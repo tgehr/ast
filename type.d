@@ -137,7 +137,7 @@ class BoolTy: Type{
 static if(language==silq) private BoolTy[2] theBool;
 else private BoolTy theBool;
 
-BoolTy Bool(bool classical){
+BoolTy Bool(bool classical=true){
 	static if(language==silq) return theBool[classical]?theBool[classical]:(theBool[classical]=new BoolTy(classical));
 	else return theBool?theBool:(theBool=new BoolTy(true));
 }
@@ -178,7 +178,7 @@ class ℕTy: Type{
 static if(language==silq) private ℕTy[2] theℕ;
 else private ℕTy theℕ;
 
-ℕTy ℕt(bool classical){
+ℕTy ℕt(bool classical=true){
 	static if(language==silq) return theℕ[classical]?theℕ[classical]:(theℕ[classical]=new ℕTy(classical));
 	else return theℕ?theℕ:(theℕ=new ℕTy(true));
 }
@@ -218,7 +218,7 @@ class ℤTy: Type{
 static if(language==silq) private ℤTy[2] theℤ;
 else private ℤTy theℤ;
 
-ℤTy ℤt(bool classical){
+ℤTy ℤt(bool classical=true){
 	static if(language==silq) return theℤ[classical]?theℤ[classical]:(theℤ[classical]=new ℤTy(classical));
 	else return theℤ?theℤ:(theℤ=new ℤTy(true));
 }
@@ -258,7 +258,7 @@ class ℚTy: Type{
 static if(language==silq) private ℚTy[2] theℚ;
 else private ℚTy theℚ;
 
-ℚTy ℚt(bool classical){
+ℚTy ℚt(bool classical=true){
 	static if(language==silq) return theℚ[classical]?theℚ[classical]:(theℚ[classical]=new ℚTy(classical));
 	else return theℚ?theℚ:(theℚ=new ℚTy(true));
 }
@@ -298,7 +298,7 @@ class ℝTy: Type{
 static if(language==silq) private ℝTy[2] theℝ;
 else private ℝTy theℝ;
 
-ℝTy ℝ(bool classical){
+ℝTy ℝ(bool classical=true){
 	static if(language==silq) return theℝ[classical]?theℝ[classical]:(theℝ[classical]=new ℝTy(classical));
 	else return theℝ?theℝ:(theℝ=new ℝTy(true));
 }
@@ -338,7 +338,7 @@ class ℂTy: Type{
 static if(language==silq) private ℂTy[2] theℂ;
 else private ℂTy theℂ;
 
-ℂTy ℂ(bool classical){
+ℂTy ℂ(bool classical=true){
 	static if(language==silq) return theℂ[classical]?theℂ[classical]:(theℂ[classical]=new ℂTy(classical));
 	else return theℂ?theℂ:(theℂ=new ℂTy(true));
 }
@@ -423,7 +423,7 @@ class ContextTy: Type{
 }
 static if(language==silq) private ContextTy[2] theContextTy;
 else private ContextTy theContextTy;
-ContextTy contextTy(bool classical){
+ContextTy contextTy(bool classical=true){
 	static if(language==silq) return theContextTy[classical]?theContextTy[classical]:(theContextTy[classical]=new ContextTy(classical));
 	else return theContextTy?theContextTy:(theContextTy=new ContextTy(true));
 }
@@ -765,7 +765,7 @@ class StringTy: Type{
 	}
 }
 
-StringTy stringTy(bool classical){
+StringTy stringTy(bool classical=true){
 	static if(language==silq) return memoize!((bool classical)=>new StringTy(classical))(classical);
 	else return memoize!(()=>new StringTy(true));
 }
