@@ -1035,9 +1035,15 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 		if(!file.exists(path)){
 			// bake prelude into binary as a fallback
 			if(path==preludePath()){
-				assert(path=="prelude.slq" || path=="prelude-nocheck.slq");
-				if(path=="prelude.slq") code = import("prelude.slq") ~ "\0\0\0\0";
-				else code=import("prelude-nocheck.slq") ~ "\0\0\0\0";
+				static if(language==silq){
+					assert(path=="prelude.slq" || path=="prelude-nocheck.slq");
+					if(path=="prelude.slq") code = import("prelude.slq") ~ "\0\0\0\0";
+					else code=import("prelude-nocheck.slq") ~ "\0\0\0\0";
+				}else static if(language==psi){
+					assert(path=="prelude.psi" || path=="prelude-nocheck.psi");
+					if(path=="prelude.psi") code = import("prelude.psi") ~ "\0\0\0\0";
+					else code=import("prelude-nocheck.psi") ~ "\0\0\0\0";
+				}else static assert(0);
 			}else error = path ~ ": no such file";
 		}else error = path ~ ": error reading file";
 		if(error){
