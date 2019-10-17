@@ -848,22 +848,22 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
 	static if(language==silq){
-		bool ok=false;
+		bool semanticDone=false;
 		if(tpl&&tpl.e.count!(x=>!!cast(IndexExp)x)==1){
 			foreach(ref e;tpl.e){
 				if(auto idx=cast(IndexExp)e){
 					e=indexReplaceSemantic(idx,be.e2,be.loc,sc);
 					propErr(e,be);
-					ok=true;
+					semanticDone=true;
 				}
 			}
 		}else if(auto idx=cast(IndexExp)be.e1){
 			be.e1=indexReplaceSemantic(idx,be.e2,be.loc,sc);
 			propErr(be.e1,be);
-			ok=true;
+			semanticDone=true;
 		}
-	}else enum ok=false;
-	if(!ok) be.e2=expressionSemantic(be.e2,sc,ConstResult.no);
+	}else enum semanticDone=false;
+	if(!semanticDone) be.e2=expressionSemantic(be.e2,sc,ConstResult.no);
 	static if(language==silq){
 		Dependency[] dependencies;
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
