@@ -166,8 +166,10 @@ abstract class Expression: Node{
 		return false;
 	}
 	bool impliesConst(){
-		if(auto tpl=isTupleTy()) if(tpl.length==0) return false;
-		return isClassical();
+		static if(language==silq){
+			if(auto tpl=isTupleTy()) if(tpl.length==0) return false;
+			return isClassical();
+		}else return true;
 	}
 	bool hasClassicalComponent(){
 		return true;

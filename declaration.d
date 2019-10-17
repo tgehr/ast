@@ -1,6 +1,7 @@
 // Written in the D programming language
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.declaration;
+import astopt;
 
 import std.array, std.algorithm, std.conv, std.exception;
 import ast.lexer, ast.type, ast.expression, ast.scope_, util;
@@ -81,7 +82,11 @@ class Parameter: VarDecl{
 	override bool isLinear(){
 		return !isConst&&(!vtype||!vtype.isClassical());
 	}
-	override string toString(){ return (isConst?"const ":"")~getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():""); }
+	override string toString(){
+		static if(language==silq){
+			return (isConst&&(!vtype||!vtype.impliesConst())?"const ":"")~getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():"");
+		}else return getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():"");
+	}
 	@property override string kind(){ return "parameter"; }
 }
 

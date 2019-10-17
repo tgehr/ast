@@ -856,7 +856,9 @@ class ProductTy: Type{
 		if(!cod.hasAnyFreeVar(names)){
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
-				if(const_&&a.impliesConst()) const_=false;
+				static if(language==silq){
+					if(const_&&a.impliesConst()) const_=false;
+				}else const_=false;
 				if(cast(FunTy)a) return del[0]~(const_?"const (":"")~a.toString()~(const_?")":"")~del[1];
 				if(a.isTupleTy()) return (const_?"const (":"")~a.toString()~(const_?")":"");
 				return (const_?"const ":"")~a.toString();
