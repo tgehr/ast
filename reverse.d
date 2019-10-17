@@ -501,7 +501,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Expression[] statements;
 	body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_)~[argRet]);
 	import options;
-	if(opt.dumpReverse){
+	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
 		writeln(fd);
 		writeln("-reverse→");
 		writeln(result);
