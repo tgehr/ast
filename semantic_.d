@@ -2897,6 +2897,13 @@ Expression handleSampleFrom(CallExp ce,Scope sc){
 		 // TODO: this special casing is not very nice:
 		ce.type=info.retVars.length==1?ℝ(true):tupleTy((cast(Expression)ℝ(true)).repeat(info.retVars.length).array);
 	}
+	if(auto tpl=cast(TupleExp)ce.arg){
+		foreach(ref arg;tpl.e[1..$]){
+			arg=expressionSemantic(arg,sc,ConstResult.yes);
+			propErr(arg,ce.arg);
+		}
+	}
+	propErr(ce.arg,ce);
 	return ce;
 }
 }else static if(language==silq){
