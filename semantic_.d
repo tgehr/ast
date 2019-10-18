@@ -558,14 +558,14 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		return ce;
 	}
 	if(auto ite=cast(IteExp)e){
-		ite.cond=expressionSemantic(ite.cond,sc,ConstResult.yes);
-		static if(language==silq) sc.pushConsumed();
-		if(ite.cond.sstate==SemState.completed && !cast(BoolTy)ite.cond.type){
-			sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",ite.cond.type),ite.cond.loc);
-			ite.sstate=SemState.error;
+		ite.cond=conditionSemantic!true(ite.cond,sc);
+		static if(language==silq){
+			auto quantumControl=ite.cond.type!=Bool(true);
+			auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
+		}else{
+			enum quantumControl=false;
+			enum restriction_=Annotation.none;
 		}
-		auto quantumControl=ite.cond.type!=Bool(true);
-		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
 		ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,restriction_);
 		if(!ite.othw){
 			ite.othw=New!CompoundExp((Expression[]).init);
@@ -653,12 +653,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		return fe;
 	}
 	if(auto we=cast(WhileExp)e){
-		we.cond=expressionSemantic(we.cond,sc,ConstResult.no);
-		static if(language==silq) sc.pushConsumed();
-		if(we.cond.sstate==SemState.completed && we.cond.type!=Bool(true)){
-			sc.error(format("type of condition should be !𝔹, not %s",we.cond.type),we.cond.loc);
-			we.sstate=SemState.error;
-		}
+		we.cond=conditionSemantic(we.cond,sc);
 		we.bdy=compoundExpSemantic(we.bdy,sc);
 		propErr(we.cond,we);
 		propErr(we.bdy,we);
@@ -718,11 +713,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		return re;
 	}
 	if(auto oe=cast(ObserveExp)e){
-		oe.e=expressionSemantic(oe.e,sc,ConstResult.no);
-		if(oe.e.sstate==SemState.completed && oe.e.type!is Bool(true)){
-			sc.error(format("type of condition should be !𝔹, not %s",oe.e.type),oe.e.loc);
-			oe.sstate=SemState.error;
-		}
+		oe.e=conditionSemantic(oe.e,sc);
 		propErr(oe.e,oe);
 		oe.type=unit;
 		return oe;
@@ -742,11 +733,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		return oe;
 	}
 	if(auto ae=cast(AssertExp)e){
-		ae.e=expressionSemantic(ae.e,sc,ConstResult.no);
-		if(ae.e.sstate==SemState.completed && ae.e.type!is Bool(true)){
-			sc.error(format("type of condition should be !𝔹, not %s",ae.e.type),ae.e.loc);
-			ae.sstate=SemState.error;
-		}
+		ae.e=conditionSemantic(ae.e,sc);
 		propErr(ae.e,ae);
 		ae.type=unit;
 		return ae;
@@ -2439,13 +2426,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		return expr=productTy(const_,names,dom,cod,fa.isSquare,fa.isTuple,fa.annotation,false);
 	}
 	if(auto ite=cast(IteExp)expr){
-		ite.cond=expressionSemantic(ite.cond,sc,ConstResult.yes);
-		if(ite.cond.sstate==SemState.completed && !cast(BoolTy)ite.cond.type){
-			static if(language==silq) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",ite.cond.type),ite.cond.loc);
-			else sc.error(format("type of condition should be 𝔹, not %s",ite.cond.type),ite.cond.loc);
-			ite.sstate=SemState.error;
-		}
-		static if(language==silq) sc.pushConsumed();
+		ite.cond=conditionSemantic!true(ite.cond,sc);
 		if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
 			sc.error("branches of if expression must be single expressions;",ite.loc);
 			ite.sstate=SemState.error;
@@ -2522,6 +2503,20 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	expr.sstate=SemState.error;
 	return expr;
 }
+Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc){
+	e=expressionSemantic(e,sc,ConstResult.yes);
+	static if(language==silq) sc.pushConsumed();
+	if(e.sstate==SemState.completed && !cast(BoolTy)e.type){
+		static if(language==silq){
+			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
+			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);
+		}else sc.error(format("type of condition should be 𝔹, not %s",e.type),e.loc);
+		e.sstate=SemState.error;
+	}
+	return e;
+}
+
+
 bool setFtype(FunctionDef fd){
 	if(fd.ftype) return true;
 	if(!fd.ret) return false;
