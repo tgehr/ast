@@ -648,7 +648,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				fe.sstate=SemState.error;
 			}
-		} sc.merge(false,fesc,forgetScope);
+		}else sc.merge(false,fesc,forgetScope);
 		fe.type=unit;
 		return fe;
 	}
