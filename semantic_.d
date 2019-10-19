@@ -1217,24 +1217,30 @@ bool isInvertibleOpAssignExp(Expression e){
 ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }body{
-	if(auto id=cast(Identifier)be.e1){
-		int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-		auto meaning=sc.lookup(id,false,true,Lookup.probing);
-		if(nerr!=sc.handler.nerrors){
-			sc.note("looked up here",id.loc);
-			return be;
+	static if(language==silq){
+		// TODO: assignments to fields
+		auto semanticDone=false;
+		if(auto id=cast(Identifier)be.e1){
+			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
+			auto meaning=sc.lookup(id,false,true,Lookup.probing);
+			if(nerr!=sc.handler.nerrors){
+				sc.note("looked up here",id.loc);
+				return be;
+			}
+			if(meaning){
+				id.meaning=meaning;
+				id.name=meaning.getName;
+				id.type=typeForDecl(meaning);
+				id.scope_=sc;
+				id.sstate=SemState.completed;
+			}else{
+				sc.error(format("undefined identifier %s",id.name),id.loc);
+				id.sstate=SemState.error;
+			}
+			semanticDone=true;
 		}
-		if(meaning){
-			id.meaning=meaning;
-			id.name=meaning.getName;
-			id.type=typeForDecl(meaning);
-			id.scope_=sc;
-			id.sstate=SemState.completed;
-		}else{
-			sc.error(format("undefined identifier %s",id.name),id.loc);
-			id.sstate=SemState.error;
-		}
-	}else be.e1=expressionSemantic(be.e1,sc,ConstResult.no);
+	}else enum semanticDone=false;
+	if(!semanticDone) be.e1=expressionSemantic(be.e1,sc,ConstResult.no);
 	be.e2=expressionSemantic(be.e2,sc,cast(CatAssignExp)be?ConstResult.no:ConstResult.yes);
 	propErr(be.e1,be);
 	propErr(be.e2,be);
