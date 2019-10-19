@@ -197,7 +197,11 @@ Expression presemantic(Declaration expr,Scope sc){
 			}else{
 				fd.contextVal=addVar("this",unit,fd.loc,fsc); // the 'this' value
 				assert(!!fd.body_.blscope_);
+				assert(fsc.allowMerge);
+				fsc.allowMerge=false; // TODO: this is hacky
 				fd.context=addVar("this",ctxty,fd.loc,fd.body_.blscope_);
+				fsc.allowMerge=true;
+				assert(fd.context.getName!=fd.contextVal.getName);
 			}
 			assert(dsc.decl.dtype);
 		}else if(auto nsc=cast(NestedScope)sc){
