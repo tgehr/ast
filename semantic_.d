@@ -714,8 +714,10 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		propErr(oe.val,oe);
 		if(oe.sstate==SemState.error)
 			return oe;
-		if(oe.var.type!is ℝ(true) || oe.val.type !is ℝ(true)){
-			sc.error("both arguments to cobserve should be classical real numbers",oe.loc);
+		if(!oe.var.type.isSubtype(ℝ(true)) || !oe.val.type.isSubtype(ℝ(true))){
+			static if(language==silq)
+				sc.error("both arguments to cobserve should be classical real numbers",oe.loc);
+			else sc.error("both arguments to cobserve should be real numbers",oe.loc);
 			oe.sstate=SemState.error;
 		}
 		oe.type=unit;
