@@ -740,10 +740,9 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 }do{
 	static if(language==silq){
 		if(control.type&&!control.type.isClassical()){
-			if(control.isQfree()){
-				ce.blscope_=new BlockScope(sc,restriction_);
-				ce.blscope_.addControlDependency(control.getDependency(ce.blscope_));
-			}else ce.blscope_.addControlDependency(Dependency(true,SetX!string.init));
+			ce.blscope_=new BlockScope(sc,restriction_);
+			if(control.isQfree()) ce.blscope_.addControlDependency(control.getDependency(ce.blscope_));
+			else ce.blscope_.addControlDependency(Dependency(true,SetX!string.init));
 		}
 	}
 	return compoundExpSemantic(ce,sc,restriction_);
@@ -2655,7 +2654,8 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 	}
 	static if(language==silq){
-		if(ret.e.type&&ret.e.type.isClassical()&&sc.controlDependency!=Dependency(false,SetX!string.init)){
+		auto bottom=Dependency(false,SetX!string.init); // variable is a workaround for DMD regression
+		if(ret.e.type&&ret.e.type.isClassical()&&sc.controlDependency!=bottom){
 			sc.error("cannot return quantum-controlled classical value",ret.e.loc); // TODO: automatically promote to quantum?
 			ret.sstate=SemState.error;
 		}
