@@ -407,6 +407,14 @@ class Identifier: Expression{
 		if(ntype==type) return this;
 		return new Identifier(name);
 	}
+	override bool isConstant(){
+		if(substitute){
+			if(auto vd=cast(VarDecl)meaning){
+				return vd.initializer && vd.initializer.isConstant;
+			}
+		}
+		return super.isConstant();
+	}
 	// semantic information:
 	Declaration meaning;
 	bool substitute=false;
