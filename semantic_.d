@@ -825,6 +825,19 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			return e;
 		}
 	}
+	static if(language==psi){ // TODO: remove this?
+		if(auto ce=cast(CallExp)be.e2){
+			if(auto id=cast(Identifier)ce.e){
+				if(id.name=="array" && !ce.isSquare){
+					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes);
+					if(isSubtype(ce.arg.type,ℕt)){
+						ce.e.type=funTy(ℝ,arrayTy(ℝ),false,false,Annotation.qfree,true);
+						ce.e.sstate=SemState.completed;
+					}
+				}
+			}
+		}
+	}
 	bool success=true;
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
