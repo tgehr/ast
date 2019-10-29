@@ -181,8 +181,10 @@ abstract class Expression: Node{
 	Annotation getAnnotation(){
 		return Annotation.none;
 	}
-	final bool isQfree(){ return getAnnotation()>=Annotation.qfree; }
-	final bool isMfree(){ return getAnnotation()>=Annotation.mfree; }
+	static if(language==silq){
+		final bool isQfree(){ return getAnnotation()>=Annotation.qfree; }
+		final bool isMfree(){ return getAnnotation()>=Annotation.mfree; }
+	}
 
 	// semantic information
 	bool constLookup=true;
@@ -303,7 +305,7 @@ class LiteralExp: Expression{
 		}
 	}
 
-	override Annotation getAnnotation(){ return Annotation.qfree; }
+	override Annotation getAnnotation(){ return deterministic; }
 	override Expression evalImpl(Expression ntype){
 		if(ntype == type) return this;
 		return new LiteralExp(lit);
@@ -402,7 +404,8 @@ class Identifier: Expression{
 		}else return this;
 	}
 
-	override Annotation getAnnotation(){ return Annotation.qfree; }
+	override Annotation getAnnotation(){ return deterministic; }
+
 	override Expression evalImpl(Expression ntype){
 		if(ntype==type) return this;
 		return new Identifier(name);
@@ -1292,7 +1295,7 @@ class TupleExp: Expression{
 		return tpl&&e==tpl.e;
 	}
 	override Annotation getAnnotation(){
-		return reduce!min(Annotation.qfree, e.map!(x=>x.getAnnotation()));
+		return reduce!min(deterministic, e.map!(x=>x.getAnnotation()));
 	}
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.map!(e=>e.eval()).array;
@@ -1358,7 +1361,7 @@ class ArrayExp: Expression{
 		if(!ae||e.length!=ae.e.length) return false;
 		return all!(i=>e[i].unify(ae.e[i],subst,meet))(iota(e.length));
 	}
-	override Annotation getAnnotation(){ return reduce!min(Annotation.qfree,e.map!(x=>x.getAnnotation())); }
+	override Annotation getAnnotation(){ return reduce!min(deterministic,e.map!(x=>x.getAnnotation())); }
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.map!(e=>e.eval()).array;
 		if(ne == e && ntype==type) return this;

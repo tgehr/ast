@@ -492,12 +492,16 @@ class TupleTy: Type,ITupleTy{
 		auto ltup=this,rtup=r.isTupleTy();
 		if(rtup&&ltup.types.length==rtup.length){
 			auto rtypes=zip(ltup.types,iota(rtup.length).map!(i=>rtup[i])).map!((t)=>combineTypes(t.expand,meet)).array;
-			if(any!(x=>x is null)(rtypes)) return null;
-			return tupleTy(rtypes);
+			if(all!(x=>x !is null)(rtypes)) return tupleTy(rtypes);
 		}
 		if(auto rarr=cast(ArrayTy)r){
-			auto rtype=ltup.types.fold!((a,b)=>combineTypes(a,b,meet))(rarr.next);
-			if(rtype) return arrayTy(rtype);
+			if(meet){
+				auto rtypes=zip(ltup.types,iota(length).map!(i=>rarr.next)).map!((t)=>combineTypes(t.expand,meet)).array;
+				if(all!(x=>x !is null)(rtypes)) return tupleTy(rtypes);
+			}else{
+				auto rtype=ltup.types.fold!((a,b)=>combineTypes(a,b,meet))(rarr.next);
+				if(rtype) return arrayTy(rtype);
+			}
 		}
 		return null;
 	}
@@ -509,8 +513,8 @@ class TupleTy: Type,ITupleTy{
 	}
 	override Expression getClassical(){
 		auto ntypes=types.map!(x=>x.getClassical()).array;
-		if(ntypes.any!(x=>x is null)) return null;
-		return tupleTy(ntypes);
+		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
+		return null;
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		foreach(x;types) if(auto r=dg(x)) return r;
@@ -594,11 +598,19 @@ class ArrayTy: Type{
 		}
 		if(auto rvec=cast(VectorTy)r){
 			auto nnext=combineTypes(next,rvec.next,meet);
-			if(nnext) return arrayTy(nnext);
+			if(nnext){
+				if(meet) return vectorTy(nnext,rvec.num);
+				else return arrayTy(nnext);
+			}
 		}
 		if(auto rtup=r.isTupleTy()){
-			auto rtype=iota(rtup.length).map!(i=>rtup[i]).fold!((a,b)=>combineTypes(a,b,meet))(next);
-			if(rtype) return arrayTy(rtype);
+			if(meet){
+				auto ntypes=iota(rtup.length).map!(i=>combineTypes(next,rtup[i],meet)).array;
+				if(all!(x=>x is null)(ntypes)) return tupleTy(ntypes);
+			}else{
+				auto rtype=iota(rtup.length).map!(i=>rtup[i]).fold!((a,b)=>combineTypes(a,b,meet))(next);
+				if(rtype) return arrayTy(rtype);
+			}
 		}
 		return null;
 	}
@@ -690,19 +702,33 @@ class VectorTy: Type, ITupleTy{
 	override Expression combineTypesImpl(Expression r,bool meet){
 		if(auto rarr=cast(ArrayTy)r){
 			auto nnext=combineTypes(next,rarr.next,meet);
-			if(nnext) return arrayTy(nnext);
+			if(nnext){
+				if(meet) return vectorTy(nnext,num);
+				else return arrayTy(nnext);
+			}
 		}
 		auto lvec=this,rvec=cast(VectorTy)r;
-		if(rvec&&num==rvec.num){
-			auto combinedNext=combineTypes(lvec.next,rvec.next,meet);
-			if(!combinedNext) return null;
-			return vectorTy(combinedNext,num);
+		if(rvec){
+			auto nnext=combineTypes(lvec.next,rvec.next,meet);
+			if(!nnext) return null;
+			if(num==rvec.num){
+				return vectorTy(nnext,num);
+			}else if(!meet){
+				return arrayTy(nnext);
+			}else return null;
 		}
 		auto ltup=this.isTupleTy(),rtup=r.isTupleTy();
-		if(ltup&&rtup&&ltup.length==rtup.length){
-			auto rtypes=iota(ltup.length).map!(i=>combineTypes(ltup[i],rtup[i],meet)).array;
-			if(any!(x=>x is null)(rtypes)) return null;
-			return tupleTy(rtypes);
+		if(rtup){
+			bool equal=false;
+			if(ltup) equal=ltup.length==rtup.length;
+			else equal=num==LiteralExp.makeInteger(rtup.length);
+			if(equal){
+				auto rtypes=iota(rtup.length).map!(i=>combineTypes(next,rtup[i],meet)).array;
+				if(all!(x=>x !is null)(rtypes)) return tupleTy(rtypes);
+			}else if(!meet){
+				auto nnext=iota(rtup.length).map!(i=>rtup[i]).fold!((a,b)=>combineTypes(a,b,meet))(next);
+				if(nnext) return arrayTy(nnext);
+			}else return null;
 		}
 		return null;
 	}
@@ -775,6 +801,9 @@ enum Annotation{
 	mfree,
 	qfree,
 }
+static if(language==silq) enum deterministic=Annotation.qfree;
+static if(language==psi) enum deterministic=Annotation.none;
+
 string annotationToString(Annotation annotation){
 	static if(language==silq) return annotation?text(annotation):"";
 	static if(language==psi) return "";
@@ -1065,8 +1094,7 @@ class ProductTy: Type{
 		if(isConst!=r.isConst||isSquare!=r.isSquare||annotation!=r.annotation||
 		   isClassical_!=r.isClassical_||nargs!=r.nargs)
 			return false;
-		r=r.relabelAll(freshNames(r));
-		return dom==r.dom&&cod==r.cod;
+		return this.isSubtypeImpl(r)&&r.isSubtypeImpl(this);
 	}
 	override bool isSubtypeImpl(Expression rhs){
 		auto r=cast(ProductTy)rhs;
@@ -1085,6 +1113,44 @@ class ProductTy: Type{
 		if(!lCod) return false;
 		assert(!!rCod);
 		return isSubtype(lCod,rCod);
+	}
+	override Expression combineTypesImpl(Expression rhs,bool meet){
+		auto r=cast(ProductTy)rhs;
+		if(!r) return null;
+		auto nannotation=meet?min(annotation,r.annotation):max(annotation,r.annotation);
+		auto nisClassical=meet?isClassical||r.isClassical:isClassical&&r.isClassical;
+		auto ndom=combineTypes(dom,r.dom,!meet);
+		if(!ndom) return null;
+		auto tpl=isTuple?ndom.isTupleTy():null;
+		if(isTuple!=r.isTuple||isTuple&&!tpl||isTuple&&names!=r.names){
+			auto nl=setTuple(false);
+			auto nr=r.setTuple(false);
+			if(!nl||!nr) return null;
+			return combineTypes(nl,nr,meet);
+		}
+		if(isConst!=r.isConst||isSquare!=r.isSquare||nargs!=r.nargs)
+			return null;
+		if(isTuple){
+			assert(names==r.names);
+			assert(!!tpl);
+			if(tpl.length!=names.length) return null;
+			auto vars=new TupleExp(iota(names.length).map!(i=>cast(Expression)varTy(names[i],tpl[i])).array);
+			vars.type=ndom;
+			vars.sstate=SemState.completed;
+			auto lCod=tryApply(vars,isSquare);
+			auto rCod=r.tryApply(vars,isSquare);
+			assert(lCod&&rCod);
+			auto ncod=combineTypes(lCod,rCod,meet);
+			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+		}else{
+			auto name=names[0]==r.names[0]?names[0]:freshName("x",r);
+			auto var=varTy(name,ndom);
+			auto lCod=tryApply(var,isSquare);
+			auto rCod=r.tryApply(var,isSquare);
+			assert(lCod&&rCod);
+			auto ncod=combineTypes(lCod,rCod,meet);
+			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+		}
 	}
 	private ProductTy setTuple(bool tuple)in{
 		assert(!tuple||dom.isTupleTy());
