@@ -410,8 +410,12 @@ bool isBuiltIn(Identifier id){
 	}
 }
 
+Expression getDistribution(Location loc,Scope sc){
+	return getPreludeSymbol("Distribution",loc,sc);
+}
+
 Expression distributionTy(Expression base,Scope sc){
-	return typeSemantic(new CallExp(varTy("Distribution",funTy(typeTy,typeTy,true,false,true)),base,true,true),sc);
+	return typeSemantic(new CallExp(getDistribution(base.loc,sc),base,true,true),sc);
 }
 
 Expression builtIn(Identifier id,Scope sc){
@@ -1568,7 +1572,9 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 					return handleQuery(ce,sc);
 			}else static if(language==psi){
 				case "Marginal":
-					ce.type=distributionTy(ce.arg.type,sc);
+					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes);
+					propErr(ce.arg,ce);
+					if(ce.arg.type) ce.type=distributionTy(ce.arg.type,sc);
 					break;
 				case "sampleFrom":
 					return handleSampleFrom(ce,sc);
