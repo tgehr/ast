@@ -775,6 +775,10 @@ enum Annotation{
 	mfree,
 	qfree,
 }
+string annotationToString(Annotation annotation){
+	static if(language==silq) return annotation?text(annotation):"";
+	static if(language==psi) return "";
+}
 
 class RawProductTy: Expression{
 	Parameter[] params;
@@ -884,10 +888,10 @@ class ProductTy: Type{
 			if(isTuple){
 				args=zip(isConst,names,iota(tdom.length).map!(i=>tdom[i])).map!(x=>(x[0]?"const ":"")~x[1]~":"~x[2].toString()).join(",");
 				if(nargs==1) args~=",";
-			}else args=(isConst[0]?"const ":"")~names[0]~":"~dom.toString();
+			}else args=(isConst[0]&&!dom.impliesConst()?"const ":"")~names[0]~":"~dom.toString();
 			static if(language==silq) auto pi=(isClassical?"!":"")~"∏";
 			else enum pi="Π";
-			r=pi~del[0]~args~del[1]~(annotation?to!string(annotation):"")~". "~c;
+			r=pi~del[0]~args~del[1]~annotationToString(annotation)~". "~c;
 		}
 		return r;
 	}
