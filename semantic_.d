@@ -1862,18 +1862,23 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			bool captureChecked=id.type.isClassical();
 			assert(sc.isNestedIn(meaning.scope_));
 			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
+				bool checkCapture(){
+					if(constResult){
+						sc.error("cannot capture variable as constant", id.loc);
+						id.sstate=SemState.error;
+						return false;
+					}else if(vd&&vd.isConst){
+						sc.error("cannot capture 'const' variable", id.loc);
+						id.sstate=SemState.error;
+						return false;
+					}
+					return true;
+				}
 				if(auto fsc=cast(FunctionScope)csc){
 					if(!captureChecked){
 						captureChecked=true;
-						if(constResult){
-							sc.error("cannot capture variable as constant", id.loc);
-							id.sstate=SemState.error;
-							break;
-						}else if(vd&&vd.isConst){
-							sc.error("cannot capture 'const' variable", id.loc);
-							id.sstate=SemState.error;
-							break;
-						}else if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
+						if(!checkCapture()) break;
+						if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
 							if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
 							else{
 								assert(!fsc.fd.ftype||fsc.fd.ftype.isClassical());
@@ -1883,7 +1888,14 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 							}
 						}
 					}
-					sc.addCapture(id);
+					fsc.addCapture(id);
+				}
+				if(auto dsc=cast(DataScope)csc){
+					if(!captureChecked){
+						captureChecked=true;
+						if(!checkCapture()) break;
+					}
+					dsc.addCapture(id);
 				}
 			}
 		}

@@ -222,6 +222,10 @@ class DatDecl: Declaration{
 	// semantic information
 	DataScope dscope_;
 	VarDecl context;
+	Identifier[] captures;
+	void addCapture(Identifier id){
+		captures~=id;
+	}
 	@property string contextName()in{assert(!!context);}body{ return context.getName; }
 	@property bool isNested(){ return !!cast(NestedScope)scope_; }
 }

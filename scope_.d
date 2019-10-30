@@ -400,11 +400,6 @@ abstract class Scope{
 		return var.sstate==SemState.completed;
 	}
 
-	bool addCaptureImpl(Identifier id,Scope ignore){ return true; }
-	final bool addCapture(Identifier id){
-		return addCaptureImpl(id,this);
-	}
-
 	Annotation restriction(){
 		return Annotation.none;
 	}
@@ -489,12 +484,12 @@ class NestedScope: Scope{
 		if(!type) return false;
 		return addVariable(id.meaning,type,true);
 	}
-	override bool addCaptureImpl(Identifier id,Scope ignore){
+	/+override bool addCaptureImpl(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
 			if(!sc.insertCapture(id,ignore))
 				return false;
 		return parent.addCaptureImpl(id,ignore);
-	}
+	}+/
 
 	override FunctionDef getFunction(){ return parent.getFunction(); }
 	override DatDecl getDatDecl(){ return parent.getDatDecl(); }
@@ -518,7 +513,8 @@ class FunctionScope: NestedScope{
 		super(parent);
 		this.fd=fd;
 	}
-	override bool addCaptureImpl(Identifier id,Scope ignore){
+	final bool addCapture(Identifier id){ return addCaptureImpl(id,this); }
+	final bool addCaptureImpl(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
 			sc.insertCapture(id,ignore);
 		insertCapture(id,ignore);
@@ -540,6 +536,14 @@ class DataScope: NestedScope{
 	this(Scope parent,DatDecl decl){
 		super(parent);
 		this.decl=decl;
+	}
+	final bool addCapture(Identifier id){ return addCaptureImpl(id,this); }
+	final bool addCaptureImpl(Identifier id,Scope ignore){
+		foreach(sc;activeNestedScopes)
+			sc.insertCapture(id,ignore);
+		insertCapture(id,ignore);
+		decl.addCapture(id);
+		return true;
 	}
 
 	override DatDecl getDatDecl(){ return decl; }
