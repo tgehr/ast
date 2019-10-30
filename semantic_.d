@@ -2576,6 +2576,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.sstate==SemState.completed){
 			foreach(id;fd.ftype.freeIdentifiers){
 				assert(!!id.meaning);
+				if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
 				if(id.meaning.scope_.isNestedIn(fsc)){
 					fsc.error(format("local variable '%s' appears in function return type", id.name), fd.loc);
 					fd.sstate=SemState.error;
