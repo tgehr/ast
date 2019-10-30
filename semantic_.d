@@ -559,11 +559,14 @@ Expression statementSemantic(Expression e,Scope sc)in{
 			enum quantumControl=false;
 			enum restriction_=Annotation.none;
 		}
-		ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,restriction_);
+		// initialize scopes, to allow captures to be inserted
+		ite.then.blscope_=new BlockScope(sc,restriction_);
 		if(!ite.othw){
 			ite.othw=New!CompoundExp((Expression[]).init);
 			ite.othw.loc=ite.loc;
 		}
+		ite.othw.blscope_=new BlockScope(sc,restriction_);
+		ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,restriction_);
 		ite.othw=controlledCompoundExpSemantic(ite.othw,sc,ite.cond,restriction_);
 		propErr(ite.cond,ite);
 		propErr(ite.then,ite);
@@ -744,7 +747,7 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 }do{
 	static if(language==silq){
 		if(control.type&&!control.type.isClassical()){
-			ce.blscope_=new BlockScope(sc,restriction_);
+			if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
 			if(control.isQfree()) ce.blscope_.addControlDependency(control.getDependency(ce.blscope_));
 			else ce.blscope_.addControlDependency(Dependency(true,SetX!string.init));
 		}
@@ -1861,8 +1864,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		if(id.type&&meaning.scope_.getFunction()){
 			bool captureChecked=id.type.isClassical();
 			assert(sc.isNestedIn(meaning.scope_));
-			Scope psc=null;
-			for(auto csc=sc;csc !is meaning.scope_;psc=csc,csc=(cast(NestedScope)csc).parent){
+			Scope[] ignore=[sc];
+			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent,ignore~=csc){
 				bool checkCapture(){
 					if(constResult){
 						sc.error("cannot capture variable as constant", id.loc);
@@ -1889,14 +1892,14 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 							}
 						}
 					}
-					fsc.addCapture(id,psc);
+					fsc.addCapture(id,ignore);
 				}
 				if(auto dsc=cast(DataScope)csc){
 					if(!captureChecked){
 						captureChecked=true;
 						if(!checkCapture()) break;
 					}
-					dsc.addCapture(id,psc);
+					dsc.addCapture(id,ignore);
 				}
 			}
 		}
@@ -2481,7 +2484,9 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}else branch=expressionSemantic(branch,sc,constResult);
 			return branch;
 		}
+		// initialize scopes, to allow captures to be inserted
 		ite.then.blscope_=new BlockScope(sc,restriction_);
+		if(ite.othw) ite.othw.blscope_=new BlockScope(sc,restriction_);
 		ite.then.s[0]=branchSemantic(ite.then.s[0],ite.then.blscope_);
 		static if(language==silq) ite.then.blscope_.pushConsumed();
 		propErr(ite.then.s[0],ite.then);
@@ -2490,7 +2495,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			ite.sstate=SemState.error;
 			return ite;
 		}
-		ite.othw.blscope_=new BlockScope(sc,restriction_);
 		ite.othw.s[0]=branchSemantic(ite.othw.s[0],ite.othw.blscope_);
 		static if(language==silq) ite.othw.blscope_.pushConsumed();
 		propErr(ite.othw.s[0],ite.othw);
@@ -2539,7 +2543,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc){
 	e=expressionSemantic(e,sc,ConstResult.yes);
 	static if(language==silq) sc.pushConsumed();
-	if(e.sstate==SemState.completed && !cast(BoolTy)e.type){
+	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)e.type:e.type!=Bool(true))){
 		static if(language==silq){
 			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
 			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);

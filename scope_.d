@@ -475,14 +475,20 @@ class NestedScope: Scope{
 
 	override bool isNestedIn(Scope rhs){ return rhs is this || parent.isNestedIn(rhs); }
 
-	private bool insertCapture(Identifier id,Scope ignore){
-		if(this is ignore) return true;
-		if(!id.meaning) return false;
-		import ast.semantic_: typeForDecl;
-		if(!id.meaning.isLinear()) return true;
-		auto type=typeForDecl(id.meaning);
-		if(!type) return false;
-		return addVariable(id.meaning,type,true);
+	private bool insertCapture(Identifier id,Scope[] ignore){
+		if(this !is ignore[$-1]){
+			if(!id.meaning) return false;
+			import ast.semantic_: typeForDecl;
+			if(!id.meaning.isLinear()) return true;
+			auto type=typeForDecl(id.meaning);
+			if(!type) return false;
+			if(!addVariable(id.meaning,type,true))
+				return false;
+		}
+		foreach(sc;activeNestedScopes)
+			if(!sc.insertCapture(id,ignore[0..$-1]))
+				return false;
+		return true;
 	}
 	/+override bool addCaptureImpl(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
@@ -513,9 +519,7 @@ class FunctionScope: NestedScope{
 		super(parent);
 		this.fd=fd;
 	}
-	final bool addCapture(Identifier id,Scope ignore){
-		foreach(sc;activeNestedScopes)
-			sc.insertCapture(id,ignore);
+	final bool addCapture(Identifier id,Scope[] ignore){
 		insertCapture(id,ignore);
 		fd.addCapture(id);
 		return true;
@@ -536,9 +540,7 @@ class DataScope: NestedScope{
 		super(parent);
 		this.decl=decl;
 	}
-	final bool addCapture(Identifier id,Scope ignore){
-		foreach(sc;activeNestedScopes)
-			sc.insertCapture(id,ignore);
+	final bool addCapture(Identifier id,Scope[] ignore){
 		insertCapture(id,ignore);
 		decl.addCapture(id);
 		return true;
