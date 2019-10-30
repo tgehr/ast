@@ -513,8 +513,7 @@ class FunctionScope: NestedScope{
 		super(parent);
 		this.fd=fd;
 	}
-	final bool addCapture(Identifier id){ return addCaptureImpl(id,this); }
-	final bool addCaptureImpl(Identifier id,Scope ignore){
+	final bool addCapture(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
 			sc.insertCapture(id,ignore);
 		insertCapture(id,ignore);
@@ -537,8 +536,7 @@ class DataScope: NestedScope{
 		super(parent);
 		this.decl=decl;
 	}
-	final bool addCapture(Identifier id){ return addCaptureImpl(id,this); }
-	final bool addCaptureImpl(Identifier id,Scope ignore){
+	final bool addCapture(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
 			sc.insertCapture(id,ignore);
 		insertCapture(id,ignore);
