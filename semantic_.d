@@ -1765,6 +1765,11 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	}
 	if(auto ce=cast(CallExp)expr)
 		return expr=callSemantic(ce,sc,constResult);
+	static if(language==psi) if(auto pl=cast(PlaceholderExp)expr){
+		pl.type = ℝ;
+		pl.sstate = SemState.completed;
+		return pl;
+	}
 	static if(language==silq) if(auto fe=cast(ForgetExp)expr){
 		bool canForgetImplicitly;
 		bool checkImplicitForget(Expression var){
