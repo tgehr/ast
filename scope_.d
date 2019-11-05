@@ -404,6 +404,17 @@ abstract class Scope{
 		return Annotation.none;
 	}
 
+	private bool insertCapture(Identifier id,Scope outermost){
+		if(!id.meaning) return false;
+		if(!id.meaning.isLinear()) return true;
+		import ast.semantic_: typeForDecl;
+		auto type=typeForDecl(id.meaning);
+		if(!type) return false;
+		return insertCaptureImpl(id,type,outermost);
+	}
+
+	protected bool insertCaptureImpl(Identifier id,Expression type,Scope outermost){ return true; }
+
 	abstract FunctionDef getFunction();
 	abstract DatDecl getDatDecl();
 	final int all(T)(int delegate(T) dg){
@@ -475,20 +486,14 @@ class NestedScope: Scope{
 
 	override bool isNestedIn(Scope rhs){ return rhs is this || parent.isNestedIn(rhs); }
 
-	private bool insertCapture(Identifier id,Scope[] ignore){
-		if(this !is ignore[$-1]){
-			if(!id.meaning) return false;
-			import ast.semantic_: typeForDecl;
-			if(!id.meaning.isLinear()) return true;
-			auto type=typeForDecl(id.meaning);
-			if(!type) return false;
+	protected override bool insertCaptureImpl(Identifier id,Expression type,Scope outermost){
+		if(this is outermost) return true;
+		foreach(sc;parent.activeNestedScopes){
+			if(this is sc) continue;
 			if(!addVariable(id.meaning,type,true))
 				return false;
 		}
-		foreach(sc;activeNestedScopes)
-			if(!sc.insertCapture(id,ignore[0..$-1]))
-				return false;
-		return true;
+		return parent.insertCaptureImpl(id,type,outermost);
 	}
 	/+override bool addCaptureImpl(Identifier id,Scope ignore){
 		foreach(sc;activeNestedScopes)
@@ -519,8 +524,8 @@ class FunctionScope: NestedScope{
 		super(parent);
 		this.fd=fd;
 	}
-	final bool addCapture(Identifier id,Scope[] ignore){
-		insertCapture(id,ignore);
+	final bool addCapture(Identifier id,Scope startScope){
+		startScope.insertCapture(id,this);
 		fd.addCapture(id);
 		return true;
 	}
@@ -540,8 +545,8 @@ class DataScope: NestedScope{
 		super(parent);
 		this.decl=decl;
 	}
-	final bool addCapture(Identifier id,Scope[] ignore){
-		insertCapture(id,ignore);
+	final bool addCapture(Identifier id,Scope startScope){
+		startScope.insertCapture(id,this);
 		decl.addCapture(id);
 		return true;
 	}

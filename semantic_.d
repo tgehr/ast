@@ -1864,8 +1864,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		if(id.type&&meaning.scope_.getFunction()){
 			bool captureChecked=id.type.isClassical();
 			assert(sc.isNestedIn(meaning.scope_));
-			Scope[] ignore=[sc];
-			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent,ignore~=csc){
+			auto startScope=sc;
+			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 				bool checkCapture(){
 					if(constResult){
 						sc.error("cannot capture variable as constant", id.loc);
@@ -1892,14 +1892,16 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 							}
 						}
 					}
-					fsc.addCapture(id,ignore);
+					fsc.addCapture(id,startScope);
+					startScope=fsc;
 				}
 				if(auto dsc=cast(DataScope)csc){
 					if(!captureChecked){
 						captureChecked=true;
 						if(!checkCapture()) break;
 					}
-					dsc.addCapture(id,ignore);
+					dsc.addCapture(id,startScope);
+					startScope=dsc;
 				}
 			}
 		}
