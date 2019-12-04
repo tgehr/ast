@@ -986,18 +986,13 @@ Expression indexReplaceSemantic(IndexExp theIndex,ref Expression rhs,Location lo
 			return false;
 		return true;
 	}
-	if(theIndex.sstate==SemState.error) theIndex=null;
-	else if(!check(theIndex)){
-		theIndex.sstate=SemState.error;
-		theIndex=null;
-	}
+	if(!check(theIndex)) theIndex.sstate=SemState.error;
 	assert(!sc.indexToReplace);
-	sc.indexToReplace=theIndex;
+	if(theIndex.sstate!=SemState.error) sc.indexToReplace=theIndex;
 	rhs=expressionSemantic(rhs,sc,ConstResult.no);
 	if(sc.indexToReplace){
 		sc.error("reassigned component must be consumed in right-hand side", theIndex.loc);
 		theIndex.sstate=SemState.error;
-		sc.indexToReplace=null;
 	}
 	if(id&&id.type) addVar(id.name,id.type,loc,sc);
 	if(theIndex.sstate!=SemState.error) theIndex.sstate=SemState.completed;
@@ -1079,7 +1074,7 @@ bool isAssignable(Declaration meaning,Scope sc){
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
 	auto vd=cast(VarDecl)meaning;
 	if(!vd||vd.isConst){
-		if(vd.isConst){
+		if(vd&&vd.isConst){
 			sc.error("cannot reassign 'const' variables",loc);
 			if(vd.typeConstBlocker){
 				string name;
@@ -1090,7 +1085,8 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 					sc.note(format("'%s' was made 'const' because it appeared in type of local variable",vd.name),vd.typeConstBlocker.loc);
 				}
 			}
-		}else sc.error("can only assign to variables",loc);
+		}else if(meaning&&!vd) sc.error("can only assign to variables",loc);
+		else sc.error("cannot assign",loc);
 		return false;
 	}else if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst){
 		sc.error("cannot reassign 'const' parameters",loc);
@@ -1807,7 +1803,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		auto meaning=id.meaning;
 		if(!meaning){
 			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-			meaning=sc.lookup(id,false,true,constResult?Lookup.constant:Lookup.consuming);
+			id.meaning=meaning=sc.lookup(id,false,true,constResult?Lookup.constant:Lookup.consuming);
 			if(nerr!=sc.handler.nerrors){
 				sc.note("looked up here",id.loc);
 				id.sstate=SemState.error;
