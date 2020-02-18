@@ -2413,19 +2413,22 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		expr.type=typeTy();
 		Q!(bool[],Expression) getConstAndType(Expression e){
 			Q!(bool[],Expression) base(Expression e){
+				static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
+					return q([true],typeSemantic(ce.e,sc));
+				}
 				auto ty=typeSemantic(e,sc);
 				return q([ty&&ty.impliesConst()||ex.isLifted],ty);
 			}
 			if(auto pr=cast(BinaryExp!(Tok!"×"))e){
-				auto merge1=!pr.e1.brackets;
+				auto merge1=!pr.e1.brackets&&cast(BinaryExp!(Tok!"×"))pr.e1;
 				auto t1=merge1?getConstAndType(pr.e1):base(pr.e1);
-				auto merge2=!pr.e2.brackets;
+				auto merge2=!pr.e2.brackets&&cast(BinaryExp!(Tok!"×"))pr.e2;
 				auto t2=merge2?getConstAndType(pr.e2):base(pr.e2);
 				if(!t1[1]||!t2[1]){
 					e.sstate=SemState.error;
 					return q((bool[]).init,Expression.init);
 				}
-				auto l=cast(TupleTy)t1[1],r=cast(TupleTy)t2[1];
+				auto l=t1[1].isTupleTy(),r=t2[1].isTupleTy();
 				merge1&=l&&l.length;
 				merge2&=r&&r.length;
 				if(merge1 && merge2)
@@ -2433,8 +2436,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				if(merge1) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2[1])).array));
 				if(merge2) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(only(t1[1]),iota(r.length).map!(i=>r[i])).array));
 				return q(t1[0]~t2[0],cast(Expression)tupleTy([t1[1],t2[1]]));
-			}else static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
-				return q([true],typeSemantic(ce.e,sc));
 			}
 			return base(e);
 		}
