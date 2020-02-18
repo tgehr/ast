@@ -495,12 +495,6 @@ class NestedScope: Scope{
 		}
 		return parent.insertCaptureImpl(id,type,outermost);
 	}
-	/+override bool addCaptureImpl(Identifier id,Scope ignore){
-		foreach(sc;activeNestedScopes)
-			if(!sc.insertCapture(id,ignore))
-				return false;
-		return parent.addCaptureImpl(id,ignore);
-	}+/
 
 	override FunctionDef getFunction(){ return parent.getFunction(); }
 	override DatDecl getDatDecl(){ return parent.getDatDecl(); }
