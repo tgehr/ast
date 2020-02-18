@@ -981,9 +981,11 @@ Expression indexReplaceSemantic(IndexExp theIndex,ref Expression rhs,Location lo
 			return false;
 		}
 		if(e) if(auto idx=cast(IndexExp)e.e) return check(idx);
-		id=e?cast(Identifier)e.e:null;
-		if(e&&!checkAssignable(id?id.meaning:null,theIndex.e.loc,sc,true))
+		id=e&&e.e&&e.e.sstate==SemState.completed?cast(Identifier)e.e:null;
+		if(e&&!checkAssignable(id?id.meaning:null,theIndex.e.loc,sc,true)){
+			id=null;
 			return false;
+		}
 		return true;
 	}
 	if(!check(theIndex)) theIndex.sstate=SemState.error;
