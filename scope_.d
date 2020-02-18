@@ -490,7 +490,7 @@ class NestedScope: Scope{
 		if(this is outermost) return true;
 		foreach(sc;parent.activeNestedScopes){
 			if(this is sc) continue;
-			if(!addVariable(id.meaning,type,true))
+			if(!sc.addVariable(id.meaning,type,true))
 				return false;
 		}
 		return parent.insertCaptureImpl(id,type,outermost);
