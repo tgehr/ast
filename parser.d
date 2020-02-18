@@ -1053,6 +1053,7 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 		}
 	}
 	auto src=new Source(path, code);
+	auto nerr=err.nerrors;
 	r=.parseFile(src,err);
-	return 0;
+	return nerr!=err.nerrors;
 }
