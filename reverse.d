@@ -267,9 +267,14 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		auto tpl=cast(TupleExp)rhs;
 		enforce(!tpl||tpl.length==0);
 		auto dup=getDup(fe.val.loc,sc);
-		auto nval=new CallExp(dup,fe.val.copy(),false,false);
+		Expression nval=new CallExp(dup,fe.val.copy(),false,false);
 		nval.type=fe.val.type;
 		nval.loc=fe.val.loc;
+		if(nval.type!=fe.var.type){
+			nval=new TypeAnnotationExp(nval,fe.var.type,TypeAnnotationType.coercion);
+			nval.type=fe.var.type;
+			nval.loc=fe.val.loc;
+		}
 		auto def=lowerDefine!analyzed(fe.var,nval,loc,sc);
 		if(!tpl) return res=new CompoundExp([rhs,def]);
 		return def;
