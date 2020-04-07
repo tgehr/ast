@@ -748,12 +748,11 @@ Expression reverseStatement(Expression e,Scope sc){
 			sc.error("reversal of assignments not supported yet",be.loc);
 			return error();
 		}
-		if(be.e2.type.hasClassicalComponent()){
-			// TODO: array append is reversible
-			sc.error("reversal of assignments not supported yet",be.loc);
-			return error();
-		}
 		if(!isInvertibleOpAssignExp(be)){
+			if(be.e2.type.hasClassicalComponent()){
+				sc.error("reversal of assignments not supported yet",be.loc);
+				return error();
+			}
 			sc.error("reversal of implicit forgets not supported yet",be.loc);
 			return error();
 		}
@@ -768,8 +767,14 @@ Expression reverseStatement(Expression e,Scope sc){
 			return res;
 		}
 		if(auto ae=cast(CatAssignExp)e){
-			sc.error("reversal of concatenation not supported yet",ae.loc);
-			return error();
+			if(!cast(Identifier)ae.e1){
+				sc.error("reversal of concatenation to non-identifier not supported yet",ae.loc);
+				return error();
+			}
+			auto nlhs=new CatExp(ae.e1.copy(),ae.e2);
+			nlhs.type=ae.e1.type;
+			auto nrhs=ae.e1;
+			return lowerDefine!true(nlhs,nrhs,ae.loc,sc);
 		}
 		if(auto ae=cast(BitXorAssignExp)e) return ae.copy();
 		sc.error("reversal not supported yet",e.loc);
