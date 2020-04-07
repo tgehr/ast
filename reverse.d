@@ -249,15 +249,38 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		tmp2.loc=rhs.loc;
 		Expression s2=new SliceExp(tmp1,l1.copy(),l);
 		s2.loc=tmp2.loc;
-		auto d2=lowerDefine!analyzed(ce.e1,s1,loc,sc);
+		auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
+		if(tmpl!is ce.e1){
+			tmpl.loc=ce.e1.loc;
+			static if(analyzed) tmpl.type=ce.e1.type;
+		}
+		auto d2=lowerDefine!analyzed(tmpl.copy(),s1,loc,sc);
 		d2.loc=loc;
-		auto d3=lowerDefine!analyzed(ce.e2,s2,loc,sc);
+		auto tmpr=cast(Identifier)ce.e2?ce.e2:new Identifier(freshName);
+		if(tmpr!is ce.e2){
+			tmpr.loc=ce.e2.loc;
+			static if(analyzed) tmpr.type=ce.e2.type;
+		}
+		auto d3=lowerDefine!analyzed(tmpr.copy(),s2,loc,sc);
 		d3.loc=loc;
 		auto tmp3=tmp.copy();
 		tmp3.loc=rhs.loc;
-		auto fe=new ForgetExp(tmp3,ce.copy());
+		auto cat=new CatExp(tmpl.copy(),tmpr.copy());
+		cat.loc=ce.loc;
+		auto fe=new ForgetExp(tmp3,cat);
 		fe.loc=loc;
-		return res=new CompoundExp([d1,d2,d3,fe]);
+		auto stmts=[d1,d2,d3,fe];
+		if(ce.e1 !is tmpl){
+			auto d4=lowerDefine!analyzed(ce.e1,tmpl,loc,sc);
+			d4.loc=loc;
+			stmts~=d4;
+		}
+		if(ce.e2 !is tmpr){
+			auto d5=lowerDefine!analyzed(ce.e2,tmpr,loc,sc);
+			d5.loc=loc;
+			stmts~=d5;
+		}
+		return res=new CompoundExp(stmts);
 	}
 	if(auto fe=cast(ForgetExp)olhs){
 		if(!fe.val){
@@ -557,8 +580,8 @@ ComputationClass classifyStatement(Expression e){
 			return r;
 		}
 		if(auto ret=cast(ReturnExp)e){
-			if(ret.e.isClassical()) return classical;
-			if(!ret.e.hasClassicalComponent()) return quantum;
+			if(ret.e.type.isClassical()) return classical;
+			if(!ret.e.type.hasClassicalComponent()) return quantum;
 			return mixed;
 		}
 		if(auto fd=cast(FunctionDef)e){
@@ -700,7 +723,15 @@ Expression reverseStatement(Expression e,Scope sc){
 	}
 	// TODO: DatDecl?
 	if(auto ce=cast(CommaExp)e) assert(0);
-	if(auto de=cast(DefineExp)e) return lowerDefine!true(de.e2,de.e1,de.loc,sc);
+	if(auto de=cast(DefineExp)e){
+		Expression nrhs=de.e1;
+		if(nrhs.type!=de.e2.type){
+			nrhs=new TypeAnnotationExp(nrhs,de.e2.type,TypeAnnotationType.coercion);
+			nrhs.loc=de.e1.loc;
+			nrhs.type=de.e2.type;
+		}
+		return lowerDefine!true(de.e2,nrhs,de.loc,sc);
+	}
 	if(auto de=cast(DefExp)e){
 		assert(!!de.initializer);
 		return reverseStatement(de.initializer,sc);
