@@ -481,7 +481,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
 	if(!ret){
 		sc.error("reversing early returns not supported yet",fd.loc);
-		return null;
+		enforce(0,text("errors while reversing function"));
 	}
 	string rpname;
 	if(auto id=cast(Identifier)ret.e) rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).name;
