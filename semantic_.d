@@ -2204,6 +2204,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
 				return true;
 			if(annotationType==TypeAnnotationType.coercion){
+				if((arr1||vec1)&&to==unit) return true;
 				if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
 					return true;
 				if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
