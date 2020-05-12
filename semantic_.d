@@ -1390,13 +1390,13 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 					ce.sstate=SemState.error;
 				}
 				static if(language==silq){
-					if(constResult&&!ce.isLifted(sc)&&!ce.type.isClassical()){
-						sc.error("non-'lifted' quantum expression must be consumed", ce.loc);
-						ce.sstate=SemState.error;
-					}
 					if(ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
+					}
+					if(constResult&&!ce.isLifted(sc)&&!ce.type.isClassical()){
+						sc.error("non-'lifted' quantum expression must be consumed", ce.loc);
+						ce.sstate=SemState.error;
 					}
 				}
 			}
