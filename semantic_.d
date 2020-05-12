@@ -1307,6 +1307,9 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 				sc.error("quantum update must be invertible",be.loc);
 				be.sstate=SemState.error;
 			}
+		}
+		if(be.sstate!=SemState.error){
+			auto id=cast(Identifier)be.e1;
 			if(id&&id.meaning&&id.meaning.name){
 				if(be.e2.isQfree()){
 					auto dependency=sc.getDependency(id.meaning);
