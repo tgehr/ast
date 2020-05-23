@@ -921,6 +921,12 @@ class BinaryExp(TokenType op): ABinaryExp{
 							nle.sstate=SemState.completed;
 							return make(new BinaryExp!sub1(se1.e1,nle));
 						}
+						if(se1.e2==ne2) return se1.e1;
+					}
+				}
+				static foreach(sub2;[Tok!"-",Tok!"sub"]){
+					if(auto se2=cast(BinaryExp!sub2)ne2){
+						if(se2.e2==ne1) return se2.e1;
 					}
 				}
 				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
