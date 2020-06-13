@@ -936,8 +936,9 @@ struct Parser{
 		auto var=parseIdentifier();
 		expect(Tok!"in");
 		bool leftExclusive=false,rightExclusive=false;
-		if(tok.type==Tok!"("){ leftExclusive=true; nextToken(); }
-		else expect(Tok!"[");
+		bool hasLeft=false;
+		if(tok.type==Tok!"("){ hasLeft=true; leftExclusive=true; nextToken(); }
+		else if(tok.type==Tok!"["){ hasLeft=true; nextToken(); }
 		auto left=parseExpression();
 		Expression step=null;
 		expect(Tok!"..");
@@ -947,8 +948,11 @@ struct Parser{
 			step=right;
 			right=parseExpression();
 		}
-		if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
-		else expect(Tok!"]");
+		if(hasLeft){
+			if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
+			else expect(Tok!"]");
+		}else rightExclusive=true;
+		if(leftExclusive == rightExclusive) handler.note("deprecation: use half-open intervals", begin.to(tok.loc));
 		auto bdy=parseCompoundExp();
 		return res=New!ForExp(var,leftExclusive,left,step,rightExclusive,right,bdy);
 	}
