@@ -132,7 +132,7 @@ abstract class Scope{
 		private Identifier[Declaration] constBlock;
 	}
 	static if(language==silq){
-		ConstBlockContext saveConst(){ return ConstBlockContext(constBlock); }
+		ConstBlockContext saveConst(){ return ConstBlockContext(constBlock.dup); }
 		void resetConst(ConstBlockContext previous){ constBlock=previous.constBlock; }
 		void resetConst(){ constBlock.clear(); }
 		Identifier isConst(Declaration decl){ return constBlock.get(decl, null); }

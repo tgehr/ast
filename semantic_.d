@@ -1005,10 +1005,12 @@ Expression permuteSemantic(DefineExp be,Scope sc)in{ // TODO: generalize defineS
 	auto tpl=cast(TupleExp)be.e1;
 	assert(tpl&&tpl.e.any!(x=>!!cast(IndexExp)x));
 }do{
-	be.e1=expressionSemantic(be.e1,sc,ConstResult.yes); // TODO: this is a hack
+	auto constSave=sc.saveConst();
+	be.e1=expressionSemantic(be.e1,sc,ConstResult.yes);
 	propErr(be.e1,be);
 	be.e2=expressionSemantic(be.e2,sc,ConstResult.yes);
 	propErr(be.e2,be);
+	sc.resetConst(constSave);
 	if(be.e1.type&&be.e1.type.isClassical()){
 		sc.error(format("use assignment statement '%s = %s' to assign to classical array components",be.e1,be.e2),be.loc);
 		be.sstate=SemState.error;
@@ -1119,8 +1121,11 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 
 AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	ae.type=unit;
+	auto constSave=sc.saveConst();
 	ae.e1=expressionSemantic(ae.e1,sc,ConstResult.yes); // reassigned variable should not be consumed (otherwise, can use ':=')
 	propErr(ae.e1,ae);
+	auto lhsConst=sc.saveConst();
+	sc.resetConst(constSave);
 	if(ae.sstate==SemState.error)
 		return ae;
 	void checkLhs(Expression lhs){
@@ -1143,7 +1148,9 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		}
 	}
 	checkLhs(ae.e1);
+	sc.resetConst(lhsConst);
 	ae.e2=expressionSemantic(ae.e2,sc,ConstResult.no);
+	sc.resetConst(constSave);
 	propErr(ae.e2,ae);
 	if(ae.sstate!=SemState.error&&!isSubtype(ae.e2.type,ae.e1.type)){
 		if(auto id=cast(Identifier)ae.e1){
