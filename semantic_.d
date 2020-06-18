@@ -798,7 +798,7 @@ Dependency getDependency(Expression e,Scope sc)in{
 			result.dependencies.insert(id.name);
 			if(!id.constLookup){
 				auto vd=cast(VarDecl)id.meaning;
-				if(!vd||!vd.isConst) result.replace(id.name,sc.getDependency(id));
+				if(!vd||!(vd.isConst||!sc.isConst(vd))) result.replace(id.name,sc.getDependency(id));
 			}
 		}
 	}
@@ -1066,7 +1066,7 @@ void typeConstBlock(Declaration decl,Expression blocker,Scope sc){
 
 bool isAssignable(Declaration meaning,Scope sc){
 	auto vd=cast(VarDecl)meaning;
-	if(!vd||vd.isConst) return false;
+	if(!vd||vd.isConst||sc.isConst(vd)) return false;
 	for(auto csc=sc;csc !is meaning.scope_&&cast(NestedScope)csc;csc=(cast(NestedScope)csc).parent)
 		if(auto fsc=cast(FunctionScope)csc)
 			return false;
@@ -1075,9 +1075,11 @@ bool isAssignable(Declaration meaning,Scope sc){
 
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
 	auto vd=cast(VarDecl)meaning;
-	if(!vd||vd.isConst){
-		if(vd&&vd.isConst){
-			sc.error("cannot reassign 'const' variables",loc);
+	if(!vd||vd.isConst||sc.isConst(vd)){
+		if(vd&&(vd.isConst||sc.isConst(vd))){
+			if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
+				sc.error("cannot reassign 'const' parameters",loc);
+			else sc.error("cannot reassign 'const' variables",loc);
 			if(vd.typeConstBlocker){
 				string name;
 				if(auto decl=cast(Declaration)vd.typeConstBlocker) name=decl.getName;
@@ -1087,11 +1089,10 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 					sc.note(format("'%s' was made 'const' because it appeared in type of local variable",vd.name),vd.typeConstBlocker.loc);
 				}
 			}
+			if(auto read=sc.isConst(vd))
+				sc.note("variable was made 'const' here", read.loc);
 		}else if(meaning&&!vd) sc.error("can only assign to variables",loc);
 		else sc.error("cannot assign",loc);
-		return false;
-	}else if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst){
-		sc.error("cannot reassign 'const' parameters",loc);
 		return false;
 	}else{
 		static if(language==silq){
@@ -1872,8 +1873,10 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 						sc.error("cannot capture variable as constant", id.loc);
 						id.sstate=SemState.error;
 						return false;
-					}else if(vd&&vd.isConst){
+					}else if(vd&&(vd.isConst||sc.isConst(vd))){
 						sc.error("cannot capture 'const' variable", id.loc);
+						if(auto read=sc.isConst(vd))
+							sc.note("variable was made 'const' here", read.loc);
 						id.sstate=SemState.error;
 						return false;
 					}
