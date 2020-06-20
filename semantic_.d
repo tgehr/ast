@@ -1672,6 +1672,8 @@ Expression powerType(Expression t1, Expression t2){
 	return ℝ(classical); // TODO: good?
 }
 Expression minusBitNotType(Expression t){
+	if(preludeNumericTypeName(t) != null)
+		return t;
 	if(!isNumeric(t)) return null;
 	if(cast(BoolTy)t||cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
