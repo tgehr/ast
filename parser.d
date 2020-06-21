@@ -602,7 +602,7 @@ struct Parser{
 				goto case;
 			case Tok!"==":
 				nextToken();
-				auto right=parseExpression(rbp!(Tok!"=="),true);
+				auto right=parseExpression(rbp!(Tok!"=="),false);
 				return res=New!(BinaryExp!(Tok!"="))(left,right);
 			case Tok!"*": goto case Tok!"·";
 			case Tok!"*=",Tok!"·=": goto case Tok!"·←";
