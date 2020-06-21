@@ -535,6 +535,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 Expression statementSemantic(Expression e,Scope sc)in{
 	assert(sc.allowsLinear());
 }do{
+	if(e.sstate==SemState.completed) return e;
 	static if(language==silq){
 		scope(exit){
 			sc.pushConsumed();
@@ -1362,7 +1363,7 @@ Expression defineOrAssignSemantic(Expression e,Scope sc)in{
 }body{
 	if(isAssignment(e)) return assignSemantic(e,sc);
 	if(auto be=cast(DefineExp)e) return defineSemantic(be,sc);
-	if(cast(DefExp)e) return e; // TODO: ok?
+	if(auto de=cast(DefExp)e) return defineOrAssignSemantic(de.initializer,sc); // (for copied functions)
 	assert(0);
 }
 

@@ -506,28 +506,54 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	result.scope_=sc;
 	result=cast(FunctionDef)presemantic(result,sc);
 	assert(!!result);
-	bool retDefNecessary=(returnType!=unit||!cast(TupleExp)ret.e)&&!cast(Identifier)ret.e;
-	auto retDef=retDefNecessary?lowerDefine!true(ret.e,retRhs,ret.loc,result.fscope_):null;
-	auto argNames=fd.params[constArgTypes1.length..constArgTypes1.length+argTypes.length].map!(p=>p.name.name);
-	auto makeArg(size_t i){
-		if(argTypes[i]==unit){ // unit is classical yet can be consumed
-			Expression r=new TupleExp([]);
-			r.loc=ret.loc;
-			r.type=unit;
-			return r;
-		}else{
-			Expression id=new Identifier(argNames[i]);
-			id.loc=ret.loc;
-			id.type=argTypes[i];
-			return id;
+	if(fd.annotation>=Annotation.qfree && argTypes.length==0){
+		assert(!constArgTypes2.length);
+		auto makeConstArg(size_t i){
+			if(constArgTypes1[i]==unit){
+				Expression r=new TupleExp([]);
+				r.loc=ret.loc;
+				r.type=unit;
+				return r;
+			}else{
+				Expression id=new Identifier(fd.params[i].name.name);
+				id.loc=fd.loc;
+				id.type=constArgTypes1[i];
+				return id;
+			}
 		}
+		auto argExp=constArgTypes1.length==1?makeConstArg(0):new TupleExp(iota(constArgTypes1.length).map!makeConstArg.array);
+		argExp.loc=fd.loc; // TODO: use precise parameter locations
+		auto nfd=fd.copy();
+		auto fun=new LambdaExp(nfd);
+		fun.loc=fd.loc;
+		auto call=new CallExp(fun,argExp,fd.isSquare,false);
+		call.loc=fd.loc;
+		auto fe=New!ForgetExp(retRhs,call);
+		fe.loc=argExp.loc;
+		body_.s=[fe];
+	}else{
+		bool retDefNecessary=(returnType!=unit||!cast(TupleExp)ret.e)&&!cast(Identifier)ret.e;
+		auto retDef=retDefNecessary?lowerDefine!true(ret.e,retRhs,ret.loc,result.fscope_):null;
+		auto argNames=fd.params[constArgTypes1.length..constArgTypes1.length+argTypes.length].map!(p=>p.name.name);
+		auto makeArg(size_t i){
+			if(argTypes[i]==unit){ // unit is classical yet can be consumed
+				Expression r=new TupleExp([]);
+				r.loc=ret.loc;
+				r.type=unit;
+				return r;
+			}else{
+				Expression id=new Identifier(argNames[i]);
+				id.loc=ret.loc;
+				id.type=argTypes[i];
+				return id;
+			}
+		}
+		auto argExp=argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
+		argExp.loc=fd.loc; // TODO: use precise parameter locations
+		Expression argRet=new ReturnExp(argExp);
+		argRet.loc=argExp.loc;
+		body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_)~[argRet]);
 	}
-	auto argExp=argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
-	argExp.loc=fd.loc; // TODO: use precise parameter locations
-	Expression argRet=new ReturnExp(argExp);
-	argRet.loc=argExp.loc;
-	Expression[] statements;
-	body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_)~[argRet]);
 	import options;
 	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
 		writeln(fd);
