@@ -952,7 +952,7 @@ struct Parser{
 			if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
 			else expect(Tok!"]");
 		}else rightExclusive=true;
-		if(leftExclusive == rightExclusive) handler.note("deprecation: use half-open intervals", begin.to(tok.loc));
+		if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
 		auto bdy=parseCompoundExp();
 		return res=New!ForExp(var,leftExclusive,left,step,rightExclusive,right,bdy);
 	}

@@ -16,6 +16,7 @@ abstract class ErrorHandler{
 
 
 	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}body{nerrors++;}   // in{assert(loc.rep);}body
+	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}body{}
 	void note(lazy string note, Location loc)in{assert(loc.rep);}body{};
 
 	void message(string msg){ stderr.write(msg); }
@@ -32,11 +33,19 @@ abstract class ErrorHandler{
 class SimpleErrorHandler: ErrorHandler{
 	override void error(lazy string err, Location loc){
 		if(loc.line == 0){ // just here for robustness
-			stderr.writeln("(location missing): "~err);
+			stderr.writeln("(location missing): error: "~err);
 			return;
 		}
 		nerrors++;
 		stderr.writeln(loc.source.name,'(',loc.line,"): error: ",err);
+	}
+	override void warning(lazy string err, Location loc){
+		if(loc.line == 0){ // just here for robustness
+			stderr.writeln("(location missing): warning: "~err);
+			return;
+		}
+		nerrors++;
+		stderr.writeln(loc.source.name,'(',loc.line,"): warning: ",err);
 	}
 }
 
@@ -75,8 +84,13 @@ class JSONErrorHandler: ErrorHandler{
 		nerrors++;
 		result~=makeJS(error,loc,"error",true);
 	}
-	override void note(lazy string note, Location loc){
+	override void warning(lazy string warning, Location loc){
 		if(!loc.line) return;
+		nerrors++;
+		result~=makeJS(warning,loc,"warning",true);
+	}
+	override void note(lazy string note, Location loc){
+		if(!loc.line||!result.length) return;
 		result[$-1]["relatedInformation"]~=[makeJS(note,loc,"note",false)];
 	}
 	override void finalize(){ stderr.writeln(result); }
@@ -88,12 +102,15 @@ class JSONErrorHandler: ErrorHandler{
 class VerboseErrorHandler: ErrorHandler{
 	override void error(lazy string err, Location loc){
 		nerrors++;
-		impl(err, loc, false);
+		impl(err, loc, "error");
+	}
+	override void warning(lazy string warn, Location loc){
+		impl(warn, loc, "warning");
 	}
 	override void note(lazy string err, Location loc){
-		impl(err, loc, true);
+		impl(err, loc, "note");
 	}
-	private void impl(lazy string err, Location loc, bool isNote){
+	private void impl(lazy string err, Location loc, string severity){
 		if(loc.line == 0||!loc.rep.length){ // just here for robustness
 			stderr.writeln("(location missing): "~err);
 			return;
@@ -103,15 +120,15 @@ class VerboseErrorHandler: ErrorHandler{
 		auto line = src.getLineOf(loc.rep);
 		if(loc.rep.ptr<line.ptr) loc.rep=loc.rep[line.ptr-loc.rep.ptr..$];
 		auto column=getColumn(loc,tabsize);
-		write(source, loc.line, column, err, isNote);
+		write(source, loc.line, column, err, severity);
 		if(line.length&&line[0]){
 			display(line);
 			highlight(column,column-getColumn(loc,tabsize-1), loc.rep);
-		}		
+		}
 	}
 protected:
-	void write(string source, int line, int column, string error, bool isNote = false){
-		stderr.writeln(source,':',line,":",column,isNote?": note: ":": error: ",error);
+	void write(string source, int line, int column, string error, string severity = "error"){
+		stderr.writeln(source,':',line,":",column,": ",severity,": ",error);
 	}
 	void display(string line){
 		stderr.writeln(line);
@@ -121,18 +138,18 @@ protected:
 		stderr.write(underlineArrow);
 		rep.popFront();
 		foreach(dchar x;rep){if(isNewLine(x)) break; stderr.write(underlineStroke);}
-		stderr.writeln();		
+		stderr.writeln();
 	}
 }
 
 import util.terminal;
 class FormattingErrorHandler: VerboseErrorHandler{
 protected:
-	override void write(string source, int line, int column, string error, bool isNote = false){
+	override void write(string source, int line, int column, string error, string severity = "error"){
 		if(isATTy(stderr)){
-			if(isNote) stderr.writeln(BOLD,source,':',line,":",column,": ",BLACK,"note:",RESET,BOLD," ",error,RESET);
-			else stderr.writeln(BOLD,source,':',line,":",column,": ",RED,"error:",RESET,BOLD," ",error,RESET);
-		}else super.write(source, line, column, error, isNote);
+			if(severity=="error") stderr.writeln(BOLD,source,':',line,":",column,": ",RED,"error:",RESET,BOLD," ",error,RESET);
+			else stderr.writeln(BOLD,source,':',line,":",column,": ",BLACK,severity,":",RESET,BOLD," ",error,RESET);
+		}else super.write(source, line, column, error, severity);
 	}
 	override void highlight(int column, int ntabs, string rep){
 		if(isATTy(stderr)){
