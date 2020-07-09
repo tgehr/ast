@@ -2125,7 +2125,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
 			sl.sstate=SemState.error;
 		}
-		sl.sstate=SemState.completed;
 		return sl;
 	}
 	if(cast(CommaExp)expr){
