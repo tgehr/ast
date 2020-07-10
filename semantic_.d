@@ -2871,7 +2871,7 @@ bool definitelyReturns(Expression e){
 		return false;
 	}
 	if(auto we=cast(WhileExp)e)
-		return isTrue(we.cond) && definitelyReturns(we.bdy);
+		return isTrue(we.cond);
 	if(auto re=cast(RepeatExp)e)
 		return isPositive(re.num) && definitelyReturns(re.bdy);
 	return false;
