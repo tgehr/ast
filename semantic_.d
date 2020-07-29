@@ -1095,7 +1095,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 			if(auto read=sc.isConst(vd))
 				sc.note("variable was made 'const' here", read.loc);
 		}else if(meaning&&!vd) sc.error("can only assign to variables",loc);
-		else sc.error("cannot assign",loc);
+		else if(meaning) sc.error("cannot assign",loc);
 		return false;
 	}else{
 		static if(language==silq){
