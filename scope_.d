@@ -204,8 +204,12 @@ abstract class Scope{
 				if(d.isLinear()){
 					if(!canForgetAppend(d)){
 						errors=true;
-						if(d.sstate!=SemState.error)
-							error(format("%s '%s' is not consumed",d.kind,d.getName),d.loc);
+						import ast.semantic_: unrealizable;
+						if(d.sstate!=SemState.error){
+							bool show=true;
+							if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
+							if(show) error(format("%s '%s' is not consumed",d.kind,d.getName),d.loc);
+						}
 						d.sstate=SemState.error;
 					}else{
 						consume(d);

@@ -1707,6 +1707,10 @@ Expression unwrap(Expression e){
 	return e;
 }
 
+bool unrealizable(Expression e){ // TODO: can we get rid of this concept?
+	return util.among(e,ℕt(false),ℤt(false),ℚt(false),ℝ(false),ℂ(false));
+}
+
 Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	if(expr.sstate==SemState.completed||expr.sstate==SemState.error) return expr;
 	if(expr.sstate==SemState.started){
@@ -1738,8 +1742,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					expr.sstate=SemState.completed;
 				}
 			}
-			if(expr.type==ℕt(false)||expr.type==ℤt(false)||expr.type==ℚt(false)||expr.type==ℝ(false)||expr.type==ℂ(false)){
-				sc.error(format("instances of type '%s' not realizable",expr.type),expr.loc);
+			if(unrealizable(expr.type)){
+				sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
 				expr.sstate=SemState.error;
 			}
 		}else{
@@ -1880,11 +1884,11 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 				bool checkCapture(){
 					if(constResult){
-						sc.error("cannot capture variable as constant", id.loc);
+						sc.error("cannot capture quantum variable as constant", id.loc);
 						id.sstate=SemState.error;
 						return false;
 					}else if(vd&&(vd.isConst||sc.isConst(vd))){
-						sc.error("cannot capture 'const' variable", id.loc);
+						sc.error("cannot capture 'const' quantum variable", id.loc);
 						if(auto read=sc.isConst(vd))
 							sc.note("variable was made 'const' here", read.loc);
 						id.sstate=SemState.error;
@@ -1989,8 +1993,11 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			assert(!replaceIndex);
 			Expression arg;
 			if(!idx.trailingComma&&idx.a.length==1) arg=idx.a[0];
-			else arg=new TupleExp(idx.a);
-			arg.loc=idx.loc;
+			else{
+				arg=new TupleExp(idx.a);
+				if(idx.a.length) arg.loc=idx.a[0].loc.to(idx.a[$-1].loc);
+				else arg.loc=idx.loc; // TODO: improve?
+			}
 			auto ce=new CallExp(idx.e,arg,true,false);
 			ce.loc=idx.loc;
 			return expr=callSemantic(ce,sc,ConstResult.no);
@@ -2792,7 +2799,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}body{
 	auto e=expressionSemantic(expr,sc,ConstResult.no);
 	if(!e) return null;
 	if(e.type==typeTy) return e;
-	if(expr.sstate!=SemState.error){
+	if(e.sstate!=SemState.error){
 		auto id=cast(Identifier)expr;
 		if(id&&id.meaning){
 			auto decl=id.meaning;
@@ -2802,7 +2809,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}body{
 		expr.sstate=SemState.error;
 	}
 	return null;
- }
+}
 
 Expression typeForDecl(Declaration decl){
 	if(auto dat=cast(DatDecl)decl){
