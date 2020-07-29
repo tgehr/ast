@@ -2619,7 +2619,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				assert(!!id.meaning);
 				if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
 				if(id.meaning.scope_.isNestedIn(fsc)){
-					fsc.error(format("local variable '%s' appears in function return type '%s' (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, id.name), fd.loc);
+					fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
 					fd.sstate=SemState.error;
 				}
 				typeConstBlock(id.meaning,fd,sc);
