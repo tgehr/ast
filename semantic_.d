@@ -947,7 +947,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	if(be.e2.type && be.e2.type.sstate==SemState.completed){
 		foreach(id;be.e2.type.freeIdentifiers){
 			assert(!!id.meaning);
-			typeConstBlock(id.meaning,be,sc);
+			auto blocker=r;
+			if(auto sde=cast(SingleDefExp)blocker) if(sde.decl) blocker=sde.decl;
+			typeConstBlock(id.meaning,blocker,sc);
 		}
 	}
 	if(r.sstate!=SemState.error) r.sstate=SemState.completed;
@@ -1076,6 +1078,19 @@ bool isAssignable(Declaration meaning,Scope sc){
 	return true;
 }
 
+void typeConstBlockNote(VarDecl vd,Scope sc)in{
+	assert(!!vd.typeConstBlocker);
+}do{
+	string name;
+	if(auto decl=cast(Declaration)vd.typeConstBlocker) name=decl.getName;
+	writeln(vd.typeConstBlocker," ",typeid(vd.typeConstBlocker));
+	if(name){
+		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",vd.name,name),vd.typeConstBlocker.loc);
+	}else{
+		sc.note(format("'%s' was made 'const' because it appeared in type of local variable",vd.name),vd.typeConstBlocker.loc);
+	}
+}
+
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
 	auto vd=cast(VarDecl)meaning;
 	if(!vd||vd.isConst||sc.isConst(vd)){
@@ -1083,16 +1098,8 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 			if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
 				sc.error("cannot reassign 'const' parameters",loc);
 			else sc.error("cannot reassign 'const' variables",loc);
-			if(vd.typeConstBlocker){
-				string name;
-				if(auto decl=cast(Declaration)vd.typeConstBlocker) name=decl.getName;
-				if(name){
-					sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",vd.name,name),vd.typeConstBlocker.loc);
-				}else{
-					sc.note(format("'%s' was made 'const' because it appeared in type of local variable",vd.name),vd.typeConstBlocker.loc);
-				}
-			}
-			if(auto read=sc.isConst(vd))
+			if(vd.typeConstBlocker) typeConstBlockNote(vd,sc);
+			else if(auto read=sc.isConst(vd))
 				sc.note("variable was made 'const' here", read.loc);
 		}else if(meaning&&!vd) sc.error("can only assign to variables",loc);
 		else if(meaning) sc.error("cannot assign",loc);

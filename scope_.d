@@ -161,11 +161,27 @@ abstract class Scope{
 		if(rnsym&&!r) r=rnsymtab.get(ident.ptr,null);
 		static if(language==silq){
 			if(kind==Lookup.consuming&&r&&r.isLinear()){
-				if(auto read=isConst(r)){
-					error(format("cannot consume 'const' variable '%s'",ident), ident.loc);
-					note("variable was made 'const' here", read.loc);
-					ident.sstate=SemState.error;
-				}else consume(r);
+				bool doConsume=true;
+				if(auto vd=cast(VarDecl)r){
+					import ast.semantic_:typeConstBlockNote;
+					if(vd.typeConstBlocker){
+						error(format("cannot consume 'const' variable '%s'",ident), ident.loc);
+						typeConstBlockNote(vd,this);
+						doConsume=false;
+					}
+				}
+				if(doConsume){
+					if(auto read=isConst(r)){
+						error(format("cannot consume 'const' variable '%s'",ident), ident.loc);
+						note("variable was made 'const' here", read.loc);
+						ident.sstate=SemState.error;
+						doConsume=false;
+					}
+				}
+				if(doConsume){
+					if(auto vd=cast(VarDecl)r) assert(!vd.isConst);
+					consume(r);
+				}
 			}
 			if(kind==Lookup.constant&&r&&r.isLinear()){
 				if(r !in constBlock)
