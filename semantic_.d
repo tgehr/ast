@@ -2372,7 +2372,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	}
 	if(auto ae=cast(UBitNotExp)expr) return expr=handleUnary!minusBitNotType("bitwise not",ae,ae.e);
 	static if(language==silq) if(auto ae=cast(UnaryExp!(Tok!"const"))expr){
-		sc.error("invalid 'const' annotation", ae.loc);
+		sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ae.loc);
 		ae.sstate=SemState.error;
 		return ae;
 	}

@@ -208,7 +208,10 @@ abstract class Scope{
 						if(d.sstate!=SemState.error){
 							bool show=true;
 							if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
-							if(show) error(format("%s '%s' is not consumed",d.kind,d.getName),d.loc);
+							if(show){
+								if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+								else error(format("%s '%s' is not consumed",d.kind,d.getName),d.loc);
+							}
 						}
 						d.sstate=SemState.error;
 					}else{
