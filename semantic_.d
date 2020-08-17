@@ -2024,42 +2024,66 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		propErr(idx.a,idx);
 		if(idx.sstate==SemState.error)
 			return idx;
-		Expression check(Expression next,Expression indexTy,Location indexLoc){
+		Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
 			if(isBasicIndexType(indexTy)){
 				if(!indexTy.isClassical()&&next.hasClassicalComponent()){
 					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
 					idx.sstate=SemState.error;
 				}
 				return next;
-			}else{
-				sc.error(format("index should be integer, not %s",indexTy),indexLoc);
-				idx.sstate=SemState.error;
+			}
+			if(auto tpl=cast(TupleExp)index){
+				auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
+				if(types.all!(e=>e!is null)) return tupleTy(types);
 				return null;
 			}
+			if(auto at=cast(ArrayTy)indexTy){
+				auto type=check(next,null,at.next,indexLoc);
+				if(type) return arrayTy(type);
+				return null;
+			}
+			if(auto vt=cast(VectorTy)indexTy){
+				auto type=check(next,null,vt.next,indexLoc);
+				if(type) return vectorTy(type,vt.num);
+				return null;
+			}
+			if(auto tt=cast(TupleTy)indexTy){
+				auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
+				if(types.all!(e=>e!is null)) return tupleTy(types);
+				return null;
+			}
+			sc.error(format("index should be integer, not %s",indexTy),indexLoc);
+			idx.sstate=SemState.error;
+			return null;
 		}
 		if(auto at=cast(ArrayTy)idx.e.type){
-			idx.type=check(at.next, idx.a.type, idx.a.loc);
+			idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
 		}else if(auto vt=cast(VectorTy)idx.e.type){
-			idx.type=check(vt.next, idx.a.type, idx.a.loc);
+			idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
 		}else if(isInt(idx.e.type)||isUint(idx.e.type)){
-			idx.type=check(Bool(idx.e.type.isClassical()), idx.a.type, idx.a.loc);
+			idx.type=check(Bool(idx.e.type.isClassical()), idx.a, idx.a.type, idx.a.loc);
 		}else if(auto tt=cast(TupleTy)idx.e.type){
 			Expression checkTpl(Expression index){
-				auto lit=cast(LiteralExp)index;
-				if(!lit||lit.lit.type!=Tok!"0"){
-					sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
-					idx.sstate=SemState.error;
-					return null;
-				}else{
-					auto c=ℤ(lit.lit.str);
-					if(c<0||c>=tt.types.length){
-						sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
-						idx.sstate=SemState.error;
-						return null;
-					}else{
-						return tt.types[cast(size_t)c.toLong()];
+				if(auto lit=cast(LiteralExp)index){
+					if(lit.lit.type==Tok!"0"){
+						auto c=ℤ(lit.lit.str);
+						if(c<0||c>=tt.types.length){
+							sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+							idx.sstate=SemState.error;
+							return null;
+						}else{
+							return tt.types[cast(size_t)c.toLong()];
+						}
 					}
 				}
+				if(auto tpl=cast(TupleExp)index){
+					auto types=tpl.e.map!(e=>checkTpl(e)).array;
+					if(types.all!(e=>e!is null)) return tupleTy(types);
+					return null;
+				}
+				sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
+				idx.sstate=SemState.error;
+				return null;
 			}
 			idx.type=checkTpl(idx.a);
 		}else{
