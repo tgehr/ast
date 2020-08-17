@@ -2024,38 +2024,44 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		propErr(idx.a,idx);
 		if(idx.sstate==SemState.error)
 			return idx;
-		void check(Expression next){
-			if(!isBasicIndexType(idx.a.type)){
-				sc.error(format("index should be integer, not %s",idx.a.type),idx.loc);
-				idx.sstate=SemState.error;
-			}else{
-				idx.type=next;
-				if(!idx.a.type.isClassical()&&idx.type.hasClassicalComponent()){
-					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",idx.type),idx.loc);
+		Expression check(Expression next,Expression indexTy,Location indexLoc){
+			if(isBasicIndexType(indexTy)){
+				if(!indexTy.isClassical()&&next.hasClassicalComponent()){
+					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
 					idx.sstate=SemState.error;
 				}
+				return next;
+			}else{
+				sc.error(format("index should be integer, not %s",indexTy),indexLoc);
+				idx.sstate=SemState.error;
+				return null;
 			}
 		}
 		if(auto at=cast(ArrayTy)idx.e.type){
-			check(at.next);
+			idx.type=check(at.next, idx.a.type, idx.a.loc);
 		}else if(auto vt=cast(VectorTy)idx.e.type){
-			check(vt.next);
+			idx.type=check(vt.next, idx.a.type, idx.a.loc);
 		}else if(isInt(idx.e.type)||isUint(idx.e.type)){
-			check(Bool(idx.e.type.isClassical()));
+			idx.type=check(Bool(idx.e.type.isClassical()), idx.a.type, idx.a.loc);
 		}else if(auto tt=cast(TupleTy)idx.e.type){
-			auto lit=cast(LiteralExp)idx.a;
-			if(!lit||lit.lit.type!=Tok!"0"){
-				sc.error(format("index for type %s should be integer constant",tt),idx.loc); // TODO: allow dynamic indexing if known to be safe?
-				idx.sstate=SemState.error;
-			}else{
-				auto c=ℤ(lit.lit.str);
-				if(c<0||c>=tt.types.length){
-					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),idx.loc);
+			Expression checkTpl(Expression index){
+				auto lit=cast(LiteralExp)index;
+				if(!lit||lit.lit.type!=Tok!"0"){
+					sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
 					idx.sstate=SemState.error;
+					return null;
 				}else{
-					idx.type=tt.types[cast(size_t)c.toLong()];
+					auto c=ℤ(lit.lit.str);
+					if(c<0||c>=tt.types.length){
+						sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+						idx.sstate=SemState.error;
+						return null;
+					}else{
+						return tt.types[cast(size_t)c.toLong()];
+					}
 				}
 			}
+			idx.type=checkTpl(idx.a);
 		}else{
 			sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
 			idx.sstate=SemState.error;
