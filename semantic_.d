@@ -1691,11 +1691,18 @@ Expression powerType(Expression t1, Expression t2){
 	if(util.among(t1,Bool(false),ℕt(false),ℤt(false),ℚt(false))&&isSubtype(t2,ℤt(false))) return ℚt(false);
 	return ℝ(classical); // TODO: good?
 }
-Expression minusBitNotType(Expression t){
+Expression minusType(Expression t){
 	if(preludeNumericTypeName(t) != null)
 		return t;
 	if(!isNumeric(t)) return null;
 	if(cast(BoolTy)t||cast(ℕTy)t) return ℤt(t.isClassical());
+	return t;
+}
+Expression bitNotType(Expression t){
+	if(preludeNumericTypeName(t) != null)
+		return t;
+	if(!isNumeric(t)) return null;
+	if(cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
 }
 Expression notType(Expression t){
@@ -1827,7 +1834,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				sc.error("forget expression must be 'lifted'",fe.val.loc);
 				fe.sstate=SemState.error;
 			}
-			if(fe.var.type&&fe.val.type && !joinTypes(fe.var.type,fe.val.type)){
+			if(fe.var.type&&fe.val.type && !joinTypes(fe.var.type,fe.val.type)){ // TODO: use cmpTypes here
 				sc.error(format("incompatible types '%s' and '%s' for forget",fe.var.type,fe.val.type),fe.loc);
 				fe.sstate=SemState.error;
 			}
@@ -2381,7 +2388,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	if(auto ae=cast(BitOrExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise or",ae,ae.e1,ae.e2);
 	if(auto ae=cast(BitXorExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise xor",ae,ae.e1,ae.e2);
 	if(auto ae=cast(BitAndExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise and",ae,ae.e1,ae.e2);
-	if(auto ae=cast(UMinusExp)expr) return expr=handleUnary!minusBitNotType("minus",ae,ae.e);
+	if(auto ae=cast(UMinusExp)expr) return expr=handleUnary!minusType("minus",ae,ae.e);
 	if(auto ae=cast(UNotExp)expr){
 		ae.e=expressionSemantic(ae.e,sc,ConstResult.yes);
 		static if(language==silq) if(ae.e.type==typeTy){
@@ -2400,7 +2407,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		}
 		return expr=handleUnary!notType("not",ae,ae.e);
 	}
-	if(auto ae=cast(UBitNotExp)expr) return expr=handleUnary!minusBitNotType("bitwise not",ae,ae.e);
+	if(auto ae=cast(UBitNotExp)expr) return expr=handleUnary!bitNotType("bitwise not",ae,ae.e);
 	static if(language==silq) if(auto ae=cast(UnaryExp!(Tok!"const"))expr){
 		sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ae.loc);
 		ae.sstate=SemState.error;
