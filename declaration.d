@@ -211,7 +211,7 @@ class DatDecl: Declaration{
 		Expression[string] subst;
 		if(isTuple){
 			foreach(i,p;params)
-				subst[p.getName]=new IndexExp(arg,[new LiteralExp(Token(Tok!"0",to!string(i)))],false).eval();
+				subst[p.getName]=new IndexExp(arg,new LiteralExp(Token(Tok!"0",to!string(i)))).eval();
 		}else{
 			assert(params.length==1);
 			subst[params[0].getName]=arg;

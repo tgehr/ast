@@ -1,4 +1,4 @@
-// Written in the D programming language
+ // Written in the D programming language
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.parser;
 import astopt;
@@ -370,27 +370,31 @@ struct Parser{
 		return q(e.data,trailingComma);
 	}
 
-	Expression parseParenthesized()in{assert(ttype==Tok!"(");}body{
+	Expression parseParenthesized(string parens="()")()in{assert(ttype==Tok!(parens[0..1]));}body{
 		mixin(SetLoc!Expression);
 		nextToken();
-		if(ttype==Tok!")"){
+		if(ttype==Tok!(parens[1..2])){
 			nextToken();
-			res=New!TupleExp(Expression[].init);
+			return res=New!TupleExp(Expression[].init);
 		}else{
 			res=parseExpression(rbp!(Tok!","));
-			if(ttype==Tok!","){
-				auto tpl=[res];
-				while(ttype==Tok!","){
-					nextToken();
-					if(ttype==Tok!")") break;
-					tpl~=parseExpression(rbp!(Tok!","));
-				}
-				expect(Tok!")");
-				res=New!TupleExp(tpl);
-			}else{
-				expect(Tok!")");
-				res.brackets++;
+			return res=parseParenthesized2!parens(res);
+		}
+	}
+
+	Expression parseParenthesized2(string parens)(Expression res){
+		if(ttype==Tok!","){
+			auto tpl=[res];
+			while(ttype==Tok!","){
+				nextToken();
+				if(ttype==Tok!(parens[1..2])) break;
+				tpl~=parseExpression(rbp!(Tok!","));
 			}
+			expect(Tok!(parens[1..2]));
+			res=New!TupleExp(tpl);
+		}else{
+			expect(Tok!(parens[1..2]));
+			res.brackets++;
 		}
 		return res;
 	}
@@ -530,7 +534,13 @@ struct Parser{
 			//case Tok!"?": mixin(rule!(TernaryExp,"_",Existing,"left",Expression,":",OrOrExp));
 			case Tok!"[":
 				nextToken();
-				if(ttype==Tok!"]"){loc=loc.to(tok.loc); nextToken(); mixin(rule!(IndexExp,Existing,q{left,(Expression[]).init,false}));}
+				if(ttype==Tok!"]"){
+					loc=loc.to(tok.loc);
+					auto empty=New!TupleExp(Expression[].init);
+					empty.loc=ptok.loc.to(tok.loc);
+					nextToken();
+					mixin(rule!(IndexExp,Existing,q{left,empty}));
+				}
 				auto l=parseExpression(rbp!(Tok!","));
 				if(ttype==Tok!".."){
 					nextToken();
@@ -538,8 +548,10 @@ struct Parser{
 					expect(Tok!"]");
 					return res=new SliceExp(left,l,r);
 				}
-				res=New!IndexExp(left,parseArgumentList(Tok!"]",l).expand);
-				expect(Tok!"]");
+				auto tpl=parseParenthesized2!"[]"(l);
+				loc=loc.to(ptok.loc);
+				tpl.loc=loc;
+				res=New!IndexExp(left,tpl);
 				return res;
 			case Tok!"(":
 				auto a=parseParenthesized();

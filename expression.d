@@ -527,25 +527,22 @@ class PostfixExp(TokenType op): Expression{
 
 class IndexExp: Expression{ //e[a...]
 	Expression e;
-	Expression[] a;
-	bool trailingComma;
-	this(Expression exp, Expression[] args, bool trailingComma){e=exp; a=args; this.trailingComma=trailingComma; }
+	Expression a;
+	this(Expression exp, Expression arg){e=exp; a=arg;}
 	override IndexExp copyImpl(CopyArgs args){
-		return new IndexExp(e.copy(args),a.map!(a=>a.copy(args)).array,trailingComma);
+		return new IndexExp(e.copy(args),a.copy(args));
 	}
 	override string toString(){
-		return _brk(e.toString()~'['~join(map!(to!string)(a),",")~(trailingComma?",":"")~']');
+		return _brk(e.toString()~a.tupleToString(true));
 	}
 	override Expression evalImpl(Expression ntype){
-		if(a.length!=1) return this;
 		auto ne=e.eval();
-		auto na=a.dup;
-		foreach(ref x;a) x=x.eval();
+		auto na=a.eval();
 		Expression[] exprs;
 		if(auto tpl=cast(TupleExp)ne) exprs=tpl.e;
 		if(auto arr=cast(ArrayExp)ne) exprs=arr.e;
 		if(exprs.length){
-			if(auto le=cast(LiteralExp)na[0]){
+			if(auto le=cast(LiteralExp)na){
 				if(le.lit.type==Tok!"0"&&!le.lit.str.canFind(".")){
 					auto idx=ℤ(le.lit.str);
 					if(0<=idx&&idx<exprs.length) return exprs[cast(size_t)idx].evalImpl(ntype);
@@ -553,38 +550,37 @@ class IndexExp: Expression{ //e[a...]
 			}
 		}
 		if(ne==e && na==a && ntype == type) return this;
-		return new IndexExp(ne,na,trailingComma);
+		return new IndexExp(ne,na);
 	}
 	override int freeVarsImpl(scope int delegate(string) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
-		foreach(x;a) if(auto r=x.freeVarsImpl(dg)) return r;
+		if(auto r=a.freeVarsImpl(dg)) return r;
 		return 0;
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(e)) return r;
-		foreach(x;a) if(auto r=dg(x)) return r;
+		if(auto r=dg(a)) return r;
 		return 0;
 	}
 	override IndexExp substituteImpl(Expression[string] subst){
 		auto ne=e.substitute(subst);
-		auto na=a.dup;
-		foreach(ref x;na) x=x.substitute(subst);
+		auto na=a.substitute(subst);
 		if(ne==e&&na==a) return this;
-		auto r=new IndexExp(ne,na,trailingComma);
+		auto r=new IndexExp(ne,na);
 		r.loc=loc;
 		return r;
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
 		auto idx=cast(IndexExp)rhs;
-		if(!idx||a.length!=idx.a.length) return false;
-		return e.unify(idx.e,subst,meet)&&all!(i=>a[i].unify(idx.a[i],subst,meet))(iota(a.length));
+		if(!idx) return false;
+		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
 	}
 	override bool opEquals(Object rhs){
 		auto idx=cast(IndexExp)rhs;
 		return idx&&idx.e==e&&idx.a==a;
 	}
 
-	override Annotation getAnnotation(){ return reduce!min(e.getAnnotation(), a.map!(x=>x.getAnnotation())); }
+	override Annotation getAnnotation(){ return min(e.getAnnotation(), a.getAnnotation()); }
 }
 
 class SliceExp: Expression{

@@ -961,6 +961,10 @@ Identifier getIdFromIndex(IndexExp e){
 	return cast(Identifier)e.e;
 }
 
+bool isBasicIndexType(Expression ty){
+	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isInt(ty)||isUint(ty);
+}
+
 static if(language==silq){
 Expression indexReplaceSemantic(IndexExp theIndex,ref Expression rhs,Location loc,Scope sc){
 	void consumeArray(IndexExp e){
@@ -979,8 +983,12 @@ Expression indexReplaceSemantic(IndexExp theIndex,ref Expression rhs,Location lo
 	theIndex=nIndex;
 	Identifier id;
 	bool check(IndexExp e){
-		if(e&&(!e.a[0].isLifted(sc)||e.a[0].type&&!e.a[0].type.isClassical())){
-			sc.error("index for component replacement must be 'lifted' and classical",e.a[0].loc);
+		if(e&&(!e.a.isLifted(sc)||e.a.type&&!e.a.type.isClassical())){
+			sc.error("index for component replacement must be 'lifted' and classical",e.a.loc);
+			return false;
+		}
+		if(e&&e.a.type&&!isBasicIndexType(e.a.type)){
+			sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
 			return false;
 		}
 		if(e) if(auto idx=cast(IndexExp)e.e) return check(idx);
@@ -1035,8 +1043,12 @@ Expression permuteSemantic(DefineExp be,Scope sc)in{ // TODO: generalize defineS
 		if(auto idx=cast(IndexExp)e){
 			idx.byRef=true;
 			bool check(IndexExp e){
-				if(e&&(!e.a[0].isLifted(sc)||e.a[0].type&&!e.a[0].type.isClassical())){
-					sc.error("index in permute statement must be 'lifted' and classical",e.a[0].loc);
+				if(e&&(!e.a.isLifted(sc)||e.a.type&&!e.a.type.isClassical())){
+					sc.error("index in permute statement must be 'lifted' and classical",e.a.loc);
+					return false;
+				}
+				if(e&&e.a.type&&!isBasicIndexType(e.a.type)){
+					sc.error(format("index in permute statement should be integer, not '%s'",e.a.type),e.a.loc);
 					return false;
 				}
 				if(e) if(auto idx=cast(IndexExp)e.e) return check(idx);
@@ -1998,14 +2010,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		idx.e=expressionSemantic(idx.e,sc,ConstResult.yes);
 		if(auto ft=cast(FunTy)idx.e.type){
 			assert(!replaceIndex);
-			Expression arg;
-			if(!idx.trailingComma&&idx.a.length==1) arg=idx.a[0];
-			else{
-				arg=new TupleExp(idx.a);
-				if(idx.a.length) arg.loc=idx.a[0].loc.to(idx.a[$-1].loc);
-				else arg.loc=idx.loc; // TODO: improve?
-			}
-			auto ce=new CallExp(idx.e,arg,true,false);
+			auto ce=new CallExp(idx.e,idx.a,true,false);
 			ce.loc=idx.loc;
 			return expr=callSemantic(ce,sc,ConstResult.no);
 		}
@@ -2015,26 +2020,19 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				return tty;
 		}
 		propErr(idx.e,idx);
-		foreach(ref a;idx.a){
-			a=expressionSemantic(a,sc,ConstResult.yes);
-			propErr(a,idx);
-		}
+		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes);
+		propErr(idx.a,idx);
 		if(idx.sstate==SemState.error)
 			return idx;
 		void check(Expression next){
-			if(idx.a.length!=1){
-				sc.error(format("only one index required to index type %s",idx.e.type),idx.loc);
+			if(!isBasicIndexType(idx.a.type)){
+				sc.error(format("index should be integer, not %s",idx.a.type),idx.loc);
 				idx.sstate=SemState.error;
 			}else{
-				if(!isSubtype(idx.a[0].type,ℤt(true))&&!isSubtype(idx.a[0].type,Bool(false))&&!isInt(idx.a[0].type)&&!isUint(idx.a[0].type)){
-					sc.error(format("index should be integer, not %s",idx.a[0].type),idx.loc);
+				idx.type=next;
+				if(!idx.a.type.isClassical()&&idx.type.hasClassicalComponent()){
+					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",idx.type),idx.loc);
 					idx.sstate=SemState.error;
-				}else{
-					idx.type=next;
-					if(!idx.a[0].type.isClassical()&&idx.type.hasClassicalComponent()){
-						sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",idx.type),idx.loc);
-						idx.sstate=SemState.error;
-					}
 				}
 			}
 		}
@@ -2045,22 +2043,17 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		}else if(isInt(idx.e.type)||isUint(idx.e.type)){
 			check(Bool(idx.e.type.isClassical()));
 		}else if(auto tt=cast(TupleTy)idx.e.type){
-			if(idx.a.length!=1){
-				sc.error(format("only one index required to index type %s",tt),idx.loc);
+			auto lit=cast(LiteralExp)idx.a;
+			if(!lit||lit.lit.type!=Tok!"0"){
+				sc.error(format("index for type %s should be integer constant",tt),idx.loc); // TODO: allow dynamic indexing if known to be safe?
 				idx.sstate=SemState.error;
 			}else{
-				auto lit=cast(LiteralExp)idx.a[0];
-				if(!lit||lit.lit.type!=Tok!"0"){
-					sc.error(format("index for type %s should be integer constant",tt),idx.loc); // TODO: allow dynamic indexing if known to be safe?
+				auto c=ℤ(lit.lit.str);
+				if(c<0||c>=tt.types.length){
+					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),idx.loc);
 					idx.sstate=SemState.error;
 				}else{
-					auto c=ℤ(lit.lit.str);
-					if(c<0||c>=tt.types.length){
-						sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),idx.loc);
-						idx.sstate=SemState.error;
-					}else{
-						idx.type=tt.types[cast(size_t)c.toLong()];
-					}
+					idx.type=tt.types[cast(size_t)c.toLong()];
 				}
 			}
 		}else{
@@ -2755,7 +2748,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 			if(auto id=cast(Identifier)e) return id.name;
 			if(auto fe=cast(FieldExp)e) return fe.f.name;
 			if(auto ie=cast(IndexExp)e){
-				auto idx=candidate(ie.a[0],true);
+				auto idx=candidate(ie.a,true);
 				if(!idx) idx="i";
 				auto low=toLow(idx);
 				if(!low) low="_"~idx;
@@ -2796,12 +2789,16 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}body{
 		}
 	}
 	auto at=cast(IndexExp)expr;
-	if(at&&at.a==[]){
-		expr.type=typeTy;
-		auto next=typeSemantic(at.e,sc);
-		propErr(at.e,expr);
-		if(!next) return null;
-		return arrayTy(next);
+	if(at){
+		if(auto tpl=cast(TupleExp)at.a){
+			if(tpl.length==0){
+				expr.type=typeTy;
+				auto next=typeSemantic(at.e,sc);
+				propErr(at.e,expr);
+				if(!next) return null;
+				return arrayTy(next);
+			}
+		}
 	}
 	auto e=expressionSemantic(expr,sc,ConstResult.no);
 	if(!e) return null;

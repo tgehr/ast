@@ -1072,8 +1072,7 @@ class ProductTy: Type{
 			auto tdom=dom.isTupleTy();
 			assert(!!tdom);
 			foreach(i,n;names){
-				import ast.lexer;
-				auto exp=new IndexExp(arg,[LiteralExp.makeInteger(i)],false);
+				auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
 				exp.type=tdom[i];
 				exp.sstate=SemState.completed;
 				subst[n]=exp.eval();
