@@ -814,6 +814,7 @@ bool consumes(Expression e){
 	return false;
 }
 bool isLifted(Expression e,Scope sc){
+	if(astopt.allowUnsafeCaptureConst && e.isQfree() && cast(Identifier)e) return true;
 	return e.isQfree()&&!e.getDependency(sc).isTop;
 }
 }
@@ -1909,16 +1910,20 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			auto startScope=sc;
 			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 				bool checkCapture(){
-					if(constResult){
-						sc.error("cannot capture quantum variable as constant", id.loc);
-						id.sstate=SemState.error;
-						return false;
-					}else if(vd&&(vd.isConst||sc.isConst(vd))){
-						sc.error("cannot capture 'const' quantum variable", id.loc);
-						if(auto read=sc.isConst(vd))
-							sc.note("variable was made 'const' here", read.loc);
-						id.sstate=SemState.error;
-						return false;
+					static if(language==silq){
+						if(!astopt.allowUnsafeCaptureConst){
+							if(constResult){
+								sc.error("cannot capture quantum variable as constant", id.loc);
+								id.sstate=SemState.error;
+								return false;
+							}else if(vd&&(vd.isConst||sc.isConst(vd))){
+								sc.error("cannot capture 'const' quantum variable", id.loc);
+								if(auto read=sc.isConst(vd))
+									sc.note("variable was made 'const' here", read.loc);
+								id.sstate=SemState.error;
+								return false;
+							}
+						}
 					}
 					return true;
 				}
