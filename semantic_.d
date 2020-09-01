@@ -2223,7 +2223,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		tae.type=typeSemantic(tae.t,sc);
 		propErr(tae.e,tae);
 		propErr(tae.t,tae);
-		if(!tae.type||tae.sstate==SemState.error)
+		if(!tae.type) tae.sstate=SemState.error;
+		if(tae.sstate==SemState.error)
 			return tae;
 		if(auto arr=cast(ArrayExp)tae.e){
 			if(!arr.e.length){
