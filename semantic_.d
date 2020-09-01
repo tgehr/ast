@@ -1422,7 +1422,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 					ce.sstate=SemState.error;
 				}
 				static if(language==silq){
-					if(ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
+					if(ce.e.type.isClassical()&&ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
 					}
