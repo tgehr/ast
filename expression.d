@@ -1324,6 +1324,7 @@ class LambdaExp: Expression{
 		return 0; // TODO: ok?
 	}
 	override Expression evalImpl(Expression ntype){ return this; } // TODO: partially evaluate lambdas?
+	override Annotation getAnnotation(){ return Annotation.qfree; }
 }
 
 class ArrayExp: Expression{
