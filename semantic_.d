@@ -814,8 +814,11 @@ bool consumes(Expression e){
 	return false;
 }
 bool isLifted(Expression e,Scope sc){
-	if(astopt.allowUnsafeCaptureConst && e.isQfree() && !consumes(e)) return true;
-	return e.isQfree()&&!e.getDependency(sc).isTop;
+	if(e.isQfree()){
+		if(!consumes(e)) return true;
+		if(astopt.allowUnsafeCaptureConst && !e.getDependency(sc).isTop) return true;
+	}
+	return false;
 }
 }
 
