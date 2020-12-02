@@ -807,6 +807,7 @@ Dependency getDependency(Expression e,Scope sc)in{
 }
 
 bool consumes(Expression e){
+	if(auto id=cast(Identifier)e) if(auto m=cast(VarDecl)id.meaning) if(m.isConst) return false;
 	if(!e.constLookup&&cast(Identifier)e&&(!e.type||!e.type.isClassical())) return true;
 	foreach(c;e.components)
 		if(c.consumes())
