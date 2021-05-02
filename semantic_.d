@@ -996,11 +996,11 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		}
 		if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
 			return false;
-		auto neq=new NeqExp(e1,e2);
+		Expression neq=new NeqExp(e1,e2);
 		neq.loc=loc;
-		auto res=expressionSemantic(neq,sc,ConstResult.yes).eval();
-		auto le=cast(LiteralExp)res;
-		return le && le.lit.type==Tok!"0" && le.lit.str=="1";
+		neq=expressionSemantic(neq,sc,ConstResult.yes);
+		assert(neq.sstate==SemState.completed);
+		return neq.eval()==LiteralExp.makeBoolean(1);
 	}
 	bool guaranteedDifferentLocations(Expression e1,Expression e2){
 		if(cast(Identifier)e1 && cast(Identifier)e2 && e1!=e2) return true;
@@ -1015,8 +1015,10 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 	}
 	foreach(i;0..indicesToReplace.length){
 		auto idx1=indicesToReplace[i];
+		if(idx1.sstate==SemState.error) continue;
 		foreach(j;i+1..indicesToReplace.length){
 			auto idx2=indicesToReplace[j];
+			if(idx2.sstate==SemState.error) continue;
 			if(!guaranteedDifferentLocations(idx1,idx2)){
 				sc.error("indices may refer to same value",idx2.loc);
 				sc.note("other index is here",idx1.loc);
@@ -1025,7 +1027,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			}
 		}
 	}
-	Tuple!(Expression,Declaration,SemState)[string] consumed;
+	Tuple!(Expression,Declaration,SemState,Scope)[string] consumed;
 	void consumeArray(IndexExp e){
 		if(auto idx=cast(IndexExp)e.e){
 			consumeArray(idx);
@@ -1039,13 +1041,14 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			id.type=tpl[0];
 			id.meaning=tpl[1];
 			id.sstate=tpl[2];
+			id.scope_=tpl[3];
 			return;
 		}
 		e.e=expressionSemantic(e.e,sc,ConstResult.no); // consume array
 		e.e.constLookup=true;
 		id=cast(Identifier)e.e;
 		assert(!!id);
-		consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate);
+		consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
 	}
 	Identifier[] ids;
 	foreach(ref theIndex;indicesToReplace){
@@ -2096,6 +2099,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	}
 	if(auto idx=cast(IndexExp)expr){
 		bool replaceIndex=false;
+		size_t replaceIndexLoc=size_t.max;
 		bool indexEquals(Expression e1,Expression e2){
 			if(auto id1=cast(Identifier)e1)
 				if(auto id2=cast(Identifier)e2)
@@ -2108,12 +2112,17 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					propErr(idx1.a,idx1);
 					idx2.a=expressionSemantic(idx2.a,sc,ConstResult.yes);
 					propErr(idx2.a,idx2);
-					return idx1.a==idx2.a;
+					if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
+						return false;
+					Expression eq=new EqExp(idx1.a,idx2.a);
+					eq=expressionSemantic(eq,sc,ConstResult.yes);
+					assert(eq.sstate==SemState.completed);
+					return eq.eval()==LiteralExp.makeBoolean(1);
 				}
 			}
 			return false;
 		}
-		foreach(indexToReplace;sc.indicesToReplace){
+		foreach(i,indexToReplace;sc.indicesToReplace){
 			if(indexToReplace&&indexEquals(indexToReplace,idx)){
 				auto rid=getIdFromIndex(indexToReplace);
 				assert(rid && rid.meaning);
@@ -2122,6 +2131,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					if(!cid.meaning){
 						cid.meaning=rid.meaning;
 						replaceIndex=true;
+						replaceIndexLoc=i;
 						break;
 					}
 				}
@@ -2213,8 +2223,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		if(replaceIndex){
 			idx.byRef=true;
 			import std.range;
-			auto loc=sc.indicesToReplace.countUntil(idx);
-			assert(loc<sc.indicesToReplace.length);
+			assert(replaceIndexLoc<sc.indicesToReplace.length);
 			/*auto loc=sc.indicesToReplace.indexOf(idx);
 			if(loc==-1 && sc.indicesToReplace.any!(idx=>getIdFromIndex(idx).name==getIdFromIndex(idx).name)){
 				sc.error("indices for component replacement must be identical",idx.loc);
@@ -2224,10 +2233,10 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}*/
 			if(constResult){
 				sc.error("replaced component must be consumed",idx.loc);
-				sc.note("replaced component is here",sc.indicesToReplace[loc].loc);
+				sc.note("replaced component is here",sc.indicesToReplace[replaceIndexLoc].loc);
 				idx.sstate=SemState.error;
 			}
-			sc.indicesToReplace[loc]=null;
+			sc.indicesToReplace[replaceIndexLoc]=null;
 		}
 		return idx;
 	}

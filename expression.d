@@ -1042,8 +1042,8 @@ class BinaryExp(TokenType op): ABinaryExp{
 				}
 			}
 			static if(op==Tok!"="||op==Tok!"≠"){
-				if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2)
-					return LiteralExp.makeBoolean(op==Tok!"="?ne1==ne2:ne1!=ne2);
+				if(ne1==ne2) return make(LiteralExp.makeBoolean(op==Tok!"="));
+				if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
 				if(util.among(ne1.type,ℕt(true),ℤt(true))&&util.among(ne2.type,ℕt(true),ℤt(true))){
 					if(!cast(LiteralExp)ne2){
 						Expression create(Expression exp,Expression type){
