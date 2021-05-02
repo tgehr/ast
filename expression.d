@@ -279,8 +279,13 @@ class LiteralExp: Expression{
 		tok.type=Tok!"0";
 		tok.str=text(i);
 		auto r=new LiteralExp(tok);
-		r.type=ℕt(true);
+		r.type=i>=0?ℕt(true):ℤt(true);
 		r.sstate=SemState.completed;
+		return r;
+	}
+	static LiteralExp makeBoolean(bool b){
+		auto r=makeInteger(b?1:0);
+		r.type=Bool(true);
 		return r;
 	}
 	override LiteralExp copyImpl(CopyArgs args){
@@ -487,6 +492,13 @@ class UnaryExp(TokenType op): Expression{
 
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.eval();
+		static if(op==Tok!"-"){
+			if(auto le=cast(LiteralExp)ne){
+				if(le.lit.type==Tok!"0"){
+					return LiteralExp.makeInteger(-ℤ(le.lit.str)); // TODO: replace literal exp internal representation
+				}
+			}
+		}
 		if(ne == e && ntype == type) return this;
 		return new UnaryExp!op(ne);
 	}
@@ -917,12 +929,12 @@ class BinaryExp(TokenType op): ABinaryExp{
 							nle.sstate=SemState.completed;
 							return make(new BinaryExp!sub1(se1.e1,nle));
 						}
-						if(se1.e2==ne2) return se1.e1;
+						if(se1.e2==ne2) return se1.e1.evalImpl(ntype);
 					}
 				}
 				static foreach(sub2;[Tok!"-",Tok!"sub"]){
 					if(auto se2=cast(BinaryExp!sub2)ne2){
-						if(se2.e2==ne1) return se2.e1;
+						if(se2.e2==ne1) return se2.e1.evalImpl(ntype);
 					}
 				}
 				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
@@ -957,6 +969,14 @@ class BinaryExp(TokenType op): ABinaryExp{
 					}
 				}
 				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return ne1.evalImpl(ntype);
+				}
+				if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
+					if(ae1.e1==ne2) return ae1.e2.evalImpl(ntype);
+					if(ae1.e2==ne2) return ae1.e1.evalImpl(ntype);
+				}
+				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
+					if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2.evalImpl(ntype)));
+					if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1.evalImpl(ntype)));
 				}
 				static foreach(sub2;[Tok!"-",Tok!"sub"]){
 					if(auto se2=cast(BinaryExp!sub2)ne2){
@@ -1018,6 +1038,24 @@ class BinaryExp(TokenType op): ABinaryExp{
 							a.sstate=SemState.completed;
 							return make(new BinaryExp!(Tok!"·")(a,ne1));
 						}
+					}
+				}
+			}
+			static if(op==Tok!"="||op==Tok!"≠"){
+				if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2)
+					return LiteralExp.makeBoolean(op==Tok!"="?ne1==ne2:ne1!=ne2);
+				if(util.among(ne1.type,ℕt(true),ℤt(true))&&util.among(ne2.type,ℕt(true),ℤt(true))){
+					if(!cast(LiteralExp)ne2){
+						Expression create(Expression exp,Expression type){
+							exp.type=type;
+							exp.sstate=SemState.completed;
+							exp.loc=ne1.loc.to(ne2.loc);
+							return exp;
+						}
+						import ast.semantic_: subtractionType;
+						auto sub=create(new BinaryExp!(Tok!"-")(ne1,ne2), subtractionType(ne1.type,ne2.type));
+						auto zero=create(LiteralExp.makeInteger(0),ℕt(true));
+						return make(new BinaryExp!op(sub,zero));
 					}
 				}
 			}
