@@ -57,7 +57,7 @@ abstract class Expression: Node{
 		auto r=evalImpl(ntype);
 		if(!r.type) r.type=ntype;
 		else if(r is this) return r;
-		else assert(r.type==ntype,text(this," ",typeid(this)));
+		else assert(r.type==ntype,text(this," ",typeid(this)," ",r," ",r.type," ",ntype));
 		r.loc=loc;
 		r.sstate=SemState.completed;
 		return r;
@@ -903,6 +903,12 @@ class BinaryExp(TokenType op): ABinaryExp{
 				exp.sstate=SemState.completed;
 				return exp.evalImpl(ntype);
 			}
+			Expression create(Expression exp,Expression type){
+				exp.type=type;
+				exp.sstate=SemState.completed;
+				exp.loc=ne1.loc.to(ne2.loc);
+				return exp;
+			}
 			static if(op==Tok!"+"){
 				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
 				if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0")
@@ -910,6 +916,8 @@ class BinaryExp(TokenType op): ABinaryExp{
 				if(le1&&le1.lit.type==Tok!"0"&&le1.lit.str=="0") return ne2.evalImpl(ntype);
 				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return ne1.evalImpl(ntype);
 				if(le1&&!le2) return make(new BinaryExp!op(ne2,ne1));
+				if(le2&&le2.lit.str.startsWith("-"))
+					return make(new BinaryExp!(Tok!"-")(ne1,create(LiteralExp.makeInteger(-ℤ(le2.lit.str)),ℕt(true))));
 				}
 				static foreach(sub1;[Tok!"-",Tok!"sub"]){
 					if(auto se1=cast(BinaryExp!sub1)ne1){
@@ -957,7 +965,7 @@ class BinaryExp(TokenType op): ABinaryExp{
 					Token tok;
 					tok.type=Tok!"0";
 					tok.str="0";
-					return new LiteralExp(tok);
+					return make(new LiteralExp(tok));
 				}
 				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
 				if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0"){
@@ -974,9 +982,19 @@ class BinaryExp(TokenType op): ABinaryExp{
 					if(ae1.e1==ne2) return ae1.e2.evalImpl(ntype);
 					if(ae1.e2==ne2) return ae1.e1.evalImpl(ntype);
 				}
+				static foreach(sub;[Tok!"-",Tok!"sub"]){
+					if(auto se1=cast(BinaryExp!sub)ne1){
+						if(se1.e1==ne2) return make(new UnaryExp!(Tok!"-")(se1.e2));
+						// TODO: if(se1.e2==-ne2)
+					}
+					if(auto se2=cast(BinaryExp!sub)ne2){
+						if(se2.e1==ne1) return se2.e2.evalImpl(ntype);
+						// TODO: if(se2.e2==-ne1
+					}
+				}
 				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
-					if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2.evalImpl(ntype)));
-					if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1.evalImpl(ntype)));
+					if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2));
+					if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1));
 				}
 				static foreach(sub2;[Tok!"-",Tok!"sub"]){
 					if(auto se2=cast(BinaryExp!sub2)ne2){
@@ -1046,12 +1064,6 @@ class BinaryExp(TokenType op): ABinaryExp{
 				if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
 				if(util.among(ne1.type,ℕt(true),ℤt(true))&&util.among(ne2.type,ℕt(true),ℤt(true))){
 					if(!cast(LiteralExp)ne2){
-						Expression create(Expression exp,Expression type){
-							exp.type=type;
-							exp.sstate=SemState.completed;
-							exp.loc=ne1.loc.to(ne2.loc);
-							return exp;
-						}
 						import ast.semantic_: subtractionType;
 						auto sub=create(new BinaryExp!(Tok!"-")(ne1,ne2), subtractionType(ne1.type,ne2.type));
 						auto zero=create(LiteralExp.makeInteger(0),ℕt(true));
@@ -1060,7 +1072,11 @@ class BinaryExp(TokenType op): ABinaryExp{
 				}
 			}
 			if(ne1 == e1 && ne2 == e1 && ntype == type) return this;
-			return new BinaryExp!op(ne1,ne2);
+			auto r=new BinaryExp!op(ne1,ne2);
+			r.type=ntype;
+			r.loc=ne1.loc.to(ne2.loc);
+			r.sstate=SemState.completed;
+			return r;
 		}else return this;
 	}
 

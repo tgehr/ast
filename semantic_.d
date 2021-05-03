@@ -995,10 +995,35 @@ bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope
 			if(guaranteedDifferentLocations(idx1.e,idx2.e,loc,sc))
 				return true;
 			return guaranteedDifferentValues(idx1.a,idx2.a,loc,sc);
+		}else return true;
+	}else if(auto idx2=cast(IndexExp)e2)
+		return true;
+	return false;
+}
+
+bool indexEquals(Expression e1,Expression e2,Scope sc){
+	if(auto id1=cast(Identifier)e1)
+		if(auto id2=cast(Identifier)e2)
+			return id1.name==id2.name;
+	if(auto idx1=cast(IndexExp)e1){
+		if(auto idx2=cast(IndexExp)e2){
+			if(!indexEquals(idx1.e,idx2.e,sc))
+				return false;
+			idx1.a=expressionSemantic(idx1.a,sc,ConstResult.yes);
+			propErr(idx1.a,idx1);
+			idx2.a=expressionSemantic(idx2.a,sc,ConstResult.yes);
+			propErr(idx2.a,idx2);
+			if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
+				return false;
+			Expression eq=new EqExp(idx1.a,idx2.a);
+			eq=expressionSemantic(eq,sc,ConstResult.yes);
+			assert(eq.sstate==SemState.completed);
+			return eq.eval()==LiteralExp.makeBoolean(1);
 		}
 	}
 	return false;
 }
+
 
 static if(language==silq){
 IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,Location loc,Scope sc,out bool isSwap)in{
@@ -1088,15 +1113,16 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			auto idx2=indicesToReplace[j];
 			if(idx2.sstate==SemState.error) continue;
 			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc)){
-				sc.error("indices may refer to same value",idx2.loc);
+				if(indexEquals(idx1,idx2,sc)) sc.error("indices refer to same value in reassignment",idx2.loc);
+				else sc.error("indices may refer to same value in reassignment",idx2.loc);
 				sc.note("other index is here",idx1.loc);
 				idx2.sstate=SemState.error;
-				return indicesToReplace;
+				//return indicesToReplace;
 			}
 		}
 	}
 	assert(!sc.indicesToReplace.length);
-	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,x.sstate==SemState.error)).array;
+	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,x.sstate==SemState.error?x:null)).array;
 	rhs=expressionSemantic(rhs,sc,ConstResult.no);
 	assert(sc.indicesToReplace.length==indicesToReplace.length);
 	foreach(i;0..sc.indicesToReplace.length){
@@ -1141,7 +1167,6 @@ void typeConstBlockNote(VarDecl vd,Scope sc)in{
 }do{
 	string name;
 	if(auto decl=cast(Declaration)vd.typeConstBlocker) name=decl.getName;
-	writeln(vd.typeConstBlocker," ",typeid(vd.typeConstBlocker));
 	if(name){
 		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",vd.name,name),vd.typeConstBlocker.loc);
 	}else{
@@ -2053,52 +2078,44 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	if(auto idx=cast(IndexExp)expr){
 		bool replaceIndex=false;
 		size_t replaceIndexLoc=size_t.max;
-		bool indexEquals(Expression e1,Expression e2){
-			if(auto id1=cast(Identifier)e1)
-				if(auto id2=cast(Identifier)e2)
-					return id1.name==id2.name;
-			if(auto idx1=cast(IndexExp)e1){
-				if(auto idx2=cast(IndexExp)e2){
-					if(!indexEquals(idx1.e,idx2.e))
-						return false;
-					idx1.a=expressionSemantic(idx1.a,sc,ConstResult.yes);
-					propErr(idx1.a,idx1);
-					idx2.a=expressionSemantic(idx2.a,sc,ConstResult.yes);
-					propErr(idx2.a,idx2);
-					if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
-						return false;
-					Expression eq=new EqExp(idx1.a,idx2.a);
-					eq=expressionSemantic(eq,sc,ConstResult.yes);
-					assert(eq.sstate==SemState.completed);
-					return eq.eval()==LiteralExp.makeBoolean(1);
-				}
-			}
-			return false;
-		}
-		foreach(i,indexToReplace;sc.indicesToReplace){
-			if(indexToReplace[0]&&!indexToReplace[1]&&indexEquals(indexToReplace[0],idx)){
-				auto rid=getIdFromIndex(indexToReplace[0]);
-				assert(rid && rid.meaning);
-				if(auto cid=getIdFromIndex(idx)){
+		if(auto cid=getIdFromIndex(idx)){
+			foreach(i,indexToReplace;sc.indicesToReplace){
+				if(indexToReplace[0]&&!indexToReplace[1]&&indexEquals(indexToReplace[0],idx,sc)){
+					auto rid=getIdFromIndex(indexToReplace[0]);
+					assert(rid && rid.meaning);
 					assert(rid.name==cid.name);
-					if(!cid.meaning){
-						cid.meaning=rid.meaning;
-						replaceIndex=true;
-						replaceIndexLoc=i;
-						break;
-					}
+					if(!cid.meaning) cid.meaning=rid.meaning;
+					else assert(cid.meaning is rid.meaning);
+					replaceIndex=true;
+					replaceIndexLoc=i;
+					break;
 				}
 			}
 		}
 		if(!replaceIndex){
-			
-			/*auto loc=sc.indicesToReplace.indexOf(idx);
-			if(loc==-1 && sc.indicesToReplace.any!(idx=>getIdFromIndex(idx).name==getIdFromIndex(idx).name)){
-				sc.error("indices for component replacement must be identical",idx.loc);
-				foreach(index;sc.indicesToReplace.filter!(idx=>getIdFromIndex(idx).name==getIdFromIndex(idx).name))
-					sc.note("replaced component is here",sc.indicesToReplace.loc);
-				idx.sstate=SemState.error;
-			}*/
+			if(auto cid=getIdFromIndex(idx)){
+				foreach(i,indexToReplace;sc.indicesToReplace){
+					if(indexToReplace[0]){
+						auto rid=getIdFromIndex(indexToReplace[0]);
+						assert(rid && rid.meaning);
+						if(rid.name==cid.name){
+							cid.constLookup=true;
+							cid.type=rid.type;
+							cid.meaning=rid.meaning;
+							cid.sstate=rid.sstate;
+							cid.scope_=rid.scope_;
+							if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc)){
+								sc.error("'const' lookup of index may refer to consumed value",idx.loc);
+								if(indexToReplace[1]) // should always be non-null
+									sc.note("consumed here",indexToReplace[1].loc);
+								else sc.note("reassigned here",indexToReplace[0].loc);
+								idx.sstate=SemState.error;
+								break;
+							}
+						}
+					}
+				}
+			}
 		}
 		idx.e=expressionSemantic(idx.e,sc,ConstResult.yes);
 		if(auto ft=cast(FunTy)idx.e.type){
@@ -2191,7 +2208,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				sc.note("replaced component is here",sc.indicesToReplace[replaceIndexLoc][0].loc);
 				idx.sstate=SemState.error;
 			}
-			sc.indicesToReplace[replaceIndexLoc][1]=true; // matched
+			sc.indicesToReplace[replaceIndexLoc][1]=idx; // matched
 		}
 		return idx;
 	}

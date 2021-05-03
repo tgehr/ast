@@ -448,7 +448,7 @@ abstract class Scope{
 		}
 		return 0;
 	}
-	Q!(IndexExp,bool)[] indicesToReplace=null;
+	Q!(IndexExp,IndexExp)[] indicesToReplace=null; // (assignee, consumer)
 private:
 	static if(language==silq){
 		Dependencies dependencies;
