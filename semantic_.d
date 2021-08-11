@@ -1060,6 +1060,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		e.e.constLookup=true;
 		id=cast(Identifier)unwrap(e.e);
 		assert(!!id);
+		if(id.meaning) id.name=id.meaning.name.name;
 		consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
 	}
 	Identifier[] ids;
@@ -1141,6 +1142,10 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 	foreach(theIndex;indicesToReplace)
 		if(theIndex.sstate!=SemState.error)
 			theIndex.sstate=SemState.completed;
+	foreach(idx;indicesToReplace)
+		if(auto id=getIdFromIndex(idx))
+			if(id.meaning&&id.meaning.rename)
+				id.name=id.meaning.rename.name;
 	return indicesToReplace;
 }
 }
@@ -2086,6 +2091,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					assert(rid.name==cid.name);
 					if(!cid.meaning) cid.meaning=rid.meaning;
 					else assert(cid.meaning is rid.meaning);
+					if(cid.meaning && cid.meaning.rename) cid.name=cid.meaning.rename.name;
 					replaceIndex=true;
 					replaceIndexLoc=i;
 					break;
