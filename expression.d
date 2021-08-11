@@ -283,6 +283,19 @@ class LiteralExp: Expression{
 		r.sstate=SemState.completed;
 		return r;
 	}
+	bool isInteger(){
+		return lit.type==Tok!"0";
+	}
+	bool isZero()in{
+		assert(isInteger());
+	}do{
+		return lit.str=="0";
+	}
+	bool isNegative()in{
+		assert(lit.type==Tok!"0");
+	}do{
+		return lit.str.startsWith("-");
+	}
 	static LiteralExp makeBoolean(bool b){
 		auto r=makeInteger(b?1:0);
 		r.type=Bool(true);
@@ -412,16 +425,23 @@ class Identifier: Expression{
 	override Annotation getAnnotation(){ return deterministic; }
 
 	override Expression evalImpl(Expression ntype){
+		if(substitute) return getInitializer().evalImpl(ntype);
 		if(ntype==type) return this;
 		return new Identifier(name);
 	}
 	override bool isConstant(){
 		if(substitute){
-			if(auto vd=cast(VarDecl)meaning){
-				return vd.initializer && vd.initializer.isConstant;
-			}
+			if(auto init=getInitializer())
+				return init.isConstant();
 		}
 		return super.isConstant();
+	}
+	Expression getInitializer()in{
+		assert(substitute);
+	}do{
+		auto vd=cast(VarDecl)meaning;
+		assert(!!vd);
+		return vd.initializer;
 	}
 	// semantic information:
 	Declaration meaning;
@@ -1017,6 +1037,14 @@ class BinaryExp(TokenType op): ABinaryExp{
 				if(le1&&le1.lit.type==Tok!"0"&&le1.lit.str=="1") return ne2.evalImpl(ntype);
 				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="1") return ne1.evalImpl(ntype);
 				if(le2&&!le1) return make(new BinaryExp!op(ne2,ne1));
+				}
+			}else static if(op==Tok!"^"){
+				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
+					if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return make(LiteralExp.makeInteger(1));
+					if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="1") return ne1.evalImpl(ntype);
+					if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0" && !le2.isNegative()){
+						return make(LiteralExp.makeInteger(pow(ℤ(le1.lit.str),ℤ(le2.lit.str)))); // TODO: replace literal exp internal representation
+					}
 				}
 			}
 			static if(op==Tok!"+"||op==Tok!"-"||op==Tok!"sub"){
