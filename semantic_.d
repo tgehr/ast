@@ -2358,7 +2358,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			if(arr1&&arr2&&typeExplicitConversion(arr1.next,arr2.next,annotationType))
 				return true;
 			auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-			if(vec1&&vec2&&vec1.num==vec2.num&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+			if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
 				return true;
 			if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
 				return true;
@@ -2401,8 +2401,16 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				if(auto arr=cast(ArrayTy)type){
 					return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],arr.next,annotationType));
 				}
-				if(annotationType==TypeAnnotationType.coercion){
-					if(auto vec2=cast(VectorTy)type){
+				if(auto vec2=cast(VectorTy)type){
+					bool ok=annotationType==TypeAnnotationType.coercion;
+					if(!ok){
+						auto len=LiteralExp.makeInteger(tpl1.e.length);
+						len.loc=expr.loc;
+						auto eq=new EqExp(len,vec2.num);
+						eq.loc=expr.loc;
+						ok=eq.eval()==LiteralExp.makeBoolean(1);
+					}
+					if(ok){
 						return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],vec2.next,annotationType));
 					}
 				}
