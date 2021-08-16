@@ -1534,7 +1534,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 		}
 		return false;
 	}
-	CallExp checkFunCall(FunTy ft){
+	Expression checkFunCall(FunTy ft){
 		bool tryCall(){
 			if(!ce.isSquare && ft.isSquare){
 				auto nft=ft;
@@ -1560,6 +1560,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 					auto nnce=new CallExp(nce,ce.arg,false,false);
 					nnce.loc=ce.loc;
 					nnce=cast(CallExp)callSemantic(nnce,sc,ConstResult.no);
+					assert(!!nnce);
 					ce=nnce;
 					return true;
 				}
@@ -1580,6 +1581,48 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 				if(!ft2.isClassical()){
 					sc.error("reversed function must be classical",ce.arg.loc);
 					ce.sstate=SemState.error;
+				}
+				if(ft2.isSquare){
+					if(auto ft3=cast(FunTy)ft2.cod){
+						if(!ft3.isSquare){
+							auto loc=ce.arg.loc;
+							auto params=iota(ft2.nargs).map!((i){
+								bool isConst=ft2.isConst[i];
+								auto name=new Identifier("`arg_"~ft2.names[i]);
+								auto type=ft2.argTy(i);
+								name.loc=loc;
+								name.type=type;
+								auto param=new Parameter(isConst,name,type);
+								param.loc=loc;
+								return param;
+							}).array;
+							auto args=params.map!((p){
+								auto id=new Identifier(p.name.name);
+								id.meaning=p;
+								id.loc=loc;
+								Expression r=id;
+								return r;
+							}).array;
+							assert(ft2.isTuple||args.length==1);
+							auto narg=ft2.isTuple?new TupleExp(args):args[0];
+							narg.loc=loc;
+							auto ce1=new CallExp(ce.arg.copy,narg,true,false);
+							ce1.loc=loc;
+							auto ce2=new CallExp(ce.e,ce1,ce.isSquare,ce.isClassical);
+							ce2.loc=loc;
+							auto ret=new ReturnExp(ce2);
+							ret.loc=loc;
+							auto body_=new CompoundExp([ret]);
+							body_.loc=loc;
+							auto def=new FunctionDef(null,params,ft2.isTuple,null,body_);
+							def.isSquare=true;
+							def.annotation=Annotation.qfree;
+							def.loc=loc;
+							auto le=new LambdaExp(def);
+							le.loc=loc;
+							return expressionSemantic(le,sc,constResult);
+						}
+					}
 				}
 				if(ce.sstate!=SemState.error&&!ft2.cod.hasAnyFreeVar(ft2.names)&&!ft2.isSquare){
 					Expression[] constArgTypes1;
@@ -1639,8 +1682,10 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 		}
 		return ce;
 	}
+	Expression r=ce;
 	if(auto ft=cast(FunTy)fun.type){
-		ce=checkFunCall(ft);
+		r=checkFunCall(ft);
+		if(r !is ce) ce=null;
 	}else if(auto at=isDataTyId(fun)){
 		auto decl=at.decl;
 		assert(fun.type is typeTy);
@@ -1657,8 +1702,9 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 			sc.error(format("no constructor for type %s",at),ce.loc);
 			ce.sstate=SemState.error;
 		}else{
-			ce=checkFunCall(ty);
-			if(ce.sstate!=SemState.error){
+			ce=cast(CallExp)checkFunCall(ty);
+			assert(!!ce);
+			if(ce&&ce.sstate!=SemState.error){
 				auto id=new Identifier(constructor.name.name);
 				id.loc=fun.loc;
 				id.scope_=sc;
@@ -1706,7 +1752,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 		sc.error(format("cannot call expression of type %s",fun.type),ce.loc);
 		ce.sstate=SemState.error;
 	}
-	return ce;
+	return r;
 }
 
 enum ConstResult:bool{
@@ -1901,8 +1947,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		}
 		if(auto tpl=cast(TupleExp)fe.var) canForgetImplicitly=tpl.e.all!checkImplicitForget;
 		else canForgetImplicitly=checkImplicitForget(fe.var);
-		auto var=expressionSemantic(fe.var,sc,ConstResult.no);
-		propErr(var,fe);
+		fe.var=expressionSemantic(fe.var,sc,ConstResult.no);
+		propErr(fe.var,fe);
 		if(fe.val){
 			fe.val=expressionSemantic(fe.val,sc,ConstResult.yes);
 			propErr(fe.val,fe);
@@ -1915,7 +1961,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				fe.sstate=SemState.error;
 			}
 		}else if(!canForgetImplicitly){
-			sc.error(format("cannot synthesize forget expression for '%s'",var),fe.loc);
+			sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.loc);
 		}
 		fe.type=unit;
 		return fe;

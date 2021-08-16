@@ -306,8 +306,12 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		if(!ce.e.type) ce.e=expressionSemantic(ce.e,sc,ConstResult.yes);
 		if(auto ft=cast(FunTy)ce.e.type){
 			if(ft.isSquare&&!ce.isSquare){
-				sc.error("implicit function call not supported as definition left-hand side",ce.loc); // TODO
-				return error();
+				if(auto ft2=cast(FunTy)ft.cod){
+					ft=ft2;
+				}else{
+					sc.error("implicit function call not supported as definition left-hand side",ce.loc); // TODO?
+					return error();
+				}
 			}
 			if(ft.annotation<Annotation.mfree){
 				sc.error("reversed function must be 'mfree'",ce.e.loc);
