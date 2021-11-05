@@ -50,7 +50,7 @@ struct Dependencies{
 	}
 	void pushUp(string removed)in{
 		assert(removed in dependencies,removed);
-	}body{
+	}do{
 		Dependency x=dependencies[removed];
 		dependencies.remove(removed);
 		foreach(k,ref v;dependencies)
@@ -96,7 +96,7 @@ abstract class Scope{
 	bool allowsLinear(){
 		return true;
 	}
-	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}body{
+	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
 		if(auto d=symtabLookup(decl.name,false,Lookup.probing)){
 			if(decl.sstate!=SemState.error) redefinitionError(decl, d);
 			decl.sstate=SemState.error;
@@ -123,7 +123,7 @@ abstract class Scope{
 	}
 	void redefinitionError(Declaration decl, Declaration prev) in{
 		assert(decl);
-	}body{
+	}do{
 		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
 		note("previous definition was here",prev.name.loc);
 	}

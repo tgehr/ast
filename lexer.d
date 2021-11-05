@@ -211,12 +211,12 @@ class Source{
 		string name;
 		string code;
 	}
-	this(string name, string code)in{auto c=code;assert(c.length>=4&&!c[$-4]&&!c[$-3]&&!c[$-2]&&!c[$-1]);}body{ // four padding zero bytes required because of UTF{
+	this(string name, string code)in{auto c=code;assert(c.length>=4&&!c[$-4]&&!c[$-3]&&!c[$-2]&&!c[$-1]);}do{ // four padding zero bytes required because of UTF{
 		this.name = name;
 		this.code = code[0..$-4]; // don't expose the padding zeros
 		sources ~= this;
 	}
-	string getLineOf(string rep)in{assert(this is get(rep));}body{
+	string getLineOf(string rep)in{assert(this is get(rep));}do{
 		//if(!code.length) return code;
 		string before=code.ptr[0..code.length+4][0..rep.ptr-code.ptr];
 		string after =code.ptr[0..code.length+4][rep.ptr-code.ptr..$];
@@ -251,8 +251,8 @@ struct Location{
 		assert(src, "source for '"~rep~"' not found!");
 		return src;
 	}
-	Location to(const(Location) end)const{// in{assert(end.source is source);}body{
-		// in{assert(rep.ptr<=end.rep.ptr);}body{ // requiring that is not robust enough
+	Location to(const(Location) end)const{// in{assert(end.source is source);}do{
+		// in{assert(rep.ptr<=end.rep.ptr);}do{ // requiring that is not robust enough
 		if(rep.ptr>end.rep.ptr+end.rep.length) return cast()this;
 		return Location(rep.ptr[0..end.rep.ptr-rep.ptr+end.rep.length],line);
 	}
@@ -477,7 +477,7 @@ private:
 		return r;
 	}
 
-	size_t lexTo(Token[] res)in{assert(res.length);}body{
+	size_t lexTo(Token[] res)in{assert(res.length);}do{
 		alias mallocAppender appender;
 		if(!code.length) return 0;
 		auto p=code.ptr;
@@ -892,7 +892,7 @@ private class EscapeSeqException: Exception{string loc; this(string msg,string l
 	returns a dchar representing the read escape sequence or
 	throws EscapeSeqException if the input is not well formed
  */
-private dchar readEscapeSeq(ref immutable(char)* _p) in{assert(*(_p-1)=='\\');}body{ // pure
+private dchar readEscapeSeq(ref immutable(char)* _p) in{assert(*(_p-1)=='\\');}do{ // pure
 	auto p=_p;
 	switch(*p){
 		case '\'','\?','"','\\':

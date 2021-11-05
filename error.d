@@ -15,9 +15,9 @@ abstract class ErrorHandler{
 	private int tabsize=8;
 
 
-	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}body{nerrors++;}   // in{assert(loc.rep);}body
-	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}body{}
-	void note(lazy string note, Location loc)in{assert(loc.rep);}body{};
+	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{nerrors++;}   // in{assert(loc.rep);}body
+	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
+	void note(lazy string note, Location loc)in{assert(loc.rep);}do{};
 
 	void message(string msg){ stderr.write(msg); }
 

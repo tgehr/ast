@@ -370,7 +370,7 @@ struct Parser{
 		return q(e.data,trailingComma);
 	}
 
-	Expression parseParenthesized(string parens="()")()in{assert(ttype==Tok!(parens[0..1]));}body{
+	Expression parseParenthesized(string parens="()")()in{assert(ttype==Tok!(parens[0..1]));}do{
 		mixin(SetLoc!Expression);
 		nextToken();
 		if(ttype==Tok!(parens[1..2])){

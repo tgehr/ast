@@ -444,7 +444,7 @@ Expression builtIn(Identifier id,Scope sc){
 
 bool isBuiltIn(FieldExp fe)in{
 	assert(fe.e.sstate==SemState.completed);
-}body{
+}do{
 	if(fe.f.meaning) return false;
 	if(auto at=cast(ArrayTy)fe.e.type){
 		if(fe.f.name=="length"){
@@ -456,7 +456,7 @@ bool isBuiltIn(FieldExp fe)in{
 
 Expression builtIn(FieldExp fe,Scope sc)in{
 	assert(fe.e.sstate==SemState.completed);
-}body{
+}do{
 	if(fe.f.meaning) return null;
 	if(auto at=cast(ArrayTy)fe.e.type){
 		if(fe.f.name=="length"){
@@ -478,7 +478,7 @@ bool isFieldDecl(Expression e){
 
 Expression fieldDeclSemantic(Expression e,Scope sc)in{
 	assert(isFieldDecl(e));
-}body{
+}do{
 	e.sstate=SemState.completed;
 	return e;
 }
@@ -1339,7 +1339,7 @@ bool isInvertibleOpAssignExp(Expression e){
 
 ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
-}body{
+}do{
 	static if(language==silq){
 		// TODO: assignments to fields
 		auto semanticDone=false;
@@ -1443,7 +1443,7 @@ bool isAssignment(Expression e){
 
 Expression assignSemantic(Expression e,Scope sc)in{
 	assert(isAssignment(e));
-}body{
+}do{
 	if(auto ae=cast(AssignExp)e) return assignExpSemantic(ae,sc);
 	if(isOpAssignExp(e)) return opAssignExpSemantic(cast(ABinaryExp)e,sc);
 	assert(0);
@@ -1455,7 +1455,7 @@ bool isDefineOrAssign(Expression e){
 
 Expression defineOrAssignSemantic(Expression e,Scope sc)in{
 	assert(isDefineOrAssign(e));
-}body{
+}do{
 	if(isAssignment(e)) return assignSemantic(e,sc);
 	if(auto be=cast(DefineExp)e) return defineSemantic(be,sc);
 	if(auto de=cast(DefExp)e) return defineOrAssignSemantic(de.initializer,sc); // (for copied functions)
@@ -2976,7 +2976,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 }
 
 
-Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}body{
+Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	if(expr.type==typeTy) return expr;
 	if(auto lit=cast(LiteralExp)expr){
 		lit.type=typeTy;

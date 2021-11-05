@@ -99,7 +99,7 @@ class FunctionDef: Declaration{
 	auto annotation=Annotation.none;
 	this(Identifier name, Parameter[] params, bool isTuple, Expression rret, CompoundExp body_)in{
 		assert(isTuple||params.length==1);
-	}body{
+	}do{
 		super(name); this.params=params; this.isTuple=isTuple; this.rret=rret; this.body_=body_;
 	}
 	override FunctionDef copyImpl(CopyArgs args){
@@ -127,7 +127,7 @@ class FunctionDef: Declaration{
 	void addCapture(Identifier id){
 		captures~=id;
 	}
-	@property string contextName()in{assert(!!context);}body{ return context.getName; }
+	@property string contextName()in{assert(!!context);}do{ return context.getName; }
 	Expression ret; // return type
 	FunTy ftype;
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined
@@ -189,7 +189,7 @@ class DatDecl: Declaration{
 	this(Identifier name,bool hasParams,DatParameter[] params,bool isTuple,bool isQuantum,CompoundDecl body_)in{
 		if(hasParams) assert(isTuple||params.length==1);
 		else assert(isTuple&&params.length==0);
-	}body{
+	}do{
 		super(name);
 		this.hasParams=hasParams;
 		this.params=params;
@@ -226,7 +226,7 @@ class DatDecl: Declaration{
 	void addCapture(Identifier id){
 		captures~=id;
 	}
-	@property string contextName()in{assert(!!context);}body{ return context.getName; }
+	@property string contextName()in{assert(!!context);}do{ return context.getName; }
 	@property bool isNested(){ return !!cast(NestedScope)scope_; }
 }
 
