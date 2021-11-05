@@ -128,14 +128,20 @@ abstract class Scope{
 		note("previous definition was here",prev.name.loc);
 	}
 
-	struct ConstBlockContext{
-		private Identifier[Declaration] constBlock;
-	}
 	static if(language==silq){
+		struct ConstBlockContext{
+			private Identifier[Declaration] constBlock;
+		}
 		ConstBlockContext saveConst(){ return ConstBlockContext(constBlock.dup); }
 		void resetConst(ConstBlockContext previous){ constBlock=previous.constBlock; }
 		void resetConst(){ constBlock.clear(); }
 		Identifier isConst(Declaration decl){ return constBlock.get(decl, null); }
+	}else{
+		struct ConstBlockContext{ }
+		final ConstBlockContext saveConst(){ return ConstBlockContext.init; }
+		final void resetConst(ConstBlockContext previous){ }
+		final void resetConst(){ }
+		final Identifier isConst(Declaration decl){ return null; }
 	}
 
 	static if(language==silq){

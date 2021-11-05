@@ -1873,10 +1873,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 	}
 	assert(expr.sstate==SemState.initial);
 	expr.sstate=SemState.started;
-	static if(language==silq){
-		Scope.ConstBlockContext constSave;
-		if(!constResult) constSave=sc.saveConst();
-	}
+	Scope.ConstBlockContext constSave;
+	if(!constResult) constSave=sc.saveConst();
 	scope(success){
 		static if(language==silq){
 			if(!constResult) sc.resetConst(constSave);
