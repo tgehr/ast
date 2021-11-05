@@ -3084,7 +3084,7 @@ bool definitelyReturns(Expression e){
 }
 
 static if(language==psi){
-import dexpr;
+import sym.dexpr;
 struct VarMapping{
 	DNVar orig;
 	DNVar tmp;
@@ -3116,7 +3116,7 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 	import util.hashtable;
 	HSet!(string,(a,b)=>a==b,a=>typeid(string).getHash(&a)) names;
 	try{
-		import dparse;
+		import sym.dparse;
 		auto parser=DParser(literal.lit.str);
 		parser.skipWhitespace();
 		parser.expect('(');
