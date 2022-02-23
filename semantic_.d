@@ -2385,6 +2385,12 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}
 		bool typeExplicitConversion(Expression from,Expression to,TypeAnnotationType annotationType){
 			if(isSubtype(from,to)) return true;
+			if(annotationType==annotationType.punning){
+				auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
+				if(ft1&&ft2&&ft1.setAnnotation(Annotation.none)==ft2.setAnnotation(Annotation.none))
+					return true;
+				return false;
+			}
 			if(annotationType>=annotationType.conversion){
 				if(isSubtype(from,ℤt(true))&&(isUint(to)||isInt(to)))
 					return true;
@@ -2427,6 +2433,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			return false;
 		}
 		bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
+			if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
 			auto lit=cast(LiteralExp)expr;
 			bool isLiteral=lit||cast(UMinusExp)expr&&cast(LiteralExp)(cast(UMinusExp)expr).e;
 			if(isLiteral){
@@ -2483,6 +2490,9 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					break;
 				case TypeAnnotationType.coercion:
 					sc.error(format("cannot coerce type %s to %s",tae.e.type,tae.type),tae.loc);
+					break;
+				case TypeAnnotationType.punning:
+					sc.error(format("punning type %s to %s not supported",tae.e.type,tae.type),tae.loc);
 					break;
 			}
 			tae.sstate=SemState.error;

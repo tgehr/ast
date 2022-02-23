@@ -203,6 +203,7 @@ enum TypeAnnotationType{
 	annotation,
 	conversion,
 	coercion,
+	punning,
 }
 
 class TypeAnnotationExp: Expression{
@@ -217,7 +218,8 @@ class TypeAnnotationExp: Expression{
 	}
 	override @property string kind(){ return e.kind; }
 	override string toString(){
-		static immutable op=[": "," as "," coerce "];
+		static immutable op=[": "," as "," coerce "," pun "];
+		static assert(TypeAnnotationType.max==TypeAnnotationType.punning);
 		return _brk(e.toString()~op[annotationType]~(type?type.toString():t.toString()));
 	}
 	override bool isConstant(){

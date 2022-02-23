@@ -1151,6 +1151,9 @@ class ProductTy: Type{
 			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}
 	}
+	final ProductTy setAnnotation(Annotation annotation){
+		return productTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical);
+	}
 	private ProductTy setTuple(bool tuple)in{
 		assert(!tuple||dom.isTupleTy());
 	}do{

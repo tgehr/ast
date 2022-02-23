@@ -53,7 +53,7 @@ int getLbp(TokenType type) pure{ // operator precedence
 	case Tok!"&&←", Tok!"||←", Tok!"~←":
 	case Tok!":=":
 		return 20;
-	case Tok!":",Tok!"as",Tok!"coerce": // type annotation, safe type conversion, unsafe type conversion
+	case Tok!":",Tok!"as",Tok!"coerce",Tok!"pun": // type annotation, statically safe type conversion, unsafe type conversion, type punning
 		return 30;
 	// logical operators
 	case Tok!"?":  return 40; // conditional operator
@@ -566,12 +566,13 @@ struct Parser{
 					r.loc=loc.to(tok.loc);
 				}
 				return r;
-			case Tok!":",Tok!"as",Tok!"coerce":{
+			case Tok!":",Tok!"as",Tok!"coerce",Tok!"pun":{
 				TypeAnnotationType type;
 				switch(ttype){
 					case Tok!":": type=TypeAnnotationType.annotation; break;
 					case Tok!"as": type=TypeAnnotationType.conversion; break;
 					case Tok!"coerce": type=TypeAnnotationType.coercion; break;
+					case Tok!"pun": type=TypeAnnotationType.punning; break;
 					default: assert(0);
 				}
 				nextToken();
@@ -580,7 +581,7 @@ struct Parser{
 				return res;
 			}mixin({string r;
 				foreach(x;binaryOps)
-					if(!util.among(x,"=>",".","!","classical","?",":","as","coerce","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&","&=","&←","∧=","|","|=","|←","∨=")){
+					if(!util.among(x,"=>",".","!","classical","?",":","as","coerce","pun","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&","&=","&←","∧=","|","|=","|←","∨=")){
 						r~=mixin(X!q{case Tok!"@(x)":
 							nextToken();
 							static if("@(x)"=="->"||"@(x)"=="→"){
