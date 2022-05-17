@@ -319,7 +319,7 @@ class LiteralExp: Expression{
 		if(lit.type!=r.lit.type) return false;
 		switch(lit.type){
 			case Tok!"0":
-				return ℤ(lit.str)==ℤ(r.lit.str);
+				return lit.str==r.lit.str;
 			default:
 				return this is r;
 		}
