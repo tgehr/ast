@@ -554,6 +554,8 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		}
 		auto argExp=argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
+		argExp=new TypeAnnotationExp(argExp,cod,TypeAnnotationType.coercion);
+		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
 		body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_)~[argRet]);
@@ -721,6 +723,19 @@ Expression reverseStatement(Expression e,Scope sc){
 	if(auto ce=cast(CallExp)e){
 		auto te=new TupleExp([]);
 		te.type=unit;
+		te.loc=ce.loc;
+		static if(language==silq){
+			if(auto id=cast(Identifier)unwrap(ce.e)){
+				if(isBuiltIn(id)){
+					switch(id.name){
+						case "__show","__query":
+							return lowerDefine!true(te,te,ce.loc,sc);
+						default:
+							break;
+					}
+				}
+			}
+		}
 		return lowerDefine!true(ce,te,ce.loc,sc);
 	}
 	if(auto ce=cast(CompoundExp)e){

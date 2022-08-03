@@ -3270,6 +3270,16 @@ Expression handleQuery(CallExp ce,Scope sc){
 		ce.sstate=SemState.error;
 		return ce;
 	}
+	auto makeStrLit(string s){
+		Token tok;
+		tok.type=Tok!"``";
+		tok.str=s;
+		auto nlit=New!LiteralExp(tok);
+		nlit.loc=ce.loc;
+		nlit.type=stringTy(true);
+		nlit.sstate=SemState.completed;
+		return nlit;		
+	}
 	switch(literal.lit.str){
 		case "dep":
 			if(args.length!=2||!cast(Identifier)args[1]){
@@ -3286,14 +3296,16 @@ Expression handleQuery(CallExp ce,Scope sc){
 						else dep=dependency.dependencies.to!string;
 					}
 				}
-				Token tok;
-				tok.type=Tok!"``";
-				tok.str=dep;
-				auto nlit=New!LiteralExp(tok);
-				nlit.loc=ce.loc;
-				nlit.type=stringTy(true);
-				nlit.sstate=SemState.completed;
-				return nlit;
+				return makeStrLit(dep);
+			}
+		case "type":
+			if(args.length!=2){
+				sc.error("expected single expression as argument to 'type' query", ce.loc);
+				ce.sstate=SemState.error;
+				break;
+			}else{
+				args[1]=expressionSemantic(args[1],sc,ConstResult.yes);
+				return makeStrLit(text(args[1].type));
 			}
 		default:
 			sc.error(format("unknown query '%s'",literal.lit.str),literal.loc);
