@@ -421,21 +421,22 @@ Expression distributionTy(Expression base,Scope sc){
 Expression builtIn(Identifier id,Scope sc){
 	Expression t=null;
 	switch(id.name){
-	case "readCSV": t=funTy(stringTy(true),arrayTy(ℝ(true)),false,false,true); break;
-	case "π","pi": t=ℝ(true); break;
-	case "Marginal","sampleFrom","quantumPrimitive","__query","__show": t=unit; break; // those are actually magic polymorphic functions
-	case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
-	case "*","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
-		id.type=typeTy;
-		if(id.name=="*") return typeTy;
-		if(id.name=="𝟙") return unit;
-		if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
-		if(id.name=="N"||id.name=="ℕ") return ℕt(false);
-		if(id.name=="Z"||id.name=="ℤ") return ℤt(false);
-		if(id.name=="Q"||id.name=="ℚ") return ℚt(false);
-		if(id.name=="R"||id.name=="ℝ") return ℝ(false);
-		if(id.name=="C"||id.name=="ℂ") return ℂ(false);
-	default: return null;
+		case "readCSV": t=funTy(stringTy(true),arrayTy(ℝ(true)),false,false,true); break;
+		case "π","pi": t=ℝ(true); break;
+		case "Marginal","sampleFrom","quantumPrimitive","__query","__show": t=unit; break; // those are actually magic polymorphic functions
+		case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
+		case "*","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+			id.type=typeTy;
+			if(id.name=="*") return typeTy;
+			if(id.name=="𝟙") return unit;
+			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
+			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
+			if(id.name=="Z"||id.name=="ℤ") return ℤt(false);
+			if(id.name=="Q"||id.name=="ℚ") return ℚt(false);
+			if(id.name=="R"||id.name=="ℝ") return ℝ(false);
+			if(id.name=="C"||id.name=="ℂ") return ℂ(false);
+			return null;
+		default: return null;
 	}
 	id.type=t;
 	id.sstate=SemState.completed;
