@@ -2025,7 +2025,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}
 		}
 		if(id.type&&meaning.scope_.getFunction()){
-			bool captureChecked=id.type.isClassical();
+			bool isQuantum=!id.type.isClassical();
+			bool captureChecked=!isQuantum;
 			assert(sc.isNestedIn(meaning.scope_));
 			auto startScope=sc;
 			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
@@ -2051,10 +2052,12 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					if(!captureChecked){
 						captureChecked=true;
 						if(!checkCapture()) break;
+					}
+					if(isQuantum){
 						if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
 							if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
 							else{
-								assert(!fsc.fd.ftype||fsc.fd.ftype.isClassical());
+								assert(fsc.fd.ftype.isClassical());
 								sc.error("cannot capture quantum variable in classical function", id.loc);
 								id.sstate=SemState.error;
 								break;
