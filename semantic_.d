@@ -3010,9 +3010,8 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 		}
 	}
 	auto e=expressionSemantic(expr,sc,ConstResult.no);
-	if(!e) return null;
-	if(e.type==typeTy) return e;
-	if(e.sstate!=SemState.error){
+	if(!e||e.sstate==SemState.error) return null;
+	if(e.type!=typeTy){
 		auto id=cast(Identifier)expr;
 		if(id&&id.meaning){
 			auto decl=id.meaning;
@@ -3020,8 +3019,8 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 			sc.note("declared here",decl.loc);
 		}else sc.error("not a type",expr.loc);
 		expr.sstate=SemState.error;
-	}
-	return null;
+		return null;
+	}else return e;
 }
 
 Expression typeForDecl(Declaration decl){
