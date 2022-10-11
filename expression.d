@@ -1405,7 +1405,8 @@ class LambdaExp: Expression{
 
 	mixin VariableFree; // TODO!
 	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0; // TODO: ok?
+		foreach(c;fd.captures) if(auto r=dg(c)) return r;
+		return 0;
 	}
 	override Expression evalImpl(Expression ntype){ return this; } // TODO: partially evaluate lambdas?
 	override Annotation getAnnotation(){ return Annotation.qfree; }
