@@ -346,8 +346,11 @@ class Identifier: Expression{
 	}
 	override Identifier copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic,"TODO");
-		if(meaning&&meaning.name&&meaning.name.name.length) return new Identifier(meaning.name.name); // TODO: this is a hack
-		return new Identifier(name);
+		Identifier r;
+		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.name); // TODO: this is a hack
+		else r=new Identifier(name);
+		r.checkReverse=checkReverse;
+		return r;
 	}
 	override string toString(){
 		static if(language==silq) return _brk((classical?"!":"")~name);
@@ -408,7 +411,7 @@ class Identifier: Expression{
 	}
 	override bool hasClassicalComponent(){
 		assert(type==typeTy);
-		return classical;
+		return true;
 	}
 	override Expression getClassical(){
 		static if(language==silq){
@@ -450,6 +453,7 @@ class Identifier: Expression{
 	bool substitute=false;
 	Scope scope_;
 	bool calledDirectly=false;
+	bool checkReverse=true; // (calls to reverse in the implementation of reverse itself are more liberal)
 	static if(language==silq) bool classical=false;
 	else enum classical=true;
 }

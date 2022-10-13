@@ -6,8 +6,7 @@ import astopt;
 import std.stdio,std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 
-bool isReverse(Expression e){
-	auto id=cast(Identifier)e;
+bool isReverse(Identifier id){
 	if(!id) return false;
 	if(id.name!="reverse") return false;
 	return id.meaning&&isReverse(id.meaning);
@@ -52,8 +51,10 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 }
 
 
-Identifier getReverse(Location loc,Scope isc){
-	return getPreludeSymbol("reverse",loc,isc);
+Identifier getReverse(Location loc,Scope isc,bool unchecked){
+	auto r=getPreludeSymbol("reverse",loc,isc);
+	if(unchecked) r.checkReverse=false; // TODO: is there a better solution than this?
+	return r;
 }
 Identifier getDup(Location loc,Scope isc){
 	return getPreludeSymbol("dup",loc,isc);
@@ -97,7 +98,7 @@ bool validDefLhs(bool analyzed)(Expression olhs,Scope sc){
 	return validDefEntry(olhs);
 }
 
-Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location loc,Scope sc)in{
+Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked)in{
 	assert(loc.line);
 }do{
 	Expression res;
@@ -140,7 +141,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 			newRhs.type=tty;
 			newRhs.loc=orhs.loc;
 		}
-		return lowerDefine!analyzed(newLhs,newRhs,loc,sc);
+		return lowerDefine!analyzed(newLhs,newRhs,loc,sc,unchecked);
 	}
 	if(auto tpll=cast(TupleExp)olhs){
 		void handleRhs(R)(){
@@ -148,7 +149,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 				enforce(tpll.e.length==tplr.e.length);
 				Expression[] es;
 				foreach_reverse(i;0..tpll.e.length){
-					es~=lowerDefine!analyzed(tpll.e[i],tplr.e[i],loc,sc); // TODO: evaluation order of rhs okay?
+					es~=lowerDefine!analyzed(tpll.e[i],tplr.e[i],loc,sc,unchecked); // TODO: evaluation order of rhs okay?
 				}
 				if(es.any!(x=>!x)) return;
 				res=new CompoundExp(es);
@@ -159,8 +160,8 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		if(!res){
 			auto tmp=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i){ auto id=new Identifier(freshName); id.loc=orhs.loc; return id; }).array);
 			tmp.loc=loc;
-			auto d1=lowerDefine!false(tmp,rhs,loc,sc);
-			auto d2=lowerDefine!analyzed(olhs,tmp,loc,sc);
+			auto d1=lowerDefine!false(tmp,rhs,loc,sc,unchecked);
+			auto d2=lowerDefine!analyzed(olhs,tmp,loc,sc,unchecked);
 			res=new CompoundExp([d1,d2]);
 		}
 		return res;
@@ -181,14 +182,14 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 				if(!orhs.type||orhs.type!=tae.e.type){
 					auto newRhs=new TypeAnnotationExp(rhs,tae.e.type,TypeAnnotationType.coercion);
 					newRhs.loc=rhs.loc;
-					return lowerDefine!analyzed(tae.e,newRhs,loc,sc);
-				}else return lowerDefine!analyzed(tae.e,orhs,loc,sc);
+					return lowerDefine!analyzed(tae.e,newRhs,loc,sc,unchecked);
+				}else return lowerDefine!analyzed(tae.e,orhs,loc,sc,unchecked);
 			}
 		}
 		// TOOD: only do this if lhs is variable
 		auto newRhs=new TypeAnnotationExp(rhs,tae.t,tae.annotationType);
 		newRhs.loc=rhs.loc;
-		return lowerDefine!analyzed(tae.e,newRhs,loc,sc);
+		return lowerDefine!analyzed(tae.e,newRhs,loc,sc,unchecked);
 	}
 	if(auto ce=cast(CatExp)olhs){
 		Expression knownLength(Expression e){
@@ -236,7 +237,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		}
 		assert(l1&&l2);
 		// TODO: nicer runtime error message for inconsistent array lengths?
-		auto d1=lowerDefine!analyzed(tmp,orhs,loc,sc);
+		auto d1=lowerDefine!analyzed(tmp,orhs,loc,sc,unchecked);
 		auto z=constantExp(0);
 		z.loc=olhs.loc;
 		auto l=tmpLen();
@@ -254,14 +255,14 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 			tmpl.loc=ce.e1.loc;
 			static if(analyzed) tmpl.type=ce.e1.type;
 		}
-		auto d2=lowerDefine!analyzed(tmpl.copy(),s1,loc,sc);
+		auto d2=lowerDefine!analyzed(tmpl.copy(),s1,loc,sc,unchecked);
 		d2.loc=loc;
 		auto tmpr=cast(Identifier)ce.e2?ce.e2:new Identifier(freshName);
 		if(tmpr!is ce.e2){
 			tmpr.loc=ce.e2.loc;
 			static if(analyzed) tmpr.type=ce.e2.type;
 		}
-		auto d3=lowerDefine!analyzed(tmpr.copy(),s2,loc,sc);
+		auto d3=lowerDefine!analyzed(tmpr.copy(),s2,loc,sc,unchecked);
 		d3.loc=loc;
 		auto tmp3=tmp.copy();
 		tmp3.loc=rhs.loc;
@@ -271,12 +272,12 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		fe.loc=loc;
 		auto stmts=[d1,d2,d3,fe];
 		if(ce.e1 !is tmpl){
-			auto d4=lowerDefine!analyzed(ce.e1,tmpl,loc,sc);
+			auto d4=lowerDefine!analyzed(ce.e1,tmpl,loc,sc,unchecked);
 			d4.loc=loc;
 			stmts~=d4;
 		}
 		if(ce.e2 !is tmpr){
-			auto d5=lowerDefine!analyzed(ce.e2,tmpr,loc,sc);
+			auto d5=lowerDefine!analyzed(ce.e2,tmpr,loc,sc,unchecked);
 			d5.loc=loc;
 			stmts~=d5;
 		}
@@ -298,7 +299,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 			nval.type=fe.var.type;
 			nval.loc=fe.val.loc;
 		}
-		auto def=lowerDefine!analyzed(fe.var,nval,loc,sc);
+		auto def=lowerDefine!analyzed(fe.var,nval,loc,sc,unchecked);
 		if(!tpl) return res=new CompoundExp([rhs,def]);
 		return def;
 	}
@@ -418,14 +419,14 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 				}
 			}
 			if(!reversed&&!newrhs){
-				auto rev=getReverse(ce.e.loc,sc);
+				auto rev=getReverse(ce.e.loc,sc,unchecked);
 				if(rev.sstate!=SemState.completed) return error();
 				reversed=new CallExp(rev,ce.e,false,false);
 				reversed.loc=ce.e.loc;
 			}
 			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical);
 			newrhs.loc=newarg.loc;
-			return lowerDefine!analyzed(newlhs,newrhs,loc,sc);
+			return lowerDefine!analyzed(newlhs,newrhs,loc,sc,unchecked);
 		}
 	}
 	sc.error("expression not supported as definition left-hand side",olhs.loc);
@@ -436,14 +437,15 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 // rev(x:=dup(y);) ⇒ dup(y):=x; ⇒ ():=reverse(dup)(x,y) ⇒ ():=forget(x=dup(y));
 // rev(x:=CNOT(a,b);) ⇒ CNOT(a,b):=x; ⇒ a:=reverse(CNOT)(x,b);
 
-Expression lowerDefine(bool analyzed)(DefineExp e,Scope sc){
+Expression lowerDefine(bool analyzed)(DefineExp e,Scope sc,bool unchecked){
 	if(e.sstate==SemState.error) return e;
 	if(validDefLhs!analyzed(e.e1,sc)) return null;
-	return lowerDefine!analyzed(e.e1,e.e2,e.loc,sc);
+	return lowerDefine!analyzed(e.e1,e.e2,e.loc,sc,unchecked);
 }
 FunctionDef reverseFunction(FunctionDef fd)in{
 	assert(fd.scope_&&fd.ftype&&fd.ftype.isClassical()&&fd.ftype.annotation>=Annotation.mfree);
 }do{
+	enum unchecked=true; // TODO: ok?
 	if(fd.reversed) return fd.reversed;
 	auto sc=fd.scope_, ft=fd.ftype;
 	auto asc=sc;
@@ -474,7 +476,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
 		constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
 	}
-	enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments");
+	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
 	returnType=ft.cod;
 	auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
 	auto nreturnTypes=argTypes;
@@ -537,7 +539,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		body_.s=[fe];
 	}else{
 		bool retDefNecessary=(returnType!=unit||!cast(TupleExp)ret.e)&&!cast(Identifier)ret.e;
-		auto retDef=retDefNecessary?lowerDefine!true(ret.e,retRhs,ret.loc,result.fscope_):null;
+		auto retDef=retDefNecessary?lowerDefine!true(ret.e,retRhs,ret.loc,result.fscope_,unchecked):null;
 		auto argNames=fd.params[constArgTypes1.length..constArgTypes1.length+argTypes.length].map!(p=>p.name.name);
 		auto makeArg(size_t i){
 			if(argTypes[i]==unit){ // unit is classical yet can be consumed
@@ -558,7 +560,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_)~[argRet]);
+		body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_,unchecked)~[argRet]);
 	}
 	import options;
 	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
@@ -701,7 +703,7 @@ Expression[] mergeCompound(Expression[] s){
 	return r;
 }
 
-Expression[] reverseStatements(Expression[] statements,Scope sc){
+Expression[] reverseStatements(Expression[] statements,Scope sc,bool unchecked){
 	statements=mergeCompound(statements);
 	Expression[] classicalStatements=statements.filter!(s=>classifyStatement(s)==ComputationClass.classical).array;
 	foreach(ref e;classicalStatements){
@@ -709,11 +711,11 @@ Expression[] reverseStatements(Expression[] statements,Scope sc){
 		else e=e.copy();
 	}
 	Expression[] quantumStatements=statements.retro.filter!(s=>classifyStatement(s)!=ComputationClass.classical).array;
-	foreach(ref e;quantumStatements) e=reverseStatement(e,sc);
+	foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked);
 	return classicalStatements~quantumStatements;
 }
 
-Expression reverseStatement(Expression e,Scope sc){
+Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 	if(!e) return e;
 	Expression error(){
 		auto res=e.copy();
@@ -729,17 +731,17 @@ Expression reverseStatement(Expression e,Scope sc){
 				if(isBuiltIn(id)){
 					switch(id.name){
 						case "__show","__query":
-							return lowerDefine!true(te,te,ce.loc,sc);
+							return lowerDefine!true(te,te,ce.loc,sc,unchecked);
 						default:
 							break;
 					}
 				}
 			}
 		}
-		return lowerDefine!true(ce,te,ce.loc,sc);
+		return lowerDefine!true(ce,te,ce.loc,sc,unchecked);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		auto res=new CompoundExp(reverseStatements(ce.s,sc));
+		auto res=new CompoundExp(reverseStatements(ce.s,sc,unchecked));
 		res.loc=ce.loc;
 		static if(language==silq){
 			if(ce.blscope_&&ce.blscope_.forgottenVars.length){
@@ -750,9 +752,9 @@ Expression reverseStatement(Expression e,Scope sc){
 		return res;
 	}
 	if(auto ite=cast(IteExp)e){
-		auto then=cast(CompoundExp)reverseStatement(ite.then,sc);
+		auto then=cast(CompoundExp)reverseStatement(ite.then,sc,unchecked);
 		assert(!!then);
-		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc);
+		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked);
 		assert(!!othw==!!ite.othw);
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
@@ -775,11 +777,11 @@ Expression reverseStatement(Expression e,Scope sc){
 			nrhs.loc=de.e1.loc;
 			nrhs.type=de.e2.type;
 		}
-		return lowerDefine!true(de.e2,nrhs,de.loc,sc);
+		return lowerDefine!true(de.e2,nrhs,de.loc,sc,unchecked);
 	}
 	if(auto de=cast(DefExp)e){
 		assert(!!de.initializer);
-		return reverseStatement(de.initializer,sc);
+		return reverseStatement(de.initializer,sc,unchecked);
 	}
 	if(auto ae=cast(AssignExp)e){
 		sc.error("reversal of functions containing assignments not supported yet",ae.loc);
@@ -819,14 +821,14 @@ Expression reverseStatement(Expression e,Scope sc){
 			auto nlhs=new CatExp(ae.e1.copy(),ae.e2);
 			nlhs.type=ae.e1.type;
 			auto nrhs=ae.e1;
-			return lowerDefine!true(nlhs,nrhs,ae.loc,sc);
+			return lowerDefine!true(nlhs,nrhs,ae.loc,sc,unchecked);
 		}
 		if(auto ae=cast(BitXorAssignExp)e) return ae.copy();
 		sc.error("reversal not supported yet",e.loc);
 		return error();
 	}
 	if(auto fe=cast(ForExp)e){
-		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc);
+		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked);
 		assert(!!bdy);
 		auto leftExclusive=fe.rightExclusive;
 		auto left=fe.right.copy();
@@ -848,7 +850,7 @@ Expression reverseStatement(Expression e,Scope sc){
 		return error();
 	}
 	if(auto re=cast(RepeatExp)e){
-		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc);
+		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc,unchecked);
 		assert(!!bdy);
 		auto res=new RepeatExp(re.num.copy(),bdy);
 		res.loc=re.loc;
@@ -861,7 +863,7 @@ Expression reverseStatement(Expression e,Scope sc){
 		auto tpl=new TupleExp([]);
 		tpl.type=unit;
 		tpl.loc=fe.loc;
-		return lowerDefine!true(fe,tpl,fe.loc,sc);
+		return lowerDefine!true(fe,tpl,fe.loc,sc,unchecked);
 	}
 	sc.error("reversal unsupported",e.loc);
 	return error();

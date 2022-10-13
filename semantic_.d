@@ -826,7 +826,8 @@ bool isLifted(Expression e,Scope sc){
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	if(sc.allowsLinear){
-		if(auto e=lowerDefine!false(be,sc)){
+		enum unchecked=false;
+		if(auto e=lowerDefine!false(be,sc,unchecked)){
 			if(e.sstate!=SemState.error)
 				return statementSemantic(e,sc);
 			return e;
@@ -1572,14 +1573,17 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 			ce.type=ft.tryApply(ce.arg,ce.isSquare);
 			return !!ce.type;
 		}
-		if(isReverse(ce.e)){
-			ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no);
+		auto calledId=cast(Identifier)ce.e;
+		if(calledId&&isReverse(calledId)){
+			bool check=calledId.checkReverse;
+			writeln("?? ",ce," ",check);
+			ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no);			
 			if(auto ft2=cast(FunTy)ce.arg.type){
-				if(ft2.annotation<Annotation.mfree){
+				if(check&&ft2.annotation<Annotation.mfree){
 					sc.error("reversed function must be 'mfree'",ce.arg.loc);
 					ce.sstate=SemState.error;
 				}
-				if(!ft2.isClassical()){
+				if(check&&!ft2.isClassical()){
 					sc.error("reversed function must be classical",ce.arg.loc);
 					ce.sstate=SemState.error;
 				}
@@ -1650,13 +1654,13 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 						argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
 						constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
 					}
-					if(argTypes.any!(t=>t.hasClassicalComponent())){
+					if(check&&argTypes.any!(t=>t.hasClassicalComponent())){
 						ok=false;
 						sc.error("reversed function cannot have classical components in consumed arguments",ce.arg.loc);
 						ce.sstate=SemState.error;
 					}
 					returnType=ft2.cod;
-					if(returnType.hasClassicalComponent()){
+					if(check&&returnType.hasClassicalComponent()){
 						ok=false;
 						sc.error("reversed function cannot have classical components in return value",ce.arg.loc);
 						ce.sstate=SemState.error;
@@ -2825,7 +2829,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		static if(language==silq) fsc.pushConsumed();
 		if(fd.sstate==SemState.completed){
 			foreach(id;fd.ftype.freeIdentifiers){
-				assert(!!id.meaning);
+				assert(!!id.meaning,text(id));
 				if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
 				if(id.meaning.scope_.isNestedIn(fsc)){
 					fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
