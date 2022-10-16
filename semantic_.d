@@ -1576,7 +1576,6 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 		auto calledId=cast(Identifier)ce.e;
 		if(calledId&&isReverse(calledId)){
 			bool check=calledId.checkReverse;
-			writeln("?? ",ce," ",check);
 			ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no);			
 			if(auto ft2=cast(FunTy)ce.arg.type){
 				if(check&&ft2.annotation<Annotation.mfree){
