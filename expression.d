@@ -58,7 +58,7 @@ abstract class Expression: Node{
 		if(!r.type) r.type=ntype;
 		else if(r is this) return r;
 		else assert(r.type==ntype,text(this," ",typeid(this)," ",r," ",r.type," ",ntype));
-		r.loc=loc;
+		if(!r.loc.line) r.loc=loc;
 		r.sstate=SemState.completed;
 		return r;
 	}
