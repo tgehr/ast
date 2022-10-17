@@ -422,6 +422,7 @@ class Identifier: Expression{
 			r.classical=true;
 			r.type=type;
 			r.meaning=meaning;
+			r.checkReverse=checkReverse;
 			r.sstate=SemState.completed;
 			return r;
 		}else return this;
@@ -432,7 +433,11 @@ class Identifier: Expression{
 	override Expression evalImpl(Expression ntype){
 		if(substitute) return getInitializer().evalImpl(ntype);
 		if(ntype==type) return this;
-		return new Identifier(name);
+		auto r=new Identifier(name);
+		r.classical=classical;
+		r.meaning=meaning;
+		r.checkReverse=checkReverse;
+		return r;
 	}
 	override bool isConstant(){
 		if(substitute){
