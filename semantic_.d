@@ -2149,6 +2149,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				}
 			}
 		}
+		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes);
+		propErr(idx.a,idx);
 		if(!replaceIndex){
 			if(auto cid=getIdFromIndex(idx)){
 				foreach(i,indexToReplace;sc.indicesToReplace){
@@ -2187,8 +2189,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				return tty;
 		}
 		propErr(idx.e,idx);
-		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes);
-		propErr(idx.a,idx);
 		if(idx.sstate==SemState.error)
 			return idx;
 		Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
