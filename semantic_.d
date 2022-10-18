@@ -447,7 +447,7 @@ bool isBuiltIn(FieldExp fe)in{
 	assert(fe.e.sstate==SemState.completed);
 }do{
 	if(fe.f.meaning) return false;
-	if(auto at=cast(ArrayTy)fe.e.type){
+	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type){
 		if(fe.f.name=="length"){
 			return true;
 		}
@@ -459,7 +459,7 @@ Expression builtIn(FieldExp fe,Scope sc)in{
 	assert(fe.e.sstate==SemState.completed);
 }do{
 	if(fe.f.meaning) return null;
-	if(auto at=cast(ArrayTy)fe.e.type){
+	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type){
 		if(fe.f.name=="length"){
 			fe.type=ℕt(true); // no superpositions over arrays with different lengths
 			fe.f.sstate=SemState.completed;
@@ -2123,10 +2123,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 					fe.f.sstate=SemState.error;
 				}
 				return fe;
-			}else return noMember();
-		}else if(auto vt=cast(VectorTy)fe.e.type){
-			if(fe.f.name=="length"){
-				return expr=expressionSemantic(vt.num.copy(),sc,ConstResult.no);// TODO: preserve semantic on clone
 			}else return noMember();
 		}else if(auto r=builtIn(fe,sc)) return expr=r;
 		else return noMember();
