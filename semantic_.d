@@ -981,6 +981,8 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 			return zip(tpl1.e,tpl2.e).any!(x=>guaranteedDifferentValues(x.expand,loc,sc));
 		return false;
 	}
+	e1=expressionSemantic(e1,sc,ConstResult.yes);
+	e2=expressionSemantic(e2,sc,ConstResult.yes);
 	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
 		return false;
 	Expression neq=new NeqExp(e1,e2);
@@ -2151,8 +2153,6 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 				}
 			}
 		}
-		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes);
-		propErr(idx.a,idx);
 		if(!replaceIndex){
 			if(auto cid=getIdFromIndex(idx)){
 				foreach(i,indexToReplace;sc.indicesToReplace){
@@ -2179,6 +2179,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}
 		}
 		idx.e=expressionSemantic(idx.e,sc,ConstResult.yes);
+		propErr(idx.e,idx);
 		if(auto ft=cast(FunTy)idx.e.type){
 			assert(!replaceIndex);
 			auto ce=new CallExp(idx.e,idx.a,true,false);
@@ -2190,7 +2191,8 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			if(auto tty=typeSemantic(expr,sc))
 				return tty;
 		}
-		propErr(idx.e,idx);
+		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes);
+		propErr(idx.a,idx);
 		if(idx.sstate==SemState.error)
 			return idx;
 		Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
