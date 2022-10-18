@@ -1515,10 +1515,28 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 	}
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
+		void checkArg(size_t i,Expression exp){
+			if(exp.sstate==SemState.error) return;
+			static if(language==silq){
+				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
+				if((!classical||!qfree)&&ft.cod.hasFreeVar(ft.names[i])){ // TODO: could just automatically deduce existential type
+					if(classical){
+						sc.error(format("argument must be qfree (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
+					}else{
+						sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+					}
+					exp.sstate=SemState.error;
+				}
+			}else static if(language==psi){
+				// TODO: check for determinism
+			}
+		}
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				foreach(i,ref exp;tpl.e){
 					exp=expressionSemantic(exp,sc,(ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no);
+					checkArg(i,exp);
 					propErr(exp,tpl);
 				}
 				if(tpl.sstate!=SemState.error){
@@ -1526,6 +1544,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 				}
 			}else{
 				ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no);
+				foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
 					ce.sstate=SemState.error;
@@ -1535,6 +1554,8 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 		}else{
 			assert(ft.isConst.length==1);
 			ce.arg=expressionSemantic(ce.arg,sc,ft.isConst[0]?ConstResult.yes:ConstResult.no);
+			assert(ft.names.length==1);
+			checkArg(0,ce.arg);
 		}
 		return false;
 	}
