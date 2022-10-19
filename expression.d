@@ -434,9 +434,11 @@ class Identifier: Expression{
 		if(substitute) return getInitializer().evalImpl(ntype);
 		if(ntype==type) return this;
 		auto r=new Identifier(name);
-		r.classical=classical;
 		r.meaning=meaning;
-		r.checkReverse=checkReverse;
+		static if(language==silq){
+			r.classical=classical;
+			r.checkReverse=checkReverse;
+		}
 		return r;
 	}
 	override bool isConstant(){

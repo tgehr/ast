@@ -2149,7 +2149,9 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			}else return noMember();
 		}else if(auto r=builtIn(fe,sc)){
 			if(auto vt=cast(VectorTy)fe.e.type){
-				if(fe.f.name=="length"&&fe.e.isQfree())
+				bool hasSideEffect=false;
+				static if(language==silq) hasSideEffect=!fe.e.isQfree();
+				if(fe.f.name=="length"&&!hasSideEffect)
 					return expr=expressionSemantic(vt.num.copy(),sc,ConstResult.no);// TODO: preserve semantic on clone
 			}
 			return expr=r;
