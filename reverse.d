@@ -31,31 +31,14 @@ Expression constantExp(size_t l){
 	return new LiteralExp(tok);
 }
 
-Identifier getPreludeSymbol(string name,Location loc,Scope isc){
-	import ast.semantic_: modules;
-	if(preludePath() !in modules) return null;
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-	auto res=new Identifier(name);
-	res.loc=loc;
-	res.scope_=isc;
-	res.meaning=sc.lookup(res,false,false,Lookup.consuming);
-	if(!res.meaning){
-		res.sstate=SemState.error;
-	}else{
-		res.type=typeForDecl(res.meaning);
-		res.constLookup=false;
-		res.sstate=SemState.completed;
-	}
-	return res;
-}
-
-
+static if(language==silq)
 Identifier getReverse(Location loc,Scope isc,bool unchecked){
 	auto r=getPreludeSymbol("reverse",loc,isc);
 	if(unchecked) r.checkReverse=false; // TODO: is there a better solution than this?
 	return r;
 }
+
+static if(language==silq)
 Identifier getDup(Location loc,Scope isc){
 	return getPreludeSymbol("dup",loc,isc);
 }
@@ -290,8 +273,12 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		}
 		auto tpl=cast(TupleExp)rhs;
 		enforce(!tpl||tpl.length==0);
-		auto dup=getDup(fe.val.loc,sc);
-		Expression nval=new CallExp(dup,fe.val.copy(),false,false);
+		static if(language==silq){
+			auto dup=getDup(fe.val.loc,sc);
+			Expression nval=new CallExp(dup,fe.val.copy(),false,false);
+		}else{
+			Expression nval=fe.val.copy();
+		}
 		nval.type=fe.val.type;
 		nval.loc=fe.val.loc;
 		if(nval.type!=fe.var.type){
@@ -303,6 +290,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 		if(!tpl) return res=new CompoundExp([rhs,def]);
 		return def;
 	}
+	static if(language==silq)
 	if(auto ce=cast(CallExp)olhs){
 		if(!ce.e.type) ce.e=expressionSemantic(ce.e,sc,ConstResult.yes);
 		if(auto ft=cast(FunTy)ce.e.type){
@@ -442,6 +430,8 @@ Expression lowerDefine(bool analyzed)(DefineExp e,Scope sc,bool unchecked){
 	if(validDefLhs!analyzed(e.e1,sc)) return null;
 	return lowerDefine!analyzed(e.e1,e.e2,e.loc,sc,unchecked);
 }
+
+static if(language==silq)
 FunctionDef reverseFunction(FunctionDef fd)in{
 	assert(fd.scope_&&fd.ftype&&fd.ftype.isClassical()&&fd.ftype.annotation>=Annotation.mfree);
 }do{

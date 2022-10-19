@@ -144,13 +144,15 @@ abstract class Scope{
 		final Identifier isConst(Declaration decl){ return null; }
 	}
 
+	final bool consume(Declaration decl){
+		if(decl.name.ptr !in symtab) return false;
+		symtab.remove(decl.name.ptr);
+		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
+		static if(language==silq) toPush~=decl.getName;
+		return true;
+	}
 	static if(language==silq){
 		/+private+/ string[] toPush;
-		final void consume(Declaration decl){
-			symtab.remove(decl.name.ptr);
-			if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-			toPush~=decl.getName;
-		}
 		final void pushUp(ref Dependency dependency,string removed){
 			dependency.replace(removed,dependencies.dependencies[removed]);
 		}

@@ -354,7 +354,7 @@ struct Parser{
 		}
 		return res=New!Parameter(isConst,i,t);
 	}
-	
+
 	Q!(Expression[],bool) parseArgumentList(bool nonempty=false, Entry=AssignExp, T...)(TokenType delim, T args){
 		auto e=appender!(Expression[])();
 		foreach(x;args) e.put(x); // static foreach
@@ -398,7 +398,7 @@ struct Parser{
 		}
 		return res;
 	}
-	
+
 	// Operator precedence expression parser
 	// null denotation
 	Expression nud(bool allowLambda){
@@ -521,7 +521,7 @@ struct Parser{
 		static if(language==silq) if(util.among(ttype,Tok!"lambda",Tok!"λ")) nextToken(); // TODO: add support in PSI as well?
 		return res=New!LambdaExp(parseFunctionDef!(true,semicolon));
 	}
-	
+
 	// left denotation
 	Expression led(Expression left,bool statement=false){
 		Expression res=null;
@@ -704,7 +704,7 @@ struct Parser{
 			case Tok!"assert": return parseAssert();
 			static if(language==psi) case Tok!"observe": return parseObserve();
 			static if(language==psi) case Tok!"cobserve": return parseCObserve();
-			static if(language==silq) case Tok!"forget": return parseForget();
+			case Tok!"forget": return parseForget();
 			default: break;
 		}
 		Expression left;
@@ -796,7 +796,7 @@ struct Parser{
 			}else{
 				nextToken();
 				e=parseExpression(rbp!(Tok!(",")));
-				static if(semicolon) expect(Tok!";");			
+				static if(semicolon) expect(Tok!";");
 			}
 			auto r=New!ReturnExp(e);
 			r.loc=e.loc;
@@ -995,16 +995,24 @@ struct Parser{
 		expect(Tok!")");
 		return res=New!CObserveExp(var,val);
 	}
-	static if(language==silq) ForgetExp parseForget(){
+	ForgetExp parseForget(){
 		mixin(SetLoc!ForgetExp);
 		expect(Tok!"forget");
 		expect(Tok!"(");
-		auto var=parseExpression(rbp!(Tok!"="));
-		Expression val=null;
-		if(ttype==Tok!"="){
-			nextToken();
-			val=parseExpression(rbp!(Tok!"←"));
-		}else if(ttype==Tok!","){
+		bool isExplicit=false;
+		static if(language==silq){
+			auto var=parseExpression(rbp!(Tok!"="));
+			Expression val=null;
+			if(ttype==Tok!"="){
+				nextToken();
+				val=parseExpression(rbp!(Tok!"←"));
+				isExplicit=true;
+			}
+		}else{
+			auto var=parseExpression(rbp!(Tok!","));
+			Expression val=null;
+		}
+		if(!isExplicit&&ttype==Tok!","){
 			auto tpl=[var];
 			while(ttype==Tok!","){
 				nextToken();

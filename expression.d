@@ -349,7 +349,7 @@ class Identifier: Expression{
 		Identifier r;
 		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.name); // TODO: this is a hack
 		else r=new Identifier(name);
-		r.checkReverse=checkReverse;
+		static if(language==silq) r.checkReverse=checkReverse;
 		return r;
 	}
 	override string toString(){
@@ -460,8 +460,10 @@ class Identifier: Expression{
 	bool substitute=false;
 	Scope scope_;
 	bool calledDirectly=false;
-	bool checkReverse=true; // (calls to reverse in the implementation of reverse itself are more liberal)
-	static if(language==silq) bool classical=false;
+	static if(language==silq){
+		bool checkReverse=true; // (calls to reverse in the implementation of reverse itself are more liberal)
+		bool classical=false;
+	}
 	else enum classical=true;
 }
 
