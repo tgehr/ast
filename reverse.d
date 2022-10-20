@@ -292,7 +292,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 	}
 	static if(language==silq)
 	if(auto ce=cast(CallExp)olhs){
-		if(!ce.e.type) ce.e=expressionSemantic(ce.e,sc,ConstResult.yes);
+		if(!ce.e.type) ce.e=expressionSemantic(ce.e,sc,ConstResult.yes,InType.no);
 		if(auto ft=cast(FunTy)ce.e.type){
 			if(ft.isSquare&&!ce.isSquare){
 				if(auto ft2=cast(FunTy)ft.cod){
