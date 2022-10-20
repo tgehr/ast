@@ -998,6 +998,7 @@ struct Parser{
 	ForgetExp parseForget(){
 		mixin(SetLoc!ForgetExp);
 		expect(Tok!"forget");
+		Location varBegin=tok.loc;
 		expect(Tok!"(");
 		bool isExplicit=false;
 		static if(language==silq){
@@ -1020,6 +1021,7 @@ struct Parser{
 				tpl~=parseExpression(rbp!(Tok!","));
 			}
 			var=New!TupleExp(tpl);
+			//var.loc=varBegin.to(tok.loc);
 		}
 		expect(Tok!")");
 		return res=New!ForgetExp(var,val);

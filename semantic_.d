@@ -1983,27 +1983,39 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 		return pl;
 	}
 	if(auto fe=cast(ForgetExp)expr){
-		bool canForgetImplicitly;
 		bool checkImplicitForget(Expression var){
+			if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
 			auto id=cast(Identifier)var;
 			if(!id) return false;
+			auto meaning=sc.lookup(id,false,true,Lookup.probing);
+			auto name=meaning.rename?meaning.rename:meaning.name;
+			static if(language==silq){
+				if(!name||!sc.dependencyTracked(name)) return false;
+				return meaning&&sc.canForget(meaning);
+			}else return true;
+		}
+		auto canForgetImplicitly=checkImplicitForget(fe.var);
+		fe.var=expressionSemantic(fe.var,sc,ConstResult.no);
+		propErr(fe.var,fe);
+		void classicalForget(Expression var){
+			if(auto tpl=cast(TupleExp)var){
+				tpl.e.each!classicalForget;
+				return;
+			}
+			auto id=cast(Identifier)var;
+			if(!id) return;
 			auto meaning=id.meaning;
-			if(!meaning) return false;
+			if(!meaning) return;
 			if(id.type&&id.type.isClassical){
 				if(!sc.consume(meaning)){
 					sc.error("cannot forget variable from outer scope",id.loc);
 					fe.sstate=SemState.error;
-					return true;
+					return;
 				}
-				return true;
+				return;
 			}
-			static if(language==silq) return sc.canForget(meaning);
-			else return true;
 		}
-		fe.var=expressionSemantic(fe.var,sc,ConstResult.no);
-		propErr(fe.var,fe);
-		if(auto tpl=cast(TupleExp)fe.var) canForgetImplicitly=tpl.e.all!checkImplicitForget;
-		else canForgetImplicitly=checkImplicitForget(fe.var);
+		classicalForget(fe.var);
 		if(fe.val){
 			fe.val=expressionSemantic(fe.val,sc,ConstResult.yes);
 			propErr(fe.val,fe);
@@ -2018,14 +2030,16 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult){
 			static if(language!=silq){
 				if(!canForgetImplicitly){
 					sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
+					fe.sstate=SemState.error;
 				}
 			}
-		}else if(!canForgetImplicitly){
+		}else if(!canForgetImplicitly&&fe.sstate!=SemState.error){
 			static if(language==silq){
 				sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.loc);
 			}else{
 				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
 			}
+			fe.sstate=SemState.error;
 		}
 		fe.type=unit;
 		return fe;
