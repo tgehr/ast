@@ -227,11 +227,11 @@ class TypeAnnotationExp: Expression{
 	}
 	override int freeVarsImpl(scope int delegate(string) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
-		return t.freeVarsImpl(dg);
+		return (type?type:t).freeVarsImpl(dg);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(e)) return r;
-		return dg(t);
+		return dg(type?type:t);
 	}
 	override TypeAnnotationExp substituteImpl(Expression[string] subst){
 		auto ne=e.substitute(subst);
