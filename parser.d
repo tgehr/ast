@@ -449,6 +449,7 @@ struct Parser{
 					switch(ttype){
 						case Tok!"{",Tok!"⇒",Tok!"↦",Tok!"=>":
 						static if(language==silq) case Tok!"lifted",Tok!"qfree",Tok!"mfree":{}
+						static if(language==psi) case Tok!"pure":{}
 							restoreState(state);
 							return parseLambdaExp();
 						default: break;
@@ -486,6 +487,11 @@ struct Parser{
 								annotation=Annotation.mfree;
 							}
 							if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst=true;
+						}else static if(language==psi){
+							if(ttype==Tok!"pure"){
+								nextToken();
+								annotation=Annotation.pure_;
+							}
 						}
 						expect(Tok!".");
 						cod = parseType();
@@ -595,6 +601,11 @@ struct Parser{
 									}else if(ttype==Tok!"mfree"){
 										nextToken();
 										annotation=Annotation.mfree;
+									}
+								}else static if(language==psi){
+									if(ttype==Tok!"pure"){
+										nextToken();
+										annotation=Annotation.pure_;
 									}
 								}
 							}
@@ -778,6 +789,11 @@ struct Parser{
 				annotation=Annotation.mfree;
 			}
 			if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst=true;
+		}else static if(language==psi){
+			if(ttype==Tok!"pure"){
+				nextToken();
+				annotation=Annotation.pure_;
+			}
 		}
 		Expression ret=null;
 		if(ttype==Tok!":"){

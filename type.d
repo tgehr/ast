@@ -3,6 +3,21 @@
 module ast.type;
 import astopt;
 
+static if(language==silq){
+	enum Annotation{
+		none,
+		mfree,
+		qfree,
+	}
+	enum deterministic=Annotation.qfree;
+}else static if(language==psi){
+	enum Annotation{
+		none,
+		pure_,
+	}
+	enum deterministic=Annotation.pure_;
+}
+
 import std.array, std.algorithm, std.conv;
 import std.functional, std.range;
 import ast.expression, ast.declaration, util;
@@ -92,7 +107,7 @@ abstract class Type: Expression{
 	override string toString(){ return "T"; }
 	abstract override bool opEquals(Object r);
 	abstract override bool isClassical();
-	override Annotation getAnnotation(){ return Annotation.qfree; }
+	override Annotation getAnnotation(){ return deterministic; }
 }
 
 class ErrorTy: Type{
@@ -796,17 +811,14 @@ StringTy stringTy(bool classical=true){
 	else return memoize!(()=>new StringTy(true));
 }
 
-enum Annotation{
-	none,
-	mfree,
-	qfree,
-}
-static if(language==silq) enum deterministic=Annotation.qfree;
-static if(language==psi) enum deterministic=Annotation.none;
-
 string annotationToString(Annotation annotation){
 	static if(language==silq) return annotation?text(annotation):"";
-	static if(language==psi) return "";
+	static if(language==psi){
+		final switch(annotation){
+			case Annotation.none: return "";
+			case Annotation.pure_: return "pure";
+		}
+	}
 }
 
 class RawProductTy: Expression{
@@ -910,7 +922,7 @@ class ProductTy: Type{
 			}else d=addp(isConst[0],dom,del);
 			static if(language==silq) auto arrow=(isClassical?"!":"")~"→";
 			else enum arrow="→";
-			r=d~" "~arrow~(annotation?to!string(annotation):"")~" "~c;
+			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
 			assert(names.length);
 			string args;
@@ -1231,7 +1243,7 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation 
 FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClassical)in{
 	assert(dom&&cod);
 }do{
-	return funTy(dom,cod,isSquare,isTuple,Annotation.qfree,isClassical);
+	return funTy(dom,cod,isSquare,isTuple,deterministic,isClassical);
 }
 
 Identifier varTy(string name,Expression type,bool classical=false){

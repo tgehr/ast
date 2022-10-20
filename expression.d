@@ -184,6 +184,8 @@ abstract class Expression: Node{
 	static if(language==silq){
 		final bool isQfree(){ return getAnnotation()>=Annotation.qfree; }
 		final bool isMfree(){ return getAnnotation()>=Annotation.mfree; }
+	}else static if(language==psi){
+		final bool isPure(){ return getAnnotation()>=Annotation.pure_; }
 	}
 
 	// semantic information
@@ -1422,7 +1424,7 @@ class LambdaExp: Expression{
 		return 0;
 	}
 	override Expression evalImpl(Expression ntype){ return this; } // TODO: partially evaluate lambdas?
-	override Annotation getAnnotation(){ return Annotation.qfree; }
+	override Annotation getAnnotation(){ return deterministic; }
 }
 
 class ArrayExp: Expression{

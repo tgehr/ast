@@ -858,7 +858,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				if(id.name=="array" && !ce.isSquare){
 					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes);
 					if(isSubtype(ce.arg.type,ℕt)){
-						ce.e.type=funTy(ℝ,arrayTy(ℝ),false,false,Annotation.qfree,true);
+						ce.e.type=funTy(ℝ,arrayTy(ℝ),false,false,Annotation.pure_,true);
 						ce.e.sstate=SemState.completed;
 					}
 				}
@@ -1513,9 +1513,9 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 			if(auto ft=cast(FunTy)ce.e.type){
 				if(ft.annotation<sc.restriction()){
 					if(ft.annotation==Annotation.none){
-						sc.error(format("cannot call function '%s' in '%s' context", ce.e, sc.restriction()), ce.loc);
+						sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(sc.restriction())), ce.loc);
 					}else{
-						sc.error(format("cannot call '%s' function '%s' in '%s' context", ft.annotation, ce.e, sc.restriction()), ce.loc);
+						sc.error(format("cannot call '%s' function '%s' in '%s' context", ft.annotation, ce.e, annotationToString(sc.restriction())), ce.loc);
 					}
 					ce.sstate=SemState.error;
 				}
@@ -1540,7 +1540,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
 				if((!classical||!qfree)&&ft.cod.hasFreeVar(ft.names[i])){ // TODO: could just automatically deduce existential type
 					if(classical){
-						sc.error(format("argument must be qfree (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						sc.error(format("argument must be 'qfree' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					}else{
 						sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
@@ -1548,7 +1548,12 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult){
 					exp.sstate=SemState.error;
 				}
 			}else static if(language==psi){
-				// TODO: check for determinism
+				bool pure_=exp.isPure();
+				if(!pure_&&ft.cod.hasFreeVar(ft.names[i])){
+					sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+					sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
+					exp.sstate=SemState.error;
+				}
 			}
 		}
 		if(ft.isTuple){
@@ -3114,7 +3119,7 @@ Expression typeForDecl(Declaration decl){
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?
 		assert(dat.isTuple||dat.params.length==1);
 		auto pt=dat.isTuple?tupleTy(dat.params.map!(p=>p.vtype).array):dat.params[0].vtype;
-		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,typeTy,true,dat.isTuple,Annotation.qfree,true);
+		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,typeTy,true,dat.isTuple,deterministic,true);
 	}
 	if(auto vd=cast(VarDecl)decl){
 		return vd.vtype;
