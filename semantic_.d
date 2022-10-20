@@ -856,7 +856,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		if(auto ce=cast(CallExp)be.e2){
 			if(auto id=cast(Identifier)ce.e){
 				if(id.name=="array" && !ce.isSquare){
-					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes);
+					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes,InType.no);
 					if(isSubtype(ce.arg.type,ℕt)){
 						ce.e.type=funTy(ℝ,arrayTy(ℝ),false,false,Annotation.pure_,true);
 						ce.e.sstate=SemState.completed;
@@ -1809,7 +1809,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 					if(ce.arg.type) ce.type=distributionTy(ce.arg.type,sc);
 					break;
 				case "sampleFrom":
-					return handleSampleFrom(ce,sc);
+					return handleSampleFrom(ce,sc,inType);
 			}
 			default: assert(0,text("TODO: ",id.name));
 		}
@@ -3300,7 +3300,12 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 	return SampleFromInfo(false,retVars,paramVars,newDist);
 }
 
-Expression handleSampleFrom(CallExp ce,Scope sc){
+Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
+	if(inType){
+		sc.error("cannot use sampleFrom directly within type",ce.loc);
+		ce.sstate=SemState.error;
+		return ce;
+	}
 	auto info=analyzeSampleFrom(ce,sc.handler);
 	if(info.error){
 		ce.sstate=SemState.error;
@@ -3310,7 +3315,7 @@ Expression handleSampleFrom(CallExp ce,Scope sc){
 	}
 	if(auto tpl=cast(TupleExp)ce.arg){
 		foreach(ref arg;tpl.e[1..$]){
-			arg=expressionSemantic(arg,sc,ConstResult.yes);
+			arg=expressionSemantic(arg,sc,ConstResult.yes,inType);
 			propErr(arg,ce.arg);
 		}
 	}
