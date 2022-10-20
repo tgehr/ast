@@ -1511,6 +1511,19 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 	scope(success){
 		if(ce&&ce.sstate!=SemState.error){
 			if(auto ft=cast(FunTy)ce.e.type){
+				if(inType){
+					static if(language==silq){
+						if(ft.annotation<Annotation.qfree){
+							sc.error(format("function called within type must be 'qfree'"),ce.loc);
+							ce.sstate=SemState.error;
+						}
+					}else static if(language==psi){
+						if(ft.annotation<Annotation.pure_){
+							sc.error(format("function called within type must be 'pure'"),ce.loc);
+							ce.sstate=SemState.error;
+						}
+					}
+				}
 				if(ft.annotation<sc.restriction()){
 					if(ft.annotation==Annotation.none){
 						sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(sc.restriction())), ce.loc);
@@ -3036,8 +3049,13 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 		return ret;
 	}
-	if(!isSubtype(ret.e.type,fd.ret)){
-		sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
+	if(fd.ret){
+		if(!isSubtype(ret.e.type,fd.ret)){
+			sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
+			ret.sstate=SemState.error;
+			return ret;
+		}
+	}else{
 		ret.sstate=SemState.error;
 		return ret;
 	}
