@@ -1551,8 +1551,8 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 			if(exp.sstate==SemState.error) return;
 			static if(language==silq){
 				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
-				if((!classical||!qfree)&&ft.cod.hasFreeVar(ft.names[i])){ // TODO: could just automatically deduce existential type
-					if(classical){
+				if((!classical||!qfree)&&ft.cod.hasFreeVar(ft.names[i])){
+					if(classical){ // TODO: could just automatically deduce existential type
 						sc.error(format("argument must be 'qfree' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					}else{
@@ -1950,11 +1950,21 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 			expr.constLookup=constResult;
 			if(expr&&expr.sstate!=SemState.error){
 				if(constResult&&!expr.isLifted(sc)&&!expr.type.isClassical()){
-					sc.error("non-'lifted' quantum expression must be consumed", expr.loc);
+					sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
 					expr.sstate=SemState.error;
 				}else{
-					assert(!!expr.type);
-					expr.sstate=SemState.completed;
+					bool consumesIdentifier(){
+						auto id=cast(Identifier)expr;
+						if(!id.meaning) return false;
+						return id.meaning.isLinear();
+					}
+					if(!constResult&&inType&&consumesIdentifier){
+						sc.error("cannot consume variables within types",expr.loc);
+						expr.sstate=SemState.error;
+					}else{
+						assert(!!expr.type);
+						expr.sstate=SemState.completed;
+					}
 				}
 			}
 			if(unrealizable(expr.type)){
@@ -3120,7 +3130,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 			}
 		}
 	}
-	auto e=expressionSemantic(expr,sc,ConstResult.no,InType.yes);
+	auto e=expressionSemantic(expr,sc,ConstResult.yes,InType.yes);
 	if(!e||e.sstate==SemState.error) return null;
 	if(e.type!=typeTy){
 		auto id=cast(Identifier)expr;
