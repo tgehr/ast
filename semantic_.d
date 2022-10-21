@@ -1955,7 +1955,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 				}else{
 					bool consumesIdentifier(){
 						auto id=cast(Identifier)expr;
-						if(!id.meaning) return false;
+						if(!id||!id.meaning) return false;
 						return id.meaning.isLinear();
 					}
 					if(!constResult&&inType&&consumesIdentifier){
