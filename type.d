@@ -1183,7 +1183,7 @@ class ProductTy: Type{
 			if(!isConst2.empty&&!isConst2.all!(x=>x==isConst2.front))
 				return null;
 			nnames=["x"];
-			nIsConst=[isConst2.empty?true:isConst2.front];
+			nIsConst=[isConst2.empty?unit.impliesConst():isConst2.front];
 		}
 		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
 		return productTy(nIsConst,nnames,dom,cod,isSquare,tuple,annotation,isClassical_);
