@@ -556,6 +556,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	assert(sc.allowsLinear());
 }do{
 	if(e.sstate==SemState.completed) return e;
+	scope(success) if(e.sstate!=SemState.error) e.sstate=SemState.completed;
 	static if(language==silq){
 		scope(exit){
 			sc.pushConsumed();
@@ -616,6 +617,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	if(auto fe=cast(ForExp)e){
 		assert(!fe.bdy.blscope_);
 		fe.left=expressionSemantic(fe.left,sc,ConstResult.no,InType.no);
+		propErr(fe.left,fe);
 		static if(language==silq) sc.pushConsumed();
 		if(fe.left.sstate==SemState.completed && !isSubtype(fe.left.type, ℝ(true))){
 			sc.error(format("lower bound for loop variable should be a classical number, not %s",fe.left.type),fe.left.loc);
@@ -629,103 +631,132 @@ Expression statementSemantic(Expression e,Scope sc)in{
 			}
 		}
 		fe.right=expressionSemantic(fe.right,sc,ConstResult.no,InType.no);
+		propErr(fe.right,fe);
 		static if(language==silq) sc.pushConsumed();
 		if(fe.right.sstate==SemState.completed && !isSubtype(fe.right.type, ℝ(true))){
 			sc.error(format("upper bound for loop variable should be a classical number, not %s",fe.right.type),fe.right.loc);
 			fe.sstate=SemState.error;
 		}
-		auto fesc=fe.bdy.blscope_=new BlockScope(sc);
-		auto vd=new VarDecl(fe.var);
-		vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
-		assert(fe.sstate==SemState.error||vd.vtype.isClassical());
-		if(fe.sstate==SemState.error){
-			if(!vd.vtype) vd.vtype=ℤt(true);
-			vd.vtype=vd.vtype.getClassical();
+		bool converged=false;
+		CompoundExp bdy;
+		while(!converged){ // TODO: limit number of iterations?
+			auto prevStateSnapshot=sc.getStateSnapshot();
+			auto forgetScope=new BlockScope(sc);
+			Expression.CopyArgs cargs={preserveSemantic: true};
+			bdy=fe.bdy.copy(cargs);
+			auto fesc=bdy.blscope_=new BlockScope(sc);
+			auto vd=new VarDecl(fe.var);
+			vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
+			assert(fe.sstate==SemState.error||vd.vtype.isClassical());
+			if(fe.sstate==SemState.error){
+				if(!vd.vtype) vd.vtype=ℤt(true);
+				vd.vtype=vd.vtype.getClassical();
+			}
+			vd.loc=fe.var.loc;
+			fe.fescope_=fesc;
+			fe.var.name=vd.getName;
+			fe.loopVar=vd;
+			if(vd.name.name!="_"&&!fesc.insert(vd))
+				fe.sstate=SemState.error;
+			bdy=compoundExpSemantic(bdy,sc);
+			assert(!!bdy);
+			propErr(bdy,fe);
+			static if(language==silq){
+				if(sc.merge(false,fesc,forgetScope)){
+					sc.note("possibly consumed in for loop", fe.loc);
+					fe.sstate=SemState.error;
+					converged=true;
+				}
+				if(forgetScope.forgottenVars.length){
+					sc.error("variables potentially consumed multiple times in for loop",fe.loc);
+					foreach(decl;forgetScope.forgottenVars)
+						sc.note(format("variable '%s'",decl.name),decl.loc);
+					fe.sstate=SemState.error;
+					converged=true;
+				}
+			}else sc.merge(false,fesc,forgetScope);
+			converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
 		}
-		vd.loc=fe.var.loc;
-		if(vd.name.name!="_"&&!fesc.insert(vd))
-			fe.sstate=SemState.error;
-		fe.var.name=vd.getName;
-		fe.fescope_=fesc;
-		fe.loopVar=vd;
-		fe.bdy=compoundExpSemantic(fe.bdy,sc);
-		assert(!!fe.bdy);
-		propErr(fe.left,fe);
-		propErr(fe.right,fe);
-		propErr(fe.bdy,fe);
-		auto forgetScope=new BlockScope(sc);
-		static if(language==silq){
-			if(sc.merge(false,fesc,forgetScope)){
-				sc.note("possibly consumed in for loop", fe.loc);
-				fe.sstate=SemState.error;
-			}
-			if(forgetScope.forgottenVars.length){
-				sc.error("variables potentially consumed multiple times in for loop",fe.loc);
-				foreach(decl;forgetScope.forgottenVars)
-					sc.note(format("variable '%s'",decl.name),decl.loc);
-				fe.sstate=SemState.error;
-			}
-		}else sc.merge(false,fesc,forgetScope);
+		fe.bdy=bdy;
 		fe.type=unit;
 		return fe;
 	}
 	if(auto we=cast(WhileExp)e){
-		we.cond=conditionSemantic(we.cond,sc,InType.no);
-		we.bdy=compoundExpSemantic(we.bdy,sc);
-		propErr(we.cond,we);
-		propErr(we.bdy,we);
-		if(we.cond.sstate==SemState.completed){
-			import ast.parser: parseExpression;
-			auto ncode='\n'.repeat(we.cond.loc.line?we.cond.loc.line-1:0).to!string~we.cond.loc.rep~"\0\0\0\0";
-			auto nsource=new Source(we.cond.loc.source.name,ncode);
-			auto condDup=parseExpression(nsource,sc.handler); // TODO: this is an ugly hack, implement dup
-			assert(!!condDup);
-			condDup.loc=we.cond.loc;
-			condDup=expressionSemantic(condDup,we.bdy.blscope_,ConstResult.no,InType.no);
-			static if(language==silq) we.bdy.blscope_.pushConsumed();
-			if(condDup.sstate==SemState.error)
-				sc.note("possibly consumed in while loop", we.loc);
-			propErr(condDup,we);
+		bool converged=false;
+		Expression.CopyArgs cargs={preserveSemantic: true};
+		auto cond=we.cond.copy(cargs);
+		cond=conditionSemantic(cond,sc,InType.no);
+		propErr(cond,we);
+		static if(language==silq) sc.pushConsumed();
+		CompoundExp bdy;
+		while(!converged){ // TODO: limit number of iterations?
+			auto prevStateSnapshot=sc.getStateSnapshot();
+			auto forgetScope=new BlockScope(sc);
+			bdy=we.bdy.copy(cargs);
+			auto wesc=bdy.blscope_=new BlockScope(sc);
+			bdy=compoundExpSemantic(bdy,sc);
+			propErr(bdy,we);
+			auto ncond=we.cond.copy(cargs);
+			ncond=conditionSemantic(ncond,wesc,InType.no);
+			static if(language==silq) wesc.pushConsumed();
+			propErr(ncond,we);
+			if(cond.sstate==SemState.completed&&ncond.sstate==SemState.error)
+				sc.note("variable declaration may be missing in while loop body", we.loc);
+			static if(language==silq){
+				if(sc.merge(false,bdy.blscope_,forgetScope)){
+					sc.note("possibly consumed in while loop", we.loc);
+					we.sstate=SemState.error;
+					converged=true;
+				}
+				if(forgetScope.forgottenVars.length){
+					sc.error("variables potentially consumed multiple times in while loop", we.loc);
+					foreach(decl;forgetScope.forgottenVars)
+						sc.note(format("variable '%s'",decl.name),decl.loc);
+					we.sstate=SemState.error;
+					converged=true;
+				}
+			}else sc.merge(false,bdy.blscope_,forgetScope);
+			converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
 		}
-		auto forgetScope=new BlockScope(sc);
-		static if(language==silq){
-			if(sc.merge(false,we.bdy.blscope_,forgetScope)){
-				sc.note("possibly consumed in while loop", we.loc);
-				we.sstate=SemState.error;
-			}
-			if(forgetScope.forgottenVars.length){
-				sc.error("variables potentially consumed multiple times in while loop", we.loc);
-				foreach(decl;forgetScope.forgottenVars)
-					sc.note(format("variable '%s'",decl.name),decl.loc);
-				we.sstate=SemState.error;
-			}
-		}else sc.merge(false,we.bdy.blscope_,forgetScope);
+		we.cond=cond;
+		we.bdy=bdy;
 		we.type=unit;
 		return we;
 	}
 	if(auto re=cast(RepeatExp)e){
 		re.num=expressionSemantic(re.num,sc,ConstResult.no,InType.no);
 		static if(language==silq) sc.pushConsumed();
+		propErr(re.num,re);
 		if(re.num.sstate==SemState.completed && !isSubtype(re.num.type, ℤt(true))){
 			sc.error(format("number of iterations should be a classical integer, not %s",re.num.type),re.num.loc);
 			re.sstate=SemState.error;
 		}
-		re.bdy=compoundExpSemantic(re.bdy,sc);
-		propErr(re.num,re);
-		propErr(re.bdy,re);
-		auto forgetScope=new BlockScope(sc);
-		static if(language==silq){
-			if(sc.merge(false,re.bdy.blscope_,forgetScope)){
-				sc.note("possibly consumed in repeat loop", re.loc);
-				re.sstate=SemState.error;
-			}
-			if(forgetScope.forgottenVars.length){
-				sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
-				foreach(decl;forgetScope.forgottenVars)
-					sc.note(format("variable '%s'",decl.name),decl.loc);
-				re.sstate=SemState.error;
-			}
-		}else sc.merge(false,re.bdy.blscope_,forgetScope);
+		bool converged=false;
+		Expression.CopyArgs cargs={preserveSemantic:true};
+		CompoundExp bdy;
+		while(!converged){ // TODO: limit number of iterations?
+			auto prevStateSnapshot=sc.getStateSnapshot();
+			auto forgetScope=new BlockScope(sc);
+			bdy=re.bdy.copy(cargs);
+			bdy=compoundExpSemantic(bdy,sc);
+			propErr(bdy,re);
+			static if(language==silq){
+				if(sc.merge(false,bdy.blscope_,forgetScope)){
+					sc.note("possibly consumed in repeat loop", re.loc);
+					re.sstate=SemState.error;
+					converged=true;
+				}
+				if(forgetScope.forgottenVars.length){
+					sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
+					foreach(decl;forgetScope.forgottenVars)
+						sc.note(format("variable '%s'",decl.name),decl.loc);
+					re.sstate=SemState.error;
+					converged=true;
+				}
+			}else sc.merge(false,bdy.blscope_,forgetScope);
+			converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
+		}
+		re.bdy=bdy;
 		re.type=unit;
 		return re;
 	}
@@ -779,12 +810,14 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 CompoundExp compoundExpSemantic(CompoundExp ce,Scope sc,Annotation restriction_=Annotation.none){
 	if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
 	foreach(ref e;ce.s){
-		//writeln("before: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.symtab);
+		//writeln("before: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
 		e=statementSemantic(e,ce.blscope_);
-		//writeln("after: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.symtab);
+		//writeln("after: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
 		propErr(e,ce);
 	}
 	ce.type=unit;
+	if(ce.sstate!=SemState.error)
+		ce.sstate=SemState.completed;
 	return ce;
 }
 
@@ -2019,11 +2052,12 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 			if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
 			auto id=cast(Identifier)var;
 			if(!id) return false;
-			auto meaning=sc.lookup(id,false,true,Lookup.probing);
-			auto name=meaning.rename?meaning.rename:meaning.name;
 			static if(language==silq){
-				if(!name||!sc.dependencyTracked(name)) return false;
-				return meaning&&sc.canForget(meaning);
+				if(auto meaning=sc.lookup(id,false,true,Lookup.probing)){
+					auto name=meaning.rename?meaning.rename:meaning.name;
+					if(!name||!sc.dependencyTracked(name)) return false;
+					return sc.canForget(meaning);
+				}else return false;
 			}else return true;
 		}
 		auto canForgetImplicitly=checkImplicitForget(fe.var);

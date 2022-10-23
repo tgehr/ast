@@ -347,11 +347,23 @@ class Identifier: Expression{
 		else this.name = uniq[name] = name;
 	}
 	override Identifier copyImpl(CopyArgs args){
-		enforce(!args.preserveSemantic,"TODO");
 		Identifier r;
 		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.name); // TODO: this is a hack
 		else r=new Identifier(name);
-		static if(language==silq) r.checkReverse=checkReverse;
+		if(args.preserveSemantic){
+			r.meaning=meaning;
+			r.substitute=substitute;
+			r.scope_=scope_;
+			r.calledDirectly=calledDirectly;
+			static if(language==silq){
+				r.checkReverse=checkReverse;
+				r.classical=classical;
+			}
+		}else{
+			static if(language==silq){
+				r.checkReverse=checkReverse;
+			}
+		}
 		return r;
 	}
 	override string toString(){
@@ -1267,8 +1279,11 @@ class ForExp: Expression{
 		this.bdy=bdy;
 	}
 	override ForExp copyImpl(CopyArgs args){
-		enforce(!args.preserveSemantic,"TODO");
-		return new ForExp(var.copy(args),leftExclusive,left.copy(args),step?step.copy(args):null,rightExclusive,right.copy(args),bdy.copy(args));
+		auto r=new ForExp(var.copy(args),leftExclusive,left.copy(args),step?step.copy(args):null,rightExclusive,right.copy(args),bdy.copy(args));
+		if(args.preserveSemantic){
+			enforce(!fescope_&&!loopVar,"TODO");
+		}
+		return r;
 	}
 	override string toString(){ return _brk("for "~var.toString()~" in "~
 	                                        (leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~

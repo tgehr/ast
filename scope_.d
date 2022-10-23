@@ -6,7 +6,7 @@ import astopt;
 import std.format, std.conv, std.algorithm, std.stdio;
 import std.typecons:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
-import util;
+import util, util.hashtable: HashMap;
 
 static if(language==silq){
 struct Dependency{
@@ -41,7 +41,7 @@ struct Dependency{
 }
 
 struct Dependencies{
-	Dependency[string] dependencies;
+	HashMap!(string,Dependency,(a,b)=>a==b,(a)=>typeid(a).getHash(&a)) dependencies;
 	void joinWith(Dependencies rhs){
 		foreach(k,ref v;dependencies){
 			if(k in rhs.dependencies)
@@ -70,7 +70,7 @@ struct Dependencies{
 		dependencies[decl]=Dependency(true);
 	}
 	Dependencies dup(){
-		Dependency[string] result;
+		typeof(Dependencies.dependencies) result;
 		foreach(k,ref v;dependencies)
 			result[k]=v.dup;
 		return Dependencies(result);
@@ -457,6 +457,50 @@ abstract class Scope{
 		return 0;
 	}
 	Q!(IndexExp,IndexExp)[] indicesToReplace=null; // (assignee, consumer)
+
+	struct ScopeState{
+		bool opEquals(ref ScopeState rhs){
+			static if(language==silq){
+				if(dependencies!=rhs.dependencies)
+					return false;
+			}
+			import ast.semantic_: typeForDecl;
+			foreach(name,decl;rhs.symtab)
+				if(name !in symtab)
+					return false;
+			foreach(name,decl;symtab){
+				import ast.semantic_: typeForDecl;
+				if(auto rdecl=name in rhs.symtab){
+					if(typeForDecl(decl)!=typeForDecl(*rdecl))
+						return false;
+				}else return false;
+			}
+			return true;
+		}
+		string toString(){
+			string r;
+			static if(language==silq)
+				r~=text("dependencies: ",dependencies,"\n");
+			import ast.semantic_: typeForDecl;
+			import std.array: join;
+			r~=text("{",symtab.values.map!(decl=>text(decl.getName,": ",typeForDecl(decl))).join(", "),"}");
+			return r;
+		}
+	private:
+		static if(language==silq){
+			Dependencies dependencies;
+		}
+		Declaration[string] symtab;
+	}
+	ScopeState getStateSnapshot(){
+		Declaration[string] nsymtab;
+		foreach(_,decl;symtab) nsymtab[decl.getName]=decl;
+		static if(language==silq){
+			return ScopeState(dependencies.dup,nsymtab);
+		}else{
+			return ScopeState(nsymtab);
+		}
+	}
 private:
 	static if(language==silq){
 		Dependencies dependencies;
