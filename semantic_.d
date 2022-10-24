@@ -2466,7 +2466,9 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 				sc.error(format("slice upper bound for type %s exceeds %s",tt,tt.length),sl.loc);
 				sl.sstate=SemState.error;
 			}
-			sl.type=tt[cast(size_t)lc..cast(size_t)rc];
+			if(sl.sstate!=SemState.error){
+				sl.type=tt[cast(size_t)lc..cast(size_t)rc];
+			}
 		}else{
 			sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
 			sl.sstate=SemState.error;
