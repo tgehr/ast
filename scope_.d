@@ -64,11 +64,6 @@ struct Dependencies{
 		dependencies[ndecl]=dependencies[decl];
 		dependencies.remove(decl);
 	}
-	void add(string decl)in{
-		assert(decl !in dependencies);
-	}do{
-		dependencies[decl]=Dependency(true);
-	}
 	Dependencies dup(){
 		typeof(Dependencies.dependencies) result;
 		foreach(k,ref v;dependencies)
@@ -76,7 +71,7 @@ struct Dependencies{
 		return Dependencies(result);
 	}
 	bool canForget(string decl)in{
-		assert(decl in dependencies);
+		assert(decl in dependencies,text(decl," ",dependencies));
 	}do{
 		return !dependencies[decl].isTop;
 	}
@@ -109,14 +104,8 @@ abstract class Scope{
 			rnsymtab[decl.rename.ptr]=decl;
 		}
 		static if(language==silq){
-			if(decl.getName in dependencies.dependencies){
-				assert(toPush.canFind(decl.getName),text(decl," ",toPush));
-				auto ndecl="`renamed`"~decl.getName;
-				assert(ndecl !in dependencies.dependencies);
-				foreach(ref x;toPush) if(x == decl.getName) x=ndecl;
-				dependencies.rename(decl.getName,ndecl);
-			}
-			dependencies.add(decl.getName);
+			if(decl.getName !in dependencies.dependencies||toPush.canFind(decl.getName))
+				addDependency(decl,Dependency(true));
 		}
 		decl.scope_=this;
 		return true;
@@ -201,15 +190,20 @@ abstract class Scope{
 	Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
 		return lookupHere(ident,rnsym,kind);
 	}
-	protected final void rename(Declaration decl){
+	Identifier getRenamed(Identifier cname){
 		for(;;){ // TODO: quite hacky
-			auto cname=decl.rename?decl.rename:decl.name;
 			auto d=lookup(cname,true,true,Lookup.probing);
 			import ast.semantic_: isBuiltIn;
 			if(!d&&!isBuiltIn(cname)) break;
-			decl.rename=new Identifier(decl.getName~"'");
-			decl.rename.loc=decl.name.loc;
+			auto loc=cname.loc;
+			cname=new Identifier(cname.name~"'");
+			cname.loc=loc;
 		}
+		return cname;
+	}
+	protected final void rename(Declaration decl){
+		auto cname=decl.rename?decl.rename:decl.name;
+		decl.rename=getRenamed(cname);
 	}
 	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind){
 		auto r = symtabLookup(ident,rnsym,kind);
@@ -256,8 +250,30 @@ abstract class Scope{
 		}
 
 		void addDependency(Declaration decl, Dependency dep){
-			dep.joinWith(controlDependency);
-			dependencies.dependencies[decl.getName]=dep;
+			addDependencies([q(decl.getName,dep)]);
+		}
+		void removeDependency(string name){
+			dependencies.dependencies.remove(name);
+		}
+		void addDependencies(scope Q!(string,Dependency)[] deps){
+			foreach(i,ref dep;deps){
+				if(dep[0] in dependencies.dependencies){ // recently consumed
+					assert(toPush.canFind(dep[0]),text(dep[0]," ",toPush));
+					auto ndecl="`renamed`"~dep[0];
+					//assert(ndecl !in dependencies.dependencies);
+					foreach(ref x;toPush) if(x == dep[0]) x=ndecl;
+					dependencies.rename(dep[0],ndecl);
+					controlDependency.rename(dep[0],ndecl);
+					foreach(j,ref odep;deps){
+						if(i==j) continue;
+						odep[1].rename(dep[0],ndecl);
+					}
+				}
+			}
+			foreach(rename,dep;deps.map!(x=>x)){
+				dep.joinWith(controlDependency);
+				dependencies.dependencies[rename]=dep;
+			}
 		}
 
 		final bool dependencyTracked(Identifier id){
@@ -418,13 +434,13 @@ abstract class Scope{
 			else redefinitionError(var,d);
 			return false;
 		}
+		static if(language==silq){
+			if(decl.getName !in dependencies.dependencies||toPush.canFind(decl.getName))
+				addDependency(decl,Dependency(true));
+		}
 		symtab[var.name.ptr]=var;
 		if(var.rename) rnsymtab[var.rename.ptr]=var;
 		var.vtype=type;
-		static if(language==silq){
-			if(var.getName !in dependencies.dependencies)
-				dependencies.add(var.getName);
-		}
 		var.scope_=this;
 		import ast.semantic_:varDeclSemantic;
 		varDeclSemantic(var,this);
