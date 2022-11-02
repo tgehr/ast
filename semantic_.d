@@ -1342,18 +1342,17 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	int curDependency;
 	void[0][string] consumed;
 	void[0][string] defined;
-	void updateDependencies(Expression lhs,Expression rhs,bool expandTuples,Stage stage){
+	void updateDependencies(Expression lhs,Expression rhs,bool expandTuples,Stage stage,bool indexed){
 		if(auto id=cast(Identifier)lhs){
 			if(id&&id.meaning&&id.meaning.name){
 				auto rename=id.meaning.getName;
 				final switch(stage){
 					case Stage.collectDeps:
 						if(rhs.isQfree()){
-							if(rename in dependencies){
-								auto dep=dependencies[rename];
-								dep.joinWith(rhs.getDependency(sc));
-								dependencies[rename]=dep;
-							}else dependencies[rename]=rhs.getDependency(sc);
+							auto dep=rhs.getDependency(sc);
+							if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+							if(rename in dependencies) dep.joinWith(dependencies[rename]);
+							dependencies[rename]=dep;
 						}
 						break;
 					case Stage.consumeLhs:
@@ -1378,28 +1377,28 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 				if(auto tplr=cast(TupleExp)rhs){
 					if(tpll.e.length==tplr.e.length){
 						foreach(i;0..tpll.e.length)
-							updateDependencies(tpll.e[i],tplr.e[i],true,stage);
+							updateDependencies(tpll.e[i],tplr.e[i],true,stage,indexed);
 						ok=true;
 					}
 				}
 			}
-			if(!ok) foreach(exp;tpll.e) updateDependencies(exp,rhs,false,stage);
+			if(!ok) foreach(exp;tpll.e) updateDependencies(exp,rhs,false,stage,indexed);
 		}else if(auto idx=cast(IndexExp)lhs){
-			updateDependencies(idx.e,rhs,false,stage);
+			updateDependencies(idx.e,rhs,false,stage,true); // TODO: pass indices down?
 		}else if(auto fe=cast(FieldExp)lhs){
-			updateDependencies(fe.e,rhs,false,stage);
+			updateDependencies(fe.e,rhs,false,stage,indexed);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
-			updateDependencies(tae.e,rhs,expandTuples,stage);
+			updateDependencies(tae.e,rhs,expandTuples,stage,indexed);
 		}else assert(0);
 	}
 	if(ae.sstate!=SemState.error){
-		updateDependencies(ae.e1,ae.e2,true,Stage.collectDeps);
-		updateDependencies(ae.e1,ae.e2,true,Stage.consumeLhs);
+		updateDependencies(ae.e1,ae.e2,true,Stage.collectDeps,false);
+		updateDependencies(ae.e1,ae.e2,true,Stage.consumeLhs,false);
 		foreach(ref dependency;dependencies)
 			foreach(name;sc.toPush)
 				sc.pushUp(dependency, name);
 		sc.pushConsumed();
-		updateDependencies(ae.e1,ae.e2,true,Stage.defineVars);
+		updateDependencies(ae.e1,ae.e2,true,Stage.defineVars,false);
 	}
 	}
 	if(ae.sstate!=SemState.error) ae.sstate=SemState.completed;
