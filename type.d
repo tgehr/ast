@@ -1152,6 +1152,7 @@ class ProductTy: Type{
 			auto rCod=r.tryApply(vars,isSquare);
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
+			if(!ncod) return null;
 			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}else{
 			auto name=names[0]==r.names[0]?names[0]:freshName("x",r);
@@ -1160,6 +1161,7 @@ class ProductTy: Type{
 			auto rCod=r.tryApply(var,isSquare);
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
+			if(!ncod) return null;
 			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}
 	}
