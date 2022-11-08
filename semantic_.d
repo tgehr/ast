@@ -2867,7 +2867,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 	if(auto ite=cast(IteExp)expr){
 		ite.cond=conditionSemantic!true(ite.cond,sc,inType);
 		if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
-			sc.error("branches of if expression must be single expressions;",ite.loc);
+			sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
 			ite.sstate=SemState.error;
 			return ite;
 		}
