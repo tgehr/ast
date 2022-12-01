@@ -2878,13 +2878,16 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 			enum quantumControl=false;
 			enum restriction_=Annotation.none;
 		}
+		int numBottom=0; // TODO: actually introduce a bottom type?
 		Expression branchSemantic(Expression branch,Scope sc){
 			if(inType) return expressionSemantic(branch,sc,constResult,inType);
 			if(auto ae=cast(AssertExp)branch){
 				branch=statementSemantic(branch,sc);
 				if(auto lit=cast(LiteralExp)ae.e)
-					if(lit.lit.type==Tok!"0" && lit.lit.str=="0")
+					if(lit.lit.type==Tok!"0" && lit.lit.str=="0"){
 						branch.type=null;
+						++numBottom;
+					}
 			}else branch=expressionSemantic(branch,sc,constResult,inType);
 			return branch;
 		}
@@ -2912,6 +2915,9 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 		auto t1=ite.then.s[0].type;
 		auto t2=ite.othw.s[0].type;
 		ite.type=joinTypes(t1,t2);
+		if(!t1 && !t2 && numBottom==2){
+			ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
+		}
 		if(t1 && t2 && !ite.type){
 			sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
 			ite.sstate=SemState.error;
