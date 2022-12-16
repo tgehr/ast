@@ -21,10 +21,11 @@ struct Dependency{
 		foreach(x;rhs.dependencies)
 			dependencies.insert(x);
 	}
-	void replace(string name, Dependency rhs){
+	void replace(string name, Dependency rhs, Dependency control){
 		if(name !in dependencies) return;
 		dependencies.remove(name);
 		joinWith(rhs);
+		joinWith(control);
 	}
 	void rename(string decl,string ndecl){
 		if(decl in dependencies){
@@ -32,7 +33,8 @@ struct Dependency{
 			dependencies.insert(ndecl);
 		}
 	}
-	void remove(string decl){
+	void remove(string decl,Dependency control){
+		if(decl in dependencies) joinWith(control);
 		dependencies.remove(decl);
 	}
 	Dependency dup(){
@@ -48,13 +50,13 @@ struct Dependencies{
 				v.joinWith(rhs.dependencies[k]);
 		}
 	}
-	void pushUp(string removed)in{
+	void pushUp(string removed, Dependency control)in{
 		assert(removed in dependencies,removed);
 	}do{
 		Dependency x=dependencies[removed];
 		dependencies.remove(removed);
 		foreach(k,ref v;dependencies)
-			v.replace(removed, x);
+			v.replace(removed, x, control);
 	}
 	void rename(string decl,string ndecl)in{
 		assert(decl in dependencies);
@@ -143,11 +145,11 @@ abstract class Scope{
 	static if(language==silq){
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
-			dependency.replace(removed,dependencies.dependencies[removed]);
+			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
 		}
 		final void pushConsumed(){
 			foreach(name;toPush)
-				dependencies.pushUp(name);
+				dependencies.pushUp(name,controlDependency);
 			toPush=[];
 		}
 	}

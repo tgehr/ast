@@ -852,7 +852,7 @@ Dependency getDependency(Expression e,Scope sc)in{
 			result.dependencies.insert(id.name);
 			if(!id.constLookup){
 				auto vd=cast(VarDecl)id.meaning;
-				if(!vd||!(vd.isConst||!sc.isConst(vd))) result.replace(id.name,sc.getDependency(id));
+				if(!vd||!(vd.isConst||!sc.isConst(vd))) result.replace(id.name,sc.getDependency(id),sc.controlDependency);
 			}
 		}
 	}
