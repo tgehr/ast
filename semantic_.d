@@ -914,13 +914,11 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 			semanticDone=true;
 		}else if(auto idx=cast(IndexExp)be.e1){
-			if(cast(Identifier)idx.e){
-				auto idxs=indexReplaceSemantic([idx],be.e2,be.loc,sc,be.isSwap);
-				assert(idxs.length==1);
-				be.e1=idxs[0];
-				propErr(be.e1,be);
-				semanticDone=true;
-			}
+			auto idxs=indexReplaceSemantic([idx],be.e2,be.loc,sc,be.isSwap);
+			assert(idxs.length==1);
+			be.e1=idxs[0];
+			propErr(be.e1,be);
+			semanticDone=true;
 		}
 	}else enum semanticDone=false;
 	if(!semanticDone) be.e2=expressionSemantic(be.e2,sc,ConstResult.no,InType.no);
