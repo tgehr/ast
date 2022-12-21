@@ -46,8 +46,11 @@ struct Dependencies{
 	HashMap!(string,Dependency,(a,b)=>a==b,(a)=>typeid(a).getHash(&a)) dependencies;
 	void joinWith(Dependencies rhs){
 		foreach(k,ref v;dependencies){
-			if(k in rhs.dependencies)
+			if(k in rhs.dependencies){
 				v.joinWith(rhs.dependencies[k]);
+				if(k in v.dependencies)
+					v=Dependency(true);
+			}
 		}
 	}
 	void pushUp(string removed, Dependency control)in{
@@ -55,8 +58,11 @@ struct Dependencies{
 	}do{
 		Dependency x=dependencies[removed];
 		dependencies.remove(removed);
-		foreach(k,ref v;dependencies)
+		foreach(k,ref v;dependencies){
 			v.replace(removed, x, control);
+			if(k in v.dependencies)
+				v=Dependency(true);
+		}
 	}
 	void rename(string decl,string ndecl)in{
 		assert(decl in dependencies);
@@ -274,7 +280,8 @@ abstract class Scope{
 			}
 			foreach(rename,dep;deps.map!(x=>x)){
 				dep.joinWith(controlDependency);
-				dependencies.dependencies[rename]=dep;
+				if(rename in dep.dependencies) dependencies.dependencies[rename]=Dependency(true);
+				else dependencies.dependencies[rename]=dep;
 			}
 		}
 
