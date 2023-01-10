@@ -1649,6 +1649,7 @@ private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
 }
 auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,auto ref T args){
 	import core.lifetime:forward;
+	// TODO: implement without cast cascade
 	if(auto fd=cast(FunctionDef)d) return f(fd,forward!args);
 	if(auto dd=cast(DatDecl)d) return f(dd,forward!args);
 
@@ -1660,19 +1661,40 @@ auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,aut
 	return default_(d,args);
 }
 
-/+
+
 private noreturn unknownStmError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown statement: ",typeid(s)," ",s));
 }
 auto dispatchStm(alias f,alias default_=unknownStmError,T...)(Expression s,auto ref T args){
-	// TODO
+	import core.lifetime:forward;
+	// TODO: implement without cast cascade
+	if(auto ce=cast(CallExp)s) return f(ce,forward!args);
+	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
+	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
+	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
+	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
+
+	if(auto ce=cast(CommaExp)s) return f(ce,forward!args);
+	// TODO: supertypes for define and assign?
+
+	if(auto fe=cast(ForExp)s) return f(fe,forward!args);
+	if(auto we=cast(WhileExp)s) return f(we,forward!args);
+	if(auto re=cast(RepeatExp)s) return f(re,forward!args);
+
+	if(auto oe=cast(ObserveExp)s) return f(oe,forward!args);
+	if(auto oe=cast(CObserveExp)s) return f(oe,forward!args);
+
+	if(auto ae=cast(AssertExp)s) return f(ae,forward!args);
+
+	if(auto fe=cast(ForgetExp)s) return f(fe,forward!args);
+
 	return default_(s,args);
 }
 
 // TODO: type dispatch
-+/
 
-private Expression unknownExpError(T...)(Expression e,auto ref T args){
+
+private noreturn unknownExpError(T...)(Expression e,auto ref T args){
 	assert(0,text("unknown expression: ",typeid(e)," ",e));
 }
 auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto ref T args){
