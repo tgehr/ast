@@ -829,13 +829,14 @@ class CallExp: Expression{
 								case Variance.contravariant: return combineTypes(t1,t2,!meet);
 							}
 						}
-						import ast.semantic_: ConstResult, InType, callSemantic; // TODO: get rid of this?
+						import ast.semantic_: ConstResult, InType, ExpSemContext, callSemantic; // TODO: get rid of this?
 						if(!dat.isTuple){
 							assert(dat.params.length==1);
 							assert(arg != rcall.arg); // (checked at start of function)
 							auto combined=combine(dat.params[0].variance,arg,rcall.arg);
 							if(!combined) return null;
-							return callSemantic(new CallExp(e,combined,isSquare,isClassical_),null,ConstResult.no,InType.yes);
+							static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+							return callSemantic(new CallExp(e,combined,isSquare,isClassical_),ExpSemContext(null,ConstResult.no,InType.yes));
 						}
 						assert(dat.isTuple);
 						auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
@@ -843,7 +844,8 @@ class CallExp: Expression{
 							auto combined=iota(tup.length).map!(i=>combine(dat.params[i].variance,tup[i],rtup[i])).array;
 							if(combined.any!(x=>x is null)) return null;
 							auto rarg=new TupleExp(combined);
-							return callSemantic(new CallExp(e,rarg,isSquare,isClassical),null,ConstResult.no,InType.yes);
+							static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+							return callSemantic(new CallExp(e,rarg,isSquare,isClassical),ExpSemContext(null,ConstResult.no,InType.yes));
 						}
 					}
 				}
@@ -1598,4 +1600,128 @@ class ForgetExp: Expression{
 		if(auto r=dg(var)) return r;
 		return dg(val);
 	}
+}
+
+alias CommaExp=BinaryExp!(Tok!",");
+alias AssignExp=BinaryExp!(Tok!"←");
+alias DefineExp=BinaryExp!(Tok!":=");
+alias OrAssignExp=BinaryExp!(Tok!"||←");
+alias AndAssignExp=BinaryExp!(Tok!"&&←");
+alias AddAssignExp=BinaryExp!(Tok!"+←");
+alias SubAssignExp=BinaryExp!(Tok!"-←");
+alias MulAssignExp=BinaryExp!(Tok!"·←");
+alias DivAssignExp=BinaryExp!(Tok!"/←");
+alias IDivAssignExp=BinaryExp!(Tok!"div←");
+alias ModAssignExp=BinaryExp!(Tok!"%←");
+alias PowAssignExp=BinaryExp!(Tok!"^←");
+alias CatAssignExp=BinaryExp!(Tok!"~←");
+alias BitOrAssignExp=BinaryExp!(Tok!"∨←");
+alias BitXorAssignExp=BinaryExp!(Tok!"⊕←");
+alias BitAndAssignExp=BinaryExp!(Tok!"∧←");
+alias AddExp=BinaryExp!(Tok!"+");
+alias SubExp=BinaryExp!(Tok!"-");
+alias NSubExp=BinaryExp!(Tok!"sub");
+alias MulExp=BinaryExp!(Tok!"·");
+alias DivExp=BinaryExp!(Tok!"/");
+alias IDivExp=BinaryExp!(Tok!"div");
+alias ModExp=BinaryExp!(Tok!"%");
+alias PowExp=BinaryExp!(Tok!"^");
+alias CatExp=BinaryExp!(Tok!"~");
+alias BitOrExp=BinaryExp!(Tok!"∨");
+alias BitXorExp=BinaryExp!(Tok!"⊕");
+alias BitAndExp=BinaryExp!(Tok!"∧");
+alias UMinusExp=UnaryExp!(Tok!"-");
+alias UNotExp=UnaryExp!(Tok!"¬");
+alias UBitNotExp=UnaryExp!(Tok!"~");
+alias LtExp=BinaryExp!(Tok!"<");
+alias LeExp=BinaryExp!(Tok!"≤");
+alias GtExp=BinaryExp!(Tok!">");
+alias GeExp=BinaryExp!(Tok!"≥");
+alias EqExp=BinaryExp!(Tok!"=");
+alias NeqExp=BinaryExp!(Tok!"≠");
+alias OrExp=BinaryExp!(Tok!"||");
+alias AndExp=BinaryExp!(Tok!"&&");
+alias Exp=Expression;
+
+/+
+private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
+	assert(0,text("unknown declaration: ",typeid(s)," ",s));
+}
+auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,auto ref T args){
+	// TODO
+	return default_(d,args);
+}
+
+private noreturn unknownStmError(T...)(Expression s,auto ref T args){
+	assert(0,text("unknown statement: ",typeid(s)," ",s));
+}
+auto dispatchStm(alias f,alias default_=unknownStmError,T...)(Expression s,auto ref T args){
+	// TODO
+	return default_(s,args);
+}
+
+// TODO: type dispatch
++/
+
+private Expression unknownExpError(T...)(Expression e,auto ref T args){
+	assert(0,text("unknown expression: ",typeid(e)," ",e));
+}
+auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto ref T args){
+	import core.lifetime:forward;
+	// TODO: implement without cast cascade
+	if(auto cd=cast(CompoundDecl)e) return f(cd,forward!args); // TODO: declaration
+	if(auto ce=cast(CompoundExp)e) return f(ce,forward!args); // TODO: statement?
+	if(auto ce=cast(CommaExp)e) return f(ce,forward!args);
+
+	if(auto ite=cast(IteExp)e) return f(ite,forward!args);
+
+	if(auto le=cast(LiteralExp)e) return f(le,forward!args);
+	if(auto le=cast(LambdaExp)e) return f(le,forward!args);
+	if(auto fd=cast(FunctionDef)e) return f(fd,forward!args); // TODO: declaration
+	if(auto ret=cast(ReturnExp)e) return f(ret,forward!args); // TODO: statement
+	if(auto ce=cast(CallExp)e) return f(ce,forward!args);
+	static if(language==psi) if(auto pl=cast(PlaceholderExp)e) return f(pl,forward!args);
+	if(auto fe=cast(ForgetExp)e) return f(fe,forward!args);
+	if(auto id=cast(Identifier)e) return f(id,forward!args);
+	if(auto fe=cast(FieldExp)e) return f(fe,forward!args);
+	if(auto idx=cast(IndexExp)e) return f(idx,forward!args);
+	if(auto sl=cast(SliceExp)e) return f(sl,forward!args);
+	if(auto tpl=cast(TupleExp)e) return f(tpl,forward!args);
+	if(auto arr=cast(ArrayExp)e) return f(arr,forward!args);
+
+	if(auto tae=cast(TypeAnnotationExp)e) return f(tae,forward!args);
+
+	if(auto ume=cast(UMinusExp)e) return f(ume,forward!args);
+	if(auto une=cast(UNotExp)e) return f(une,forward!args);
+	if(auto ubne=cast(UBitNotExp)e) return f(ubne,forward!args);
+	static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e) return f(ce,forward!args);
+
+	if(auto ae=cast(AddExp)e) return f(ae,forward!args);
+	if(auto se=cast(SubExp)e) return f(se,forward!args);
+	if(auto nse=cast(NSubExp)e) return f(nse,forward!args);
+	if(auto me=cast(MulExp)e) return f(me,forward!args);
+	if(auto de=cast(DivExp)e) return f(de,forward!args);
+	if(auto ide=cast(IDivExp)e) return f(ide,forward!args);
+	if(auto me=cast(ModExp)e) return f(me,forward!args);
+	if(auto pe=cast(PowExp)e) return f(pe,forward!args);
+	if(auto boe=cast(BitOrExp)e) return f(boe,forward!args);
+	if(auto bxe=cast(BitXorExp)e) return f(bxe,forward!args);
+	if(auto bae=cast(BitAndExp)e) return f(bae,forward!args);
+
+	if(auto ae=cast(AndExp)e) return f(ae,forward!args);
+	if(auto oe=cast(OrExp)e) return f(oe,forward!args);
+
+	if(auto le=cast(LtExp)e) return f(le,forward!args);
+	if(auto le=cast(LeExp)e) return f(le,forward!args);
+	if(auto ge=cast(GtExp)e) return f(ge,forward!args);
+	if(auto ge=cast(GeExp)e) return f(ge,forward!args);
+	if(auto eq=cast(EqExp)e) return f(eq,forward!args);
+	if(auto ne=cast(NeqExp)e) return f(ne,forward!args);
+
+	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
+	if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
+	if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
+	if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);
+
+	return default_(e,forward!args);
 }

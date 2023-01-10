@@ -7,47 +7,6 @@ import std.array,std.algorithm,std.range,std.exception;
 import std.format, std.conv, std.typecons:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.error,ast.reverse,util;
 
-alias CommaExp=BinaryExp!(Tok!",");
-alias AssignExp=BinaryExp!(Tok!"←");
-alias DefineExp=BinaryExp!(Tok!":=");
-alias OrAssignExp=BinaryExp!(Tok!"||←");
-alias AndAssignExp=BinaryExp!(Tok!"&&←");
-alias AddAssignExp=BinaryExp!(Tok!"+←");
-alias SubAssignExp=BinaryExp!(Tok!"-←");
-alias MulAssignExp=BinaryExp!(Tok!"·←");
-alias DivAssignExp=BinaryExp!(Tok!"/←");
-alias IDivAssignExp=BinaryExp!(Tok!"div←");
-alias ModAssignExp=BinaryExp!(Tok!"%←");
-alias PowAssignExp=BinaryExp!(Tok!"^←");
-alias CatAssignExp=BinaryExp!(Tok!"~←");
-alias BitOrAssignExp=BinaryExp!(Tok!"∨←");
-alias BitXorAssignExp=BinaryExp!(Tok!"⊕←");
-alias BitAndAssignExp=BinaryExp!(Tok!"∧←");
-alias AddExp=BinaryExp!(Tok!"+");
-alias SubExp=BinaryExp!(Tok!"-");
-alias NSubExp=BinaryExp!(Tok!"sub");
-alias MulExp=BinaryExp!(Tok!"·");
-alias DivExp=BinaryExp!(Tok!"/");
-alias IDivExp=BinaryExp!(Tok!"div");
-alias ModExp=BinaryExp!(Tok!"%");
-alias PowExp=BinaryExp!(Tok!"^");
-alias CatExp=BinaryExp!(Tok!"~");
-alias BitOrExp=BinaryExp!(Tok!"∨");
-alias BitXorExp=BinaryExp!(Tok!"⊕");
-alias BitAndExp=BinaryExp!(Tok!"∧");
-alias UMinusExp=UnaryExp!(Tok!"-");
-alias UNotExp=UnaryExp!(Tok!"¬");
-alias UBitNotExp=UnaryExp!(Tok!"~");
-alias LtExp=BinaryExp!(Tok!"<");
-alias LeExp=BinaryExp!(Tok!"≤");
-alias GtExp=BinaryExp!(Tok!">");
-alias GeExp=BinaryExp!(Tok!"≥");
-alias EqExp=BinaryExp!(Tok!"=");
-alias NeqExp=BinaryExp!(Tok!"≠");
-alias OrExp=BinaryExp!(Tok!"||");
-alias AndExp=BinaryExp!(Tok!"&&");
-alias Exp=Expression;
-
 void propErr(Expression e1,Expression e2){
 	if(e1.sstate==SemState.error) e2.sstate=SemState.error;
 }
@@ -132,7 +91,8 @@ Expression presemantic(Declaration expr,Scope sc){
 						// capture c:
 						auto id=new Identifier("c");
 						id.loc=fd.loc;
-						expressionSemantic(id,fsc,ConstResult.yes,InType.no);
+						static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+						expressionSemantic(id,ExpSemContext(fsc,ConstResult.yes,InType.no));
 						break;
 					default: break;
 				}
@@ -150,19 +110,22 @@ Expression presemantic(Declaration expr,Scope sc){
 			auto id=new Identifier(dsc.decl.name.name);
 			id.loc=dsc.decl.loc;
 			id.meaning=dsc.decl;
-			id=cast(Identifier)expressionSemantic(id,sc,ConstResult.no,InType.yes);
+			static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+			id=cast(Identifier)expressionSemantic(id,ExpSemContext(sc,ConstResult.no,InType.yes));
 			assert(!!id);
 			Expression ctxty=id;
 			if(dsc.decl.hasParams){
 				auto args=dsc.decl.params.map!((p){
 					auto id=new Identifier(p.name.name);
 					id.meaning=p;
-					auto r=expressionSemantic(id,sc,ConstResult.no,InType.yes);
+					static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+					auto r=expressionSemantic(id,ExpSemContext(sc,ConstResult.no,InType.yes));
 					assert(r.sstate==SemState.completed);
 					return r;
 				}).array;
 				assert(dsc.decl.isTuple||args.length==1);
-				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),sc,ConstResult.no,InType.yes);
+				static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),ExpSemContext(sc,ConstResult.no,InType.yes));
 				ctxty.sstate=SemState.completed;
 				assert(ctxty.type == typeTy);
 			}
@@ -557,14 +520,17 @@ Expression statementSemantic(Expression e,Scope sc)in{
 }do{
 	if(e.sstate==SemState.completed) return e;
 	scope(success) if(e.sstate!=SemState.error) e.sstate=SemState.completed;
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
 	static if(language==silq){
 		scope(exit){
 			sc.pushConsumed();
 			sc.resetConst();
 		}
 	}
-	if(auto ce=cast(CallExp)e)
-		return callSemantic(ce,sc,ConstResult.yes,InType.no);
+	if(auto ce=cast(CallExp)e){
+		return callSemantic(ce,context.nestConst);
+	}
 	if(auto ce=cast(CompoundExp)e){
 		foreach(ref s;ce.s){
 			s=statementSemantic(s,sc);
@@ -616,7 +582,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	if(isDefineOrAssign(e)) return defineOrAssignSemantic(e,sc);
 	if(auto fe=cast(ForExp)e){
 		assert(!fe.bdy.blscope_);
-		fe.left=expressionSemantic(fe.left,sc,ConstResult.no,InType.no);
+		fe.left=expressionSemantic(fe.left,context.nestConst);
 		propErr(fe.left,fe);
 		static if(language==silq) sc.pushConsumed();
 		if(fe.left.sstate==SemState.completed && !isSubtype(fe.left.type, ℝ(true))){
@@ -624,13 +590,13 @@ Expression statementSemantic(Expression e,Scope sc)in{
 			fe.sstate=SemState.error;
 		}
 		if(fe.step){
-			fe.step=expressionSemantic(fe.step,sc,ConstResult.no,InType.no);
+			fe.step=expressionSemantic(fe.step,context.nestConst);
 			if(fe.step.sstate==SemState.completed && !isSubtype(fe.step.type, ℤt(true))){
 				sc.error(format("step should be a classical integer, not %s",fe.step.type),fe.step.loc);
 				fe.sstate=SemState.error;
 			}
 		}
-		fe.right=expressionSemantic(fe.right,sc,ConstResult.no,InType.no);
+		fe.right=expressionSemantic(fe.right,context.nestConst);
 		propErr(fe.right,fe);
 		static if(language==silq) sc.pushConsumed();
 		if(fe.right.sstate==SemState.completed && !isSubtype(fe.right.type, ℝ(true))){
@@ -724,7 +690,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		return we;
 	}
 	if(auto re=cast(RepeatExp)e){
-		re.num=expressionSemantic(re.num,sc,ConstResult.no,InType.no);
+		re.num=expressionSemantic(re.num,context.nestConst);
 		static if(language==silq) sc.pushConsumed();
 		propErr(re.num,re);
 		if(re.num.sstate==SemState.completed && !isSubtype(re.num.type, ℤt(true))){
@@ -766,9 +732,9 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		oe.type=unit;
 		return oe;
 	}
-	if(auto oe=cast(CObserveExp)e){ // TODO: get rid of cobserve!
-		oe.var=expressionSemantic(oe.var,sc,ConstResult.no,InType.no);
-		oe.val=expressionSemantic(oe.val,sc,ConstResult.no,InType.no);
+	if(auto oe=cast(CObserveExp)e){
+		oe.var=expressionSemantic(oe.var,context.nestConst);
+		oe.val=expressionSemantic(oe.val,context.nestConst);
 		propErr(oe.var,oe);
 		propErr(oe.val,oe);
 		if(oe.sstate==SemState.error)
@@ -788,7 +754,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		ae.type=unit;
 		return ae;
 	}
-	if(auto fe=cast(ForgetExp)e) return expressionSemantic(fe,sc,ConstResult.yes,InType.no);
+	if(auto fe=cast(ForgetExp)e) return expressionSemantic(fe,context.nestConst);
 	sc.error("not supported at this location",e.loc);
 	e.sstate=SemState.error;
 	return e;
@@ -898,6 +864,8 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 		}
 	}
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
 	bool success=true;
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
@@ -921,7 +889,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			semanticDone=true;
 		}
 	}else enum semanticDone=false;
-	if(!semanticDone) be.e2=expressionSemantic(be.e2,sc,ConstResult.no,InType.no);
+	if(!semanticDone) be.e2=expressionSemantic(be.e2,context.nestConsumed);
 	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
 	static if(language==silq) if(!semanticDone){
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
@@ -1045,52 +1013,54 @@ bool isBasicIndexType(Expression ty){
 	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isInt(ty)||isUint(ty);
 }
 
-bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc){
+bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	if(auto tpl1=cast(TupleExp)unwrap(e1)){
 		if(auto tpl2=cast(TupleExp)unwrap(e2))
-			return zip(tpl1.e,tpl2.e).any!(x=>guaranteedDifferentValues(x.expand,loc,sc));
+			return zip(tpl1.e,tpl2.e).any!(x=>guaranteedDifferentValues(x.expand,loc,sc,inType));
 		return false;
 	}
-	e1=expressionSemantic(e1,sc,ConstResult.yes,InType.no);
-	e2=expressionSemantic(e2,sc,ConstResult.yes,InType.no);
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	e1=expressionSemantic(e1,ExpSemContext(sc,ConstResult.yes,inType));
+	e2=expressionSemantic(e2,ExpSemContext(sc,ConstResult.yes,inType));
 	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
 		return false;
 	Expression neq=new NeqExp(e1,e2);
 	neq.loc=loc;
-	neq=expressionSemantic(neq,sc,ConstResult.yes,InType.no);
+	neq=expressionSemantic(neq,ExpSemContext(sc,ConstResult.yes,inType));
 	assert(neq.sstate==SemState.completed);
 	return neq.eval()==LiteralExp.makeBoolean(1);
 }
-bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope sc){
+bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	e1=unwrap(e1), e2=unwrap(e2);
 	if(cast(Identifier)e1 && cast(Identifier)e2 && e1!=e2) return true;
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
-			if(guaranteedDifferentLocations(idx1.e,idx2.e,loc,sc))
+			if(guaranteedDifferentLocations(idx1.e,idx2.e,loc,sc,inType))
 				return true;
-			return guaranteedDifferentValues(idx1.a,idx2.a,loc,sc);
+			return guaranteedDifferentValues(idx1.a,idx2.a,loc,sc,inType);
 		}else return true;
 	}else if(auto idx2=cast(IndexExp)e2)
 		return true;
 	return false;
 }
 
-bool indexEquals(Expression e1,Expression e2,Scope sc){
+bool indexEquals(Expression e1,Expression e2,Scope sc,InType inType){
 	if(auto id1=cast(Identifier)e1)
 		if(auto id2=cast(Identifier)e2)
 			return id1.name==id2.name;
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
-			if(!indexEquals(idx1.e,idx2.e,sc))
+			if(!indexEquals(idx1.e,idx2.e,sc,inType))
 				return false;
-			idx1.a=expressionSemantic(idx1.a,sc,ConstResult.yes,InType.no);
+			static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+			idx1.a=expressionSemantic(idx1.a,ExpSemContext(sc,ConstResult.yes,inType));
 			propErr(idx1.a,idx1);
-			idx2.a=expressionSemantic(idx2.a,sc,ConstResult.yes,InType.no);
+			idx2.a=expressionSemantic(idx2.a,ExpSemContext(sc,ConstResult.yes,inType));
 			propErr(idx2.a,idx2);
 			if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
 				return false;
 			Expression eq=new EqExp(idx1.a,idx2.a);
-			eq=expressionSemantic(eq,sc,ConstResult.yes,InType.no);
+			eq=expressionSemantic(eq,ExpSemContext(sc,ConstResult.yes,inType));
 			assert(eq.sstate==SemState.completed);
 			return eq.eval()==LiteralExp.makeBoolean(1);
 		}
@@ -1103,10 +1073,13 @@ static if(language==silq){
 IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,Location loc,Scope sc,out bool isSwap)in{
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 }do{
+	auto inType=InType.no;
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,inType);
 	indicesToReplace=indicesToReplace.dup;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
-		e.a=expressionSemantic(e.a,sc,ConstResult.yes,InType.no);
+		e.a=expressionSemantic(e.a,context.nestConst);
 		propErr(e.e,e);
 	}
 	foreach(ref theIndex;indicesToReplace)
@@ -1130,7 +1103,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			id.scope_=tpl[3];
 			return;
 		}
-		e.e=expressionSemantic(e.e,sc,ConstResult.no,InType.no); // consume array
+		e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
 		e.e.constLookup=true;
 		id=cast(Identifier)unwrap(e.e);
 		assert(!!id);
@@ -1145,7 +1118,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			theIndex.sstate=SemState.error;
 			return indicesToReplace;
 		}
-		auto nIndex=cast(IndexExp)expressionSemantic(theIndex,sc,ConstResult.yes,InType.no);
+		auto nIndex=cast(IndexExp)expressionSemantic(theIndex,context.nestConst);
 		assert(!!nIndex); // TODO: this might change
 		theIndex=nIndex;
 		Identifier id=null;
@@ -1187,8 +1160,8 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		foreach(j;i+1..indicesToReplace.length){
 			auto idx2=indicesToReplace[j];
 			if(idx2.sstate==SemState.error) continue;
-			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc)){
-				if(indexEquals(idx1,idx2,sc)) sc.error("indices refer to same value in reassignment",idx2.loc);
+			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc,inType)){
+				if(indexEquals(idx1,idx2,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
 				else sc.error("indices may refer to same value in reassignment",idx2.loc);
 				sc.note("other index is here",idx1.loc);
 				idx2.sstate=SemState.error;
@@ -1198,7 +1171,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 	}
 	assert(!sc.indicesToReplace.length);
 	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,x.sstate==SemState.error?x:null)).array;
-	rhs=expressionSemantic(rhs,sc,ConstResult.no,InType.no);
+	rhs=expressionSemantic(rhs,context.nestConsumed);
 	assert(sc.indicesToReplace.length==indicesToReplace.length);
 	foreach(i;0..sc.indicesToReplace.length){
 		if(!sc.indicesToReplace[i][1]){
@@ -1290,9 +1263,11 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 }
 
 AssignExp assignExpSemantic(AssignExp ae,Scope sc){
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
 	ae.type=unit;
 	auto constSave=sc.saveConst();
-	ae.e1=expressionSemantic(ae.e1,sc,ConstResult.yes,InType.no); // reassigned variable should not be consumed (otherwise, can use ':=')
+	ae.e1=expressionSemantic(ae.e1,context.nestConst); // reassigned variable should not be consumed (otherwise, can use ':=')
 	propErr(ae.e1,ae);
 	auto lhsConst=sc.saveConst();
 	sc.resetConst(constSave);
@@ -1319,7 +1294,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	}
 	checkLhs(ae.e1);
 	sc.resetConst(lhsConst);
-	ae.e2=expressionSemantic(ae.e2,sc,ConstResult.no,InType.no);
+	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	sc.resetConst(constSave);
 	propErr(ae.e2,ae);
 	if(ae.sstate!=SemState.error&&!isSubtype(ae.e2.type,ae.e1.type)){
@@ -1414,6 +1389,8 @@ bool isInvertibleOpAssignExp(Expression e){
 ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }do{
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
 	static if(language==silq){
 		// TODO: assignments to fields
 		auto semanticDone=false;
@@ -1437,8 +1414,8 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 			semanticDone=true;
 		}
 	}else enum semanticDone=false;
-	if(!semanticDone) be.e1=expressionSemantic(be.e1,sc,ConstResult.no,InType.no);
-	be.e2=expressionSemantic(be.e2,sc,cast(CatAssignExp)be?ConstResult.no:ConstResult.yes,InType.no);
+	if(!semanticDone) be.e1=expressionSemantic(be.e1,context.nestConsumed);
+	be.e2=expressionSemantic(be.e2,context.nest(cast(CatAssignExp)be?ConstResult.no:ConstResult.yes));
 	propErr(be.e1,be);
 	propErr(be.e2,be);
 	if(be.sstate==SemState.error)
@@ -1468,7 +1445,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 		}
 	}
 	assert(!!ce);
-	ce=expressionSemantic(ce,sc,ConstResult.no,InType.no);
+	ce=expressionSemantic(ce,context.nestConsumed);
 	propErr(ce, be);
 	checkULhs(be.e1);
 	if(be.sstate!=SemState.error&&!isSubtype(ce.type, be.e1.type)){
@@ -1552,13 +1529,14 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 }
 
 
-Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inType){
+Expression callSemantic(CallExp ce,ExpSemContext context){
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
-	ce.e=expressionSemantic(ce.e,sc,ConstResult.no,inType);
+	ce.e=expressionSemantic(ce.e,context.nestConsumed);
 	propErr(ce.e,ce);
 	if(ce.sstate==SemState.error)
 		return ce;
 	scope(success){
+		auto sc=context.sc, constResult=context.constResult, inType=context.inType;
 		if(ce&&ce.sstate!=SemState.error){
 			if(auto ft=cast(FunTy)ce.e.type){
 				if(inType){
@@ -1595,6 +1573,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 			}
 		}
 	}
+	auto sc=context.sc;
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
 		void checkArg(size_t i,Expression exp){
@@ -1622,7 +1601,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				foreach(i,ref exp;tpl.e){
-					exp=expressionSemantic(exp,sc,(ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no,inType);
+					exp=expressionSemantic(exp,context.nest((ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no));
 					checkArg(i,exp);
 					propErr(exp,tpl);
 				}
@@ -1630,7 +1609,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 					tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 				}
 			}else{
-				ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no,inType);
+				ce.arg=expressionSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
 				foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
@@ -1640,7 +1619,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 			}
 		}else{
 			assert(ft.isConst.length==1);
-			ce.arg=expressionSemantic(ce.arg,sc,ft.isConst[0]?ConstResult.yes:ConstResult.no,inType);
+			ce.arg=expressionSemantic(ce.arg,context.nest(ft.isConst[0]?ConstResult.yes:ConstResult.no));
 			assert(ft.names.length==1);
 			checkArg(0,ce.arg);
 		}
@@ -1671,7 +1650,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 					nce.loc=ce.loc;
 					auto nnce=new CallExp(nce,ce.arg,false,false);
 					nnce.loc=ce.loc;
-					nnce=cast(CallExp)callSemantic(nnce,sc,ConstResult.no,inType);
+					nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
 					assert(!!nnce);
 					ce=nnce;
 					return true;
@@ -1687,7 +1666,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 		static if(language==silq)
 		if(calledId&&isReverse(calledId)){
 			bool check=calledId.checkReverse;
-			ce.arg=expressionSemantic(ce.arg,sc,(ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no,inType);
+			ce.arg=expressionSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
 			if(auto ft2=cast(FunTy)ce.arg.type){
 				if(check&&ft2.annotation<Annotation.mfree){
 					sc.error("reversed function must be 'mfree'",ce.arg.loc);
@@ -1735,7 +1714,7 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 							def.loc=loc;
 							auto le=new LambdaExp(def);
 							le.loc=loc;
-							return expressionSemantic(le,sc,constResult,inType);
+							return expressionSemantic(le,context);
 						}
 					}
 				}
@@ -1844,17 +1823,17 @@ Expression callSemantic(CallExp ce,Scope sc,ConstResult constResult,InType inTyp
 				case "quantumPrimitive":
 					return handleQuantumPrimitive(ce,sc);
 				case "__show":
-					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes,inType);
+					ce.arg=expressionSemantic(ce.arg,context.nestConst);
 					auto lit=cast(LiteralExp)ce.arg;
 					if(lit&&lit.lit.type==Tok!"``") writeln(lit.lit.str);
 					else writeln(ce.arg);
 					ce.type=unit;
 					break;
 				case "__query":
-					return handleQuery(ce,sc,inType);
+					return handleQuery(ce,context);
 			}else static if(language==psi){
 				case "Marginal":
-					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes,inType);
+					ce.arg=expressionSemantic(ce.arg,context.nestConst);
 					propErr(ce.arg,ce);
 					if(ce.arg.type) ce.type=distributionTy(ce.arg.type,sc);
 					break;
@@ -1877,6 +1856,803 @@ enum ConstResult:bool{
 enum InType:bool{
 	no,
 	yes,
+}
+
+Expression unwrap(Expression e){
+	if(auto tae=cast(TypeAnnotationExp)e)
+		return unwrap(tae.e);
+	return e;
+}
+
+bool unrealizable(Expression e){ // TODO: can we get rid of this concept?
+	return util.among(e,ℕt(false),ℤt(false),ℚt(false),ℝ(false),ℂ(false));
+}
+
+struct ExpSemContext{
+	Scope sc;
+	ConstResult constResult;
+	InType inType;
+}
+auto nest(ref ExpSemContext context,ConstResult newConstResult){
+	with(context) return ExpSemContext(sc,newConstResult,inType);
+}
+auto nestConst(ref ExpSemContext context){
+	return context.nest(ConstResult.yes);
+}
+auto nestConsumed(ref ExpSemContext context){
+	return context.nest(ConstResult.no);
+}
+
+
+Expression expressionSemanticImpl(CompoundDecl cd,ExpSemContext context){
+	return compoundDeclSemantic(cd,context.sc);
+}
+
+Expression expressionSemanticImpl(CompoundExp ce,ExpSemContext context){
+	return compoundExpSemantic(ce,context.sc);
+}
+
+Expression expressionSemanticImpl(CommaExp ce,ExpSemContext context){
+	context.sc.error("nested comma expressions are disallowed",ce.loc);
+	ce.sstate=SemState.error;
+	return ce;
+}
+
+Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InType inType){
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	e=expressionSemantic(e,ExpSemContext(sc,ConstResult.yes,inType));
+	static if(language==silq) sc.pushConsumed();
+	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)e.type:e.type!=Bool(true))){
+		static if(language==silq){
+			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
+			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);
+		}else sc.error(format("type of condition should be 𝔹, not %s",e.type),e.loc);
+		e.sstate=SemState.error;
+	}
+	return e;
+}
+Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	ite.cond=conditionSemantic!true(ite.cond,sc,inType);
+	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
+		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
+		ite.sstate=SemState.error;
+		return ite;
+	}
+	static if(language==silq){
+		auto quantumControl=ite.cond.type!=Bool(true);
+		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
+	}else{
+		enum quantumControl=false;
+		enum restriction_=Annotation.none;
+	}
+	int numBottom=0; // TODO: actually introduce a bottom type?
+	Expression branchSemantic(Expression branch,Scope sc){
+		static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+		auto context=ExpSemContext(sc,context.constResult,context.inType);
+		if(inType) return expressionSemantic(branch,context);
+		if(auto ae=cast(AssertExp)branch){
+			branch=statementSemantic(branch,sc);
+			if(auto lit=cast(LiteralExp)ae.e)
+				if(lit.lit.type==Tok!"0" && lit.lit.str=="0"){
+					branch.type=null;
+					++numBottom;
+				}
+		}else branch=expressionSemantic(branch,context);
+		return branch;
+	}
+	// initialize scopes, to allow captures to be inserted
+	ite.then.blscope_=new BlockScope(sc,restriction_);
+	if(ite.othw) ite.othw.blscope_=new BlockScope(sc,restriction_);
+	ite.then.s[0]=branchSemantic(ite.then.s[0],ite.then.blscope_);
+	static if(language==silq) ite.then.blscope_.pushConsumed();
+	propErr(ite.then.s[0],ite.then);
+	if(!ite.othw){
+		sc.error("missing else for if expression",ite.loc);
+		ite.sstate=SemState.error;
+		return ite;
+	}
+	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ite.othw.blscope_);
+	static if(language==silq) ite.othw.blscope_.pushConsumed();
+	propErr(ite.othw.s[0],ite.othw);
+	propErr(ite.cond,ite);
+	propErr(ite.then,ite);
+	propErr(ite.othw,ite);
+	if(ite.sstate==SemState.error)
+		return ite;
+	if(!ite.then.s[0].type) ite.then.s[0].type = ite.othw.s[0].type;
+	if(!ite.othw.s[0].type) ite.othw.s[0].type = ite.then.s[0].type;
+	auto t1=ite.then.s[0].type;
+	auto t2=ite.othw.s[0].type;
+	ite.type=joinTypes(t1,t2);
+	if(!t1 && !t2 && numBottom==2){
+		ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
+	}
+	if(t1 && t2 && !ite.type){
+		sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
+		ite.sstate=SemState.error;
+	}
+	if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
+		// TODO: automatically promote to quantum if possible
+		sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
+		ite.sstate=SemState.error;
+	}
+	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
+		sc.note("consumed in one branch of if expression", ite.loc);
+		ite.sstate=SemState.error;
+	}
+	return ite;
+}
+
+Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
+	switch(le.lit.type){
+		case Tok!"0",Tok!".0":
+			if(!le.type)
+				le.type=le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
+			return le;
+		case Tok!"``":
+			le.type=stringTy(true);
+			return le;
+		default:
+			return expressionSemanticImplDefault(le,context);
+	}
+}
+
+Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
+	auto sc=context.sc;
+	FunctionDef nfd=le.fd;
+	if(!le.fd.scope_){
+		le.fd.scope_=context.sc;
+		nfd=cast(FunctionDef)presemantic(nfd,sc);
+	}else assert(le.fd.scope_ is sc);
+	assert(!!nfd);
+	le.fd=functionDefSemantic(nfd,sc);
+	assert(!!le.fd);
+	propErr(le.fd,le);
+	if(le.fd.sstate==SemState.completed)
+		le.type=typeForDecl(le.fd);
+	if(le.fd.sstate==SemState.completed) le.sstate=SemState.completed;
+	return le;
+}
+
+Expression expressionSemanticImpl(FunctionDef fd,ExpSemContext context){
+	context.sc.error("function definition cannot appear within an expression",fd.loc);
+	fd.sstate=SemState.error;
+	return fd;
+}
+
+Expression expressionSemanticImpl(ReturnExp ret,ExpSemContext context){
+	context.sc.error("return statement cannot appear within an expression",ret.loc);
+	ret.sstate=SemState.error;
+	return ret;
+}
+
+Expression expressionSemanticImpl(CallExp ce,ExpSemContext context){
+	return callSemantic(ce,context);
+}
+
+static if(language==psi)
+Expression expressionSemanticImpl(PlaceholderExp pl,ExpSemContext context){
+	pl.type = ℝ;
+	pl.sstate = SemState.completed;
+	return pl;
+}
+
+Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	bool checkImplicitForget(Expression var){
+		if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
+		auto id=cast(Identifier)var;
+		if(!id) return false;
+		static if(language==silq){
+			if(auto meaning=sc.lookup(id,false,true,Lookup.probing)){
+				auto name=meaning.rename?meaning.rename:meaning.name;
+				if(!name||!sc.dependencyTracked(name)) return false;
+				return sc.canForget(meaning);
+			}else return false;
+		}else return true;
+	}
+	auto canForgetImplicitly=checkImplicitForget(fe.var);
+	fe.var=expressionSemantic(fe.var,context.nestConsumed);
+	propErr(fe.var,fe);
+	void classicalForget(Expression var){
+		if(auto tpl=cast(TupleExp)var){
+			tpl.e.each!classicalForget;
+			return;
+		}
+		auto id=cast(Identifier)var;
+		if(!id) return;
+		auto meaning=id.meaning;
+		if(!meaning) return;
+		if(id.type&&id.type.isClassical){
+			if(!sc.consume(meaning)){
+				sc.error("cannot forget variable from outer scope",id.loc);
+				fe.sstate=SemState.error;
+				return;
+			}
+			return;
+		}
+	}
+	classicalForget(fe.var);
+	if(fe.val){
+		fe.val=expressionSemantic(fe.val,context.nestConst);
+		propErr(fe.val,fe);
+		static if(language==silq) if(fe.sstate!=SemState.error&&!fe.val.isLifted(sc)){
+				sc.error("forget expression must be 'lifted'",fe.val.loc);
+				fe.sstate=SemState.error;
+			}
+		if(fe.var.type&&fe.val.type && !joinTypes(fe.var.type,fe.val.type)){ // TODO: use cmpTypes here
+			sc.error(format("incompatible types '%s' and '%s' for forget",fe.var.type,fe.val.type),fe.loc);
+			fe.sstate=SemState.error;
+		}
+		static if(language!=silq){
+			if(!canForgetImplicitly){
+				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
+				fe.sstate=SemState.error;
+			}
+		}
+	}else if(!canForgetImplicitly&&fe.sstate!=SemState.error){
+		static if(language==silq){
+			sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.loc);
+		}else{
+			sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
+		}
+		fe.sstate=SemState.error;
+	}
+	fe.type=unit;
+	return fe;
+}
+
+Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
+	auto sc=context.sc;
+	id.scope_=sc;
+	auto meaning=id.meaning;
+	if(!meaning){
+		int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
+		id.meaning=meaning=sc.lookup(id,false,true,context.constResult?Lookup.constant:Lookup.consuming);
+		if(nerr!=sc.handler.nerrors){
+			sc.note("looked up here",id.loc);
+			id.sstate=SemState.error;
+			return id;
+		}
+		if(!meaning){
+			if(auto r=builtIn(id,sc)){
+				if(!id.calledDirectly&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
+					sc.error("special operator must be called directly",id.loc);
+					id.sstate=r.sstate=SemState.error;
+				}
+				return r;
+			}
+			sc.error(format("undefined identifier %s",id.name),id.loc);
+			id.sstate=SemState.error;
+			return id;
+		}
+		if(auto fd=cast(FunctionDef)meaning)
+			if(auto asc=isInDataScope(fd.scope_))
+				if(fd.name.name==asc.decl.name.name)
+					meaning=asc.decl;
+		id.meaning=meaning;
+	}
+	id.name=meaning.getName;
+	propErr(meaning,id);
+	id.type=typeForDecl(meaning);
+	if(!id.type&&id.sstate!=SemState.error){
+		sc.error("invalid forward reference",id.loc);
+		id.sstate=SemState.error;
+	}
+	if(id.type != typeTy()){
+		if(auto dsc=isInDataScope(meaning.scope_)){
+			if(auto decl=sc.getDatDecl()){
+				if(decl is dsc.decl){
+					auto this_=new Identifier("this");
+					this_.loc=id.loc;
+					this_.scope_=sc;
+					auto fe=new FieldExp(this_,id);
+					fe.loc=id.loc;
+					return expressionSemantic(fe,context.nestConsumed);
+				}
+			}
+		}
+	}
+	auto vd=cast(VarDecl)meaning;
+	if(vd){
+		if(cast(TopScope)vd.scope_||vd.vtype==typeTy&&vd.initializer){
+			if(!vd.initializer||vd.initializer.sstate!=SemState.completed)
+				id.sstate=SemState.error;
+			id.substitute=true;
+			return id;
+		}
+	}
+	if(id.type&&meaning.scope_.getFunction()){
+		bool isQuantum=!id.type.isClassical();
+		bool captureChecked=!isQuantum;
+		assert(sc.isNestedIn(meaning.scope_));
+		auto startScope=sc;
+		for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
+			bool checkCapture(){
+				static if(language==silq){
+					if(!astopt.allowUnsafeCaptureConst){
+						if(context.constResult){
+							sc.error("cannot capture quantum variable as constant", id.loc);
+							id.sstate=SemState.error;
+							return false;
+						}else if(vd&&(vd.isConst||sc.isConst(vd))){
+							sc.error("cannot capture 'const' quantum variable", id.loc);
+							if(auto read=sc.isConst(vd))
+								sc.note("variable was made 'const' here", read.loc);
+							id.sstate=SemState.error;
+							return false;
+						}
+					}
+				}
+				return true;
+			}
+			if(auto fsc=cast(FunctionScope)csc){
+				if(!captureChecked){
+					captureChecked=true;
+					if(!checkCapture()) break;
+				}
+				if(isQuantum){
+					if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
+						if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
+						else{
+							assert(fsc.fd.ftype.isClassical());
+							sc.error("cannot capture quantum variable in classical function", id.loc);
+							id.sstate=SemState.error;
+							break;
+						}
+					}
+				}
+				fsc.addCapture(id,startScope);
+				startScope=fsc;
+			}
+			if(auto dsc=cast(DataScope)csc){
+				if(!captureChecked){
+					captureChecked=true;
+					if(!checkCapture()) break;
+				}
+				dsc.addCapture(id,startScope);
+				startScope=dsc;
+			}
+		}
+	}
+	return id;
+}
+
+Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	fe.e=expressionSemantic(fe.e,context.nestConst);
+	propErr(fe.e,fe);
+	if(fe.sstate==SemState.error)
+		return fe;
+	auto noMember(){
+		sc.error(format("no member %s for type %s",fe.f,fe.e.type),fe.loc);
+		fe.sstate=SemState.error;
+		return fe;
+	}
+	DatDecl aggrd=null;
+	if(auto aggrty=cast(AggregateTy)fe.e.type) aggrd=aggrty.decl;
+	else if(auto id=cast(Identifier)fe.e.type) if(auto dat=cast(DatDecl)id.meaning) aggrd=dat;
+	Expression arg=null;
+	if(auto ce=cast(CallExp)fe.e.type){
+		if(auto id=cast(Identifier)ce.e){
+			if(auto decl=cast(DatDecl)id.meaning){
+				aggrd=decl;
+				arg=ce.arg;
+			}
+		}
+	}
+	if(aggrd){
+		if(aggrd.body_.ascope_){
+			auto meaning=aggrd.body_.ascope_.lookupHere(fe.f,false,Lookup.consuming);
+			if(!meaning) return noMember();
+			fe.f.meaning=meaning;
+			fe.f.name=meaning.getName;
+			fe.f.scope_=sc;
+			fe.f.type=typeForDecl(meaning);
+			if(fe.f.type&&aggrd.hasParams){
+				auto subst=aggrd.getSubst(arg);
+				fe.f.type=fe.f.type.substitute(subst);
+			}
+			fe.f.sstate=SemState.completed;
+			fe.type=fe.f.type;
+			if(!fe.type){
+				fe.sstate=SemState.error;
+				fe.f.sstate=SemState.error;
+			}
+			return fe;
+		}else return noMember();
+	}else if(auto r=builtIn(fe,sc)){
+		if(auto vt=cast(VectorTy)fe.e.type){
+			bool hasSideEffect=false;
+			static if(language==silq) hasSideEffect=!fe.e.isQfree();
+			if(fe.f.name=="length"&&!hasSideEffect)
+				return expressionSemantic(vt.num.copy(),context.nestConsumed);// TODO: preserve semantic on clone
+		}
+		return r;
+	}
+	else return noMember();
+}
+
+Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	bool replaceIndex=false;
+	size_t replaceIndexLoc=size_t.max;
+	if(auto cid=getIdFromIndex(idx)){
+		foreach(i,indexToReplace;sc.indicesToReplace){
+			if(indexToReplace[0]&&!indexToReplace[1]&&indexEquals(indexToReplace[0],idx,sc,inType)){
+				auto rid=getIdFromIndex(indexToReplace[0]);
+				assert(rid && rid.meaning);
+				assert(rid.name==cid.name);
+				if(!cid.meaning) cid.meaning=rid.meaning;
+				else assert(cid.meaning is rid.meaning);
+				if(cid.meaning && cid.meaning.rename) cid.name=cid.meaning.rename.name;
+				replaceIndex=true;
+				replaceIndexLoc=i;
+				break;
+			}
+		}
+	}
+	if(!replaceIndex){
+		if(auto cid=getIdFromIndex(idx)){
+			foreach(i,indexToReplace;sc.indicesToReplace){
+				if(indexToReplace[0]){
+					auto rid=getIdFromIndex(indexToReplace[0]);
+					assert(rid && rid.meaning);
+					if(rid.name==cid.name){
+						cid.constLookup=true;
+						cid.type=rid.type;
+						cid.meaning=rid.meaning;
+						cid.sstate=rid.sstate;
+						cid.scope_=rid.scope_;
+						if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
+							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
+							if(indexToReplace[1]) // should always be non-null
+								sc.note("consumed here",indexToReplace[1].loc);
+							else sc.note("reassigned here",indexToReplace[0].loc);
+							idx.sstate=SemState.error;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	idx.e=expressionSemantic(idx.e,context.nestConst);
+	propErr(idx.e,idx);
+	if(auto ft=cast(FunTy)idx.e.type){
+		assert(!replaceIndex);
+		auto ce=new CallExp(idx.e,idx.a,true,false);
+		ce.loc=idx.loc;
+		return callSemantic(ce,context.nestConsumed);
+	}
+	if(idx.e.type==typeTy){
+		assert(!replaceIndex);
+		if(auto tty=typeSemantic(idx,sc))
+			return tty;
+	}
+	idx.a=expressionSemantic(idx.a,context.nestConst);
+	propErr(idx.a,idx);
+	if(idx.sstate==SemState.error)
+		return idx;
+	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
+		if(isBasicIndexType(indexTy)){
+			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
+				sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
+				idx.sstate=SemState.error;
+			}
+			return next;
+		}
+		if(auto tpl=cast(TupleExp)index){
+			auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
+			if(types.all!(e=>e!is null)) return tupleTy(types);
+			return null;
+		}
+		if(auto at=cast(ArrayTy)indexTy){
+			auto type=check(next,null,at.next,indexLoc);
+			if(type) return arrayTy(type);
+			return null;
+		}
+		if(auto vt=cast(VectorTy)indexTy){
+			auto type=check(next,null,vt.next,indexLoc);
+			if(type) return vectorTy(type,vt.num);
+			return null;
+		}
+		if(auto tt=cast(TupleTy)indexTy){
+			auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
+			if(types.all!(e=>e!is null)) return tupleTy(types);
+			return null;
+		}
+		sc.error(format("index should be integer, not %s",indexTy),indexLoc);
+		idx.sstate=SemState.error;
+		return null;
+	}
+	if(auto at=cast(ArrayTy)idx.e.type){
+		idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
+	}else if(auto vt=cast(VectorTy)idx.e.type){
+		idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
+	}else if(isInt(idx.e.type)||isUint(idx.e.type)){
+		idx.type=check(Bool(idx.e.type.isClassical()), idx.a, idx.a.type, idx.a.loc);
+	}else if(auto tt=cast(TupleTy)idx.e.type){
+		Expression checkTpl(Expression index){
+			if(auto lit=cast(LiteralExp)index){
+				if(lit.lit.type==Tok!"0"){
+					auto c=ℤ(lit.lit.str);
+					if(c<0||c>=tt.types.length){
+						sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+						idx.sstate=SemState.error;
+						return null;
+					}else{
+						return tt.types[cast(size_t)c.toLong()];
+					}
+				}
+			}
+			if(auto tpl=cast(TupleExp)index){
+				auto types=tpl.e.map!(e=>checkTpl(e)).array;
+				if(types.all!(e=>e!is null)) return tupleTy(types);
+				return null;
+			}
+			sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
+			idx.sstate=SemState.error;
+			return null;
+		}
+		idx.type=checkTpl(idx.a);
+	}else{
+		sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
+		idx.sstate=SemState.error;
+	}
+	if(replaceIndex){
+		idx.byRef=true;
+		assert(replaceIndexLoc<sc.indicesToReplace.length);
+		if(context.constResult){
+			sc.error("replaced component must be consumed",idx.loc);
+			sc.note("replaced component is here",sc.indicesToReplace[replaceIndexLoc][0].loc);
+			idx.sstate=SemState.error;
+		}
+		sc.indicesToReplace[replaceIndexLoc][1]=idx; // matched
+	}
+	return idx;
+}
+
+Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
+	auto sc=context.sc;
+	sl.e=expressionSemantic(sl.e,context.nestConst);
+	propErr(sl.e,sl);
+	sl.l=expressionSemantic(sl.l,context.nestConst);
+	propErr(sl.l,sl);
+	sl.r=expressionSemantic(sl.r,context.nestConst);
+	propErr(sl.r,sl);
+	if(sl.sstate==SemState.error)
+		return sl;
+	if(!isSubtype(sl.l.type,ℤt(true))){
+		sc.error(format("lower bound should be classical integer, not %s",sl.l.type),sl.l.loc);
+		sl.l.sstate=SemState.error;
+	}
+	if(!isSubtype(sl.r.type,ℤt(true))){
+		sc.error(format("upper bound should be classical integer, not %s",sl.r.type),sl.r.loc);
+		sl.r.sstate=SemState.error;
+	}
+	if(sl.sstate==SemState.error)
+		return sl;
+	if(auto at=cast(ArrayTy)sl.e.type){
+		sl.type=at;
+	}else if(auto vt=cast(VectorTy)sl.e.type){
+		auto se=new NSubExp(sl.r,sl.l);
+		se.type=ℕt(true);
+		se.sstate=SemState.completed;
+		sl.type=vectorTy(vt.next,se.eval());
+	}else if(auto tt=sl.e.type.isTupleTy){
+		auto llit=cast(LiteralExp)sl.l, rlit=cast(LiteralExp)sl.r;
+		if(!llit||llit.lit.type!=Tok!"0"){
+			sc.error(format("slice lower bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(!rlit||rlit.lit.type!=Tok!"0"){
+			sc.error(format("slice upper bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(sl.sstate==SemState.error)
+			return sl;
+		auto lc=ℤ(llit.lit.str), rc=ℤ(rlit.lit.str);
+		if(lc<0){
+			sc.error(format("slice lower bound for type %s cannot be negative",tt),sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(lc>rc){
+			sc.error("slice lower bound exceeds slice upper bound",sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(rc>tt.length){
+			sc.error(format("slice upper bound for type %s exceeds %s",tt,tt.length),sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(sl.sstate!=SemState.error){
+			sl.type=tt[cast(size_t)lc..cast(size_t)rc];
+		}
+	}else{
+		sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
+		sl.sstate=SemState.error;
+	}
+	return sl;
+}
+
+Expression expressionSemanticImpl(TupleExp tpl,ExpSemContext context){
+	foreach(ref exp;tpl.e){
+		exp=expressionSemantic(exp,context);
+		propErr(exp,tpl);
+	}
+	if(tpl.sstate!=SemState.error){
+		tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+	}
+	return tpl;
+}
+
+Expression expressionSemanticImpl(ArrayExp arr,ExpSemContext context){
+	auto sc=context.sc;
+	Expression t; bool tok=true;
+	foreach(i,ref exp;arr.e){
+		exp=expressionSemantic(exp,context);
+		propErr(exp,arr);
+		auto nt = joinTypes(t, exp.type);
+		if(!nt&&tok){
+			Expression texp;
+			foreach(j,oexp;arr.e[0..i]){
+				if(!joinTypes(oexp, exp)){
+					texp=oexp;
+					break;
+				}
+			}
+			if(texp){
+				sc.error(format("incompatible types %s and %s in array literal",t,exp.type),texp.loc);
+				sc.note("incompatible entry",exp.loc);
+			}
+			arr.sstate=SemState.error;
+			tok=false;
+		}else t=nt;
+	}
+	if(arr.e.length && t){
+		if(arr.e[0].type) arr.type=arrayTy(t);
+	}else arr.type=arrayTy(ℝ(true)); // TODO: type inference?
+	return arr;
+}
+
+Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
+	auto sc=context.sc;
+	tae.e=expressionSemantic(tae.e,context);
+	tae.type=typeSemantic(tae.t,sc);
+	propErr(tae.e,tae);
+	propErr(tae.t,tae);
+	if(!tae.type) tae.sstate=SemState.error;
+	if(tae.sstate==SemState.error)
+		return tae;
+	if(auto arr=cast(ArrayExp)tae.e){
+		if(!arr.e.length){
+			if(auto aty=cast(ArrayTy)tae.type)
+				arr.type=aty;
+			if(auto vty=cast(VectorTy)tae.type)
+				arr.type=arrayTy(vty.next);
+		}
+	}
+	if(auto ce=cast(CallExp)tae.e)
+		if(auto id=cast(Identifier)ce.e){
+			if(id.name=="sampleFrom"||id.name=="readCSV"&&tae.type==arrayTy(arrayTy(ℝ(true))))
+				ce.type=tae.type;
+		}
+	bool typeExplicitConversion(Expression from,Expression to,TypeAnnotationType annotationType){
+		if(isSubtype(from,to)) return true;
+		if(annotationType==annotationType.punning){
+			auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
+			if(ft1&&ft2&&ft1.setAnnotation(Annotation.none)==ft2.setAnnotation(Annotation.none))
+				return true;
+			return false;
+		}
+		if(annotationType>=annotationType.conversion){
+			if(isSubtype(from,ℤt(true))&&(isUint(to)||isInt(to)))
+				return true;
+			if(isUint(from)&&isSubtype(ℕt(from.isClassical()),to))
+				return true;
+			if(isInt(from)&&isSubtype(ℤt(from.isClassical()),to))
+				return true;
+			if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
+				return true;
+			auto ce1=cast(CallExp)from;
+			if(ce1&&(isInt(ce1)||isUint(ce1))&&(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)))
+				return true;
+			auto ce2=cast(CallExp)to;
+			if(ce2&&(isInt(ce2)||isUint(ce2))&&(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))))
+				return true;
+		}
+		auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
+		if(tpl1&&tpl2&&tpl1.length==tpl2.length&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],tpl2[i],annotationType)))
+			return true;
+		auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
+		if(arr1&&arr2&&typeExplicitConversion(arr1.next,arr2.next,annotationType))
+			return true;
+		auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
+		if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+			return true;
+		if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
+			return true;
+		if(annotationType==TypeAnnotationType.coercion){
+			if((arr1||vec1)&&to==unit) return true;
+			if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+				return true;
+			if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
+				return true;
+			if(vec1&&tpl2&&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType)))
+				return true;
+			if(tpl1&&vec2&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType)))
+				return true;
+			if(from.isClassical()&&isSubtype(to.getClassical(),from)&&from.isNumeric) return true;
+		}
+		return false;
+	}
+	bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
+		if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
+		auto lit=cast(LiteralExp)expr;
+		bool isLiteral=lit||cast(UMinusExp)expr&&cast(LiteralExp)(cast(UMinusExp)expr).e;
+		if(isLiteral){
+			if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
+				return true;
+			if(isSubtype(expr.type,ℤt(false))&&isInt(type))
+				return true;
+			if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
+				return true;
+			if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
+				return true;
+			if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
+				auto val=ℤ(lit.lit.str);
+				if(val==0||val==1) return true;
+			}
+		}
+		if(typeExplicitConversion(expr.type,type,annotationType)) return true;
+		if(auto tpl1=cast(TupleExp)expr){
+			if(auto tpl2=type.isTupleTy()){
+				return tpl1.e.length==tpl2.length&&iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],tpl2[i],annotationType));
+			}
+			if(auto arr=cast(ArrayTy)type){
+				return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],arr.next,annotationType));
+			}
+			if(auto vec2=cast(VectorTy)type){
+				bool ok=annotationType==TypeAnnotationType.coercion;
+				if(!ok){
+					auto len=LiteralExp.makeInteger(tpl1.e.length);
+					len.loc=expr.loc;
+					auto eq=new EqExp(len,vec2.num);
+					eq.loc=expr.loc;
+					ok=eq.eval()==LiteralExp.makeBoolean(1);
+				}
+				if(ok){
+					return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],vec2.next,annotationType));
+				}
+			}
+		}
+		return false;
+	}
+	if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
+		final switch(tae.annotationType){
+			case TypeAnnotationType.annotation:
+				sc.error(format("type is %s, not %s",tae.e.type,tae.type),tae.loc);
+				if(explicitConversion(tae.e,tae.type,TypeAnnotationType.conversion))
+					sc.note(format("explicit conversion possible, use '%s as %s'",tae.e,tae.type),tae.loc);
+				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
+					sc.note(format("(unsafe type coercion possible)"),tae.loc);
+				break;
+			case TypeAnnotationType.conversion:
+				sc.error(format("cannot convert from type %s to %s",tae.e.type,tae.type),tae.loc);
+				if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
+					sc.note(format("(unsafe type coercion possible)"),tae.loc);
+				break;
+			case TypeAnnotationType.coercion:
+				sc.error(format("cannot coerce type %s to %s",tae.e.type,tae.type),tae.loc);
+				break;
+			case TypeAnnotationType.punning:
+				sc.error(format("punning type %s to %s not supported",tae.e.type,tae.type),tae.loc);
+				break;
+		}
+		tae.sstate=SemState.error;
+	}
+	return tae;
 }
 
 Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
@@ -1968,17 +2744,262 @@ Expression cmpType(Expression t1,Expression t2){
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
 
-Expression unwrap(Expression e){
-	if(auto tae=cast(TypeAnnotationExp)e)
-		return unwrap(tae.e);
+private Expression handleUnary(alias determineType)(string name,Expression e,ref Expression e1,ExpSemContext context){
+	e1=expressionSemantic(e1,context.nestConst);
+	propErr(e1,e);
+	if(e.sstate==SemState.error)
+		return e;
+	e.type=determineType(e1.type);
+	if(!e.type){
+		context.sc.error(format("incompatible type %s for %s",e1.type,name),e.loc);
+		e.sstate=SemState.error;
+	}
 	return e;
 }
 
-bool unrealizable(Expression e){ // TODO: can we get rid of this concept?
-	return util.among(e,ℕt(false),ℤt(false),ℚt(false),ℝ(false),ℂ(false));
+Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
+	return handleUnary!minusType("minus",ume,ume.e,context);
+}
+Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
+	auto sc=context.sc;
+	une.e=expressionSemantic(une.e,context.nestConst);
+	static if(language==silq) if(une.e.type==typeTy){
+		if(auto ty=typeSemantic(une.e,sc)){
+			if(ty.sstate==SemState.completed){
+				if(auto r=ty.getClassical()){
+					return typeSemantic(r,sc);
+				}else{
+					// TODO: have explicit ClassicalTy
+					sc.error(format("cannot make type %s classical",une.e),une.loc);
+					une.sstate=SemState.error;
+					return une;
+				}
+			}
+		}
+	}
+	return handleUnary!notType("not",une,une.e,context);
+}
+Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
+	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
+}
+static if(language==silq)
+Expression expressionSemanticImpl(UnaryExp!(Tok!"const") ce,ExpSemContext context){
+	context.sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc);
+	ce.sstate=SemState.error;
+	return ce;
 }
 
-Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,InType inType){
+private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context){
+	auto sc=context.sc;
+	e1=expressionSemantic(e1,context.nestConst);
+	e2=expressionSemantic(e2,context.nestConst);
+	propErr(e1,e);
+	propErr(e2,e);
+	if(e.sstate==SemState.error)
+		return e;
+	if(e1.type==typeTy&&name=="power"){
+		/+if(auto le=cast(LiteralExp)e2){
+			if(le.lit.type==Tok!"0"){
+				if(!le.lit.str.canFind(".")){
+					auto n=ℤ(le.lit.str);
+					if(0<=n&&n<long.max)
+						return tupleTy(e1.repeat(cast(size_t)n.toLong()).array);
+				}
+			}
+		}
+		sc.error("expected non-negative integer constant",e2.loc);
+		e.sstate=SemState.error;+/
+		if(!isSubtype(e2.type,ℕt(true))){
+			sc.error(format("vector length should be of type !ℕ, not %s",e2.type), e2.loc);
+			e.sstate=SemState.error;
+		}else return vectorTy(e1,e2);
+	}else{
+		e.type = determineType(e1.type,e2.type);
+		if(!e.type){
+			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+			e.sstate=SemState.error;
+		}
+	}
+	return e;
+}
+
+Expression expressionSemanticImpl(AddExp ae,ExpSemContext context){
+	return handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,context);
+}
+Expression expressionSemanticImpl(SubExp se,ExpSemContext context){
+	return handleBinary!subtractionType("subtraction",se,se.e1,se.e2,context);
+}
+Expression expressionSemanticImpl(NSubExp nse,ExpSemContext context){
+	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context);
+}
+Expression expressionSemanticImpl(MulExp me,ExpSemContext context){
+	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context);
+}
+Expression expressionSemanticImpl(DivExp de,ExpSemContext context){
+	return handleBinary!divisionType("division",de,de.e1,de.e2,context);
+}
+Expression expressionSemanticImpl(IDivExp ide,ExpSemContext context){
+	return handleBinary!iDivType("integer division",ide,ide.e1,ide.e2,context);
+}
+Expression expressionSemanticImpl(ModExp me,ExpSemContext context){
+	return handleBinary!moduloType("modulo",me,me.e1,me.e2,context);
+}
+Expression expressionSemanticImpl(PowExp pe,ExpSemContext context){
+	return handleBinary!powerType("power",pe,pe.e1,pe.e2,context);
+}
+Expression expressionSemanticImpl(BitOrExp boe,ExpSemContext context){
+	return handleBinary!(arithmeticType!true)("bitwise or",boe,boe.e1,boe.e2,context);
+}
+Expression expressionSemanticImpl(BitXorExp bxe,ExpSemContext context){
+	return handleBinary!(arithmeticType!true)("bitwise xor",bxe,bxe.e1,bxe.e2,context);
+}
+Expression expressionSemanticImpl(BitAndExp bae,ExpSemContext context){
+	return handleBinary!(arithmeticType!true)("bitwise and",bae,bae.e1,bae.e2,context);
+}
+
+Expression expressionSemanticImpl(AndExp ae,ExpSemContext context){
+	return handleBinary!logicType("conjunction",ae,ae.e1,ae.e2,context);
+}
+Expression expressionSemanticImpl(OrExp oe,ExpSemContext context){
+	return handleBinary!logicType("disjunction",oe,oe.e1,oe.e2,context);
+}
+
+Expression expressionSemanticImpl(LtExp le,ExpSemContext context){
+	return handleBinary!cmpType("'<'",le,le.e1,le.e2,context);
+}
+Expression expressionSemanticImpl(LeExp le,ExpSemContext context){
+	return handleBinary!cmpType("'≤'",le,le.e1,le.e2,context);
+}
+Expression expressionSemanticImpl(GtExp ge,ExpSemContext context){
+	return handleBinary!cmpType("'>'",ge,ge.e1,ge.e2,context);
+}
+Expression expressionSemanticImpl(GeExp ge,ExpSemContext context){
+	return handleBinary!cmpType("'≥'",ge,ge.e1,ge.e2,context);
+}
+Expression expressionSemanticImpl(EqExp eq,ExpSemContext context){
+	return handleBinary!cmpType("'='",eq,eq.e1,eq.e2,context);
+}
+Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
+	return handleBinary!cmpType("'≠'",ne,ne.e1,ne.e2,context);
+}
+
+Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
+	auto sc=context.sc;
+	ce.e1=expressionSemantic(ce.e1,context);
+	ce.e2=expressionSemantic(ce.e2,context);
+	propErr(ce.e1,ce);
+	propErr(ce.e2,ce);
+	if(ce.sstate==SemState.error)
+		return ce;
+	auto vt1=cast(VectorTy)ce.e1.type,vt2=cast(VectorTy)ce.e2.type;
+	assert(!ce.type);
+	if(vt1&&vt2){
+		if(auto netype=joinTypes(vt1.next,vt2.next)){
+			auto add=new AddExp(vt1.num,vt2.num);
+			add.type=ℕt(true);
+			add.sstate=SemState.completed;
+			auto ntype=vectorTy(netype,add.eval()); // TODO: evaluation context
+			ce.type=ntype;
+		}
+	}else{
+		auto ntype=joinTypes(ce.e1.type,ce.e2.type);
+		if(cast(ArrayTy)ntype)
+			ce.type=ntype;
+		}
+	if(!ce.type){
+		sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
+		ce.sstate=SemState.error;
+	}
+	return ce;
+}
+
+Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context){
+	auto sc=context.sc;
+	// TODO: allow nested declarations
+	pr.type=typeTy();
+	auto t1=typeSemantic(pr.e1,sc);
+	auto t2=typeSemantic(pr.e2,sc);
+	if(!t1||!t2){
+		pr.sstate=SemState.error;
+		return pr;
+	}
+	auto l=t1.isTupleTy(),r=t2.isTupleTy();
+	auto merge1=!pr.e1.brackets&&l&&l.length;
+	auto merge2=!pr.e2.brackets&&r&&r.length;
+	if(merge1 && merge2)
+		return tupleTy(chain(iota(l.length).map!(i=>l[i]),iota(r.length).map!(i=>r[i])).array);
+	if(merge1) return tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2)).array);
+	if(merge2) return tupleTy(chain(only(t1),iota(r.length).map!(i=>r[i])).array);
+	return tupleTy([t1,t2]);
+}
+
+Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context){
+	auto sc=context.sc;
+	ex.type=typeTy();
+	Q!(bool[],Expression) getConstAndType(Expression e){
+		Q!(bool[],Expression) base(Expression e){
+			static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
+				return q([true],typeSemantic(ce.e,sc));
+			}
+			auto ty=typeSemantic(e,sc);
+			return q([ty&&ty.impliesConst()||ex.isLifted],ty);
+		}
+		if(auto pr=cast(BinaryExp!(Tok!"×"))e){
+			auto merge1=!pr.e1.brackets&&cast(BinaryExp!(Tok!"×"))pr.e1;
+			auto t1=merge1?getConstAndType(pr.e1):base(pr.e1);
+			auto merge2=!pr.e2.brackets&&cast(BinaryExp!(Tok!"×"))pr.e2;
+			auto t2=merge2?getConstAndType(pr.e2):base(pr.e2);
+			if(!t1[1]||!t2[1]){
+				e.sstate=SemState.error;
+				return q((bool[]).init,Expression.init);
+			}
+			auto l=t1[1].isTupleTy(),r=t2[1].isTupleTy();
+			merge1&=l&&l.length;
+			merge2&=r&&r.length;
+			if(merge1 && merge2)
+				return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(iota(l.length).map!(i=>l[i]),iota(r.length).map!(i=>r[i])).array));
+			if(merge1) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2[1])).array));
+			if(merge2) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(only(t1[1]),iota(r.length).map!(i=>r[i])).array));
+			return q(t1[0]~t2[0],cast(Expression)tupleTy([t1[1],t2[1]]));
+		}
+		return base(e);
+	}
+	auto t1=getConstAndType(ex.e1);
+	auto t2=typeSemantic(ex.e2,sc);
+	if(!t1[1]||!t2){
+		ex.sstate=SemState.error;
+		return ex;
+	}
+	return funTy(t1[0],t1[1],t2,false,!!t1[1].isTupleTy()&&t1[0].length!=1,ex.annotation,false);
+}
+
+Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
+	auto sc=context.sc;
+	fa.type=typeTy();
+	auto fsc=new RawProductScope(sc,fa.annotation);
+	scope(exit) fsc.forceClose();
+	declareParameters(fa,fa.isSquare,fa.params,fsc); // parameter variables
+	auto cod=typeSemantic(fa.cod,fsc);
+	propErr(fa.cod,fa);
+	if(fa.sstate==SemState.error) return fa;
+	auto const_=fa.params.map!(p=>p.isConst).array;
+	auto names=fa.params.map!(p=>p.getName).array;
+	auto types=fa.params.map!(p=>p.vtype).array;
+	assert(fa.isTuple||types.length==1);
+	auto dom=fa.isTuple?tupleTy(types):types[0];
+	return productTy(const_,names,dom,cod,fa.isSquare,fa.isTuple,fa.annotation,false);
+}
+
+Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
+	auto sc=context.sc;
+	if(expr.kind=="expression"){ sc.error("unsupported",expr.loc); }
+	else sc.error(expr.kind~" cannot appear within an expression",expr.loc);
+	expr.sstate=SemState.error;
+	return expr;
+}
+
+Expression expressionSemantic(Expression expr,ExpSemContext context){
+	auto sc=context.sc;
 	if(expr.sstate==SemState.completed||expr.sstate==SemState.error) return expr;
 	if(expr.sstate==SemState.started){
 		sc.error("cyclic dependency",expr.loc);
@@ -1993,13 +3014,13 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 	assert(expr.sstate==SemState.initial);
 	expr.sstate=SemState.started;
 	Scope.ConstBlockContext constSave;
-	if(!constResult) constSave=sc.saveConst();
+	if(!context.constResult) constSave=sc.saveConst();
 	scope(success){
 		static if(language==silq){
-			if(!constResult) sc.resetConst(constSave);
-			expr.constLookup=constResult;
+			if(!context.constResult) sc.resetConst(constSave);
+			expr.constLookup=context.constResult;
 			if(expr&&expr.sstate!=SemState.error){
-				if(constResult&&!expr.isLifted(sc)&&!expr.type.isClassical()){
+				if(context.constResult&&!expr.isLifted(sc)&&!expr.type.isClassical()){
 					sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
 					expr.sstate=SemState.error;
 				}else{
@@ -2008,7 +3029,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 						if(!id||!id.meaning) return false;
 						return id.meaning.isLinear();
 					}
-					if(!constResult&&inType&&consumesIdentifier){
+					if(!context.constResult&&context.inType&&consumesIdentifier){
 						sc.error("cannot consume variables within types",expr.loc);
 						expr.sstate=SemState.error;
 					}else{
@@ -2028,937 +3049,7 @@ Expression expressionSemantic(Expression expr,Scope sc,ConstResult constResult,I
 			}
 		}
 	}
-	if(auto cd=cast(CompoundDecl)expr)
-		return compoundDeclSemantic(cd,sc);
-	if(auto ce=cast(CompoundExp)expr)
-		return compoundExpSemantic(ce,sc);
-	if(auto le=cast(LambdaExp)expr){
-		FunctionDef nfd=le.fd;
-		if(!le.fd.scope_){
-			le.fd.scope_=sc;
-			nfd=cast(FunctionDef)presemantic(nfd,sc);
-		}else assert(le.fd.scope_ is sc);
-		assert(!!nfd);
-		le.fd=functionDefSemantic(nfd,sc);
-		assert(!!le.fd);
-		propErr(le.fd,le);
-		if(le.fd.sstate==SemState.completed)
-			le.type=typeForDecl(le.fd);
-		if(le.fd.sstate==SemState.completed) le.sstate=SemState.completed;
-		return le;
-	}
-	if(auto fd=cast(FunctionDef)expr){
-		sc.error("function definition cannot appear within an expression",fd.loc);
-		fd.sstate=SemState.error;
-		return fd;
-	}
-	if(auto ret=cast(ReturnExp)expr){
-		sc.error("return statement cannot appear within an expression",ret.loc);
-		ret.sstate=SemState.error;
-		return ret;
-	}
-	if(auto ce=cast(CallExp)expr)
-		return expr=callSemantic(ce,sc,constResult,inType);
-	static if(language==psi) if(auto pl=cast(PlaceholderExp)expr){
-		pl.type = ℝ;
-		pl.sstate = SemState.completed;
-		return pl;
-	}
-	if(auto fe=cast(ForgetExp)expr){
-		bool checkImplicitForget(Expression var){
-			if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
-			auto id=cast(Identifier)var;
-			if(!id) return false;
-			static if(language==silq){
-				if(auto meaning=sc.lookup(id,false,true,Lookup.probing)){
-					auto name=meaning.rename?meaning.rename:meaning.name;
-					if(!name||!sc.dependencyTracked(name)) return false;
-					return sc.canForget(meaning);
-				}else return false;
-			}else return true;
-		}
-		auto canForgetImplicitly=checkImplicitForget(fe.var);
-		fe.var=expressionSemantic(fe.var,sc,ConstResult.no,inType);
-		propErr(fe.var,fe);
-		void classicalForget(Expression var){
-			if(auto tpl=cast(TupleExp)var){
-				tpl.e.each!classicalForget;
-				return;
-			}
-			auto id=cast(Identifier)var;
-			if(!id) return;
-			auto meaning=id.meaning;
-			if(!meaning) return;
-			if(id.type&&id.type.isClassical){
-				if(!sc.consume(meaning)){
-					sc.error("cannot forget variable from outer scope",id.loc);
-					fe.sstate=SemState.error;
-					return;
-				}
-				return;
-			}
-		}
-		classicalForget(fe.var);
-		if(fe.val){
-			fe.val=expressionSemantic(fe.val,sc,ConstResult.yes,inType);
-			propErr(fe.val,fe);
-			static if(language==silq) if(fe.sstate!=SemState.error&&!fe.val.isLifted(sc)){
-				sc.error("forget expression must be 'lifted'",fe.val.loc);
-				fe.sstate=SemState.error;
-			}
-			if(fe.var.type&&fe.val.type && !joinTypes(fe.var.type,fe.val.type)){ // TODO: use cmpTypes here
-				sc.error(format("incompatible types '%s' and '%s' for forget",fe.var.type,fe.val.type),fe.loc);
-				fe.sstate=SemState.error;
-			}
-			static if(language!=silq){
-				if(!canForgetImplicitly){
-					sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
-					fe.sstate=SemState.error;
-				}
-			}
-		}else if(!canForgetImplicitly&&fe.sstate!=SemState.error){
-			static if(language==silq){
-				sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.loc);
-			}else{
-				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
-			}
-			fe.sstate=SemState.error;
-		}
-		fe.type=unit;
-		return fe;
-	}
-	if(auto id=cast(Identifier)expr){
-		id.scope_=sc;
-		auto meaning=id.meaning;
-		if(!meaning){
-			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-			id.meaning=meaning=sc.lookup(id,false,true,constResult?Lookup.constant:Lookup.consuming);
-			if(nerr!=sc.handler.nerrors){
-				sc.note("looked up here",id.loc);
-				id.sstate=SemState.error;
-				return id;
-			}
-			if(!meaning){
-				if(auto r=builtIn(id,sc)){
-					if(!id.calledDirectly&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
-						sc.error("special operator must be called directly",id.loc);
-						id.sstate=r.sstate=SemState.error;
-					}
-					return r;
-				}
-				sc.error(format("undefined identifier %s",id.name),id.loc);
-				id.sstate=SemState.error;
-				return id;
-			}
-			if(auto fd=cast(FunctionDef)meaning)
-				if(auto asc=isInDataScope(fd.scope_))
-					if(fd.name.name==asc.decl.name.name)
-						meaning=asc.decl;
-			id.meaning=meaning;
-		}
-		id.name=meaning.getName;
-		propErr(meaning,id);
-		id.type=typeForDecl(meaning);
-		if(!id.type&&id.sstate!=SemState.error){
-			sc.error("invalid forward reference",id.loc);
-			id.sstate=SemState.error;
-		}
-		if(id.type != typeTy()){
-			if(auto dsc=isInDataScope(meaning.scope_)){
-				if(auto decl=sc.getDatDecl()){
-					if(decl is dsc.decl){
-						auto this_=new Identifier("this");
-						this_.loc=id.loc;
-						this_.scope_=sc;
-						auto fe=new FieldExp(this_,id);
-						fe.loc=id.loc;
-						return expressionSemantic(fe,sc,ConstResult.no,inType);
-					}
-				}
-			}
-		}
-		auto vd=cast(VarDecl)meaning;
-		if(vd){
-			if(cast(TopScope)vd.scope_||vd.vtype==typeTy&&vd.initializer){
-				if(!vd.initializer||vd.initializer.sstate!=SemState.completed)
-					id.sstate=SemState.error;
-				id.substitute=true;
-				return id;
-			}
-		}
-		if(id.type&&meaning.scope_.getFunction()){
-			bool isQuantum=!id.type.isClassical();
-			bool captureChecked=!isQuantum;
-			assert(sc.isNestedIn(meaning.scope_));
-			auto startScope=sc;
-			for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
-				bool checkCapture(){
-					static if(language==silq){
-						if(!astopt.allowUnsafeCaptureConst){
-							if(constResult){
-								sc.error("cannot capture quantum variable as constant", id.loc);
-								id.sstate=SemState.error;
-								return false;
-							}else if(vd&&(vd.isConst||sc.isConst(vd))){
-								sc.error("cannot capture 'const' quantum variable", id.loc);
-								if(auto read=sc.isConst(vd))
-									sc.note("variable was made 'const' here", read.loc);
-								id.sstate=SemState.error;
-								return false;
-							}
-						}
-					}
-					return true;
-				}
-				if(auto fsc=cast(FunctionScope)csc){
-					if(!captureChecked){
-						captureChecked=true;
-						if(!checkCapture()) break;
-					}
-					if(isQuantum){
-						if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
-							if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
-							else{
-								assert(fsc.fd.ftype.isClassical());
-								sc.error("cannot capture quantum variable in classical function", id.loc);
-								id.sstate=SemState.error;
-								break;
-							}
-						}
-					}
-					fsc.addCapture(id,startScope);
-					startScope=fsc;
-				}
-				if(auto dsc=cast(DataScope)csc){
-					if(!captureChecked){
-						captureChecked=true;
-						if(!checkCapture()) break;
-					}
-					dsc.addCapture(id,startScope);
-					startScope=dsc;
-				}
-			}
-		}
-		return id;
-	}
-	if(auto fe=cast(FieldExp)expr){
-		fe.e=expressionSemantic(fe.e,sc,ConstResult.yes,inType);
-		propErr(fe.e,fe);
-		if(fe.sstate==SemState.error)
-			return fe;
-		auto noMember(){
-			sc.error(format("no member %s for type %s",fe.f,fe.e.type),fe.loc);
-			fe.sstate=SemState.error;
-			return fe;
-		}
-		DatDecl aggrd=null;
-		if(auto aggrty=cast(AggregateTy)fe.e.type) aggrd=aggrty.decl;
-		else if(auto id=cast(Identifier)fe.e.type) if(auto dat=cast(DatDecl)id.meaning) aggrd=dat;
-		Expression arg=null;
-		if(auto ce=cast(CallExp)fe.e.type){
-			if(auto id=cast(Identifier)ce.e){
-				if(auto decl=cast(DatDecl)id.meaning){
-					aggrd=decl;
-					arg=ce.arg;
-				}
-			}
-		}
-		if(aggrd){
-			if(aggrd.body_.ascope_){
-				auto meaning=aggrd.body_.ascope_.lookupHere(fe.f,false,Lookup.consuming);
-				if(!meaning) return noMember();
-				fe.f.meaning=meaning;
-				fe.f.name=meaning.getName;
-				fe.f.scope_=sc;
-				fe.f.type=typeForDecl(meaning);
-				if(fe.f.type&&aggrd.hasParams){
-					auto subst=aggrd.getSubst(arg);
-					fe.f.type=fe.f.type.substitute(subst);
-				}
-				fe.f.sstate=SemState.completed;
-				fe.type=fe.f.type;
-				if(!fe.type){
-					fe.sstate=SemState.error;
-					fe.f.sstate=SemState.error;
-				}
-				return fe;
-			}else return noMember();
-		}else if(auto r=builtIn(fe,sc)){
-			if(auto vt=cast(VectorTy)fe.e.type){
-				bool hasSideEffect=false;
-				static if(language==silq) hasSideEffect=!fe.e.isQfree();
-				if(fe.f.name=="length"&&!hasSideEffect)
-					return expr=expressionSemantic(vt.num.copy(),sc,ConstResult.no,inType);// TODO: preserve semantic on clone
-			}
-			return expr=r;
-		}
-		else return noMember();
-	}
-	if(auto idx=cast(IndexExp)expr){
-		bool replaceIndex=false;
-		size_t replaceIndexLoc=size_t.max;
-		if(auto cid=getIdFromIndex(idx)){
-			foreach(i,indexToReplace;sc.indicesToReplace){
-				if(indexToReplace[0]&&!indexToReplace[1]&&indexEquals(indexToReplace[0],idx,sc)){
-					auto rid=getIdFromIndex(indexToReplace[0]);
-					assert(rid && rid.meaning);
-					assert(rid.name==cid.name);
-					if(!cid.meaning) cid.meaning=rid.meaning;
-					else assert(cid.meaning is rid.meaning);
-					if(cid.meaning && cid.meaning.rename) cid.name=cid.meaning.rename.name;
-					replaceIndex=true;
-					replaceIndexLoc=i;
-					break;
-				}
-			}
-		}
-		if(!replaceIndex){
-			if(auto cid=getIdFromIndex(idx)){
-				foreach(i,indexToReplace;sc.indicesToReplace){
-					if(indexToReplace[0]){
-						auto rid=getIdFromIndex(indexToReplace[0]);
-						assert(rid && rid.meaning);
-						if(rid.name==cid.name){
-							cid.constLookup=true;
-							cid.type=rid.type;
-							cid.meaning=rid.meaning;
-							cid.sstate=rid.sstate;
-							cid.scope_=rid.scope_;
-							if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc)){
-								sc.error("'const' lookup of index may refer to consumed value",idx.loc);
-								if(indexToReplace[1]) // should always be non-null
-									sc.note("consumed here",indexToReplace[1].loc);
-								else sc.note("reassigned here",indexToReplace[0].loc);
-								idx.sstate=SemState.error;
-								break;
-							}
-						}
-					}
-				}
-			}
-		}
-		idx.e=expressionSemantic(idx.e,sc,ConstResult.yes,inType);
-		propErr(idx.e,idx);
-		if(auto ft=cast(FunTy)idx.e.type){
-			assert(!replaceIndex);
-			auto ce=new CallExp(idx.e,idx.a,true,false);
-			ce.loc=idx.loc;
-			return expr=callSemantic(ce,sc,ConstResult.no,inType);
-		}
-		if(idx.e.type==typeTy){
-			assert(!replaceIndex);
-			if(auto tty=typeSemantic(expr,sc))
-				return tty;
-		}
-		idx.a=expressionSemantic(idx.a,sc,ConstResult.yes,inType);
-		propErr(idx.a,idx);
-		if(idx.sstate==SemState.error)
-			return idx;
-		Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
-			if(isBasicIndexType(indexTy)){
-				if(!indexTy.isClassical()&&next.hasClassicalComponent()){
-					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
-					idx.sstate=SemState.error;
-				}
-				return next;
-			}
-			if(auto tpl=cast(TupleExp)index){
-				auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
-				if(types.all!(e=>e!is null)) return tupleTy(types);
-				return null;
-			}
-			if(auto at=cast(ArrayTy)indexTy){
-				auto type=check(next,null,at.next,indexLoc);
-				if(type) return arrayTy(type);
-				return null;
-			}
-			if(auto vt=cast(VectorTy)indexTy){
-				auto type=check(next,null,vt.next,indexLoc);
-				if(type) return vectorTy(type,vt.num);
-				return null;
-			}
-			if(auto tt=cast(TupleTy)indexTy){
-				auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
-				if(types.all!(e=>e!is null)) return tupleTy(types);
-				return null;
-			}
-			sc.error(format("index should be integer, not %s",indexTy),indexLoc);
-			idx.sstate=SemState.error;
-			return null;
-		}
-		if(auto at=cast(ArrayTy)idx.e.type){
-			idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
-		}else if(auto vt=cast(VectorTy)idx.e.type){
-			idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
-		}else if(isInt(idx.e.type)||isUint(idx.e.type)){
-			idx.type=check(Bool(idx.e.type.isClassical()), idx.a, idx.a.type, idx.a.loc);
-		}else if(auto tt=cast(TupleTy)idx.e.type){
-			Expression checkTpl(Expression index){
-				if(auto lit=cast(LiteralExp)index){
-					if(lit.lit.type==Tok!"0"){
-						auto c=ℤ(lit.lit.str);
-						if(c<0||c>=tt.types.length){
-							sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
-							idx.sstate=SemState.error;
-							return null;
-						}else{
-							return tt.types[cast(size_t)c.toLong()];
-						}
-					}
-				}
-				if(auto tpl=cast(TupleExp)index){
-					auto types=tpl.e.map!(e=>checkTpl(e)).array;
-					if(types.all!(e=>e!is null)) return tupleTy(types);
-					return null;
-				}
-				sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
-				idx.sstate=SemState.error;
-				return null;
-			}
-			idx.type=checkTpl(idx.a);
-		}else{
-			sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
-			idx.sstate=SemState.error;
-		}
-		if(replaceIndex){
-			idx.byRef=true;
-			assert(replaceIndexLoc<sc.indicesToReplace.length);
-			if(constResult){
-				sc.error("replaced component must be consumed",idx.loc);
-				sc.note("replaced component is here",sc.indicesToReplace[replaceIndexLoc][0].loc);
-				idx.sstate=SemState.error;
-			}
-			sc.indicesToReplace[replaceIndexLoc][1]=idx; // matched
-		}
-		return idx;
-	}
-	if(auto sl=cast(SliceExp)expr){
-		sl.e=expressionSemantic(sl.e,sc,ConstResult.yes,inType);
-		propErr(sl.e,sl);
-		sl.l=expressionSemantic(sl.l,sc,ConstResult.yes,inType);
-		propErr(sl.l,sl);
-		sl.r=expressionSemantic(sl.r,sc,ConstResult.yes,inType);
-		propErr(sl.r,sl);
-		if(sl.sstate==SemState.error)
-			return sl;
-		if(!isSubtype(sl.l.type,ℤt(true))){
-			sc.error(format("lower bound should be classical integer, not %s",sl.l.type),sl.l.loc);
-			sl.l.sstate=SemState.error;
-		}
-		if(!isSubtype(sl.r.type,ℤt(true))){
-			sc.error(format("upper bound should be classical integer, not %s",sl.r.type),sl.r.loc);
-			sl.r.sstate=SemState.error;
-		}
-		if(sl.sstate==SemState.error)
-			return sl;
-		if(auto at=cast(ArrayTy)sl.e.type){
-			sl.type=at;
-		}else if(auto vt=cast(VectorTy)sl.e.type){
-			auto se=new NSubExp(sl.r,sl.l);
-			se.type=ℕt(true);
-			se.sstate=SemState.completed;
-			sl.type=vectorTy(vt.next,se.eval());
-		}else if(auto tt=sl.e.type.isTupleTy){
-			auto llit=cast(LiteralExp)sl.l, rlit=cast(LiteralExp)sl.r;
-			if(!llit||llit.lit.type!=Tok!"0"){
-				sc.error(format("slice lower bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
-				sl.sstate=SemState.error;
-			}
-			if(!rlit||rlit.lit.type!=Tok!"0"){
-				sc.error(format("slice upper bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
-				sl.sstate=SemState.error;
-			}
-			if(sl.sstate==SemState.error)
-				return sl;
-			auto lc=ℤ(llit.lit.str), rc=ℤ(rlit.lit.str);
-			if(lc<0){
-				sc.error(format("slice lower bound for type %s cannot be negative",tt),sl.loc);
-				sl.sstate=SemState.error;
-			}
-			if(lc>rc){
-				sc.error("slice lower bound exceeds slice upper bound",sl.loc);
-				sl.sstate=SemState.error;
-			}
-			if(rc>tt.length){
-				sc.error(format("slice upper bound for type %s exceeds %s",tt,tt.length),sl.loc);
-				sl.sstate=SemState.error;
-			}
-			if(sl.sstate!=SemState.error){
-				sl.type=tt[cast(size_t)lc..cast(size_t)rc];
-			}
-		}else{
-			sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
-			sl.sstate=SemState.error;
-		}
-		return sl;
-	}
-	if(cast(CommaExp)expr){
-		sc.error("nested comma expressions are disallowed",expr.loc);
-		expr.sstate=SemState.error;
-		return expr;
-	}
-	if(auto tpl=cast(TupleExp)expr){
-		foreach(ref exp;tpl.e){
-			exp=expressionSemantic(exp,sc,constResult,inType);
-			propErr(exp,tpl);
-		}
-		if(tpl.sstate!=SemState.error){
-			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
-		}
-		return tpl;
-	}
-	if(auto arr=cast(ArrayExp)expr){
-		Expression t; bool tok=true;
-		foreach(i,ref exp;arr.e){
-			exp=expressionSemantic(exp,sc,constResult,inType);
-			propErr(exp,arr);
-			auto nt = joinTypes(t, exp.type);
-			if(!nt&&tok){
-				Expression texp;
-				foreach(j,oexp;arr.e[0..i]){
-					if(!joinTypes(oexp, exp)){
-						texp=oexp;
-						break;
-					}
-				}
-				if(texp){
-					sc.error(format("incompatible types %s and %s in array literal",t,exp.type),texp.loc);
-					sc.note("incompatible entry",exp.loc);
-				}
-				arr.sstate=SemState.error;
-				tok=false;
-			}else t=nt;
-		}
-		if(arr.e.length && t){
-			if(arr.e[0].type) arr.type=arrayTy(t);
-		}else arr.type=arrayTy(ℝ(true)); // TODO: type inference?
-		return arr;
-	}
-	if(auto tae=cast(TypeAnnotationExp)expr){
-		tae.e=expressionSemantic(tae.e,sc,constResult,inType);
-		tae.type=typeSemantic(tae.t,sc);
-		propErr(tae.e,tae);
-		propErr(tae.t,tae);
-		if(!tae.type) tae.sstate=SemState.error;
-		if(tae.sstate==SemState.error)
-			return tae;
-		if(auto arr=cast(ArrayExp)tae.e){
-			if(!arr.e.length){
-				if(auto aty=cast(ArrayTy)tae.type)
-					arr.type=aty;
-				if(auto vty=cast(VectorTy)tae.type)
-					arr.type=arrayTy(vty.next);
-			}
-		}
-		if(auto ce=cast(CallExp)tae.e)
-			if(auto id=cast(Identifier)ce.e){
-				if(id.name=="sampleFrom"||id.name=="readCSV"&&tae.type==arrayTy(arrayTy(ℝ(true))))
-					ce.type=tae.type;
-			}
-		bool typeExplicitConversion(Expression from,Expression to,TypeAnnotationType annotationType){
-			if(isSubtype(from,to)) return true;
-			if(annotationType==annotationType.punning){
-				auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
-				if(ft1&&ft2&&ft1.setAnnotation(Annotation.none)==ft2.setAnnotation(Annotation.none))
-					return true;
-				return false;
-			}
-			if(annotationType>=annotationType.conversion){
-				if(isSubtype(from,ℤt(true))&&(isUint(to)||isInt(to)))
-					return true;
-				if(isUint(from)&&isSubtype(ℕt(from.isClassical()),to))
-					return true;
-				if(isInt(from)&&isSubtype(ℤt(from.isClassical()),to))
-					return true;
-				if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
-					return true;
-				auto ce1=cast(CallExp)from;
-				if(ce1&&(isInt(ce1)||isUint(ce1))&&(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)))
-					return true;
-				auto ce2=cast(CallExp)to;
-				if(ce2&&(isInt(ce2)||isUint(ce2))&&(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))))
-					return true;
-			}
-			auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
-			if(tpl1&&tpl2&&tpl1.length==tpl2.length&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],tpl2[i],annotationType)))
-				return true;
-			auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
-			if(arr1&&arr2&&typeExplicitConversion(arr1.next,arr2.next,annotationType))
-				return true;
-			auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-			if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
-				return true;
-			if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
-				return true;
-			if(annotationType==TypeAnnotationType.coercion){
-				if((arr1||vec1)&&to==unit) return true;
-				if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
-					return true;
-				if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
-					return true;
-				if(vec1&&tpl2&&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType)))
-					return true;
-				if(tpl1&&vec2&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType)))
-					return true;
-				if(from.isClassical()&&isSubtype(to.getClassical(),from)&&from.isNumeric) return true;
-			}
-			return false;
-		}
-		bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
-			if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
-			auto lit=cast(LiteralExp)expr;
-			bool isLiteral=lit||cast(UMinusExp)expr&&cast(LiteralExp)(cast(UMinusExp)expr).e;
-			if(isLiteral){
-				if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
-					return true;
-				if(isSubtype(expr.type,ℤt(false))&&isInt(type))
-					return true;
-				if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
-					return true;
-				if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
-					return true;
-				if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
-					auto val=ℤ(lit.lit.str);
-					if(val==0||val==1) return true;
-				}
-			}
-			if(typeExplicitConversion(expr.type,type,annotationType)) return true;
-			if(auto tpl1=cast(TupleExp)expr){
-				if(auto tpl2=type.isTupleTy()){
-					return tpl1.e.length==tpl2.length&&iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],tpl2[i],annotationType));
-				}
-				if(auto arr=cast(ArrayTy)type){
-					return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],arr.next,annotationType));
-				}
-				if(auto vec2=cast(VectorTy)type){
-					bool ok=annotationType==TypeAnnotationType.coercion;
-					if(!ok){
-						auto len=LiteralExp.makeInteger(tpl1.e.length);
-						len.loc=expr.loc;
-						auto eq=new EqExp(len,vec2.num);
-						eq.loc=expr.loc;
-						ok=eq.eval()==LiteralExp.makeBoolean(1);
-					}
-					if(ok){
-						return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],vec2.next,annotationType));
-					}
-				}
-			}
-			return false;
-		}
-		if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
-			final switch(tae.annotationType){
-				case TypeAnnotationType.annotation:
-					sc.error(format("type is %s, not %s",tae.e.type,tae.type),tae.loc);
-					if(explicitConversion(tae.e,tae.type,TypeAnnotationType.conversion))
-						sc.note(format("explicit conversion possible, use '%s as %s'",tae.e,tae.type),tae.loc);
-					else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
-						sc.note(format("(unsafe type coercion possible)"),tae.loc);
-					break;
-				case TypeAnnotationType.conversion:
-					sc.error(format("cannot convert from type %s to %s",tae.e.type,tae.type),tae.loc);
-					if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
-						sc.note(format("(unsafe type coercion possible)"),tae.loc);
-					break;
-				case TypeAnnotationType.coercion:
-					sc.error(format("cannot coerce type %s to %s",tae.e.type,tae.type),tae.loc);
-					break;
-				case TypeAnnotationType.punning:
-					sc.error(format("punning type %s to %s not supported",tae.e.type,tae.type),tae.loc);
-					break;
-			}
-			tae.sstate=SemState.error;
-		}
-		return tae;
-	}
-
-	Expression handleUnary(alias determineType)(string name,Expression e,ref Expression e1,InType inType){
-		e1=expressionSemantic(e1,sc,ConstResult.yes,inType);
-		propErr(e1,e);
-		if(e.sstate==SemState.error)
-			return e;
-		e.type=determineType(e1.type);
-		if(!e.type){
-			sc.error(format("incompatible type %s for %s",e1.type,name),e.loc);
-			e.sstate=SemState.error;
-		}
-		return e;
-	}
-
-	Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,InType inType){
-		e1=expressionSemantic(e1,sc,ConstResult.yes,inType);
-		e2=expressionSemantic(e2,sc,ConstResult.yes,inType);
-		propErr(e1,e);
-		propErr(e2,e);
-		if(e.sstate==SemState.error)
-			return e;
-		if(e1.type==typeTy&&name=="power"){
-			/+if(auto le=cast(LiteralExp)e2){
-				if(le.lit.type==Tok!"0"){
-					if(!le.lit.str.canFind(".")){
-						auto n=ℤ(le.lit.str);
-						if(0<=n&&n<long.max)
-							return tupleTy(e1.repeat(cast(size_t)n.toLong()).array);
-					}
-				}
-			}
-			sc.error("expected non-negative integer constant",e2.loc);
-			e.sstate=SemState.error;+/
-			if(!isSubtype(e2.type,ℕt(true))){
-				sc.error(format("vector length should be of type !ℕ, not %s",e2.type), e2.loc);
-				e.sstate=SemState.error;
-			}else return vectorTy(e1,e2);
-		}else{
-			e.type = determineType(e1.type,e2.type);
-			if(!e.type){
-				sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
-				e.sstate=SemState.error;
-			}
-		}
-		return e;
-	}
-	if(auto ae=cast(AddExp)expr) return expr=handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(SubExp)expr) return expr=handleBinary!subtractionType("subtraction",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(NSubExp)expr) return expr=handleBinary!nSubType("natural subtraction",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(MulExp)expr) return expr=handleBinary!(arithmeticType!true)("multiplication",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(DivExp)expr) return expr=handleBinary!divisionType("division",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(IDivExp)expr) return expr=handleBinary!iDivType("integer division",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(ModExp)expr) return expr=handleBinary!moduloType("modulo",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(PowExp)expr) return expr=handleBinary!powerType("power",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(BitOrExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise or",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(BitXorExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise xor",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(BitAndExp)expr) return expr=handleBinary!(arithmeticType!true)("bitwise and",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(UMinusExp)expr) return expr=handleUnary!minusType("minus",ae,ae.e,inType);
-	if(auto ae=cast(UNotExp)expr){
-		ae.e=expressionSemantic(ae.e,sc,ConstResult.yes,inType);
-		static if(language==silq) if(ae.e.type==typeTy){
-			if(auto ty=typeSemantic(ae.e,sc)){
-				if(ty.sstate==SemState.completed){
-					if(auto r=ty.getClassical()){
-						return expr=typeSemantic(r,sc);
-					}else{
-						// TODO: have explicit ClassicalTy
-						sc.error(format("cannot make type %s classical",ae.e),ae.loc);
-						ae.sstate=SemState.error;
-						return ae;
-					}
-				}
-			}
-		}
-		return expr=handleUnary!notType("not",ae,ae.e,inType);
-	}
-	if(auto ae=cast(UBitNotExp)expr) return expr=handleUnary!bitNotType("bitwise not",ae,ae.e,inType);
-	static if(language==silq) if(auto ae=cast(UnaryExp!(Tok!"const"))expr){
-		sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ae.loc);
-		ae.sstate=SemState.error;
-		return ae;
-	}
-	if(auto ae=cast(AndExp)expr) return expr=handleBinary!logicType("conjunction",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(OrExp)expr) return expr=handleBinary!logicType("disjunction",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(LtExp)expr) return expr=handleBinary!cmpType("'<'",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(LeExp)expr) return expr=handleBinary!cmpType("'≤'",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(GtExp)expr) return expr=handleBinary!cmpType("'>'",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(GeExp)expr) return expr=handleBinary!cmpType("'≥'",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(EqExp)expr) return expr=handleBinary!cmpType("'='",ae,ae.e1,ae.e2,inType);
-	if(auto ae=cast(NeqExp)expr) return expr=handleBinary!cmpType("'≠'",ae,ae.e1,ae.e2,inType);
-
-	if(auto ce=cast(CatExp)expr){
-		ce.e1=expressionSemantic(ce.e1,sc,constResult,inType);
-		ce.e2=expressionSemantic(ce.e2,sc,constResult,inType);
-		propErr(ce.e1,ce);
-		propErr(ce.e2,ce);
-		if(ce.sstate==SemState.error)
-			return ce;
-		auto vt1=cast(VectorTy)ce.e1.type,vt2=cast(VectorTy)ce.e2.type;
-		assert(!ce.type);
-		if(vt1&&vt2){
-			if(auto netype=joinTypes(vt1.next,vt2.next)){
-				auto add=new AddExp(vt1.num,vt2.num);
-				add.type=ℕt(true);
-				add.sstate=SemState.completed;
-				auto ntype=vectorTy(netype,add.eval()); // TODO: evaluation context
-				ce.type=ntype;
-			}
-		}else{
-			auto ntype=joinTypes(ce.e1.type,ce.e2.type);
-			if(cast(ArrayTy)ntype)
-				ce.type=ntype;
-		}
-		if(!ce.type){
-			sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
-			ce.sstate=SemState.error;
-		}
-		return ce;
-	}
-
-	if(auto pr=cast(BinaryExp!(Tok!"×"))expr){
-		// TODO: allow nested declarations
-		expr.type=typeTy();
-		auto t1=typeSemantic(pr.e1,sc);
-		auto t2=typeSemantic(pr.e2,sc);
-		if(!t1||!t2){
-			expr.sstate=SemState.error;
-			return expr;
-		}
-		auto l=t1.isTupleTy(),r=t2.isTupleTy();
-		auto merge1=!pr.e1.brackets&&l&&l.length;
-		auto merge2=!pr.e2.brackets&&r&&r.length;
-		if(merge1 && merge2)
-			return tupleTy(chain(iota(l.length).map!(i=>l[i]),iota(r.length).map!(i=>r[i])).array);
-		if(merge1) return tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2)).array);
-		if(merge2) return tupleTy(chain(only(t1),iota(r.length).map!(i=>r[i])).array);
-		return tupleTy([t1,t2]);
-	}
-	if(auto ex=cast(BinaryExp!(Tok!"→"))expr){
-		expr.type=typeTy();
-		Q!(bool[],Expression) getConstAndType(Expression e){
-			Q!(bool[],Expression) base(Expression e){
-				static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
-					return q([true],typeSemantic(ce.e,sc));
-				}
-				auto ty=typeSemantic(e,sc);
-				return q([ty&&ty.impliesConst()||ex.isLifted],ty);
-			}
-			if(auto pr=cast(BinaryExp!(Tok!"×"))e){
-				auto merge1=!pr.e1.brackets&&cast(BinaryExp!(Tok!"×"))pr.e1;
-				auto t1=merge1?getConstAndType(pr.e1):base(pr.e1);
-				auto merge2=!pr.e2.brackets&&cast(BinaryExp!(Tok!"×"))pr.e2;
-				auto t2=merge2?getConstAndType(pr.e2):base(pr.e2);
-				if(!t1[1]||!t2[1]){
-					e.sstate=SemState.error;
-					return q((bool[]).init,Expression.init);
-				}
-				auto l=t1[1].isTupleTy(),r=t2[1].isTupleTy();
-				merge1&=l&&l.length;
-				merge2&=r&&r.length;
-				if(merge1 && merge2)
-					return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(iota(l.length).map!(i=>l[i]),iota(r.length).map!(i=>r[i])).array));
-				if(merge1) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2[1])).array));
-				if(merge2) return q(t1[0]~t2[0],cast(Expression)tupleTy(chain(only(t1[1]),iota(r.length).map!(i=>r[i])).array));
-				return q(t1[0]~t2[0],cast(Expression)tupleTy([t1[1],t2[1]]));
-			}
-			return base(e);
-		}
-		auto t1=getConstAndType(ex.e1);
-		auto t2=typeSemantic(ex.e2,sc);
-		if(!t1[1]||!t2){
-			expr.sstate=SemState.error;
-			return expr;
-		}
-		return expr=funTy(t1[0],t1[1],t2,false,!!t1[1].isTupleTy()&&t1[0].length!=1,ex.annotation,false);
-	}
-	if(auto fa=cast(RawProductTy)expr){
-		expr.type=typeTy();
-		auto fsc=new RawProductScope(sc,fa.annotation);
-		scope(exit) fsc.forceClose();
-		declareParameters(fa,fa.isSquare,fa.params,fsc); // parameter variables
-		auto cod=typeSemantic(fa.cod,fsc);
-		propErr(fa.cod,fa);
-		if(fa.sstate==SemState.error) return fa;
-		auto const_=fa.params.map!(p=>p.isConst).array;
-		auto names=fa.params.map!(p=>p.getName).array;
-		auto types=fa.params.map!(p=>p.vtype).array;
-		assert(fa.isTuple||types.length==1);
-		auto dom=fa.isTuple?tupleTy(types):types[0];
-		return expr=productTy(const_,names,dom,cod,fa.isSquare,fa.isTuple,fa.annotation,false);
-	}
-	if(auto ite=cast(IteExp)expr){
-		ite.cond=conditionSemantic!true(ite.cond,sc,inType);
-		if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
-			sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
-			ite.sstate=SemState.error;
-			return ite;
-		}
-		static if(language==silq){
-			auto quantumControl=ite.cond.type!=Bool(true);
-			auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
-		}else{
-			enum quantumControl=false;
-			enum restriction_=Annotation.none;
-		}
-		int numBottom=0; // TODO: actually introduce a bottom type?
-		Expression branchSemantic(Expression branch,Scope sc){
-			if(inType) return expressionSemantic(branch,sc,constResult,inType);
-			if(auto ae=cast(AssertExp)branch){
-				branch=statementSemantic(branch,sc);
-				if(auto lit=cast(LiteralExp)ae.e)
-					if(lit.lit.type==Tok!"0" && lit.lit.str=="0"){
-						branch.type=null;
-						++numBottom;
-					}
-			}else branch=expressionSemantic(branch,sc,constResult,inType);
-			return branch;
-		}
-		// initialize scopes, to allow captures to be inserted
-		ite.then.blscope_=new BlockScope(sc,restriction_);
-		if(ite.othw) ite.othw.blscope_=new BlockScope(sc,restriction_);
-		ite.then.s[0]=branchSemantic(ite.then.s[0],ite.then.blscope_);
-		static if(language==silq) ite.then.blscope_.pushConsumed();
-		propErr(ite.then.s[0],ite.then);
-		if(!ite.othw){
-			sc.error("missing else for if expression",ite.loc);
-			ite.sstate=SemState.error;
-			return ite;
-		}
-		ite.othw.s[0]=branchSemantic(ite.othw.s[0],ite.othw.blscope_);
-		static if(language==silq) ite.othw.blscope_.pushConsumed();
-		propErr(ite.othw.s[0],ite.othw);
-		propErr(ite.cond,ite);
-		propErr(ite.then,ite);
-		propErr(ite.othw,ite);
-		if(ite.sstate==SemState.error)
-			return ite;
-		if(!ite.then.s[0].type) ite.then.s[0].type = ite.othw.s[0].type;
-		if(!ite.othw.s[0].type) ite.othw.s[0].type = ite.then.s[0].type;
-		auto t1=ite.then.s[0].type;
-		auto t2=ite.othw.s[0].type;
-		ite.type=joinTypes(t1,t2);
-		if(!t1 && !t2 && numBottom==2){
-			ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
-		}
-		if(t1 && t2 && !ite.type){
-			sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
-			ite.sstate=SemState.error;
-		}
-		if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
-			// TODO: automatically promote to quantum if possible
-			sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
-			ite.sstate=SemState.error;
-		}
-		if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
-			sc.note("consumed in one branch of if expression", ite.loc);
-			ite.sstate=SemState.error;
-		}
-		return ite;
-	}
-	if(auto lit=cast(LiteralExp)expr){
-		switch(lit.lit.type){
-		case Tok!"0",Tok!".0":
-			if(!expr.type)
-				expr.type=lit.lit.str.canFind(".")?ℝ(true):lit.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
-			return expr;
-		case Tok!"``":
-			expr.type=stringTy(true);
-			return expr;
-		default: break; // TODO
-		}
-	}
-	if(expr.kind=="expression"){ sc.error("unsupported",expr.loc); }
-	else sc.error(expr.kind~" cannot appear within an expression",expr.loc);
-	expr.sstate=SemState.error;
-	return expr;
-}
-Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InType inType){
-	e=expressionSemantic(e,sc,ConstResult.yes,inType);
-	static if(language==silq) sc.pushConsumed();
-	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)e.type:e.type!=Bool(true))){
-		static if(language==silq){
-			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
-			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);
-		}else sc.error(format("type of condition should be 𝔹, not %s",e.type),e.loc);
-		e.sstate=SemState.error;
-	}
-	return e;
+	return expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault)(context);
 }
 
 
@@ -3064,13 +3155,13 @@ DatDecl datDeclSemantic(DatDecl dat,Scope sc){
 	return dat;
 }
 
-void determineType(ref Expression e,Scope sc,void delegate(Expression) future){
+void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future){
 	if(e.type) return future(e.type);
 	if(auto le=cast(LambdaExp)e){
 		assert(!!le.fd);
 		if(!le.fd.scope_){
-			le.fd.scope_=sc;
-			le.fd=cast(FunctionDef)presemantic(le.fd,sc);
+			le.fd.scope_=context.sc;
+			le.fd=cast(FunctionDef)presemantic(le.fd,context.sc);
 			assert(!!le.fd);
 		}
 		if(auto ty=le.fd.ftype)
@@ -3078,7 +3169,7 @@ void determineType(ref Expression e,Scope sc,void delegate(Expression) future){
 		le.fd.ftypeCallbacks~=future;
 		return;
 	}
-	e=expressionSemantic(e,sc,ConstResult.no,InType.no);
+	e=expressionSemantic(e,context);
 	return future(e.type);
 }
 
@@ -3091,13 +3182,15 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 		return ret;
 	}
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.no,InType.no);
 	if(!fd.rret && !fd.ret){
-		determineType(ret.e,sc,(ty){
+		determineType(ret.e,context,(ty){
 			fd.ret=ty;
 			setFtype(fd);
 		});
 	}
-	ret.e=expressionSemantic(ret.e,sc,ConstResult.no,InType.no);
+	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
 	if(cast(CommaExp)ret.e){
 		sc.error("use parentheses for multiple return values",ret.e.loc);
@@ -3189,7 +3282,9 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 			}
 		}
 	}
-	auto e=expressionSemantic(expr,sc,ConstResult.yes,InType.yes);
+	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
+	auto context=ExpSemContext(sc,ConstResult.yes,InType.yes);
+	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
 	if(e.type!=typeTy){
 		auto id=cast(Identifier)expr;
@@ -3374,7 +3469,7 @@ Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 	}
 	if(auto tpl=cast(TupleExp)ce.arg){
 		foreach(ref arg;tpl.e[1..$]){
-			arg=expressionSemantic(arg,sc,ConstResult.yes,inType);
+			arg=expressionSemantic(arg,context.nestConst);
 			propErr(arg,ce.arg);
 		}
 	}
@@ -3442,7 +3537,8 @@ Expression handleQuantumPrimitive(CallExp ce,Scope sc){
 	return ce;
 }
 
-Expression handleQuery(CallExp ce,Scope sc,InType inType){
+Expression handleQuery(CallExp ce,ExpSemContext context){
+	auto sc=context.sc;
 	Expression[] args;
 	if(auto tpl=cast(TupleExp)ce.arg) args=tpl.e;
 	else args=[ce.arg];
@@ -3474,7 +3570,7 @@ Expression handleQuery(CallExp ce,Scope sc,InType inType){
 				ce.sstate=SemState.error;
 				break;
 			}else{
-				args[1]=expressionSemantic(args[1],sc,ConstResult.yes,inType);
+				args[1]=expressionSemantic(args[1],context.nestConst);
 				auto dep="{}";
 				if(auto id=cast(Identifier)args[1]){
 					if(id.sstate==SemState.completed){
@@ -3491,7 +3587,7 @@ Expression handleQuery(CallExp ce,Scope sc,InType inType){
 				ce.sstate=SemState.error;
 				break;
 			}else{
-				args[1]=expressionSemantic(args[1],sc,ConstResult.yes,inType);
+				args[1]=expressionSemantic(args[1],context.nestConst);
 				return makeStrLit(text(args[1].type));
 			}
 		default:
