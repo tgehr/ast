@@ -1643,15 +1643,24 @@ alias OrExp=BinaryExp!(Tok!"||");
 alias AndExp=BinaryExp!(Tok!"&&");
 alias Exp=Expression;
 
-/+
+
 private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown declaration: ",typeid(s)," ",s));
 }
 auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,auto ref T args){
-	// TODO
+	import core.lifetime:forward;
+	if(auto fd=cast(FunctionDef)d) return f(fd,forward!args);
+	if(auto dd=cast(DatDecl)d) return f(dd,forward!args);
+
+	if(auto de=cast(DefineExp)d) return f(de,forward!args);
+	if(auto de=cast(DefExp)d) return f(de,forward!args);
+	if(auto ce=cast(CommaExp)d) return f(ce,forward!args);
+
+	if(auto imp=cast(ImportExp)d) return f(imp,forward!args);
 	return default_(d,args);
 }
 
+/+
 private noreturn unknownStmError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown statement: ",typeid(s)," ",s));
 }

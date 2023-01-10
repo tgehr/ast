@@ -339,19 +339,34 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 	return exprs;
 }
 
-Expression toplevelSemantic(Expression expr,Scope sc){
-	if(expr.sstate==SemState.error) return expr;
-	if(auto fd=cast(FunctionDef)expr) return functionDefSemantic(fd,sc);
-	if(auto dd=cast(DatDecl)expr) return datDeclSemantic(dd,sc);
-	if(cast(DefineExp)expr||cast(DefExp)expr) return defineOrAssignSemantic(expr,sc);
-	if(auto ce=cast(CommaExp)expr) return expectDefineOrAssignSemantic(ce,sc);
-	if(auto imp=cast(ImportExp)expr){
-		assert(util.among(imp.sstate,SemState.error,SemState.completed));
-		return imp;
-	}
+Expression toplevelSemanticImpl(FunctionDef fd,Scope sc){
+	return functionDefSemantic(fd,sc);
+}
+Expression toplevelSemanticImpl(DatDecl dd,Scope sc){
+	return datDeclSemantic(dd,sc);
+}
+Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
+	return defineOrAssignSemantic(expr,sc);
+}
+Expression toplevelSemanticImpl(DefExp expr,Scope sc){
+	return defineOrAssignSemantic(expr,sc);
+}
+Expression toplevelSemanticImpl(CommaExp ce,Scope sc){
+	return expectDefineOrAssignSemantic(ce,sc);
+}
+Expression toplevelSemanticImpl(ImportExp imp,Scope sc){
+	assert(util.among(imp.sstate,SemState.error,SemState.completed));
+	return imp;
+}
+Expression toplevelSemanticDefault(Expression expr,Scope sc){
 	sc.error("not supported at toplevel",expr.loc);
 	expr.sstate=SemState.error;
 	return expr;
+}
+
+Expression toplevelSemantic(Expression expr,Scope sc){
+	if(expr.sstate==SemState.error) return expr;
+	return expr.dispatchDecl!(toplevelSemanticImpl,toplevelSemanticDefault)(sc);
 }
 
 bool isBuiltIn(Identifier id){
