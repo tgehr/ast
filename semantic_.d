@@ -1067,7 +1067,10 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 }
 bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	e1=unwrap(e1), e2=unwrap(e2);
-	if(cast(Identifier)e1 && cast(Identifier)e2 && e1!=e2) return true;
+	if(auto id1=cast(Identifier)e1)
+		if(auto id2=cast(Identifier)e2)
+			if(id1.name!=id2.name) // TODO: this may become imprecise
+				return true;
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
 			if(guaranteedDifferentLocations(idx1.e,idx2.e,loc,sc,inType))
@@ -1079,24 +1082,28 @@ bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope
 	return false;
 }
 
-bool indexEquals(Expression e1,Expression e2,Scope sc,InType inType){
+bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
+	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
+	if(e1.sstate==SemState.error||e2.sstate==SemState.error)
+		return false;
+	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
+		return false;
+	Expression eq=new EqExp(e1,e2);
+	eq=expressionSemantic(eq,expSemContext(sc,ConstResult.yes,inType));
+	eq.loc=loc;
+	assert(eq.sstate==SemState.completed);
+	return eq.eval()==LiteralExp.makeBoolean(1);
+}
+bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	if(auto id1=cast(Identifier)e1)
 		if(auto id2=cast(Identifier)e2)
-			return id1.name==id2.name;
+			return id1.name==id2.name; // TODO: this is likely to break
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
-			if(!indexEquals(idx1.e,idx2.e,sc,inType))
+			if(!guaranteedSameLocations(idx1.e,idx2.e,loc,sc,inType))
 				return false;
-			idx1.a=expressionSemantic(idx1.a,expSemContext(sc,ConstResult.yes,inType));
-			propErr(idx1.a,idx1);
-			idx2.a=expressionSemantic(idx2.a,expSemContext(sc,ConstResult.yes,inType));
-			propErr(idx2.a,idx2);
-			if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
-				return false;
-			Expression eq=new EqExp(idx1.a,idx2.a);
-			eq=expressionSemantic(eq,expSemContext(sc,ConstResult.yes,inType));
-			assert(eq.sstate==SemState.completed);
-			return eq.eval()==LiteralExp.makeBoolean(1);
+			return guaranteedSameValues(idx1.a,idx2.a,loc,sc,inType);
 		}
 	}
 	return false;
@@ -1194,7 +1201,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			auto idx2=indicesToReplace[j];
 			if(idx2.sstate==SemState.error) continue;
 			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc,inType)){
-				if(indexEquals(idx1,idx2,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
+				if(guaranteedSameLocations(idx1,idx2,loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
 				else sc.error("indices may refer to same value in reassignment",idx2.loc);
 				sc.note("other index is here",idx1.loc);
 				idx2.sstate=SemState.error;
@@ -2314,7 +2321,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	size_t replaceIndexLoc=size_t.max;
 	if(auto cid=getIdFromIndex(idx)){
 		foreach(i,indexToReplace;sc.indicesToReplace){
-			if(indexToReplace[0]&&!indexToReplace[1]&&indexEquals(indexToReplace[0],idx,sc,inType)){
+			if(indexToReplace[0]&&!indexToReplace[1]&&guaranteedSameLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
 				auto rid=getIdFromIndex(indexToReplace[0]);
 				assert(rid && rid.meaning);
 				assert(rid.name==cid.name);
