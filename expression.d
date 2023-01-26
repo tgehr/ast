@@ -829,14 +829,13 @@ class CallExp: Expression{
 								case Variance.contravariant: return combineTypes(t1,t2,!meet);
 							}
 						}
-						import ast.semantic_: ConstResult, InType, ExpSemContext, callSemantic; // TODO: get rid of this?
+						import ast.semantic_: ConstResult, InType, expSemContext, callSemantic; // TODO: get rid of this?
 						if(!dat.isTuple){
 							assert(dat.params.length==1);
 							assert(arg != rcall.arg); // (checked at start of function)
 							auto combined=combine(dat.params[0].variance,arg,rcall.arg);
 							if(!combined) return null;
-							static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-							return callSemantic(new CallExp(e,combined,isSquare,isClassical_),ExpSemContext(null,ConstResult.no,InType.yes));
+							return callSemantic(new CallExp(e,combined,isSquare,isClassical_),expSemContext(null,ConstResult.no,InType.yes));
 						}
 						assert(dat.isTuple);
 						auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
@@ -844,8 +843,7 @@ class CallExp: Expression{
 							auto combined=iota(tup.length).map!(i=>combine(dat.params[i].variance,tup[i],rtup[i])).array;
 							if(combined.any!(x=>x is null)) return null;
 							auto rarg=new TupleExp(combined);
-							static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-							return callSemantic(new CallExp(e,rarg,isSquare,isClassical),ExpSemContext(null,ConstResult.no,InType.yes));
+							return callSemantic(new CallExp(e,rarg,isSquare,isClassical),expSemContext(null,ConstResult.no,InType.yes));
 						}
 					}
 				}

@@ -91,8 +91,7 @@ Expression presemantic(Declaration expr,Scope sc){
 						// capture c:
 						auto id=new Identifier("c");
 						id.loc=fd.loc;
-						static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-						expressionSemantic(id,ExpSemContext(fsc,ConstResult.yes,InType.no));
+						expressionSemantic(id,expSemContext(fsc,ConstResult.yes,InType.no));
 						break;
 					default: break;
 				}
@@ -110,22 +109,19 @@ Expression presemantic(Declaration expr,Scope sc){
 			auto id=new Identifier(dsc.decl.name.name);
 			id.loc=dsc.decl.loc;
 			id.meaning=dsc.decl;
-			static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-			id=cast(Identifier)expressionSemantic(id,ExpSemContext(sc,ConstResult.no,InType.yes));
+			id=cast(Identifier)expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
 			assert(!!id);
 			Expression ctxty=id;
 			if(dsc.decl.hasParams){
 				auto args=dsc.decl.params.map!((p){
 					auto id=new Identifier(p.name.name);
 					id.meaning=p;
-					static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-					auto r=expressionSemantic(id,ExpSemContext(sc,ConstResult.no,InType.yes));
+					auto r=expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
 					assert(r.sstate==SemState.completed);
 					return r;
 				}).array;
 				assert(dsc.decl.isTuple||args.length==1);
-				static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),ExpSemContext(sc,ConstResult.no,InType.yes));
+				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),expSemContext(sc,ConstResult.no,InType.yes));
 				ctxty.sstate=SemState.completed;
 				assert(ctxty.type == typeTy);
 			}
@@ -531,8 +527,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 }
 
 Expression statementSemanticImpl(CallExp ce,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	return callSemantic(ce,context.nestConst);
 }
 
@@ -594,8 +589,7 @@ Expression statementSemanticImpl(CommaExp ce,Scope sc){
 
 // TODO: supertypes for define and assign?
 Expression statementSemanticImpl(ForExp fe,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	assert(!fe.bdy.blscope_);
 	fe.left=expressionSemantic(fe.left,context.nestConst);
 	propErr(fe.left,fe);
@@ -707,8 +701,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 }
 
 Expression statementSemanticImpl(RepeatExp re,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	re.num=expressionSemantic(re.num,context.nestConst);
 	static if(language==silq) sc.pushConsumed();
 	propErr(re.num,re);
@@ -754,8 +747,7 @@ Expression statementSemanticImpl(ObserveExp oe,Scope sc){
 }
 
 Expression statementSemanticImpl(CObserveExp oe,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	oe.var=expressionSemantic(oe.var,context.nestConst);
 	oe.val=expressionSemantic(oe.val,context.nestConst);
 	propErr(oe.var,oe);
@@ -780,8 +772,7 @@ Expression statementSemanticImpl(AssertExp ae,Scope sc){
 }
 
 Expression statementSemanticImpl(ForgetExp fe,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	return expressionSemantic(fe,context.nestConst);
 }
 
@@ -910,8 +901,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 		}
 	}
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	bool success=true;
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
@@ -1065,14 +1055,13 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 			return zip(tpl1.e,tpl2.e).any!(x=>guaranteedDifferentValues(x.expand,loc,sc,inType));
 		return false;
 	}
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	e1=expressionSemantic(e1,ExpSemContext(sc,ConstResult.yes,inType));
-	e2=expressionSemantic(e2,ExpSemContext(sc,ConstResult.yes,inType));
+	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
+	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
 	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
 		return false;
 	Expression neq=new NeqExp(e1,e2);
 	neq.loc=loc;
-	neq=expressionSemantic(neq,ExpSemContext(sc,ConstResult.yes,inType));
+	neq=expressionSemantic(neq,expSemContext(sc,ConstResult.yes,inType));
 	assert(neq.sstate==SemState.completed);
 	return neq.eval()==LiteralExp.makeBoolean(1);
 }
@@ -1098,15 +1087,14 @@ bool indexEquals(Expression e1,Expression e2,Scope sc,InType inType){
 		if(auto idx2=cast(IndexExp)e2){
 			if(!indexEquals(idx1.e,idx2.e,sc,inType))
 				return false;
-			static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-			idx1.a=expressionSemantic(idx1.a,ExpSemContext(sc,ConstResult.yes,inType));
+			idx1.a=expressionSemantic(idx1.a,expSemContext(sc,ConstResult.yes,inType));
 			propErr(idx1.a,idx1);
-			idx2.a=expressionSemantic(idx2.a,ExpSemContext(sc,ConstResult.yes,inType));
+			idx2.a=expressionSemantic(idx2.a,expSemContext(sc,ConstResult.yes,inType));
 			propErr(idx2.a,idx2);
 			if(idx1.sstate==SemState.error||idx2.sstate==SemState.error)
 				return false;
 			Expression eq=new EqExp(idx1.a,idx2.a);
-			eq=expressionSemantic(eq,ExpSemContext(sc,ConstResult.yes,inType));
+			eq=expressionSemantic(eq,expSemContext(sc,ConstResult.yes,inType));
 			assert(eq.sstate==SemState.completed);
 			return eq.eval()==LiteralExp.makeBoolean(1);
 		}
@@ -1120,8 +1108,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 }do{
 	auto inType=InType.no;
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,inType);
+	auto context=expSemContext(sc,ConstResult.yes,inType);
 	indicesToReplace=indicesToReplace.dup;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
@@ -1310,8 +1297,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 }
 
 AssignExp assignExpSemantic(AssignExp ae,Scope sc){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	ae.type=unit;
 	auto constSave=sc.saveConst();
 	ae.e1=expressionSemantic(ae.e1,context.nestConst); // reassigned variable should not be consumed (otherwise, can use ':=')
@@ -1436,8 +1422,7 @@ bool isInvertibleOpAssignExp(Expression e){
 ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }do{
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	static if(language==silq){
 		// TODO: assignments to fields
 		auto semanticDone=false;
@@ -1920,8 +1905,11 @@ struct ExpSemContext{
 	ConstResult constResult;
 	InType inType;
 }
+auto expSemContext(Scope sc,ConstResult constResult,InType inType){
+	return ExpSemContext(sc,constResult,inType);
+}
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
-	with(context) return ExpSemContext(sc,newConstResult,inType);
+	with(context) return expSemContext(sc,newConstResult,inType);
 }
 auto nestConst(ref ExpSemContext context){
 	return context.nest(ConstResult.yes);
@@ -1946,8 +1934,7 @@ Expression expressionSemanticImpl(CommaExp ce,ExpSemContext context){
 }
 
 Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InType inType){
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	e=expressionSemantic(e,ExpSemContext(sc,ConstResult.yes,inType));
+	e=expressionSemantic(e,expSemContext(sc,ConstResult.yes,inType));
 	static if(language==silq) sc.pushConsumed();
 	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)e.type:e.type!=Bool(true))){
 		static if(language==silq){
@@ -1976,8 +1963,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	}
 	int numBottom=0; // TODO: actually introduce a bottom type?
 	Expression branchSemantic(Expression branch,Scope sc){
-		static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-		auto context=ExpSemContext(sc,context.constResult,context.inType);
+		auto context=expSemContext(sc,context.constResult,context.inType);
 		if(inType) return expressionSemantic(branch,context);
 		if(auto ae=cast(AssertExp)branch){
 			branch=statementSemantic(branch,sc);
@@ -3231,8 +3217,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 		return ret;
 	}
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.no,InType.no);
+	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	if(!fd.rret && !fd.ret){
 		determineType(ret.e,context,(ty){
 			fd.ret=ty;
@@ -3331,8 +3316,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 			}
 		}
 	}
-	static assert([__traits(allMembers,ExpSemContext)]==["sc","constResult","inType"]);
-	auto context=ExpSemContext(sc,ConstResult.yes,InType.yes);
+	auto context=expSemContext(sc,ConstResult.yes,InType.yes);
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
 	if(e.type!=typeTy){
