@@ -732,7 +732,9 @@ class CallExp: Expression{
 	bool isSquare;
 	static if(language==silq) bool isClassical_;
 	else enum isClassical_=true;
-	this(Expression exp, Expression arg, bool isSquare, bool isClassical_){
+	this(Expression exp, Expression arg, bool isSquare, bool isClassical_)in{
+		assert(exp&&arg);
+	}do{
 		e=exp; this.arg=arg; this.isSquare=isSquare;
 		static if(language==silq) this.isClassical_=isClassical_;
 	}
@@ -1723,6 +1725,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto 
 	if(auto ume=cast(UMinusExp)e) return f(ume,forward!args);
 	if(auto une=cast(UNotExp)e) return f(une,forward!args);
 	if(auto ubne=cast(UBitNotExp)e) return f(ubne,forward!args);
+
 	static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e) return f(ce,forward!args);
 
 	if(auto ae=cast(AddExp)e) return f(ae,forward!args);
@@ -1748,6 +1751,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto 
 	if(auto ne=cast(NeqExp)e) return f(ne,forward!args);
 
 	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
+
 	if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 	if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
 	if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);

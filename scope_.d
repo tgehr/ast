@@ -481,7 +481,12 @@ abstract class Scope{
 		}
 		return 0;
 	}
-	Q!(IndexExp,IndexExp)[] indicesToReplace=null; // (assignee, consumer)
+	Q!(IndexExp,IndexExp)[] indicesToReplace=null; // (assignee, consumer) // TODO: remove
+	Q!(IndexExp,string)[] namedIndices;
+
+	void nameIndex(IndexExp index,string name){ // semantic checks that those do not alias
+		namedIndices~=q(index,name);
+	}
 
 	struct ScopeState{
 		bool opEquals(ref ScopeState rhs){

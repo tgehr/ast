@@ -19,10 +19,6 @@ bool isReverse(Declaration decl){
 	if(!decl.name) return false;
 	return decl.getName=="reverse";
 }
-string freshName(){
-	static int counter=0;
-	return text("__tmp",counter++);
-}
 
 Expression constantExp(size_t l){
 	Token tok;
@@ -148,15 +144,6 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 			res=new CompoundExp([d1,d2]);
 		}
 		return res;
-	}
-	bool isLiftedBuiltIn(Expression e){
-		if(cast(AddExp)lhs||cast(SubExp)lhs||cast(NSubExp)lhs||cast(MulExp)lhs||cast(DivExp)lhs||cast(IDivExp)lhs||cast(ModExp)lhs||cast(PowExp)lhs||cast(BitOrExp)lhs||cast(BitXorExp)lhs||cast(BitAndExp)lhs||cast(UMinusExp)lhs||cast(UNotExp)lhs||cast(UBitNotExp)lhs||cast(AndExp)lhs||cast(OrExp)lhs||cast(LtExp)lhs||cast(LeExp)lhs||cast(GtExp)lhs||cast(GeExp)lhs||cast(EqExp)lhs||cast(NeqExp)lhs)
-			return true;
-		if(cast(LiteralExp)e) return true;
-		if(cast(SliceExp)e) return true;
-		if(auto tae=cast(TypeAnnotationExp)e)
-			return isLiftedBuiltIn(tae.e);
-		return false;
 	}
 	if(isLiftedBuiltIn(lhs)) return forget();
 	if(auto tae=cast(TypeAnnotationExp)olhs){
@@ -419,7 +406,7 @@ Expression lowerDefine(bool analyzed)(Expression olhs,Expression orhs,Location l
 			return lowerDefine!analyzed(newlhs,newrhs,loc,sc,unchecked);
 		}
 	}
-	sc.error("expression not supported as definition left-hand side",olhs.loc);
+	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
 }
 // rev(x:=y;) ⇒ y:=x;

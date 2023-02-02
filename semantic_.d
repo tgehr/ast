@@ -7,6 +7,16 @@ import std.array,std.algorithm,std.range,std.exception;
 import std.format, std.conv, std.typecons:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.error,ast.reverse,util;
 
+string freshName(){ // TODO: improve mechanism for generating temporaries
+	static int counter=0;
+	return text("__tmp",counter++);
+}
+
+Expression moved(Expression e){
+	// TODO: implement
+	return e;
+}
+
 void propErr(Expression e1,Expression e2){
 	if(e1.sstate==SemState.error) e2.sstate=SemState.error;
 }
@@ -877,9 +887,288 @@ bool isLifted(Expression e,Scope sc){
 	}
 	return false;
 }
+bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
+	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e)
+		return true;
+	if(cast(LiteralExp)e) return true;
+	if(cast(SliceExp)e) return true;
+	if(auto tae=cast(TypeAnnotationExp)e)
+		return isLiftedBuiltIn(tae.e);
+	return false;
+}
+}
+
+struct DefineLhsContext{
+	ExpSemContext expSem;
+	@property sc(){ return expSem.sc; }
+	@property constResult(){ return expSem.constResult; }
+	@property inType(){ return expSem.inType; }
+	static class ArrayReplacements{
+		IndexExp[] locations; // TODO: support fields
+		string[] temporaries;
+
+		void addWriteback(IndexExp arrayIndex,string temporary){
+			locations~=arrayIndex;
+			temporaries~=temporary;
+		}
+	}
+	ArrayReplacements arrayReplacements;
+	string nameIndex(IndexExp index){
+		auto name=freshName();
+		sc.nameIndex(index,name);
+		arrayReplacements.addWriteback(index,name);
+		return name;
+	}
+}
+auto defineLhsContext(ExpSemContext expSem,DefineLhsContext.ArrayReplacements arrayReplacements=null){
+	if(!arrayReplacements) arrayReplacements=new DefineLhsContext.ArrayReplacements();
+	return DefineLhsContext(expSem,arrayReplacements);
+}
+auto nest(DefineLhsContext context,ConstResult newConstResult){
+	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$]);
+}
+
+Expression defineLhsSemanticImpl(CompoundDecl cd,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(cd,context); // TODO: get rid of this case
+}
+Expression defineLhsSemanticImpl(CompoundExp ce,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ce,context); // TODO: get rid of this case?
+}
+Expression defineLhsSemanticImpl(CommaExp ce,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ce,context); // TODO: get rid of this case?
+}
+
+Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){
+	return defineLhsSemanticImplCurrentlyUnsupported(ite,context);
+}
+
+Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(lit,context);
+}
+Expression defineLhsSemanticImpl(LambdaExp le,DefineLhsContext context){
+	return defineLhsSemanticImplUnsupported(le,context);
+}
+
+Expression defineLhsSemanticImpl(FunctionDef fd,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(fd,context); // TODO: get rid of this case
+}
+Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(re,context); // TODO: get rid of this case
+}
+Expression defineLhsSemanticImpl(CallExp e,DefineLhsContext context){
+	return callSemantic(e,context);
+}
+
+static if(language==psi)
+Expression defineLhsSemanticImpl(PlaceholderExp pl,DefineLhsContext context){
+	return defineLhsSemanticImplCurrentlyUnsupported(pl,context);
+}
+
+Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
+	fe.type=unit;
+	// TODO: introduce variables here?
+	return fe;
+}
+Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
+	// id.type= // TODO?
+	// TODO: introduce variable here?
+	return id;
+}
+Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
+	// TODO: add new fields to records?
+	return defineLhsSemanticImplUnsupported(fe,context);
+}
+Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
+	Expression analyzeAggregate(IndexExp e){
+		if(auto id=cast(Identifier)e.e){
+			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
+			propErr(e.e,e);
+			if(id.meaning){
+				id.type=typeForDecl(id.meaning);
+				if(auto ft=cast(FunTy)id.type){
+					auto ce=new CallExp(id,e.a,true,false);
+					ce.loc=idx.loc;
+					return callSemantic(ce,context.nestConsumed);
+				}
+			}
+		}
+		if(auto idx=cast(IndexExp)e.e){
+			if(auto r=analyzeAggregate(idx)){
+				e.e=r;
+				return e;
+			}
+		}
+		return null;
+	}
+	if(auto r=analyzeAggregate(idx)) return r;
+	void analyzeIndex(IndexExp e){
+		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
+		e.a=expressionSemantic(e.a,context.expSem.nestConst);
+		propErr(e.e,e);
+	}
+	analyzeIndex(idx);
+	// TODO: determine type?
+	auto name=context.nameIndex(idx);
+	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
+	id.loc=idx.loc;
+	// return id; // TODO
+	return idx;
+}
+Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
+	// return defineLhsSemanticImplLifted(slc,context);
+	// maybe we will want to support slice replacement
+	return defineLhsSemanticImplCurrentlyUnsupported(slc,context);
+}
+Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
+	foreach(ref e;tpl.e){
+		e=defineLhsSemantic(e,context);
+		propErr(e,tpl);
+	}
+	return tpl;
+}
+Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
+	// TODO: do we even keep this?
+	foreach(ref e;arr.e){
+		e=defineLhsSemantic(e,context);
+		propErr(e,arr);
+	}
+	return arr;
+}
+
+Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
+	auto sc=context.sc;
+	tae.e=defineLhsSemantic(tae.e,context);
+	// tae.type=typeSemantic(tae.t,sc); // (can't do this here at the moment due to how expressionSemantic works)
+	// TODO: need to do anything else?
+	return tae;
+}
+
+Expression defineLhsSemanticImpl(UMinusExp ume,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ume,context);
+}
+Expression defineLhsSemanticImpl(UNotExp une,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(une,context);
+}
+Expression defineLhsSemanticImpl(UBitNotExp ubne,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ubne,context);
+}
+
+static if(language==silq)
+Expression defineLhsSemanticImpl(UnaryExp!(Tok!"const") ce,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ce,context);
+}
+
+Expression defineLhsSemanticImpl(AddExp ae,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ae,context);
+}
+Expression defineLhsSemanticImpl(SubExp se,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(se,context);
+}
+Expression defineLhsSemanticImpl(NSubExp nse,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(nse,context);
+}
+Expression defineLhsSemanticImpl(MulExp me,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(me,context);
+}
+Expression defineLhsSemanticImpl(DivExp de,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(de,context);
+}
+Expression defineLhsSemanticImpl(IDivExp ide,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ide,context);
+}
+Expression defineLhsSemanticImpl(ModExp me,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(me,context);
+}
+Expression defineLhsSemanticImpl(PowExp pe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(pe,context);
+}
+Expression defineLhsSemanticImpl(BitOrExp boe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(boe,context);
+}
+Expression defineLhsSemanticImpl(BitXorExp bxe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(bxe,context);
+}
+Expression defineLhsSemanticImpl(BitAndExp bae,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(bae,context);
+}
+
+Expression defineLhsSemanticImpl(AndExp ae,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ae,context);
+}
+Expression defineLhsSemanticImpl(OrExp oe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(oe,context);
+}
+
+Expression defineLhsSemanticImpl(LtExp le,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(le,context);
+}
+Expression defineLhsSemanticImpl(LeExp le,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(le,context);
+}
+Expression defineLhsSemanticImpl(GtExp ge,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ge,context);
+}
+Expression defineLhsSemanticImpl(GeExp ge,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ge,context);
+}
+Expression defineLhsSemanticImpl(EqExp eq,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(eq,context);
+}
+Expression defineLhsSemanticImpl(NeqExp neq,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(neq,context);
+}
+
+Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
+	ce.e1=defineLhsSemantic(ce.e1,context);
+	propErr(ce.e1,ce);
+	ce.e2=defineLhsSemantic(ce.e2,context);
+	propErr(ce.e2,ce);
+	// TODO: determine type?
+	return ce;
+}
+
+Expression defineLhsSemanticImpl(BinaryExp!(Tok!"×") pr,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(pr,context);
+}
+Expression defineLhsSemanticImpl(BinaryExp!(Tok!"→") ex,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ex,context);
+}
+Expression defineLhsSemanticImpl(RawProductTy fa,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(fa,context);
+}
+
+
+Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
+	return expressionSemantic(e,context.expSem); // TODO: analyze later instead?
+}
+
+Expression defineLhsSemanticImplCurrentlyUnsupported(Expression e,DefineLhsContext context){
+	auto sc=context.sc;
+	sc.error("currently not supported as definition left-hand side",e.loc);
+	e.sstate=SemState.error;
+	return e;
+}
+Expression defineLhsSemanticImplUnsupported(Expression e,DefineLhsContext context){
+	auto sc=context.sc;
+	sc.error("not supported as definition left-hand side",e.loc);
+	e.sstate=SemState.error;
+	return e;
+}
+Expression defineLhsSemanticImplDefault(Expression e,DefineLhsContext context){
+	return defineLhsSemanticImplUnsupported(e,context);
+}
+
+
+Expression defineLhsSemantic(Expression lhs,DefineLhsContext context){
+	if(context.constResult) return expressionSemantic(lhs,context.expSem);
+	return dispatchExp!(defineLhsSemanticImpl,defineLhsSemanticImplDefault)(lhs,context);
 }
 
 Expression defineSemantic(DefineExp be,Scope sc){
+	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
+	auto dcontext=defineLhsContext(econtext);
+	be.e1=defineLhsSemantic(be.e1,dcontext);
+	propErr(be.e1,be);
 	if(sc.allowsLinear){
 		enum unchecked=false;
 		if(auto e=lowerDefine!false(be,sc,unchecked)){
@@ -892,7 +1181,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		if(auto ce=cast(CallExp)be.e2){
 			if(auto id=cast(Identifier)ce.e){
 				if(id.name=="array" && !ce.isSquare){
-					ce.arg=expressionSemantic(ce.arg,sc,ConstResult.yes,InType.no);
+					ce.arg=expressionSemantic(ce.arg,expSemContext(sc,ConstResult.yes,InType.no));
 					if(isSubtype(ce.arg.type,ℕt)){
 						ce.e.type=funTy(ℝ,arrayTy(ℝ),false,false,Annotation.pure_,true);
 						ce.e.sstate=SemState.completed;
@@ -1143,7 +1432,10 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 			id.scope_=tpl[3];
 			return;
 		}
+		auto oldMeaning=id.meaning;
+		id.meaning=null;
 		e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
+		assert(id.meaning is oldMeaning);
 		e.e.constLookup=true;
 		id=cast(Identifier)unwrap(e.e);
 		assert(!!id);
@@ -1199,6 +1491,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		if(idx1.sstate==SemState.error) continue;
 		foreach(j;i+1..indicesToReplace.length){
 			auto idx2=indicesToReplace[j];
+			// (scope will handle this)
 			if(idx2.sstate==SemState.error) continue;
 			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc,inType)){
 				if(guaranteedSameLocations(idx1,idx2,loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
@@ -1568,9 +1861,17 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 }
 
 
-Expression callSemantic(CallExp ce,ExpSemContext context){
+Expression callSemantic(T)(CallExp ce,T context)if(is(T==ExpSemContext)||is(T==DefineLhsContext)){
+	enum isRhs=is(T==ExpSemContext);
+	static argSemantic(Expression e,T context)in{
+		assert(!!e);
+	}do{
+		static if(isRhs) return expressionSemantic(e,context);
+		else return defineLhsSemantic(e,context);
+	}
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
-	ce.e=expressionSemantic(ce.e,context.nestConsumed);
+	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestConsumed);
+	else ce.e=expressionSemantic(ce.e,context.expSem.nestConst);
 	propErr(ce.e,ce);
 	if(ce.sstate==SemState.error)
 		return ce;
@@ -1599,7 +1900,7 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 					}
 					ce.sstate=SemState.error;
 				}
-				static if(language==silq){
+				static if(language==silq && isRhs){
 					if(ce.e.type.isClassical()&&ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
@@ -1615,7 +1916,9 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
-		void checkArg(size_t i,Expression exp){
+		void checkArg(size_t i,Expression exp)in{
+			assert(exp.sstate==SemState.error||exp.type,text(exp));
+		}do{
 			if(exp.sstate==SemState.error) return;
 			static if(language==silq){
 				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
@@ -1640,16 +1943,18 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				foreach(i,ref exp;tpl.e){
-					exp=expressionSemantic(exp,context.nest((ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no));
-					checkArg(i,exp);
+					exp=argSemantic(exp,context.nest((ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no));
+					static if(isRhs) checkArg(i,exp);
 					propErr(exp,tpl);
 				}
-				if(tpl.sstate!=SemState.error){
-					tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+				static if(isRhs){
+					if(tpl.sstate!=SemState.error){
+						tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+					}
 				}
 			}else{
-				ce.arg=expressionSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
-				foreach(i;0..ft.names.length) checkArg(i,ce.arg);
+				ce.arg=argSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
+				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
 					ce.sstate=SemState.error;
@@ -1658,9 +1963,9 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 			}
 		}else{
 			assert(ft.isConst.length==1);
-			ce.arg=expressionSemantic(ce.arg,context.nest(ft.isConst[0]?ConstResult.yes:ConstResult.no));
+			ce.arg=argSemantic(ce.arg,context.nest(ft.isConst[0]?ConstResult.yes:ConstResult.no));
 			assert(ft.names.length==1);
-			checkArg(0,ce.arg);
+			static if(isRhs) checkArg(0,ce.arg);
 		}
 		return false;
 	}
@@ -1682,27 +1987,34 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 					if(matchArg(codft)) return true;
 					propErr(ce.arg,ce);
 					if(ce.arg.sstate==SemState.error) return true;
-					Expression garg;
-					auto tt=nft.tryMatch(ce.arg,garg);
-					if(!tt) return false;
-					auto nce=new CallExp(ce.e,garg,true,false);
-					nce.loc=ce.loc;
-					auto nnce=new CallExp(nce,ce.arg,false,false);
-					nnce.loc=ce.loc;
-					nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
-					assert(!!nnce);
-					ce=nnce;
-					return true;
+					static if(isRhs){
+						Expression garg;
+						auto tt=nft.tryMatch(ce.arg,garg);
+						if(!tt) return false;
+						auto nce=new CallExp(ce.e,garg,true,false);
+						nce.loc=ce.loc;
+						auto nnce=new CallExp(nce,ce.arg,false,false);
+						nnce.loc=ce.loc;
+						nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
+						assert(!!nnce);
+						ce=nnce;
+						return true;
+					}else{
+						// TODO: need to analyze arguments!
+						return true;
+					}
 				}
 			}
 			if(matchArg(ft)) return true;
 			propErr(ce.arg,ce);
 			if(ce.arg.sstate==SemState.error) return true;
-			ce.type=ft.tryApply(ce.arg,ce.isSquare);
-			return !!ce.type;
+			static if(isRhs){
+				ce.type=ft.tryApply(ce.arg,ce.isSquare);
+				return !!ce.type;
+			}else return true; // TODO: ok?
 		}
 		auto calledId=cast(Identifier)ce.e;
-		static if(language==silq)
+		static if(language==silq && isRhs) // TODO: probably this can work on lhs
 		if(calledId&&isReverse(calledId)){
 			bool check=calledId.checkReverse;
 			ce.arg=expressionSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
@@ -1819,7 +2131,7 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 	if(auto ft=cast(FunTy)fun.type){
 		r=checkFunCall(ft);
 		if(r !is ce) ce=null;
-	}else if(auto at=isDataTyId(fun)){
+	}else if(auto at=isRhs?isDataTyId(fun):null){
 		auto decl=at.decl;
 		assert(fun.type is typeTy);
 		auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.consuming);
@@ -1855,32 +2167,34 @@ Expression callSemantic(CallExp ce,ExpSemContext context){
 				}else ce.e=id;
 			}
 		}
-	}else if(isBuiltIn(cast(Identifier)ce.e)){
-		auto id=cast(Identifier)ce.e;
-		switch(id.name){
-			static if(language==silq){
-				case "quantumPrimitive":
-					return handleQuantumPrimitive(ce,sc);
-				case "__show":
-					ce.arg=expressionSemantic(ce.arg,context.nestConst);
-					auto lit=cast(LiteralExp)ce.arg;
-					if(lit&&lit.lit.type==Tok!"``") writeln(lit.lit.str);
-					else writeln(ce.arg);
-					ce.type=unit;
-					break;
-				case "__query":
-					return handleQuery(ce,context);
-			}else static if(language==psi){
-				case "Marginal":
-					ce.arg=expressionSemantic(ce.arg,context.nestConst);
-					propErr(ce.arg,ce);
-					if(ce.arg.type) ce.type=distributionTy(ce.arg.type,sc);
-					break;
-				case "sampleFrom":
-					return handleSampleFrom(ce,sc,inType);
+	}else if(isRhs&&isBuiltIn(cast(Identifier)ce.e)){
+		static if(isRhs){
+			auto id=cast(Identifier)ce.e;
+			switch(id.name){
+				static if(language==silq){
+					case "quantumPrimitive":
+						return handleQuantumPrimitive(ce,sc);
+					case "__show":
+						ce.arg=expressionSemantic(ce.arg,context.nestConst);
+						auto lit=cast(LiteralExp)ce.arg;
+						if(lit&&lit.lit.type==Tok!"``") writeln(lit.lit.str);
+						else writeln(ce.arg);
+						ce.type=unit;
+						break;
+					case "__query":
+						return handleQuery(ce,context);
+				}else static if(language==psi){
+					case "Marginal":
+						ce.arg=expressionSemantic(ce.arg,context.nestConst);
+						propErr(ce.arg,ce);
+						if(ce.arg.type) ce.type=distributionTy(ce.arg.type,sc);
+						break;
+					case "sampleFrom":
+						return handleSampleFrom(ce,sc,inType);
+				}
+				default: assert(0,text("TODO: ",id.name));
 			}
-			default: assert(0,text("TODO: ",id.name));
-		}
+		}else assert(0);
 	}else{
 		sc.error(format("cannot call expression of type %s",fun.type),ce.loc);
 		ce.sstate=SemState.error;
@@ -1918,10 +2232,10 @@ auto expSemContext(Scope sc,ConstResult constResult,InType inType){
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
 	with(context) return expSemContext(sc,newConstResult,inType);
 }
-auto nestConst(ref ExpSemContext context){
+auto nestConst(T)(ref T context){
 	return context.nest(ConstResult.yes);
 }
-auto nestConsumed(ref ExpSemContext context){
+auto nestConsumed(T)(ref T context){
 	return context.nest(ConstResult.no);
 }
 
@@ -2144,18 +2458,25 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	return fe;
 }
 
+Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc){
+	if(id.meaning) return id.meaning;
+	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
+	id.meaning=sc.lookup(id,false,true,lookup);
+	if(nerr!=sc.handler.nerrors){
+		sc.note("looked up here",id.loc);
+		id.sstate=SemState.error;
+	}
+	return id.meaning;
+}
+
 Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	auto sc=context.sc;
 	id.scope_=sc;
+	if(id.sstate==SemState.error) return id;
 	auto meaning=id.meaning;
 	if(!meaning){
-		int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-		id.meaning=meaning=sc.lookup(id,false,true,context.constResult?Lookup.constant:Lookup.consuming);
-		if(nerr!=sc.handler.nerrors){
-			sc.note("looked up here",id.loc);
-			id.sstate=SemState.error;
-			return id;
-		}
+		meaning=lookupMeaning(id,context.constResult?Lookup.constant:Lookup.consuming,sc);
+		if(id.sstate==SemState.error) return id;
 		if(!meaning){
 			if(auto r=builtIn(id,sc)){
 				if(!id.calledDirectly&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){

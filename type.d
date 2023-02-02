@@ -546,7 +546,7 @@ class TupleTy: Type,ITupleTy{
 Type unit(){ return tupleTy([]); }
 
 Type tupleTy(Expression[] types)in{
-	assert(types.all!(x=>x.type==typeTy));
+	assert(types.all!(x=>x.type&&x.type==typeTy));
 }do{
 	import ast.lexer: Token,Tok;
 	if(types.length&&types.all!(x=>x==types[0])){
