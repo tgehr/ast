@@ -928,6 +928,7 @@ auto nest(DefineLhsContext context,ConstResult newConstResult){
 	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$]);
 }
 
+template defineLhsSemanticImpls(bool isPresemantic){
 Expression defineLhsSemanticImpl(CompoundDecl cd,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(cd,context); // TODO: get rid of this case
 }
@@ -956,7 +957,7 @@ Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(re,context); // TODO: get rid of this case
 }
 Expression defineLhsSemanticImpl(CallExp e,DefineLhsContext context){
-	return callSemantic(e,context);
+	return callSemantic!isPresemantic(e,context);
 }
 
 static if(language==psi)
@@ -988,7 +989,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
 					ce.loc=idx.loc;
-					return callSemantic(ce,context.nestConsumed);
+					return callSemantic!isPresemantic(ce,context.nestConsumed);
 				}
 			}
 		}
@@ -1021,7 +1022,7 @@ Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 	foreach(ref e;tpl.e){
-		e=defineLhsSemantic(e,context);
+		e=defineLhsSemantic!isPresemantic(e,context);
 		propErr(e,tpl);
 	}
 	return tpl;
@@ -1029,7 +1030,7 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 	// TODO: do we even keep this?
 	foreach(ref e;arr.e){
-		e=defineLhsSemantic(e,context);
+		e=defineLhsSemantic!isPresemantic(e,context);
 		propErr(e,arr);
 	}
 	return arr;
@@ -1037,7 +1038,7 @@ Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	auto sc=context.sc;
-	tae.e=defineLhsSemantic(tae.e,context);
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context);
 	// tae.type=typeSemantic(tae.t,sc); // (can't do this here at the moment due to how expressionSemantic works)
 	// TODO: need to do anything else?
 	return tae;
@@ -1119,9 +1120,9 @@ Expression defineLhsSemanticImpl(NeqExp neq,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
-	ce.e1=defineLhsSemantic(ce.e1,context);
+	ce.e1=defineLhsSemantic!isPresemantic(ce.e1,context);
 	propErr(ce.e1,ce);
-	ce.e2=defineLhsSemantic(ce.e2,context);
+	ce.e2=defineLhsSemantic!isPresemantic(ce.e2,context);
 	propErr(ce.e2,ce);
 	// TODO: determine type?
 	return ce;
@@ -1154,20 +1155,30 @@ Expression defineLhsSemanticImplUnsupported(Expression e,DefineLhsContext contex
 	e.sstate=SemState.error;
 	return e;
 }
+
 Expression defineLhsSemanticImplDefault(Expression e,DefineLhsContext context){
 	return defineLhsSemanticImplUnsupported(e,context);
 }
 
+}
 
-Expression defineLhsSemantic(Expression lhs,DefineLhsContext context){
+alias defineLhsSemanticImpl(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImpl;
+alias defineLhsSemanticImplDefault(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImplDefault;
+
+
+Expression defineLhsSemantic(bool isPresemantic)(Expression lhs,DefineLhsContext context){
 	if(context.constResult) return expressionSemantic(lhs,context.expSem);
-	return dispatchExp!(defineLhsSemanticImpl,defineLhsSemanticImplDefault)(lhs,context);
+	return dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic)(lhs,context);
+}
+
+Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
+	return defineLhsSemantic!true(lhs,context);
 }
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto dcontext=defineLhsContext(econtext);
-	be.e1=defineLhsSemantic(be.e1,dcontext);
+	be.e1=defineLhsPresemantic(be.e1,dcontext);
 	propErr(be.e1,be);
 	if(sc.allowsLinear){
 		enum unchecked=false;
@@ -1861,13 +1872,13 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 }
 
 
-Expression callSemantic(T)(CallExp ce,T context)if(is(T==ExpSemContext)||is(T==DefineLhsContext)){
+Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
 	enum isRhs=is(T==ExpSemContext);
 	static argSemantic(Expression e,T context)in{
 		assert(!!e);
 	}do{
 		static if(isRhs) return expressionSemantic(e,context);
-		else return defineLhsSemantic(e,context);
+		else return defineLhsSemantic!isPresemantic(e,context);
 	}
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
 	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestConsumed);
