@@ -481,11 +481,10 @@ abstract class Scope{
 		}
 		return 0;
 	}
-	Q!(IndexExp,IndexExp)[] indicesToReplace=null; // (assignee, consumer) // TODO: remove
-	Q!(IndexExp,string)[] namedIndices;
+	Q!(IndexExp,string,IndexExp)[] indicesToReplace=null; // (assignee, consumer) // TODO: remove
 
 	void nameIndex(IndexExp index,string name){ // semantic checks that those do not alias
-		namedIndices~=q(index,name);
+		indicesToReplace~=q(index,name,IndexExp.init);
 	}
 
 	struct ScopeState{
@@ -519,17 +518,32 @@ abstract class Scope{
 	private:
 		static if(language==silq){
 			Dependencies dependencies;
+			Identifier[Declaration] constBlock;
 		}
 		Declaration[string] symtab;
+		bool restoreable=false;
 	}
-	ScopeState getStateSnapshot(){
+	ScopeState getStateSnapshot(bool restoreable=false)in{
+		assert(!toPush.length);
+	}do{
 		Declaration[string] nsymtab;
 		foreach(_,decl;symtab) nsymtab[decl.getName]=decl;
 		static if(language==silq){
-			return ScopeState(dependencies.dup,nsymtab);
+			return ScopeState(dependencies.dup,restoreable?constBlock.dup:null,nsymtab,restoreable);
 		}else{
-			return ScopeState(nsymtab);
+			return ScopeState(nsymtab,restoreable);
 		}
+	}
+	void restoreStateSnapshot(ref ScopeState state)in{
+		assert(!toPush.length);
+		assert(state.restoreable);
+	}do{
+		dependencies=state.dependencies;
+		constBlock=state.constBlock;
+		symtab.clear();
+		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=decl;
+		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
+		state=ScopeState.init;
 	}
 private:
 	static if(language==silq){

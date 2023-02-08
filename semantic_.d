@@ -904,7 +904,7 @@ struct DefineLhsContext{
 	@property constResult(){ return expSem.constResult; }
 	@property inType(){ return expSem.inType; }
 	static class ArrayReplacements{
-		IndexExp[] locations; // TODO: support fields
+		IndexExp[] locations; // TODO: support slices and fields
 		string[] temporaries;
 
 		void addWriteback(IndexExp arrayIndex,string temporary){
@@ -1002,6 +1002,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		return null;
 	}
 	if(auto r=analyzeAggregate(idx)) return r;
+	if(idx.byRef) return idx;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
 		e.a=expressionSemantic(e.a,context.expSem.nestConst);
@@ -1012,8 +1013,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	auto name=context.nameIndex(idx);
 	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
 	id.loc=idx.loc;
-	// return id; // TODO
-	return idx;
+	return id; // TODO
+	//return idx;
 }
 Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	// return defineLhsSemanticImplLifted(slc,context);
@@ -1166,7 +1167,7 @@ alias defineLhsSemanticImpl(bool isPresemantic)=defineLhsSemanticImpls!isPresema
 alias defineLhsSemanticImplDefault(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImplDefault;
 
 
-Expression defineLhsSemantic(bool isPresemantic)(Expression lhs,DefineLhsContext context){
+Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsContext context){
 	if(context.constResult) return expressionSemantic(lhs,context.expSem);
 	return dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic)(lhs,context);
 }
@@ -1177,17 +1178,52 @@ Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	auto dcontext=defineLhsContext(econtext);
-	be.e1=defineLhsPresemantic(be.e1,dcontext);
-	propErr(be.e1,be);
+	auto oldIndicesToReplace=sc.indicesToReplace;
+	scope(exit) sc.indicesToReplace=oldIndicesToReplace;
+	Expression prologue=null,epilogue=null;
 	if(sc.allowsLinear){
-		enum unchecked=false;
-		if(auto e=lowerDefine!false(be,sc,unchecked)){
-			if(e.sstate!=SemState.error)
-				return statementSemantic(e,sc);
-			return e;
+		auto dcontext=defineLhsContext(econtext);
+		sc.indicesToReplace=[];
+		be.e1=defineLhsPresemantic(be.e1,dcontext);
+		assert(!oldIndicesToReplace.length||!sc.indicesToReplace.length);
+		foreach(ref indexToReplace;sc.indicesToReplace){
+			assert(!indexToReplace[2]);
+			if(indexToReplace[0].sstate==SemState.error)
+				swap(indexToReplace[0],indexToReplace[2]);
+		}
+		//writeln("{",sc.indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
+		if(sc.indicesToReplace.length){
+			Expression[] reads;
+			foreach(ref indexToReplace;sc.indicesToReplace){
+				if(!indexToReplace[0]) continue;
+				auto id=new Identifier(indexToReplace[1]);
+				id.loc=be.loc;
+				auto idx=indexToReplace[0].copy();
+				idx.loc=be.loc;
+				idx.byRef=true;
+				auto read=new BinaryExp!(Tok!":=")(id,idx);
+				read.loc=be.loc;
+				reads~=read;
+			}
+			prologue=statementSemantic(new CompoundExp(reads),sc);
+			prologue.loc=be.loc;
+			Expression[] writes;
+			foreach(ref indexToReplace;sc.indicesToReplace){
+				if(!indexToReplace[0]) continue;
+				auto id=new Identifier(indexToReplace[1]);
+				id.loc=be.loc;
+				auto idx=indexToReplace[0].copy();
+				idx.loc=be.loc;
+				idx.byRef=true;
+				auto write=new BinaryExp!(Tok!":=")(idx,id);
+				write.loc=be.loc;
+				writes~=write;
+			}
+			epilogue=new CompoundExp(writes);
+			epilogue.loc=be.loc;
 		}
 	}
+	propErr(be.e1,be);
 	static if(language==psi){ // TODO: remove this?
 		if(auto ce=cast(CallExp)be.e2){
 			if(auto id=cast(Identifier)ce.e){
@@ -1202,10 +1238,26 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	if(sc.allowsLinear){
+		auto state=sc.getStateSnapshot(true);
+		assert(!sc.toPush.length);
+		be.e2=expressionSemantic(be.e2,context.nestConsumed);
+		sc.toPush=[];
+		sc.restoreStateSnapshot(state);
+		enum unchecked=false;
+		if(auto e=lowerDefine!true(be,sc,unchecked)){
+			writeln(be," ",e);
+			if(e.sstate!=SemState.error)
+				return statementSemantic(e,sc);
+			return e;
+		}
+	}else{
+		be.e2=expressionSemantic(be.e2,context.nestConsumed);
+	}
 	bool success=true;
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
-	static if(language==silq){
+	/+static if(language==silq){
 		bool semanticDone=false;
 		if(tpl&&tpl.e.any!(x=>!!cast(IndexExp)x)&&tpl.e.all!(x=>!cast(IndexExp)x||getIdFromIndex(cast(IndexExp)x))){
 			auto indicesToReplace=tpl.e.map!(x=>cast(IndexExp)x).filter!(x=>!!x).array;
@@ -1225,9 +1277,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			semanticDone=true;
 		}
 	}else enum semanticDone=false;
-	if(!semanticDone) be.e2=expressionSemantic(be.e2,context.nestConsumed);
+	if(!semanticDone) be.e2=expressionSemantic(be.e2,context.nestConsumed);+/
 	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
-	static if(language==silq) if(!semanticDone){
+	static if(language==silq)/+ if(!semanticDone)+/{
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
 			void addDependencies(Expression[] lhs,Expression[] rhs)in{
 				assert(lhs.length==rhs.length);
@@ -1514,7 +1566,7 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		}
 	}
 	assert(!sc.indicesToReplace.length);
-	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,x.sstate==SemState.error?x:null)).array;
+	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,"",x.sstate==SemState.error?x:null)).array;
 	rhs=expressionSemantic(rhs,context.nestConsumed);
 	assert(sc.indicesToReplace.length==indicesToReplace.length);
 	foreach(i;0..sc.indicesToReplace.length){
@@ -2653,7 +2705,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	size_t replaceIndexLoc=size_t.max;
 	if(auto cid=getIdFromIndex(idx)){
 		foreach(i,indexToReplace;sc.indicesToReplace){
-			if(indexToReplace[0]&&!indexToReplace[1]&&guaranteedSameLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
+			if(indexToReplace[0]&&!indexToReplace[2]&&guaranteedSameLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
 				auto rid=getIdFromIndex(indexToReplace[0]);
 				assert(rid && rid.meaning);
 				assert(rid.name==cid.name);
@@ -2681,7 +2733,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
 							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
 							if(indexToReplace[1]) // should always be non-null
-								sc.note("consumed here",indexToReplace[1].loc);
+								sc.note("consumed here",indexToReplace[2].loc);
 							else sc.note("reassigned here",indexToReplace[0].loc);
 							idx.sstate=SemState.error;
 							break;
@@ -2782,7 +2834,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			sc.note("replaced component is here",sc.indicesToReplace[replaceIndexLoc][0].loc);
 			idx.sstate=SemState.error;
 		}
-		sc.indicesToReplace[replaceIndexLoc][1]=idx; // matched
+		sc.indicesToReplace[replaceIndexLoc][2]=idx; // matched
+		auto id=new Identifier(sc.indicesToReplace[replaceIndexLoc][1]);
+		id.loc=idx.loc;
+		return expressionSemantic(id,context);
 	}
 	return idx;
 }
