@@ -980,7 +980,7 @@ Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
 	return defineLhsSemanticImplUnsupported(fe,context);
 }
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
-	Expression analyzeAggregate(IndexExp e){
+	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		if(auto id=cast(Identifier)e.e){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(e.e,e);
@@ -989,26 +989,26 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
 					ce.loc=idx.loc;
-					return callSemantic!isPresemantic(ce,context.nestConsumed);
+					return callSemantic!isPresemantic(ce,context);
 				}
 			}
 		}
 		if(auto idx=cast(IndexExp)e.e){
-			if(auto r=analyzeAggregate(idx)){
+			if(auto r=analyzeAggregate(idx,context.nestConst)){
 				e.e=r;
 				return e;
 			}
 		}
 		return null;
 	}
-	if(auto r=analyzeAggregate(idx)) return r;
-	if(idx.byRef) return idx;
+	if(auto r=analyzeAggregate(idx,context)) return r;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
 		e.a=expressionSemantic(e.a,context.expSem.nestConst);
 		propErr(e.e,e);
 	}
 	analyzeIndex(idx);
+	if(idx.byRef) return idx;
 	// TODO: determine type?
 	auto name=context.nameIndex(idx);
 	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
@@ -1181,6 +1181,23 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto oldIndicesToReplace=sc.indicesToReplace;
 	scope(exit) sc.indicesToReplace=oldIndicesToReplace;
 	Expression prologue=null,epilogue=null;
+	Expression finish(Expression r){
+		sc.pushConsumed();
+		if(!prologue&&!epilogue) return r;
+		assert(!prologue||util.among(prologue.sstate,SemState.completed,SemState.error));
+		Expression[] s;
+		if(prologue) s~=prologue;
+		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
+		s~=r;
+		if(epilogue){
+			epilogue=statementSemantic(epilogue,sc);
+			s~=epilogue;
+		}
+		auto res=new CompoundExp(s);
+		res.loc=be.loc;
+		res.sstate=SemState.completed;
+		return res;
+	}
 	if(sc.allowsLinear){
 		auto dcontext=defineLhsContext(econtext);
 		sc.indicesToReplace=[];
@@ -1203,7 +1220,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				idx.byRef=true;
 				auto read=new BinaryExp!(Tok!":=")(id,idx);
 				read.loc=be.loc;
-				reads~=read;
+				reads~=move(read);
 			}
 			prologue=statementSemantic(new CompoundExp(reads),sc);
 			prologue.loc=be.loc;
@@ -1217,7 +1234,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				idx.byRef=true;
 				auto write=new BinaryExp!(Tok!":=")(idx,id);
 				write.loc=be.loc;
-				writes~=write;
+				writes~=move(write);
 			}
 			epilogue=new CompoundExp(writes);
 			epilogue.loc=be.loc;
@@ -1239,17 +1256,17 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	}
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	if(sc.allowsLinear){
-		auto state=sc.getStateSnapshot(true);
-		assert(!sc.toPush.length);
+		assert(!sc.toPush.length,text(be));
+		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
-		sc.toPush=[];
-		sc.restoreStateSnapshot(state);
 		enum unchecked=false;
 		if(auto e=lowerDefine!true(be,sc,unchecked)){
-			writeln(be," ",e);
-			if(e.sstate!=SemState.error)
-				return statementSemantic(e,sc);
-			return e;
+			if(e.sstate!=SemState.error){
+				sc.toPush=[];
+				sc.restoreStateSnapshot(preState);
+				return finish(statementSemantic(e,sc));
+			}
+			return finish(e);
 		}
 	}else{
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
@@ -1287,11 +1304,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				Q!(string,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
-						auto renamed=sc.getRenamed(id);
 						if(rhs[i].isQfree()){
-							dependencies~=q(renamed.name,rhs[i].getDependency(sc));
+							dependencies~=q(id.name,rhs[i].getDependency(sc));
 						}else{
-							dependencies~=q(renamed.name,Dependency(true));
+							dependencies~=q(id.name,Dependency(true));
 						}
 					}else badUnpackLhs=true;
 				}
@@ -1384,7 +1400,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}
 	if(r.sstate!=SemState.error) r.sstate=SemState.completed;
-	return r;
+	return finish(r);
 }
 
 Identifier getIdFromIndex(IndexExp e){

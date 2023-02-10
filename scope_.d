@@ -265,16 +265,20 @@ abstract class Scope{
 		}
 		void addDependencies(scope Q!(string,Dependency)[] deps){
 			foreach(i,ref dep;deps){
-				if(dep[0] in dependencies.dependencies){ // recently consumed
-					assert(toPush.canFind(dep[0]),text(dep[0]," ",toPush));
-					auto ndecl="`renamed`"~dep[0];
-					//assert(ndecl !in dependencies.dependencies);
-					foreach(ref x;toPush) if(x == dep[0]) x=ndecl;
-					dependencies.rename(dep[0],ndecl);
-					controlDependency.rename(dep[0],ndecl);
-					foreach(j,ref odep;deps){
-						if(i==j) continue;
-						odep[1].rename(dep[0],ndecl);
+				if(dep[0] in dependencies.dependencies){
+					if(toPush.canFind(dep[0])){  // recently consumed
+						auto ndecl="`renamed`"~dep[0];
+						//assert(ndecl !in dependencies.dependencies);
+						foreach(ref x;toPush) if(x == dep[0]) x=ndecl;
+						dependencies.rename(dep[0],ndecl);
+						controlDependency.rename(dep[0],ndecl);
+						foreach(j,ref odep;deps){
+							if(i==j) continue;
+							odep[1].rename(dep[0],ndecl);
+						}
+					}else{
+						//writeln(dep[0]," ",toPush," ",dependencies)
+						dep[1].joinWith(dependencies.dependencies[dep[0]]);
 					}
 				}
 			}
