@@ -1259,8 +1259,8 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		assert(!sc.toPush.length,text(be));
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
-		enum unchecked=false;
-		if(auto e=lowerDefine!true(be,sc,unchecked)){
+		enum flags=LowerDefineFlags.createFresh, unchecked=false;
+		if(auto e=lowerDefine!flags(be,sc,unchecked)){
 			if(e.sstate!=SemState.error){
 				sc.toPush=[];
 				sc.restoreStateSnapshot(preState);
