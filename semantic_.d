@@ -1014,7 +1014,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		propErr(e.e,e);
 	}
 	analyzeIndex(idx);
-	if(idx.byRef) return idx;
+	if(idx.byRef) return expressionSemantic(idx,context.expSem);
 	auto sc=context.sc;
 	if(idx.e.type&&idx.e.type.isClassical()){
 		sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
