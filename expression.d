@@ -42,6 +42,7 @@ abstract class Expression: Node{
 		}
 		r.brackets=brackets;
 		r.loc=loc;
+		r.byRef=byRef;
 		return r;
 	}
 
