@@ -105,6 +105,7 @@ class FunctionDef: Declaration{
 	override FunctionDef copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic,"TODO");
 		auto r=new FunctionDef(name?name.copy(args):null,params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
+		r.isSquare=isSquare;
 		r.annotation=annotation;
 		return r;
 	}
