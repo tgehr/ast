@@ -760,6 +760,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 	// TODO: DatDecl?
 	if(auto ce=cast(CommaExp)e) assert(0);
 	if(auto de=cast(DefineExp)e){
+		if(de.isSwap) return de.copy(); // TODO: ok?
 		Expression nrhs=de.e1;
 		if(nrhs.type!=de.e2.type){
 			nrhs=new TypeAnnotationExp(nrhs,de.e2.type,TypeAnnotationType.coercion);
