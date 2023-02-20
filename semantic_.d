@@ -981,7 +981,7 @@ Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
-		if(auto id=cast(Identifier)e.e){
+		if(auto id=cast(Identifier)unwrap(e.e)){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(e.e,e);
 			if(id.meaning){
@@ -993,7 +993,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				}
 			}
 		}
-		if(auto idx=cast(IndexExp)e.e){
+		if(auto idx=cast(IndexExp)unwrap(e.e)){
 			if(auto r=analyzeAggregate(idx,context.nestConst)){
 				e.e=r;
 				return e;
@@ -1009,12 +1009,38 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	}
 	analyzeIndex(idx);
 	if(idx.byRef) return idx;
+	auto sc=context.sc;
+	if(idx.e.type&&idx.e.type.isClassical()){
+		sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
+		idx.sstate=SemState.error;
+		return idx;
+	}
+	bool checkReplaceable(IndexExp e){
+		if(auto id=cast(Identifier)unwrap(e.e)){
+			if(id.meaning) return checkAssignable(id.meaning,idx.e.loc,sc,true);
+			assert(id.sstate==SemState.error);
+			return true; // TODO: ok?
+		}
+		if(!e.a.isLifted(sc)||e.a.type&&!e.a.type.isClassical()){ // TODO: quantum index replacement
+			sc.error("index for component replacement must be 'lifted' and classical",e.a.loc);
+			return false;
+		}
+		if(e.a.type&&!isBasicIndexType(e.a.type)){
+			sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
+			return false;
+		}
+		if(auto idx2=cast(IndexExp)unwrap(e.e)) return checkReplaceable(idx2);
+		return true;
+	}
+	if(!checkReplaceable(idx)){
+		idx.sstate=SemState.error;
+		return idx;
+	}
 	// TODO: determine type?
 	auto name=context.nameIndex(idx);
 	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
 	id.loc=idx.loc;
-	return id; // TODO
-	//return idx;
+	return id;
 }
 Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	// return defineLhsSemanticImplLifted(slc,context);
