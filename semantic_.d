@@ -1196,6 +1196,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		auto res=new CompoundExp(s);
 		res.loc=be.loc;
 		res.sstate=SemState.completed;
+		foreach(e;s) propErr(e,res);
 		return res;
 	}
 	if(sc.allowsLinear){
