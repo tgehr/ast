@@ -86,19 +86,19 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked)in{
 	assert(loc.line);
 }do{
-	enum createFresh=!!(flags&LowerDefineFlags.createFresh);
+	enum createFresh=!!(flags&LowerDefineFlags.createFresh); // TODO: can we get rid of this?
 	enum reverseMode=!!(flags&LowerDefineFlags.reverseMode);
 	Expression res;
 	scope(success) if(res){ res.loc=loc; }
 	static if(createFresh) Expression nlhs;
-	Expression lhs(){
+	Expression lhs(){ // TODO: solve better
 		static if(createFresh){
 			if(!nlhs) nlhs=olhs.copy();
 			return nlhs;
 		}else return olhs;
 	}
 	static if(createFresh) Expression nrhs;
-	Expression rhs(){
+	Expression rhs(){ // TODO: solve better
 		static if(createFresh){
 			if(!nrhs) nrhs=orhs.copy();
 			return nrhs;
@@ -120,7 +120,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	if(auto arr=cast(ArrayExp)olhs){
 		auto newLhs=new TupleExp(arr.copy().e);
-		newLhs.loc=lhs.loc;
+		newLhs.loc=olhs.loc;
 		auto newRhs=orhs;
 		if(auto aty=cast(ArrayTy)orhs.type){
 			auto tty=tupleTy(aty.next.repeat(arr.e.length).array);
@@ -159,14 +159,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			if(olhs.type){
 				if(!orhs.type||orhs.type!=tae.e.type){
 					auto newRhs=new TypeAnnotationExp(rhs,tae.e.type,TypeAnnotationType.coercion);
-					newRhs.loc=rhs.loc;
+					newRhs.loc=orhs.loc;
 					return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
 				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked);
 			}
 		}
 		// TOOD: only do this if lhs is variable
 		auto newRhs=new TypeAnnotationExp(rhs,tae.t,tae.annotationType);
-		newRhs.loc=rhs.loc;
+		newRhs.loc=orhs.loc;
 		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
 	}
 	if(auto ce=cast(CatExp)olhs){
@@ -221,11 +221,11 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		auto l=tmpLen();
 		l.loc=olhs.loc;
 		auto tmp1=tmp.copy();
-		tmp1.loc=rhs.loc;
+		tmp1.loc=orhs.loc;
 		Expression s1=new SliceExp(tmp1,z,l1);
 		s1.loc=tmp1.loc;
 		auto tmp2=tmp.copy();
-		tmp2.loc=rhs.loc;
+		tmp2.loc=orhs.loc;
 		Expression s2=new SliceExp(tmp1,l1.copy(),l);
 		s2.loc=tmp2.loc;
 		auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
@@ -243,7 +243,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		auto d3=lowerDefine!flags(tmpr.copy(),s2,loc,sc,unchecked);
 		d3.loc=loc;
 		auto tmp3=tmp.copy();
-		tmp3.loc=rhs.loc;
+		tmp3.loc=orhs.loc;
 		auto cat=new CatExp(tmpl.copy(),tmpr.copy());
 		cat.loc=ce.loc;
 		auto fe=new ForgetExp(tmp3,cat);
@@ -322,7 +322,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				newlhs=new TupleExp([]);
 				newlhs.loc=ce.arg.loc;
 				newarg=new TupleExp([ce.arg,orhs]);
-				newarg.loc=lhs.loc;
+				newarg.loc=olhs.loc;
 			}else if(auto tpl=cast(TupleExp)ce.arg){
 				auto newlhss=tpl.e[numConstArgs1..numConstArgs1+numArgs];
 				if(newlhss.length==1) newlhs=newlhss[0];
@@ -331,7 +331,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				auto newargs=tpl.e[0..numConstArgs1]~[rhs]~tpl.e[numConstArgs1+numArgs..$];
 				if(newargs.length==1) newarg=newargs[0];
 				else newarg=new TupleExp(newargs);
-				newarg.loc=lhs.loc;
+				newarg.loc=olhs.loc;
 			}else if(numArgs==ft.nargs){
 				newlhs=ce.arg;
 				newarg=orhs;
