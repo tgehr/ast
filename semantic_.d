@@ -1363,10 +1363,11 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				Q!(string,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
+						auto renamed=sc.getRenamed(id);
 						if(rhs[i].isQfree()){
-							dependencies~=q(id.name,rhs[i].getDependency(sc));
+							dependencies~=q(renamed.name,rhs[i].getDependency(sc));
 						}else{
-							dependencies~=q(id.name,Dependency(true));
+							dependencies~=q(renamed.name,Dependency(true));
 						}
 					}else badUnpackLhs=true;
 				}
@@ -1571,6 +1572,7 @@ struct ArrayConsumer{
 			id.meaning=null;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
 			assert(id.meaning is oldMeaning);
+			assert(id.name==oldMeaning.getName);
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
