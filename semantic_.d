@@ -2749,7 +2749,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						cid.scope_=rid.scope_;
 						if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
 							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
-							if(indexToReplace[1]) // should always be non-null
+							if(indexToReplace[2]) // should always be non-null
 								sc.note("consumed here",indexToReplace[2].loc);
 							else sc.note("reassigned here",indexToReplace[0].loc);
 							idx.sstate=SemState.error;
