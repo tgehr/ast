@@ -982,15 +982,21 @@ Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		if(auto id=cast(Identifier)unwrap(e.e)){
+			id.scope_=context.sc;
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(e.e,e);
 			if(id.meaning){
+				if(id.meaning.rename) id.name=id.meaning.rename.name;
 				id.type=typeForDecl(id.meaning);
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
 					ce.loc=idx.loc;
 					return callSemantic!isPresemantic(ce,context);
 				}
+			}else{
+				context.sc.error(format("undefined identifier %s",id.name),id.loc);
+				id.sstate=SemState.error;
+				return id;
 			}
 		}
 		if(auto idx=cast(IndexExp)unwrap(e.e)){
@@ -1517,9 +1523,15 @@ bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InTy
 	return eq.eval()==LiteralExp.makeBoolean(1);
 }
 bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
-	if(auto id1=cast(Identifier)e1)
-		if(auto id2=cast(Identifier)e2)
-			return id1.name==id2.name; // TODO: this is likely to break
+	if(auto id1=cast(Identifier)e1){
+		if(auto id2=cast(Identifier)e2){
+			// TODO: this is likely to break
+			/+if(id1.meaning&&id2.meaning) return id1.meaning==id2.meaning;
+			if(id1.meaning) return id1.meaning.name.name==id2.name;
+			if(id2.meaning) return id1.name==id2.meaning.name.name;+/
+			return id1.name==id2.name;
+		}
+	}
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
 			if(!guaranteedSameLocations(idx1.e,idx2.e,loc,sc,inType))
@@ -1554,6 +1566,7 @@ struct ArrayConsumer{
 				id.scope_=tpl[3];
 				return;
 			}
+			if(id.meaning) id.name=id.meaning.name.name;
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
@@ -1562,7 +1575,6 @@ struct ArrayConsumer{
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
 			ids~=id;
-			if(id.meaning) id.name=id.meaning.name.name;
 			consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
 		}
 		doIt(e);
@@ -1570,8 +1582,8 @@ struct ArrayConsumer{
 	void redefineArrays(Location loc,Scope sc){
 		SetX!string added;
 		foreach(id;ids){
-			if(id&&id.type&&id.name !in added){
-				auto var=addVar(id.name,id.type,loc,sc);
+			if(id&&id.meaning&&id.type&&id.name !in added){
+				auto var=addVar(id.meaning.name.name,id.type,loc,sc);
 				added.insert(id.name);
 			}
 		}
@@ -2729,6 +2741,8 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
+	idx.e=expressionSemantic(idx.e,context.nestConst);
+	propErr(idx.e,idx);
 	bool replaceIndex=false;
 	size_t replaceIndexLoc=size_t.max;
 	if(auto cid=getIdFromIndex(idx)){
@@ -2737,9 +2751,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				auto rid=getIdFromIndex(indexToReplace[0]);
 				assert(rid && rid.meaning);
 				assert(rid.name==cid.name);
-				if(!cid.meaning) cid.meaning=rid.meaning;
-				else assert(cid.meaning is rid.meaning);
-				if(cid.meaning && cid.meaning.rename) cid.name=cid.meaning.rename.name;
+				assert(cid.meaning is rid.meaning);
 				replaceIndex=true;
 				replaceIndexLoc=i;
 				break;
@@ -2754,10 +2766,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 					assert(rid && rid.meaning);
 					if(rid.name==cid.name){
 						cid.constLookup=true;
-						cid.type=rid.type;
-						cid.meaning=rid.meaning;
-						cid.sstate=rid.sstate;
-						cid.scope_=rid.scope_;
+						assert(cid.type==rid.type);
+						assert(cid.meaning is rid.meaning);
+						assert(cid.scope_ is rid.scope_);
 						if(!guaranteedDifferentLocations(indexToReplace[0],idx,idx.loc,sc,inType)){
 							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
 							if(indexToReplace[2]) // should always be non-null
@@ -2771,8 +2782,6 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			}
 		}
 	}
-	idx.e=expressionSemantic(idx.e,context.nestConst);
-	propErr(idx.e,idx);
 	if(auto ft=cast(FunTy)idx.e.type){
 		assert(!replaceIndex);
 		auto ce=new CallExp(idx.e,idx.a,true,false);
