@@ -1202,6 +1202,30 @@ Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
 	return defineLhsSemantic!true(lhs,context);
 }
 
+Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
+	bool isSwap=false;
+	auto tpl1=cast(TupleExp)unwrap(be.e1);
+	auto tpl2=cast(TupleExp)unwrap(be.e2);
+	if(!tpl1||!tpl2) return null;
+	if(tpl1.length!=2||tpl2.length!=2) return null;
+	IndexExp[2] idx1=[cast(IndexExp)tpl1.e[0],cast(IndexExp)tpl1.e[1]];
+	IndexExp[2] idx2=[cast(IndexExp)tpl2.e[0],cast(IndexExp)tpl2.e[1]];
+	if(!idx1[0]||!idx1[1]||!idx2[0]||!idx2[1]) return null;
+	assert(!sc.toPush.length,text(be));
+	auto preState=sc.getStateSnapshot(true);
+	foreach(i;0..2){
+		if(!guaranteedSameLocations(idx1[i],idx2[$-1-i],be.loc,sc,InType.no)){
+			sc.restoreStateSnapshot(preState);
+			return null;
+		}
+	}
+	be.isSwap=true;
+	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
+	be.e2=expressionSemantic(be.e2,econtext);
+	be.sstate=SemState.completed;
+	return be;
+}
+
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto oldIndicesToReplace=sc.indicesToReplace;
@@ -1218,6 +1242,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		if(epilogue){
 			epilogue=statementSemantic(epilogue,sc);
 			s~=epilogue;
+			finishIndexReplacement(be,sc);
 		}
 		auto res=new CompoundExp(s);
 		res.loc=be.loc;
@@ -1226,6 +1251,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		return res;
 	}
 	if(sc.allowsLinear){
+		if(auto r=swapSemantic(be,sc)) return r;
 		auto dcontext=defineLhsContext(econtext);
 		sc.indicesToReplace=[];
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
@@ -1506,125 +1532,85 @@ bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,I
 
 
 static if(language==silq){
-IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,Location loc,Scope sc,out bool isSwap)in{
-	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
-}do{
+struct ArrayConsumer{
+	Tuple!(Expression,Declaration,SemState,Scope)[string] consumed;
+	Identifier[] ids;
+	void consumeArray(IndexExp e,ExpSemContext context){
+		Identifier id=null;
+		void doIt(IndexExp e){
+			if(auto idx=cast(IndexExp)unwrap(e.e)){
+				doIt(idx);
+				propErr(idx,e.e);
+				return;
+			}
+			auto id=cast(Identifier)unwrap(e.e);
+			assert(!!id);
+			if(id.name in consumed){
+				auto tpl=consumed[id.name];
+				id.constLookup=true;
+				id.type=tpl[0];
+				id.meaning=tpl[1];
+				id.sstate=tpl[2];
+				id.scope_=tpl[3];
+				return;
+			}
+			auto oldMeaning=id.meaning;
+			id.meaning=null;
+			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
+			assert(id.meaning is oldMeaning);
+			e.e.constLookup=true;
+			id=cast(Identifier)unwrap(e.e);
+			assert(!!id);
+			ids~=id;
+			if(id.meaning) id.name=id.meaning.name.name;
+			consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
+		}
+		doIt(e);
+	}
+	void redefineArrays(Location loc,Scope sc){
+		SetX!string added;
+		foreach(id;ids){
+			if(id&&id.type&&id.name !in added){
+				auto var=addVar(id.name,id.type,loc,sc);
+				added.insert(id.name);
+			}
+		}
+	}
+}
+void finishIndexReplacement(DefineExp be,Scope sc){
 	auto inType=InType.no;
 	auto context=expSemContext(sc,ConstResult.yes,inType);
-	indicesToReplace=indicesToReplace.dup;
-	void analyzeIndex(IndexExp e){
-		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
-		e.a=expressionSemantic(e.a,context.nestConst);
-		propErr(e.e,e);
-	}
-	foreach(ref theIndex;indicesToReplace)
-		analyzeIndex(theIndex);
 
-	Tuple!(Expression,Declaration,SemState,Scope)[string] consumed;
-	void consumeArray(IndexExp e){
-		if(auto idx=cast(IndexExp)unwrap(e.e)){
-			consumeArray(idx);
-			propErr(idx,e.e);
-			return;
-		}
-		auto id=cast(Identifier)unwrap(e.e);
-		assert(!!id);
-		if(id.name in consumed){
-			auto tpl=consumed[id.name];
-			id.constLookup=true;
-			id.type=tpl[0];
-			id.meaning=tpl[1];
-			id.sstate=tpl[2];
-			id.scope_=tpl[3];
-			return;
-		}
-		auto oldMeaning=id.meaning;
-		id.meaning=null;
-		e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
-		assert(id.meaning is oldMeaning);
-		e.e.constLookup=true;
-		id=cast(Identifier)unwrap(e.e);
-		assert(!!id);
-		if(id.meaning) id.name=id.meaning.name.name;
-		consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
-	}
-	Identifier[] ids;
-	foreach(ref theIndex;indicesToReplace){
-		consumeArray(theIndex);
-		if(theIndex.e.type&&theIndex.e.type.isClassical()){
-			sc.error(format("use assignment statement '%s = %s' to assign to classical array component",theIndex,rhs),loc);
-			theIndex.sstate=SemState.error;
-			return indicesToReplace;
-		}
-		auto nIndex=cast(IndexExp)expressionSemantic(theIndex,context.nestConst);
-		assert(!!nIndex); // TODO: this might change
-		theIndex=nIndex;
-		Identifier id=null;
-		bool check(IndexExp e){
-			if(e&&(!e.a.isLifted(sc)||e.a.type&&!e.a.type.isClassical())){
-				sc.error("index for component replacement must be 'lifted' and classical",e.a.loc);
-				return false;
-			}
-			if(e&&e.a.type&&!isBasicIndexType(e.a.type)){
-				sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
-				return false;
-			}
-			if(e) if(auto idx=cast(IndexExp)unwrap(e.e)) return check(idx);
-			id=e&&e.e&&e.e.sstate==SemState.completed?cast(Identifier)unwrap(e.e):null;
-			if(e&&!checkAssignable(id?id.meaning:null,theIndex.e.loc,sc,true)){
-				id=null;
-				return false;
-			}
-			return true;
-		}
-		if(!check(theIndex)) theIndex.sstate=SemState.error;
-		ids~=id;
-	}
-	if(auto tpl=cast(TupleExp)unwrap(rhs)){
-		if(indicesToReplace.length==2 && tpl.length==2){
-			isSwap=true;
-			foreach(e;tpl.e){
-				if(auto idx=cast(IndexExp)unwrap(e)){
-					if(auto id=getIdFromIndex(idx)){
-						isSwap&=!!(id.name in consumed);
-					}else isSwap=false;
-				}else isSwap=false;
-			}
-		}
-	}
-	if(!isSwap) foreach(i;0..indicesToReplace.length){
+	auto indicesToReplace=sc.indicesToReplace.map!(x=>x[0]).array;
+	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
+
+	ArrayConsumer consumer;
+	foreach(ref theIndex;indicesToReplace)
+		consumer.consumeArray(theIndex,context);
+	foreach(i;0..indicesToReplace.length){
 		auto idx1=indicesToReplace[i];
 		if(idx1.sstate==SemState.error) continue;
 		foreach(j;i+1..indicesToReplace.length){
 			auto idx2=indicesToReplace[j];
 			// (scope will handle this)
 			if(idx2.sstate==SemState.error) continue;
-			if(!guaranteedDifferentLocations(idx1,idx2,loc,sc,inType)){
-				if(guaranteedSameLocations(idx1,idx2,loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
+			if(!guaranteedDifferentLocations(idx1,idx2,be.loc,sc,inType)){
+				if(guaranteedSameLocations(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
 				else sc.error("indices may refer to same value in reassignment",idx2.loc);
 				sc.note("other index is here",idx1.loc);
 				idx2.sstate=SemState.error;
-				//return indicesToReplace;
+				//return;
 			}
 		}
 	}
-	assert(!sc.indicesToReplace.length);
-	sc.indicesToReplace=indicesToReplace.map!(x=>tuple(x.sstate!=SemState.error?x:null,"",x.sstate==SemState.error?x:null)).array;
-	rhs=expressionSemantic(rhs,context.nestConsumed);
-	assert(sc.indicesToReplace.length==indicesToReplace.length);
-	foreach(i;0..sc.indicesToReplace.length){
+	foreach(i;0..indicesToReplace.length){
 		if(!sc.indicesToReplace[i][1]){
 			sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
 			indicesToReplace[i].sstate=SemState.error;
+			be.sstate=SemState.error;
 		}
 	}
-	sc.indicesToReplace=[];
-	SetX!string added;
-	foreach(id;ids)
-		if(id&&id.type&&id.name !in added){
-			auto var=addVar(id.name,id.type,loc,sc);
-			added.insert(id.name);
-		}
+	consumer.redefineArrays(be.loc,sc);
 	foreach(theIndex;indicesToReplace)
 		if(theIndex.sstate!=SemState.error)
 			theIndex.sstate=SemState.completed;
@@ -1632,7 +1618,6 @@ IndexExp[] indexReplaceSemantic(IndexExp[] indicesToReplace,ref Expression rhs,L
 		if(auto id=getIdFromIndex(idx))
 			if(id.meaning&&id.meaning.rename)
 				id.name=id.meaning.rename.name;
-	return indicesToReplace;
 }
 }
 
