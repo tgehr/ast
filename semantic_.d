@@ -1571,6 +1571,8 @@ struct ArrayConsumer{
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
+			if(e.e.sstate!=SemState.completed)
+				return;
 			assert(id.meaning is oldMeaning);
 			assert(id.name==oldMeaning.getName);
 			e.e.constLookup=true;
