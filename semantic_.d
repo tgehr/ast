@@ -3394,8 +3394,8 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context)
 		return pr;
 	}
 	auto l=t1.isTupleTy(),r=t2.isTupleTy();
-	auto merge1=!pr.e1.brackets&&l&&l.length;
-	auto merge2=!pr.e2.brackets&&r&&r.length;
+	auto merge1=!pr.e1.brackets&&l&&l.length&&cast(BinaryExp!(Tok!"×"))pr.e1;
+	auto merge2=!pr.e2.brackets&&r&&r.length&&cast(BinaryExp!(Tok!"×"))pr.e2;
 	if(merge1 && merge2)
 		return tupleTy(chain(iota(l.length).map!(i=>l[i]),iota(r.length).map!(i=>r[i])).array);
 	if(merge1) return tupleTy(chain(iota(l.length).map!(i=>l[i]),only(t2)).array);
