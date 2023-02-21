@@ -288,7 +288,10 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			de.loc=be.loc;
 			return de;
 		}else LnoIdTuple:{
-			sc.error("left-hand side of definition must be identifier or tuple of identifiers",be.e1.loc);
+			if(be.sstate!=SemState.error){
+				sc.error("left-hand side of definition must be identifier or tuple of identifiers",be.e1.loc);
+				be.sstate=SemState.error;
+			}
 			success=false;
 		}
 		success&=expr.sstate==SemState.completed;
@@ -1246,6 +1249,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
 		s~=r;
 		if(epilogue){
+			propErr(prologue,epilogue);
 			epilogue=statementSemantic(epilogue,sc);
 			s~=epilogue;
 		}
@@ -1317,16 +1321,22 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		assert(!sc.toPush.length,text(be));
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
-		enum flags=LowerDefineFlags.createFresh, unchecked=false;
-		if(auto e=lowerDefine!flags(be,sc,unchecked)){
-			if(e.sstate!=SemState.error){
-				sc.toPush=[];
-				sc.restoreStateSnapshot(preState);
-				auto r=statementSemantic(e,sc);
+		propErr(be.e2,be);
+		if(be.sstate!=SemState.error){
+			enum flags=LowerDefineFlags.createFresh, unchecked=false;
+			if(auto e=lowerDefine!flags(be,sc,unchecked)){
+				if(e.sstate!=SemState.error){
+					sc.toPush=[];
+					sc.restoreStateSnapshot(preState);
+					auto r=statementSemantic(e,sc);
+					finishIndexReplacement(be,sc);
+					if(be.sstate==SemState.error)
+						return be;
+					return finish(r);
+				}
 				finishIndexReplacement(be,sc);
-				return finish(r);
+				return finish(e);
 			}
-			return finish(e);
 		}
 		finishIndexReplacement(be,sc);
 	}else{
