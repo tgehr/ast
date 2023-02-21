@@ -52,7 +52,7 @@ class VarDecl: Declaration{
 	bool isConst;
 	this(Identifier name){ super(name); }
 	override VarDecl copyImpl(CopyArgs args){
-		enforce(!args.preserveSemantic,"TODO");
+		//enforce(!args.preserveSemantic,"TODO");
 		//return new VarDecl(dtype.copy(args));
 		auto r=new VarDecl(name?name.copy(args):null);
 		if(dtype) r.dtype=dtype.copy(args);

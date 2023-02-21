@@ -627,7 +627,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	while(!converged){ // TODO: limit number of iterations?
 		auto prevStateSnapshot=sc.getStateSnapshot();
 		auto forgetScope=new BlockScope(sc);
-		Expression.CopyArgs cargs={preserveSemantic: false};
+		Expression.CopyArgs cargs={preserveSemantic: true};
 		bdy=fe.bdy.copy(cargs);
 		auto fesc=bdy.blscope_=new BlockScope(sc);
 		auto vd=new VarDecl(fe.var);
@@ -669,7 +669,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 
 Expression statementSemanticImpl(WhileExp we,Scope sc){
 	bool converged=false;
-	Expression.CopyArgs cargs={preserveSemantic: false};
+	Expression.CopyArgs cargs={preserveSemantic: true};
 	auto cond=we.cond.copy(cargs);
 	cond=conditionSemantic(cond,sc,InType.no);
 	propErr(cond,we);
@@ -720,7 +720,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 		re.sstate=SemState.error;
 	}
 	bool converged=false;
-	Expression.CopyArgs cargs={preserveSemantic: false};
+	Expression.CopyArgs cargs={preserveSemantic: true};
 	CompoundExp bdy;
 	while(!converged){ // TODO: limit number of iterations?
 		auto prevStateSnapshot=sc.getStateSnapshot();
