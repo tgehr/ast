@@ -1248,7 +1248,6 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		if(epilogue){
 			epilogue=statementSemantic(epilogue,sc);
 			s~=epilogue;
-			finishIndexReplacement(be,sc);
 		}
 		auto res=new CompoundExp(s);
 		res.loc=be.loc;
@@ -1318,6 +1317,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		assert(!sc.toPush.length,text(be));
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
+		finishIndexReplacement(be,sc);
 		enum flags=LowerDefineFlags.createFresh, unchecked=false;
 		if(auto e=lowerDefine!flags(be,sc,unchecked)){
 			if(e.sstate!=SemState.error){
@@ -1618,7 +1618,7 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 		}
 	}
 	foreach(i;0..indicesToReplace.length){
-		if(!sc.indicesToReplace[i][1]){
+		if(!sc.indicesToReplace[i][2]){
 			sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
 			indicesToReplace[i].sstate=SemState.error;
 			be.sstate=SemState.error;
