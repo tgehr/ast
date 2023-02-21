@@ -131,27 +131,18 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return lowerDefine!flags(newLhs,newRhs,loc,sc,unchecked);
 	}
 	if(auto tpll=cast(TupleExp)olhs){
-		void handleRhs(R)(){
-			if(auto tplr=cast(R)orhs){
-				enforce(tpll.e.length==tplr.e.length);
-				Expression[] es;
-				foreach_reverse(i;0..tpll.e.length){
-					es~=lowerDefine!flags(tpll.e[i],tplr.e[i],loc,sc,unchecked); // TODO: evaluation order of rhs okay?
-				}
-				if(es.any!(x=>!x)) return;
-				res=new CompoundExp(es);
-			}
+		auto tplr=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i){ auto id=new Identifier(freshName); id.loc=orhs.loc; return id; }).array);
+		tplr.loc=orhs.loc;
+		auto d1=lowerDefine!(flags&~LowerDefineFlags.createFresh)(tplr,rhs,loc,sc,unchecked);
+		enforce(tpll.e.length==tplr.e.length);
+		Expression[] es;
+		foreach_reverse(i;0..tpll.e.length){
+			es~=lowerDefine!flags(tpll.e[i],move(tplr.e[i]),loc,sc,unchecked); // TODO: evaluation order of rhs okay?
 		}
-		handleRhs!TupleExp();
-		handleRhs!ArrayExp();
-		if(!res){
-			auto tmp=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i){ auto id=new Identifier(freshName); id.loc=orhs.loc; return id; }).array);
-			tmp.loc=loc;
-			auto d1=lowerDefine!(flags&~LowerDefineFlags.createFresh)(tmp,rhs,loc,sc,unchecked);
-			auto d2=lowerDefine!flags(olhs,tmp,loc,sc,unchecked);
-			res=new CompoundExp([d1,d2]);
-		}
-		return res;
+		if(es.any!(x=>!x)) return null;
+		auto d2=new CompoundExp(es);
+		d2.loc=loc;
+		return res=new CompoundExp([d1,d2]);
 	}
 	if(isLiftedBuiltIn(lhs)) return forget();
 	if(auto tae=cast(TypeAnnotationExp)olhs){

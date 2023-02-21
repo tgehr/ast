@@ -1317,16 +1317,18 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		assert(!sc.toPush.length,text(be));
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
-		finishIndexReplacement(be,sc);
 		enum flags=LowerDefineFlags.createFresh, unchecked=false;
 		if(auto e=lowerDefine!flags(be,sc,unchecked)){
 			if(e.sstate!=SemState.error){
 				sc.toPush=[];
 				sc.restoreStateSnapshot(preState);
-				return finish(statementSemantic(e,sc));
+				auto r=statementSemantic(e,sc);
+				finishIndexReplacement(be,sc);
+				return finish(r);
 			}
 			return finish(e);
 		}
+		finishIndexReplacement(be,sc);
 	}else{
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 	}
@@ -1599,7 +1601,6 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 
 	auto indicesToReplace=sc.indicesToReplace.map!(x=>x[0]).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
-
 	ArrayConsumer consumer;
 	foreach(ref theIndex;indicesToReplace)
 		consumer.consumeArray(theIndex,context);
