@@ -126,18 +126,68 @@ abstract class Scope{
 	}
 
 	static if(language==silq){
-		struct ConstBlockContext{
+		static struct DeclProp{
+			Identifier constBlock;
+			static DeclProp default_(){
+				return DeclProp.init;
+			}
+		}
+		static struct DeclProps{
+			private DeclProp[Declaration] props;
+			DeclProps dup(){ return DeclProps(props.dup); }
+			void clear(){ props.clear(); }
+			DeclProp* tryGet(Declaration decl){ return decl in props; }
+			ref DeclProp set(Declaration decl,DeclProp prop){
+				return props[decl]=prop;
+			}
+		}
+		final DeclProps saveDeclProps(){ return declProps.dup; }
+		final void resetDeclProps(DeclProps previous){ declProps=previous; }
+		final void resetDeclProps(){ declProps.clear(); }
+		DeclProp* getDeclProp(Declaration decl,bool failed=false){
+			if(failed) return null;
+			return declProps.tryGet(decl);
+		}
+		final ref DeclProp updateDeclProps(Declaration decl){
+			if(auto r=declProps.tryGet(decl)) return *r;
+			if(auto r=getDeclProp(decl,true)) return declProps.set(decl,*r);
+			return declProps.set(decl,DeclProp.default_());
+		}
+		private Identifier isConstHere(Declaration decl){
+			if(auto r=declProps.tryGet(decl)) return r.constBlock;
+			return null;
+		}
+		final void blockConst(Declaration decl,Identifier constBlock){
+			updateDeclProps(decl).constBlock=constBlock;
+		}
+		final Identifier isConst(Declaration decl){
+			if(auto props=getDeclProp(decl)) return props.constBlock;
+			return null;
+		}
+		static struct ConstBlockContext{
 			private Identifier[Declaration] constBlock;
 		}
-		ConstBlockContext saveConst(){ return ConstBlockContext(constBlock.dup); }
-		void resetConst(ConstBlockContext previous){ constBlock=previous.constBlock; }
-		void resetConst(){ constBlock.clear(); }
-		Identifier isConst(Declaration decl){ return constBlock.get(decl, null); }
+		final ConstBlockContext saveConst(){
+			Identifier[Declaration] constBlock;
+			foreach(decl,ref prop;declProps.props) constBlock[decl]=prop.constBlock;
+			return ConstBlockContext(constBlock);
+		}
+		final void resetConst(ConstBlockContext context){
+			foreach(decl,constBlock;context.constBlock)
+				updateDeclProps(decl).constBlock=constBlock;
+			foreach(decl,ref prop;declProps.props)
+				if(decl !in context.constBlock)
+					prop.constBlock=null;
+		}
+		final void resetConst(){
+			foreach(decl,ref prop;declProps.props)
+				prop.constBlock=null;
+		}
 	}else{
-		struct ConstBlockContext{ }
-		final ConstBlockContext saveConst(){ return ConstBlockContext.init; }
-		final void resetConst(ConstBlockContext previous){ }
-		final void resetConst(){ }
+		struct DeclProps{ }
+		final DeclProps saveDeclProps(){ return DeclProps.init; }
+		final void resetDeclProps(DeclProps previous){ }
+		final void resetDeclProps(){ }
 		final Identifier isConst(Declaration decl){ return null; }
 	}
 
@@ -189,8 +239,8 @@ abstract class Scope{
 				}
 			}
 			if(kind==Lookup.constant&&r&&r.isLinear()){
-				if(r !in constBlock)
-					constBlock[r]=ident;
+				if(!isConstHere(r))
+					blockConst(r,ident);
 			}
 		}
 		return r;
@@ -522,7 +572,7 @@ abstract class Scope{
 	private:
 		static if(language==silq){
 			Dependencies dependencies;
-			Identifier[Declaration] constBlock;
+			DeclProps declProps;
 		}
 		Declaration[string] symtab;
 		bool restoreable=false;
@@ -533,7 +583,7 @@ abstract class Scope{
 		Declaration[string] nsymtab;
 		foreach(_,decl;symtab) nsymtab[decl.getName]=decl;
 		static if(language==silq){
-			return ScopeState(dependencies.dup,restoreable?constBlock.dup:null,nsymtab,restoreable);
+			return ScopeState(dependencies.dup,restoreable?saveDeclProps:DeclProps.init,nsymtab,restoreable);
 		}else{
 			return ScopeState(nsymtab,restoreable);
 		}
@@ -543,7 +593,7 @@ abstract class Scope{
 		assert(state.restoreable);
 	}do{
 		dependencies=state.dependencies;
-		constBlock=state.constBlock;
+		resetDeclProps(state.declProps);
 		symtab.clear();
 		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=decl;
 		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
@@ -552,7 +602,7 @@ abstract class Scope{
 private:
 	static if(language==silq){
 		Dependencies dependencies;
-		Identifier[Declaration] constBlock;
+		DeclProps declProps;
 	}
 	Declaration[const(char)*] symtab;
 	Declaration[const(char)*] rnsymtab;
@@ -601,9 +651,10 @@ class NestedScope: Scope{
 
 	override Annotation restriction(){ return parent.restriction(); }
 	static if(language==silq){
-		override Identifier isConst(Declaration decl){
-			if(auto r=super.isConst(decl)) return r;
-			return parent.isConst(decl);
+		override DeclProp* getDeclProp(Declaration decl,bool failed=false){
+			if(auto r=super.getDeclProp(decl,failed))
+				return r;
+			return parent.getDeclProp(decl);
 		}
 	}
 
