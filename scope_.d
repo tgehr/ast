@@ -127,9 +127,23 @@ abstract class Scope{
 
 	static if(language==silq){
 		static struct DeclProp{
-			Identifier constBlock;
+			private Identifier constBlock;
+			static struct ComponentReplacement{
+				IndexExp write;
+				string name;
+				IndexExp read;
+			}
+			ComponentReplacement[] componentReplacements;
+			void nameIndex(IndexExp index,string name){
+				auto r=ComponentReplacement(index,name,IndexExp.init);
+				if(index.sstate==SemState.error) swap(r.write,r.read);
+				componentReplacements~=r;
+			}
 			static DeclProp default_(){
 				return DeclProp.init;
+			}
+			DeclProp dup(){
+				return DeclProp(constBlock,componentReplacements.dup);
 			}
 		}
 		static struct DeclProps{
@@ -150,7 +164,7 @@ abstract class Scope{
 		}
 		final ref DeclProp updateDeclProps(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return *r;
-			if(auto r=getDeclProp(decl,true)) return declProps.set(decl,*r);
+			if(auto r=getDeclProp(decl,true)) return declProps.set(decl,r.dup);
 			return declProps.set(decl,DeclProp.default_());
 		}
 		private Identifier isConstHere(Declaration decl){
@@ -183,12 +197,46 @@ abstract class Scope{
 			foreach(decl,ref prop;declProps.props)
 				prop.constBlock=null;
 		}
+		final void resetComponentReplacements(){
+			foreach(decl,ref prop;declProps.props)
+				prop.componentReplacements=[];
+		}
+		final DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
+			typeof(return) r;
+			foreach(decl,ref prop;declProps.props)
+				r~=prop.componentReplacements;
+			return r;
+		}
+		static struct ComponentReplacementContext{
+			private DeclProp.ComponentReplacement[][Declaration] componentReplacements;
+		}
+		final ComponentReplacementContext moveComponentReplacements(){ // TODO: get rid of this
+			DeclProp.ComponentReplacement[][Declaration] r;
+			foreach(decl,ref prop;declProps.props){
+				r[decl]=prop.componentReplacements;
+				prop.componentReplacements=[];
+			}
+			return typeof(return)(r);
+		}
+		final void restoreComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
+			foreach(decl,crepls;previous.componentReplacements)
+				updateDeclProps(decl).componentReplacements=crepls;
+		}
+		final DeclProp.ComponentReplacement[] componentReplacements(Declaration decl){
+			if(auto r=declProps.tryGet(decl)) return r.componentReplacements;
+			return [];
+		}
 	}else{
 		struct DeclProps{ }
+		struct ConstBlockContext{ }
 		final DeclProps saveDeclProps(){ return DeclProps.init; }
 		final void resetDeclProps(DeclProps previous){ }
 		final void resetDeclProps(){ }
 		final Identifier isConst(Declaration decl){ return null; }
+		final ConstBlockContext saveConst(){ return ConstBlockContext.init; }
+		final void resetConst(ConstBlockContext previous){ }
+		final void resetConst(){ }
+		final void resetComponentReplacement(){ }
 	}
 
 	final bool consume(Declaration decl){
@@ -535,10 +583,12 @@ abstract class Scope{
 		}
 		return 0;
 	}
-	Q!(IndexExp,string,IndexExp)[] indicesToReplace=null; // (assignee, consumer) // TODO: remove
 
 	void nameIndex(IndexExp index,string name){ // semantic checks that those do not alias
-		indicesToReplace~=q(index,name,IndexExp.init);
+		import ast.semantic_:getIdFromIndex;
+		auto id=getIdFromIndex(index);
+		assert(id&&id.meaning);
+		updateDeclProps(id.meaning).nameIndex(index,name);
 	}
 
 	struct ScopeState{
