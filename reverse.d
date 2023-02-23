@@ -469,8 +469,14 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		enforce(0,text("errors while reversing function"));
 	}
 	string rpname;
-	if(auto id=cast(Identifier)ret.e) rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).name;
-	else rpname=freshName();
+	bool retDefReplaced=false;
+	if(auto id=cast(Identifier)ret.e){
+		if(validDefLhs!flags(id,sc)){
+			retDefReplaced=true;
+			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).name;
+		}
+	}
+	if(!retDefReplaced) rpname=freshName();
 	auto pnames=chain(fd.params[0..constArgTypes1.length].map!(p=>p.name.name),only(rpname),fd.params[chain(constArgTypes1,argTypes).length..$].map!(p=>p.name.name));
 	auto params=iota(nargTypes.length).map!((i){
 		auto pname=new Identifier(pnames[i]);
@@ -517,7 +523,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		fe.loc=argExp.loc;
 		body_.s=[fe];
 	}else{
-		bool retDefNecessary=(returnType!=unit||!cast(TupleExp)ret.e)&&!cast(Identifier)ret.e;
+		bool retDefNecessary=!(returnType==unit&&cast(TupleExp)ret.e||retDefReplaced);
 		auto retDef=retDefNecessary?lowerDefine!flags(ret.e,retRhs,ret.loc,result.fscope_,unchecked):null;
 		auto argNames=fd.params[constArgTypes1.length..constArgTypes1.length+argTypes.length].map!(p=>p.name.name);
 		auto makeArg(size_t i){
