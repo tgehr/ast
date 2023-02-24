@@ -3,7 +3,7 @@
 module ast.scope_;
 import astopt;
 
-import std.format, std.conv, std.algorithm, std.stdio;
+import std.format, std.conv, std.range, std.algorithm, std.stdio;
 import std.typecons:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap;
@@ -100,7 +100,7 @@ abstract class Scope{
 		return true;
 	}
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
-		if(auto d=symtabLookup(decl.name,false,Lookup.probing)){
+		if(auto d=symtabLookup(decl.name,false,Lookup.probing,this)){
 			if(decl.sstate!=SemState.error) redefinitionError(decl, d);
 			decl.sstate=SemState.error;
 			return false;
@@ -145,6 +145,7 @@ abstract class Scope{
 			DeclProp dup(){
 				return DeclProp(constBlock,componentReplacements.dup);
 			}
+			DeclProp inherit(){ return default_(); }
 		}
 		static struct DeclProps{
 			private DeclProp[Declaration] props;
@@ -158,14 +159,37 @@ abstract class Scope{
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
 		final void resetDeclProps(){ declProps.clear(); }
-		DeclProp* getDeclProp(Declaration decl,bool failed=false){
-			if(failed) return null;
-			return declProps.tryGet(decl);
+		final int nestedDeclProps(scope int delegate(ref DeclProps) dg){
+			if(auto r=dg(declProps)) return r;
+			return outerDeclProps(dg);
 		}
-		final ref DeclProp updateDeclProps(Declaration decl){
-			if(auto r=declProps.tryGet(decl)) return *r;
-			if(auto r=getDeclProp(decl,true)) return declProps.set(decl,r.dup);
-			return declProps.set(decl,DeclProp.default_());
+		int outerDeclProps(scope int delegate(ref DeclProps) dg){
+			return 0;
+		}
+		final nestedDeclProp(Declaration decl){
+			static struct NestedDeclProps{
+				Scope sc;
+				Declaration decl;
+				int opApply(scope int delegate(ref DeclProp) dg){
+					foreach(ref props;&sc.nestedDeclProps){
+						if(auto prop=props.tryGet(decl)){
+							if(auto r=dg(*prop))
+								return r;
+						}
+					}
+					return 0;
+				}
+			}
+			return NestedDeclProps(this,decl);
+		}
+		// DMD/LDC bug: if this function returns ref DeclProp,
+		// memory corruption occurs
+		final DeclProp* updateDeclProps(Declaration decl){
+			if(auto r=declProps.tryGet(decl)) return r;
+			foreach(ref prop;nestedDeclProp(decl)){
+				return &declProps.set(decl,prop.inherit);
+			}
+			return &declProps.set(decl,DeclProp.default_());
 		}
 		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
@@ -175,7 +199,9 @@ abstract class Scope{
 			updateDeclProps(decl).constBlock=constBlock;
 		}
 		final Identifier isConst(Declaration decl){
-			if(auto props=getDeclProp(decl)) return props.constBlock;
+			foreach(ref prop;nestedDeclProp(decl))
+				if(auto r=prop.constBlock)
+					return r;
 			return null;
 		}
 		static struct ConstBlockContext{
@@ -197,7 +223,7 @@ abstract class Scope{
 			foreach(decl,ref prop;declProps.props)
 				prop.constBlock=null;
 		}
-		final void resetComponentReplacements(){
+		final void resetLocalComponentReplacements(){
 			foreach(decl,ref prop;declProps.props)
 				prop.componentReplacements=[];
 		}
@@ -207,8 +233,18 @@ abstract class Scope{
 				r~=prop.componentReplacements;
 			return r;
 		}
-		DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
-			return localComponentReplacements();
+		DeclProp.ComponentReplacement*[] allComponentReplacements(){ // TODO: get rid of this?
+			typeof(return) r=[];
+			foreach(ref props;&nestedDeclProps)
+				foreach(decl,ref prop;props.props)
+					r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
+			return r;
+		}
+		final DeclProp.ComponentReplacement*[] componentReplacements(Declaration decl){ // TODO: get rid of this?
+			typeof(return) r=[];
+			foreach(ref prop;nestedDeclProp(decl))
+				r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
+			return r;
 		}
 		static struct ComponentReplacementContext{
 			private DeclProp.ComponentReplacement[][Declaration] componentReplacements;
@@ -224,10 +260,6 @@ abstract class Scope{
 		final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
 			foreach(decl,crepls;previous.componentReplacements)
 				updateDeclProps(decl).componentReplacements=crepls;
-		}
-		final DeclProp.ComponentReplacement[] componentReplacements(Declaration decl){
-			if(auto r=getDeclProp(decl)) return r.componentReplacements;
-			return [];
 		}
 	}else{
 		struct DeclProps{ }
@@ -261,7 +293,7 @@ abstract class Scope{
 		}
 	}
 
-	protected final Declaration symtabLookup(Identifier ident,bool rnsym,Lookup kind){
+	protected final Declaration symtabLookup(Identifier ident,bool rnsym,Lookup kind,Scope origin){
 		if(allowMerge) return null;
 		auto r=symtab.get(ident.ptr, null);
 		if(rnsym&&!r) r=rnsymtab.get(ident.ptr,null);
@@ -290,14 +322,17 @@ abstract class Scope{
 				}
 			}
 			if(kind==Lookup.constant&&r&&r.isLinear()){
-				if(!isConstHere(r))
-					blockConst(r,ident);
+				if(!origin.isConstHere(r))
+					origin.blockConst(r,ident);
 			}
 		}
 		return r;
 	}
-	Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
-		return lookupHere(ident,rnsym,kind);
+	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
+		return lookupImpl(ident,rnsym,lookupImports,kind,this);
+	}
+	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
+		return lookupHereImpl(ident,rnsym,kind,origin);
 	}
 	Identifier getRenamed(Identifier cname){
 		for(;;){ // TODO: quite hacky
@@ -315,7 +350,10 @@ abstract class Scope{
 		decl.rename=getRenamed(cname);
 	}
 	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind){
-		return symtabLookup(ident,rnsym,kind);
+		return lookupHereImpl(ident,rnsym,kind,this);
+	}
+	final Declaration lookupHereImpl(Identifier ident,bool rnsym,Lookup kind,Scope origin){
+		return symtabLookup(ident,rnsym,kind,origin);
 	}
 
 	bool isNestedIn(Scope rhs){ return rhs is this; }
@@ -542,7 +580,7 @@ abstract class Scope{
 			var.rename=new Identifier(decl.rename.name);
 			var.rename.loc=decl.rename.loc;
 		}
-		if(auto d=symtabLookup(var.name,false,Lookup.probing)){
+		if(auto d=symtabLookup(var.name,false,Lookup.probing,this)){
 			if(isFirstDef) redefinitionError(d,var);
 			else redefinitionError(var,d);
 			return false;
@@ -672,11 +710,11 @@ class TopScope: Scope{
 		// TODO: store a location for better error messages
 		// TODO: allow symbol lookup by full path
 	}
-	override Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
-		if(auto d=super.lookup(ident,rnsym,lookupImports,kind)) return d;
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
+		if(auto d=super.lookupImpl(ident,rnsym,lookupImports,kind,origin)) return d;
 		if(lookupImports){
 			Declaration[] ds;
-			foreach(sc;imports) if(auto d=sc.lookup(ident,rnsym,false,kind)) ds~=d;
+			foreach(sc;imports) if(auto d=sc.lookupImpl(ident,rnsym,false,kind,origin)) ds~=d;
 			if(ds.length==1||ds.length>=1&&rnsym) return ds[0];
 			if(ds.length>1){
 				error(format("multiple imports of %s",ident.name),ident.loc);
@@ -697,20 +735,15 @@ class NestedScope: Scope{
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
 
-	override Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
-		if(auto decl=lookupHere(ident,rnsym,kind)) return decl;
-		return parent.lookup(ident,rnsym,lookupImports,kind);
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
+		if(auto decl=lookupHereImpl(ident,rnsym,kind,origin)) return decl;
+		return parent.lookupImpl(ident,rnsym,lookupImports,kind,origin);
 	}
 
 	override Annotation restriction(){ return parent.restriction(); }
 	static if(language==silq){
-		override DeclProp* getDeclProp(Declaration decl,bool failed=false){
-			if(auto r=super.getDeclProp(decl,failed))
-				return r;
-			return parent.getDeclProp(decl);
-		}
-		override DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
-			return parent.allComponentReplacements()~super.allComponentReplacements();
+		override int outerDeclProps(scope int delegate(ref DeclProps) dg){
+			return parent.nestedDeclProps(dg);
 		}
 	}
 

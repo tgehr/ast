@@ -1254,13 +1254,13 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
 		auto dcontext=defineLhsContext(econtext);
-		auto crepls=sc.moveLocalComponentReplacements(); // TODO: get rid of this
+		auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
-		auto componentReplacements=sc.localComponentReplacements();
-		if(componentReplacements.length){
+		auto crepls=sc.localComponentReplacements();
+		if(crepls.length){
 			Expression[] reads;
-			foreach(ref crepl;componentReplacements){
+			foreach(ref crepl;crepls){
 				if(!crepl.write) continue;
 				auto id=new Identifier(crepl.name);
 				id.loc=be.loc;
@@ -1271,12 +1271,12 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				read.loc=crepl.write.loc;
 				reads~=move(read);
 			}
-			auto crepls2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
+			auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 			prologue=statementSemantic(new CompoundExp(reads),sc);
-			sc.restoreLocalComponentReplacements(crepls2); // TODO: get rid of this
+			sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 			prologue.loc=be.loc;
 			Expression[] writes;
-			foreach(ref crepl;componentReplacements){
+			foreach(ref crepl;crepls){
 				if(!crepl.write) continue;
 				auto id=new Identifier(crepl.name);
 				id.loc=be.loc;
@@ -1289,7 +1289,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 			epilogue=new CompoundExp(writes);
 			epilogue.loc=be.loc;
-		}else sc.restoreLocalComponentReplacements(crepls); // TODO: get rid of this
+		}else sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
 	}
 	propErr(be.e1,be);
 	static if(language==psi){ // TODO: remove this?
@@ -1574,10 +1574,11 @@ struct ArrayConsumer{
 			if(id.meaning) id.name=id.meaning.name.name;
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
+			assert(id.sstate!=SemState.completed);
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
 			if(e.e.sstate!=SemState.completed)
 				return;
-			assert(id.meaning is oldMeaning);
+			assert(id.meaning is oldMeaning,text(id.meaning," ",oldMeaning," ",id.loc));
 			assert(id.name==oldMeaning.getName);
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
@@ -1601,9 +1602,9 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 	auto inType=InType.no;
 	auto context=expSemContext(sc,ConstResult.yes,inType);
 
-	auto componentReplacements=sc.allComponentReplacements();
-	scope(exit) sc.resetComponentReplacements();
-	auto indicesToReplace=componentReplacements.map!(x=>x.write).array;
+	auto crepls=sc.localComponentReplacements();
+	scope(exit) sc.resetLocalComponentReplacements();
+	auto indicesToReplace=crepls.map!(x=>x.write).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 	ArrayConsumer consumer;
 	foreach(ref theIndex;indicesToReplace)
@@ -1624,8 +1625,8 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 			}
 		}
 	}
-	foreach(i;0..componentReplacements.length){
-		if(!componentReplacements[i].read){
+	foreach(i;0..crepls.length){
+		if(!crepls[i].read){
 			sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
 			indicesToReplace[i].sstate=SemState.error;
 			be.sstate=SemState.error;
@@ -2602,7 +2603,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return id;
 		}else{
 			if(!id.indexedDirectly){
-				if(auto crepls=sc.componentReplacements(meaning)){
+				auto crepls=sc.componentReplacements(meaning);
+				if(crepls.length){
 					sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);
 					if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
 					id.sstate=SemState.error;
@@ -2653,10 +2655,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 			bool checkCapture(){
 				static if(language==silq){
-					if(!astopt.allowUnsafeCaptureConst){
-						if(id.meaning&&sc.componentReplacements(id.meaning).length){
-							return false; // not captured, will be replaced
-						}else if(context.constResult){
+					if(id.meaning&&sc.componentReplacements(id.meaning).length){
+						return false; // not captured, will be replaced
+					}else if(!astopt.allowUnsafeCaptureConst){
+						if(context.constResult){
 							sc.error("cannot capture quantum variable as constant", id.loc);
 							id.sstate=SemState.error;
 							return false;
