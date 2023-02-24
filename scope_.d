@@ -167,7 +167,7 @@ abstract class Scope{
 			if(auto r=getDeclProp(decl,true)) return declProps.set(decl,r.dup);
 			return declProps.set(decl,DeclProp.default_());
 		}
-		private Identifier isConstHere(Declaration decl){
+		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
 			return null;
 		}
@@ -201,16 +201,19 @@ abstract class Scope{
 			foreach(decl,ref prop;declProps.props)
 				prop.componentReplacements=[];
 		}
-		final DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
+		final DeclProp.ComponentReplacement[] localComponentReplacements(){
 			typeof(return) r;
 			foreach(decl,ref prop;declProps.props)
 				r~=prop.componentReplacements;
 			return r;
 		}
+		DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
+			return localComponentReplacements();
+		}
 		static struct ComponentReplacementContext{
 			private DeclProp.ComponentReplacement[][Declaration] componentReplacements;
 		}
-		final ComponentReplacementContext moveComponentReplacements(){ // TODO: get rid of this
+		final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
 			DeclProp.ComponentReplacement[][Declaration] r;
 			foreach(decl,ref prop;declProps.props){
 				r[decl]=prop.componentReplacements;
@@ -218,12 +221,12 @@ abstract class Scope{
 			}
 			return typeof(return)(r);
 		}
-		final void restoreComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
+		final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
 			foreach(decl,crepls;previous.componentReplacements)
 				updateDeclProps(decl).componentReplacements=crepls;
 		}
 		final DeclProp.ComponentReplacement[] componentReplacements(Declaration decl){
-			if(auto r=declProps.tryGet(decl)) return r.componentReplacements;
+			if(auto r=getDeclProp(decl)) return r.componentReplacements;
 			return [];
 		}
 	}else{
@@ -312,8 +315,7 @@ abstract class Scope{
 		decl.rename=getRenamed(cname);
 	}
 	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind){
-		auto r = symtabLookup(ident,rnsym,kind);
-		return r;
+		return symtabLookup(ident,rnsym,kind);
 	}
 
 	bool isNestedIn(Scope rhs){ return rhs is this; }
@@ -694,6 +696,7 @@ class NestedScope: Scope{
 	Scope parent;
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
+
 	override Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
 		if(auto decl=lookupHere(ident,rnsym,kind)) return decl;
 		return parent.lookup(ident,rnsym,lookupImports,kind);
@@ -705,6 +708,9 @@ class NestedScope: Scope{
 			if(auto r=super.getDeclProp(decl,failed))
 				return r;
 			return parent.getDeclProp(decl);
+		}
+		override DeclProp.ComponentReplacement[] allComponentReplacements(){ // TODO: get rid of this
+			return parent.allComponentReplacements()~super.allComponentReplacements();
 		}
 	}
 

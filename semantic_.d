@@ -1254,10 +1254,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
 		auto dcontext=defineLhsContext(econtext);
-		auto crepls=sc.moveComponentReplacements(); // TODO: get rid of this
+		auto crepls=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
-		auto componentReplacements=sc.allComponentReplacements();
+		auto componentReplacements=sc.localComponentReplacements();
 		if(componentReplacements.length){
 			Expression[] reads;
 			foreach(ref crepl;componentReplacements){
@@ -1271,9 +1271,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				read.loc=crepl.write.loc;
 				reads~=move(read);
 			}
-			auto crepls2=sc.moveComponentReplacements(); // TODO: get rid of this
+			auto crepls2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 			prologue=statementSemantic(new CompoundExp(reads),sc);
-			sc.restoreComponentReplacements(crepls2); // TODO: get rid of this
+			sc.restoreLocalComponentReplacements(crepls2); // TODO: get rid of this
 			prologue.loc=be.loc;
 			Expression[] writes;
 			foreach(ref crepl;componentReplacements){
@@ -1289,7 +1289,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 			epilogue=new CompoundExp(writes);
 			epilogue.loc=be.loc;
-		}else sc.restoreComponentReplacements(crepls); // TODO: get rid of this
+		}else sc.restoreLocalComponentReplacements(crepls); // TODO: get rid of this
 	}
 	propErr(be.e1,be);
 	static if(language==psi){ // TODO: remove this?
@@ -2654,7 +2654,9 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			bool checkCapture(){
 				static if(language==silq){
 					if(!astopt.allowUnsafeCaptureConst){
-						if(context.constResult){
+						if(id.meaning&&sc.componentReplacements(id.meaning).length){
+							return false; // not captured, will be replaced
+						}else if(context.constResult){
 							sc.error("cannot capture quantum variable as constant", id.loc);
 							id.sstate=SemState.error;
 							return false;
@@ -2781,11 +2783,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				if(crepl.write){
 					auto rid=getIdFromIndex(crepl.write);
 					assert(rid && rid.meaning);
-					if(rid.name==cid.name){
+					if(rid.meaning is cid.meaning && cid.scope_ && rid.scope_ is cid.scope_){
 						cid.constLookup=true;
 						assert(cid.type==rid.type);
 						assert(cid.meaning is rid.meaning);
-						assert(cid.scope_ is rid.scope_);
 						if(!guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)){
 							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
 							if(crepl.read) // should always be non-null
