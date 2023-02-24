@@ -974,6 +974,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		auto next=unwrap(e.e);
 		if(auto id=cast(Identifier)next){
+			id.indexedDirectly=true;
 			id.scope_=context.sc;
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(next,e);
@@ -1325,6 +1326,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				finishIndexReplacement(be,sc);
 				return finish(e);
 			}
+		}else{
+			epilogue=null; // (avoids error messages)
+			// TODO: clean up other temporaries
 		}
 		finishIndexReplacement(be,sc);
 	}else{
@@ -2596,6 +2600,14 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			sc.error(format("undefined identifier %s",id.name),id.loc);
 			id.sstate=SemState.error;
 			return id;
+		}else{
+			if(!id.indexedDirectly){
+				if(auto crepls=sc.componentReplacements(meaning)){
+					sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);
+					if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+					id.sstate=SemState.error;
+				}
+			}
 		}
 		if(auto fd=cast(FunctionDef)meaning)
 			if(auto asc=isInDataScope(fd.scope_))
@@ -2746,6 +2758,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
+	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
 	idx.e=expressionSemantic(idx.e,context.nestConst);
 	propErr(idx.e,idx);
 	bool replaceIndex=false;

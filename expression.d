@@ -356,6 +356,7 @@ class Identifier: Expression{
 			r.substitute=substitute;
 			r.scope_=scope_;
 			r.calledDirectly=calledDirectly;
+			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
 				r.checkReverse=checkReverse;
 				r.classical=classical;
@@ -475,6 +476,7 @@ class Identifier: Expression{
 	bool substitute=false;
 	Scope scope_;
 	bool calledDirectly=false;
+	bool indexedDirectly=false;
 	static if(language==silq){
 		bool checkReverse=true; // (calls to reverse in the implementation of reverse itself are more liberal)
 		bool classical=false;
