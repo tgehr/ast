@@ -182,14 +182,12 @@ abstract class Scope{
 			}
 			return NestedDeclProps(this,decl);
 		}
-		// DMD/LDC bug: if this function returns ref DeclProp,
-		// memory corruption occurs
-		final DeclProp* updateDeclProps(Declaration decl){
-			if(auto r=declProps.tryGet(decl)) return r;
+		final ref DeclProp updateDeclProps(Declaration decl){
+			if(auto r=declProps.tryGet(decl)) return *r;
 			foreach(ref prop;nestedDeclProp(decl)){
-				return &declProps.set(decl,prop.inherit);
+				return declProps.set(decl,prop.inherit);
 			}
-			return &declProps.set(decl,DeclProp.default_());
+			return declProps.set(decl,DeclProp.default_());
 		}
 		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
