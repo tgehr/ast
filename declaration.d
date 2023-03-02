@@ -117,7 +117,7 @@ class FunctionDef: Declaration{
 	override bool isCompound(){ return true; }
 	override bool isLinear(){ return ftype && !ftype.isClassical(); }
 
-	@property override string kind(){ return "function"; }
+	@property override string kind(){ return "function definition"; }
 
 	// semantic information
 	FunctionScope fscope_;

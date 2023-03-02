@@ -1501,6 +1501,7 @@ class ReturnExp: Expression{
 		return new ReturnExp(e.copy(args));
 	}
 	override string toString(){ return "return"~(e?" "~e.toString():""); }
+	override @property string kind(){ return "return statement"; }
 
 	string expected;
 
@@ -1700,19 +1701,12 @@ auto dispatchStm(alias f,alias default_=unknownStmError,T...)(Expression s,auto 
 private noreturn unknownExpError(T...)(Expression e,auto ref T args){
 	assert(0,text("unknown expression: ",typeid(e)," ",e));
 }
-auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto ref T args){
+auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T...)(Expression e,auto ref T args){
 	import core.lifetime:forward;
 	// TODO: implement without cast cascade
-	if(auto cd=cast(CompoundDecl)e) return f(cd,forward!args); // TODO: declaration
-	if(auto ce=cast(CompoundExp)e) return f(ce,forward!args); // TODO: statement?
-	if(auto ce=cast(CommaExp)e) return f(ce,forward!args);
-
 	if(auto ite=cast(IteExp)e) return f(ite,forward!args);
-
 	if(auto le=cast(LiteralExp)e) return f(le,forward!args);
 	if(auto le=cast(LambdaExp)e) return f(le,forward!args);
-	if(auto fd=cast(FunctionDef)e) return f(fd,forward!args); // TODO: declaration
-	if(auto ret=cast(ReturnExp)e) return f(ret,forward!args); // TODO: statement
 	if(auto ce=cast(CallExp)e) return f(ce,forward!args);
 	static if(language==psi) if(auto pl=cast(PlaceholderExp)e) return f(pl,forward!args);
 	if(auto fe=cast(ForgetExp)e) return f(fe,forward!args);
@@ -1728,8 +1722,6 @@ auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto 
 	if(auto ume=cast(UMinusExp)e) return f(ume,forward!args);
 	if(auto une=cast(UNotExp)e) return f(une,forward!args);
 	if(auto ubne=cast(UBitNotExp)e) return f(ubne,forward!args);
-
-	static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e) return f(ce,forward!args);
 
 	if(auto ae=cast(AddExp)e) return f(ae,forward!args);
 	if(auto se=cast(SubExp)e) return f(se,forward!args);
@@ -1755,9 +1747,12 @@ auto dispatchExp(alias f,alias default_=unknownExpError,T...)(Expression e,auto 
 
 	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
 
-	if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
-	if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
-	if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);
+	static if(unanalyzed){
+		// expression types that only occur in unanalyzed expressions
+		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
+		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
+		if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);
+	}
 
 	return default_(e,forward!args);
 }

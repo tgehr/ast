@@ -2352,21 +2352,6 @@ auto nestConsumed(T)(ref T context){
 	return context.nest(ConstResult.no);
 }
 
-
-Expression expressionSemanticImpl(CompoundDecl cd,ExpSemContext context){
-	return compoundDeclSemantic(cd,context.sc);
-}
-
-Expression expressionSemanticImpl(CompoundExp ce,ExpSemContext context){
-	return compoundExpSemantic(ce,context.sc);
-}
-
-Expression expressionSemanticImpl(CommaExp ce,ExpSemContext context){
-	context.sc.error("nested comma expressions are disallowed",ce.loc);
-	ce.sstate=SemState.error;
-	return ce;
-}
-
 Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InType inType){
 	e=expressionSemantic(e,expSemContext(sc,ConstResult.yes,inType));
 	static if(language==silq) sc.pushConsumed();
@@ -2481,18 +2466,6 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 		le.type=typeForDecl(le.fd);
 	if(le.fd.sstate==SemState.completed) le.sstate=SemState.completed;
 	return le;
-}
-
-Expression expressionSemanticImpl(FunctionDef fd,ExpSemContext context){
-	context.sc.error("function definition cannot appear within an expression",fd.loc);
-	fd.sstate=SemState.error;
-	return fd;
-}
-
-Expression expressionSemanticImpl(ReturnExp ret,ExpSemContext context){
-	context.sc.error("return statement cannot appear within an expression",ret.loc);
-	ret.sstate=SemState.error;
-	return ret;
 }
 
 Expression expressionSemanticImpl(CallExp ce,ExpSemContext context){
@@ -3286,12 +3259,6 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
-static if(language==silq)
-Expression expressionSemanticImpl(UnaryExp!(Tok!"const") ce,ExpSemContext context){
-	context.sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc);
-	ce.sstate=SemState.error;
-	return ce;
-}
 
 private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context){
 	auto sc=context.sc;
@@ -3496,7 +3463,9 @@ Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
 
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
-	if(expr.kind=="expression"){ sc.error("unsupported",expr.loc); }
+	if(auto ce=cast(CommaExp)expr){ sc.error("nested comma expressions are disallowed",ce.loc); }
+	else if(auto ce=cast(UnaryExp!(Tok!"const"))expr){ sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc); }
+	else if(expr.kind=="expression"){ sc.error("not supported as an expression",expr.loc); }
 	else sc.error(expr.kind~" cannot appear within an expression",expr.loc);
 	expr.sstate=SemState.error;
 	return expr;
@@ -3553,7 +3522,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			}
 		}
 	}
-	return expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault)(context);
+	return expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault,true)(context);
 }
 
 
