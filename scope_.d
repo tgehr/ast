@@ -520,8 +520,8 @@ abstract class Scope{
 								symtab.remove(sym.name.ptr);
 								if(sym.rename) rnsymtab.remove(sym.rename.ptr);
 								static if(language==silq){
-									if(sym.isLinear()&&!scopes[0].canForgetAppend(sym)||
-									   osym.isLinear()&&!sc.canForgetAppend(osym)){
+									if(sym.isLinear()&&!scopes[0].canForget(sym)||
+									   osym.isLinear()&&!sc.canForget(osym)){
 										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
 										errors=true;
