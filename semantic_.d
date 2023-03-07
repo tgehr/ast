@@ -4,7 +4,7 @@ module ast.semantic_;
 import astopt;
 
 import std.array,std.algorithm,std.range,std.exception;
-import std.format, std.conv, std.typecons:Q=Tuple,q=tuple;
+import std.format, std.conv, util.tuple:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.error,ast.reverse,util;
 
 string freshName(){ // TODO: improve mechanism for generating temporaries
@@ -181,7 +181,7 @@ Expression presemantic(Declaration expr,Scope sc){
 	return expr;
 }
 
-import std.typecons: tuple,Tuple;
+import util.tuple: tuple,Tuple;
 static Tuple!(Expression[],TopScope)[string] modules;
 TopScope prsc=null;
 int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc=Location.init){

@@ -4,7 +4,7 @@ module ast.scope_;
 import astopt;
 
 import std.format, std.conv, std.range, std.algorithm, std.stdio;
-import std.typecons:Q=Tuple,q=tuple;
+import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap;
 

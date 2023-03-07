@@ -7,7 +7,7 @@ import std.string, utf = std.utf, std.uni;
 import std.stdio, std.conv;
 import std.algorithm;
 import std.traits: EnumMembers;
-import std.typecons;
+import util.tuple;
 import std.utf;
 
 import core.memory;
@@ -261,16 +261,17 @@ import std.array;
 int getColumn(Location loc, int tabsize){
 	return getStart(loc, tabsize).column;
 }
-Tuple!(int,"line",int,"column") getStart(T=dchar)(Location loc, int tabsize){
+struct LineCol{ int line; int column; }
+LineCol getStart(T=dchar)(Location loc, int tabsize){
 	int res=0;
 	auto l=loc.source.getLineOf(loc.rep);
 	for(;!l.empty&&l[0]&&l.ptr<loc.rep.ptr; l.popFront()){
 		if(l[0]=='\t') res=res-res%tabsize+tabsize;
 		else res+=l.front.codeLength!T();
 	}
-	return tuple!("line","column")(loc.line,res);
+	return LineCol(loc.line,res);
 }
-Tuple!(int,"line",int,"column") getEnd(T=dchar)(Location loc, int tabsize){
+LineCol getEnd(T=dchar)(Location loc, int tabsize){
 	int res=0;
 	auto lines=loc.rep.splitLines();
 	auto llen=lines.length;
@@ -280,7 +281,7 @@ Tuple!(int,"line",int,"column") getEnd(T=dchar)(Location loc, int tabsize){
 		if(l[0]=='\t') res=res-res%tabsize+tabsize;
 		else res+=l.front.codeLength!T();
 	}
-	return tuple!("line","column")(to!int(loc.line+llen-1),res);
+	return LineCol(to!int(loc.line+llen-1),res);
 }
 
 struct Token{

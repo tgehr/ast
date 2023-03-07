@@ -5,7 +5,7 @@ import astopt;
 
 import std.array, std.typetuple, std.algorithm, std.conv;
 import std.traits: EnumMembers;
-import std.typecons: Q=Tuple,q=tuple;
+import util.tuple: Q=Tuple,q=tuple;
 import ast.lexer, ast.error, ast.expression, ast.type, ast.declaration, util;
 // (re-purposed D parser, a little bit messy for now.)
 
