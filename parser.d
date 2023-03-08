@@ -276,7 +276,9 @@ struct Parser{
 				case Tok!")": if(pnest--) continue; break;
 				case Tok!"}": if(cnest--) continue; break;
 				case Tok!"]": if(bnest--) continue; break;
-				static if(!skipcomma) case Tok!",": if(pnest) continue; break;
+				static if(!skipcomma) {
+					case Tok!",": if(pnest) continue; break;
+				}
 				case Tok!"EOF": return false;
 				//case Tok!"..": if(bnest) continue; break;
 				default: continue;
