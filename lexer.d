@@ -356,15 +356,16 @@ string caseSimpleToken(string prefix="", bool needs = false)pure{
 										res[0].type=Tok!(candidates[0]);
 										p+=len;
 										break Lswitch;
-									}else static foreach(y;candidates){ // TODO: get rid of linear search?
-										if(p[0..y.length]==y){
-										   res[0].type=Tok!y;
-										   p+=y.length;
-										   break Lswitch;
+									}else {
+										static foreach(y;candidates){ // TODO: get rid of linear search?
+											if(p[0..y.length]==y){
+											   res[0].type=Tok!y;
+											   p+=y.length;
+											   break Lswitch;
+											}
 										}
+										goto default;
 									}
-									goto default;
-								break Lswitch;
 							}
 							default: break;
 						}`~(prefix==""?`if(isAlphaEx(ch)){s=p, p+=len; goto identifier; }

@@ -47,7 +47,7 @@ abstract class Expression: Node{
 	}
 
 	override string toString(){return _brk("{}()");}
-	protected string _brk(string s){return std.array.replicate("(",brackets)~s~std.array.replicate(")",brackets); return s;}
+	protected string _brk(string s){return std.array.replicate("(",brackets)~s~std.array.replicate(")",brackets);}
 
 	override @property string kind(){return "expression";}
 	bool isCompound(){ return false; }

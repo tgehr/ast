@@ -329,7 +329,7 @@ class ℂTy: Type{
 	}
 	override string toString(){
 		static if(language==silq) return classical?"!ℂ":"ℂ";
-		return "ℂ";
+		else return "ℂ";
 	}
 	override bool opEquals(Object o){
 		auto r=cast(ℂTy)o;
