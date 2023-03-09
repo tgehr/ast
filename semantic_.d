@@ -3049,48 +3049,38 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 		return false;
 	}
 	bool annotateLiteral(Expression expr, Expression type){
-		auto lit=cast(LiteralExp)expr;
-		if(lit){
-			if(cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
-				auto val=ℤ(lit.lit.str);
-				if(val==0||val==1) {
-					lit.type=Bool(true);
-					return true;
-				}
-			}
-			if(isUint(type)){
-				if(!isSubtype(expr.type,ℕt(false)))
-					return false;
-				expr.type=type.getClassical();
+		auto lit=cast(LiteralExp)expr, negLit=cast(UMinusExp)expr?cast(LiteralExp)(cast(UMinusExp)expr).e:null;
+		if(!lit&&!negLit) return false;
+		bool check(){
+			if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
 				return true;
+			if(isSubtype(expr.type,ℤt(false))&&isInt(type))
+				return true;
+			if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
+				return true;
+			if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
+				return true;
+			if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
+				auto val=ℤ(lit.lit.str);
+				if(val==0||val==1) return true;
 			}
-		}
-
-		LiteralExp negLit=null;
-		if(!lit){
-			if(auto negExpr=cast(UMinusExp)expr)
-				negLit=cast(LiteralExp)negExpr.e;
-			if(!negLit)
-				return false;
-		}
-
-		if(isInt(type)){
-			if(!isSubtype(expr.type,ℤt(false))) return false;
-		}else if(isRat(type)||isFloat(type)){
-			if(!isSubtype(expr.type,ℝ(false))) return false;
-		}else{
 			return false;
 		}
-
-		expr.type=type.getClassical();
-		if(negLit) negLit.type=expr.type;
+		if(!check()) return false;
+		auto ltype=type.getClassical();
+		if(negLit){
+			assert(minusType(ltype)==ltype);
+			negLit.type=ltype;
+		}
+		expr.type=ltype;
 		return true;
 	}
 	bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
 		if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
-		if(annotateLiteral(expr, type)) return true;
+		if(annotateLiteral(expr,type)) return true;
 		if(typeExplicitConversion(expr.type,type,annotationType)) return true;
 		if(auto tpl1=cast(TupleExp)expr){
+			scope(success) expr.type=tupleTy(tpl1.e.map!(e=>e.type).array);
 			if(auto tpl2=type.isTupleTy()){
 				return tpl1.e.length==tpl2.length&&iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],tpl2[i],annotationType));
 			}
