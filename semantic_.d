@@ -3048,24 +3048,47 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 		}
 		return false;
 	}
-	bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
-		if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
+	bool annotateLiteral(Expression expr, Expression type){
 		auto lit=cast(LiteralExp)expr;
-		bool isLiteral=lit||cast(UMinusExp)expr&&cast(LiteralExp)(cast(UMinusExp)expr).e;
-		if(isLiteral){
-			if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
-				return true;
-			if(isSubtype(expr.type,ℤt(false))&&isInt(type))
-				return true;
-			if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
-				return true;
-			if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
-				return true;
-			if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
+		if(lit){
+			if(cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
 				auto val=ℤ(lit.lit.str);
-				if(val==0||val==1) return true;
+				if(val==0||val==1) {
+					lit.type=Bool(true);
+					return true;
+				}
+			}
+			if(isUint(type)){
+				if(!isSubtype(expr.type,ℕt(false)))
+					return false;
+				expr.type=type.getClassical();
+				return true;
 			}
 		}
+
+		LiteralExp negLit=null;
+		if(!lit){
+			if(auto negExpr=cast(UMinusExp)expr)
+				negLit=cast(LiteralExp)negExpr.e;
+			if(!negLit)
+				return false;
+		}
+
+		if(isInt(type)){
+			if(!isSubtype(expr.type,ℤt(false))) return false;
+		}else if(isRat(type)||isFloat(type)){
+			if(!isSubtype(expr.type,ℝ(false))) return false;
+		}else{
+			return false;
+		}
+
+		expr.type=type.getClassical();
+		if(negLit) negLit.type=expr.type;
+		return true;
+	}
+	bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
+		if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
+		if(annotateLiteral(expr, type)) return true;
 		if(typeExplicitConversion(expr.type,type,annotationType)) return true;
 		if(auto tpl1=cast(TupleExp)expr){
 			if(auto tpl2=type.isTupleTy()){
