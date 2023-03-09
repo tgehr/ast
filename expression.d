@@ -1613,6 +1613,7 @@ alias OrAssignExp=BinaryExp!(Tok!"||←");
 alias AndAssignExp=BinaryExp!(Tok!"&&←");
 alias AddAssignExp=BinaryExp!(Tok!"+←");
 alias SubAssignExp=BinaryExp!(Tok!"-←");
+alias NSubAssignExp=BinaryExp!(Tok!"sub←");
 alias MulAssignExp=BinaryExp!(Tok!"·←");
 alias DivAssignExp=BinaryExp!(Tok!"/←");
 alias IDivAssignExp=BinaryExp!(Tok!"div←");

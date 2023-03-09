@@ -1825,11 +1825,11 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 }
 
 bool isOpAssignExp(Expression e){
-	return cast(OrAssignExp)e||cast(AndAssignExp)e||cast(AddAssignExp)e||cast(SubAssignExp)e||cast(MulAssignExp)e||cast(DivAssignExp)e||cast(IDivAssignExp)e||cast(ModAssignExp)e||cast(PowAssignExp)e||cast(CatAssignExp)e||cast(BitOrAssignExp)e||cast(BitXorAssignExp)e||cast(BitAndAssignExp)e;
+	return cast(OrAssignExp)e||cast(AndAssignExp)e||cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(MulAssignExp)e||cast(DivAssignExp)e||cast(IDivAssignExp)e||cast(ModAssignExp)e||cast(PowAssignExp)e||cast(CatAssignExp)e||cast(BitOrAssignExp)e||cast(BitXorAssignExp)e||cast(BitAndAssignExp)e;
 }
 
 bool isInvertibleOpAssignExp(Expression e){
-	return cast(AddAssignExp)e||cast(SubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e;
+	return cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e;
 }
 
 ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
