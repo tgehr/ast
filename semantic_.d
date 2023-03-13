@@ -1673,37 +1673,47 @@ void typeConstBlockNote(VarDecl vd,Scope sc)in{
 	}
 }
 
-bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
-	auto vd=cast(VarDecl)meaning;
-	if(!vd||vd.isConst||sc.isConst(vd)){
-		if(vd&&(vd.isConst||sc.isConst(vd))){
-			if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
-				sc.error("cannot reassign 'const' parameters",loc);
-			else sc.error("cannot reassign 'const' variables",loc);
-			if(vd.typeConstBlocker) typeConstBlockNote(vd,sc);
-			else if(auto read=sc.isConst(vd))
-				sc.note("variable was made 'const' here", read.loc);
-		}else if(meaning&&!vd) sc.error("can only assign to variables",loc);
-		else if(meaning) sc.error("cannot assign",loc);
+bool isNonConstVar(VarDecl vd,Scope sc){
+	if(!vd||vd.isConst||sc.isConst(vd))
 		return false;
-	}else{
-		static if(language==silq){
-			if(!quantumAssign&&!vd.vtype.isClassical()&&!sc.canForget(meaning)){
-				sc.error("cannot reassign quantum variable", loc);
-				return false;
-			}
-		}
-		if(vd.vtype==typeTy){
-			sc.error("cannot reassign type variables", loc);
+	return true;
+}
+
+bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){
+	auto vd=cast(VarDecl)meaning;
+	if(isNonConstVar(vd,sc)) return true;
+	if(vd&&(vd.isConst||sc.isConst(vd))){
+		if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
+			sc.error("cannot "~action~" 'const' parameters",loc);
+		else sc.error("cannot "~action~" 'const' variables",loc);
+		if(vd.typeConstBlocker) typeConstBlockNote(vd,sc);
+		else if(auto read=sc.isConst(vd))
+			sc.note("variable was made 'const' here", read.loc);
+	}else if(meaning&&!vd) sc.error(continuous~" non-variables not supported",loc);
+		else if(meaning) sc.error("cannot assign",loc);
+	return false;
+}
+
+bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
+	if(!checkNonConstVar!("reassign","reassigning")(meaning,loc,sc))
+		return false;
+	auto vd=cast(VarDecl)meaning;
+	static if(language==silq){
+		if(!quantumAssign&&!vd.vtype.isClassical()&&!sc.canForget(meaning)){
+			sc.error("cannot reassign quantum variable", loc);
 			return false;
 		}
-		for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
-			if(auto fsc=cast(FunctionScope)csc){
-				// TODO: what needs to be done to lift this restriction?
+	}
+	if(vd.vtype==typeTy){
+		sc.error("cannot reassign type variables", loc);
+		return false;
+	}
+	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
+		if(auto fsc=cast(FunctionScope)csc){
+			// TODO: what needs to be done to lift this restriction?
 				// TODO: method calls are also implicit assignments.
-				sc.error("cannot assign to variable in closure context (capturing by value)",loc);
-				return false;
-			}
+			sc.error("cannot assign to variable in closure context (capturing by value)",loc);
+			return false;
 		}
 	}
 	return true;
@@ -2505,6 +2515,10 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		if(!id) return;
 		auto meaning=id.meaning;
 		if(!meaning) return;
+		if(!checkNonConstVar!("forget","forgetting")(meaning,id.loc,sc)){
+			fe.sstate=SemState.error;
+			return;
+		}
 		if(id.type&&id.type.isClassical){
 			if(!sc.consume(meaning)){
 				sc.error("cannot forget variable from outer scope",id.loc);
