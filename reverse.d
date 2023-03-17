@@ -6,32 +6,11 @@ import astopt;
 import std.stdio,std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 
-bool isReverse(Identifier id){
-	if(!id) return false;
-	if(id.name!="reverse") return false;
-	return id.meaning&&isReverse(id.meaning);
-}
-bool isReverse(Declaration decl){
-	if(preludePath() !in modules) return false;
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-	if(!decl||decl.scope_ !is sc) return false;
-	if(!decl.name) return false;
-	return decl.getName=="reverse";
-}
-
 Expression constantExp(size_t l){
 	Token tok;
 	tok.type=Tok!"0";
 	tok.str=to!string(l);
 	return new LiteralExp(tok);
-}
-
-static if(language==silq)
-Identifier getReverse(Location loc,Scope isc,bool unchecked){
-	auto r=getPreludeSymbol("reverse",loc,isc);
-	if(unchecked) r.checkReverse=false; // TODO: is there a better solution than this?
-	return r;
 }
 
 static if(language==silq)
@@ -332,72 +311,49 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				return error();
 			}
 			Expression reversed=null,newrhs=null;
-			if(auto ce2=cast(CallExp)unwrap(ce.e)){
-				if(auto id=cast(Identifier)unwrap(ce2.e)){
-					if(isBuiltIn(id)){
-						switch(id.name){
-							static if(language==silq) case "quantumPrimitive":{
-								auto op=getQuantumOp(ce2.arg);
-								switch(op){
-									case "H","X","Y","Z": reversed=ce.e; break;
-									case "P":
-										reversed=ce.e;
-										reversed.loc=ce.e.loc;
-										auto tpl=cast(TupleExp)newarg;
-										enforce(tpl&&tpl.length==2);
-										// note: this ignores side-effects of rhs, if any
-										auto negated=new UMinusExp(tpl.e[0]);
-										negated.loc=newarg.loc;
-										newarg=negated;
-										break;
-									case "rX","rY","rZ":
-										reversed=ce.e;
-										reversed.loc=ce.e.loc;
-										auto tpl=cast(TupleExp)newarg;
-										enforce(tpl&&tpl.length==2);
-										auto negated=new UMinusExp(tpl.e[0]);
-										negated.loc=tpl.e[0].loc;
-										auto newtpl=new TupleExp([negated,tpl.e[1]]);
-										newtpl.loc=newarg.loc;
-										newarg=newtpl;
-										break; // DMD bug: does not detect if this is missing
-									default:
-										sc.error(format("cannot reverse quantum primitive '%s'",op),ce2.loc);
-										return error();
-								}
-								break;
-							}
-							default: break;
-						}
-					}
-				}else if(auto ce3=cast(CallExp)unwrap(ce2.e)){
-						if(auto id3=cast(Identifier)unwrap(ce3.e)){
-							if(isBuiltIn(id3)){
-								switch(id3.name){
-									static if(language==silq) case "quantumPrimitive":{
-										auto op=getQuantumOp(ce3.arg);
-										switch(op){
-											case "dup":
-												auto tpl=cast(TupleExp)newarg;
-												enforce(tpl&&tpl.length==2);
-												newrhs=new ForgetExp(tpl.e[1],tpl.e[0]);
-												break;
-											default:
-												sc.error(format("cannot reverse quantum primitive '%s'",op),ce2.loc);
-												return error();
-										}
-										break;
-									}
-									default: break;
-								}
-							}
-						}
+			static if(language==silq) {
+				auto op = isQuantumPrimitive(cast(CallExp)unwrap(ce.e));
+				switch(op) {
+					case null:
+						break;
+					case "dup":
+						auto tpl=cast(TupleExp)newarg;
+						enforce(tpl&&tpl.length==2);
+						newrhs=new ForgetExp(tpl.e[1],tpl.e[0]);
+						break;
+					case "H", "X", "Y", "Z":
+						reversed=ce.e;
+						break;
+					case "P":
+						reversed=ce.e;
+						auto tpl=cast(TupleExp)newarg;
+						enforce(tpl&&tpl.length==2);
+						// note: this ignores side-effects of rhs, if any
+						auto negated=new UMinusExp(tpl.e[0]);
+						negated.loc=newarg.loc;
+						newarg=negated;
+						break;
+					case "rX","rY","rZ":
+						reversed=ce.e;
+						auto tpl=cast(TupleExp)newarg;
+						enforce(tpl&&tpl.length==2);
+						auto negated=new UMinusExp(tpl.e[0]);
+						negated.loc=tpl.e[0].loc;
+						auto newtpl=new TupleExp([negated,tpl.e[1]]);
+						newtpl.loc=newarg.loc;
+						newarg=newtpl;
+						break; // DMD bug: does not detect if this is missing
+					default:
+						sc.error(format("cannot reverse quantum primitive '%s'",op),ce.e.loc);
+						return error();
 				}
 			}
 			if(!reversed&&!newrhs){
-				auto rev=getReverse(ce.e.loc,sc,unchecked);
-				if(rev.sstate!=SemState.completed) return error();
-				reversed=new CallExp(rev,ce.e,false,false);
+				reversed = tryReverseExpr(ce.e, ce.loc, sc, !unchecked);
+				if(!reversed) {
+					sc.error("cannot reverse expression", ce.e.loc);
+					return error();
+				}
 				reversed.loc=ce.e.loc;
 			}
 			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical);

@@ -288,6 +288,16 @@ class LiteralExp: Expression{
 		r.sstate=SemState.completed;
 		return r;
 	}
+	static LiteralExp makeString(string s, Location loc=Location.init){
+		Token tok;
+		tok.type=Tok!"``";
+		tok.str=s;
+		auto r=new LiteralExp(tok);
+		r.type=stringTy();
+		r.loc=loc;
+		r.sstate=SemState.completed;
+		return r;
+	}
 	bool isInteger(){
 		return lit.type==Tok!"0";
 	}
@@ -358,12 +368,7 @@ class Identifier: Expression{
 			r.calledDirectly=calledDirectly;
 			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
-				r.checkReverse=checkReverse;
 				r.classical=classical;
-			}
-		}else{
-			static if(language==silq){
-				r.checkReverse=checkReverse;
 			}
 		}
 		return r;
@@ -438,7 +443,6 @@ class Identifier: Expression{
 			r.classical=true;
 			r.type=type;
 			r.meaning=meaning;
-			r.checkReverse=checkReverse;
 			r.sstate=SemState.completed;
 			return r;
 		}else return this;
@@ -453,7 +457,6 @@ class Identifier: Expression{
 		r.meaning=meaning;
 		static if(language==silq){
 			r.classical=classical;
-			r.checkReverse=checkReverse;
 		}
 		return r;
 	}
@@ -478,7 +481,6 @@ class Identifier: Expression{
 	bool calledDirectly=false;
 	bool indexedDirectly=false;
 	static if(language==silq){
-		bool checkReverse=true; // (calls to reverse in the implementation of reverse itself are more liberal)
 		bool classical=false;
 	}
 	else enum classical=true;
@@ -1431,7 +1433,7 @@ class LambdaExp: Expression{
 		this.fd=fd;
 	}
 	override LambdaExp copyImpl(CopyArgs args){
-		return new LambdaExp(fd.copy(args));
+		return new LambdaExp(fd);
 	}
 	override string toString(){
 		string d=fd.isSquare?"[]":"()";
