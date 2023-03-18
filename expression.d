@@ -1428,12 +1428,14 @@ class TupleExp: Expression{
 }
 
 class LambdaExp: Expression{
+	FunctionDef orig;
 	FunctionDef fd;
-	this(FunctionDef fd){
-		this.fd=fd;
+	this(FunctionDef orig){
+		this.orig=orig;
+		this.fd=orig.copy();
 	}
 	override LambdaExp copyImpl(CopyArgs args){
-		return new LambdaExp(fd);
+		return new LambdaExp(orig);
 	}
 	override string toString(){
 		string d=fd.isSquare?"[]":"()";
