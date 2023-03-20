@@ -416,7 +416,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
 	auto nreturnTypes=argTypes;
 	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
-	auto cod=nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
+	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
 	auto isConst=chain(true.repeat(constArgTypes1.length),only(returnType.impliesConst()),true.repeat(constArgTypes2.length)).array;
 	auto annotation=ft.annotation;
 	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
@@ -495,7 +495,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 				return id;
 			}
 		}
-		auto argExp=argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
+		auto argExp=!(ft.isTuple&&ft.names.length==1)&&argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		argExp=new TypeAnnotationExp(argExp,cod,TypeAnnotationType.coercion);
 		argExp.loc=fd.loc; // TODO: use precise parameter locations

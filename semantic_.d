@@ -2219,24 +2219,24 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 	return ce;
 }
 
-FunTy reverseType(FunTy fTy, Location loc, Scope sc, bool check) {
-	assert(!fTy.cod.hasAnyFreeVar(fTy.names));
+FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
+	assert(!ft.cod.hasAnyFreeVar(ft.names));
 
 	Expression[] constArgTypes1;
 	Expression[] argTypes;
 	Expression[] constArgTypes2;
 	Expression returnType;
 	bool ok=true;
-	if(!fTy.isTuple){
-		assert(fTy.isConst.length==1);
-		if(fTy.isConst[0]) constArgTypes1=[fTy.dom];
-		else argTypes=[fTy.dom];
+	if(!ft.isTuple){
+		assert(ft.isConst.length==1);
+		if(ft.isConst[0]) constArgTypes1=[ft.dom];
+		else argTypes=[ft.dom];
 	}else{
-		auto tpl=fTy.dom.isTupleTy;
-		assert(!!tpl && tpl.length==fTy.isConst.length);
-		auto numConstArgs1=fTy.isConst.until!(x=>!x).walkLength;
-		auto numArgs=fTy.isConst[numConstArgs1..$].until!(x=>x).walkLength;
-		auto numConstArgs2=fTy.isConst[numConstArgs1+numArgs..$].until!(x=>!x).walkLength;
+		auto tpl=ft.dom.isTupleTy;
+		assert(!!tpl && tpl.length==ft.isConst.length);
+		auto numConstArgs1=ft.isConst.until!(x=>!x).walkLength;
+		auto numArgs=ft.isConst[numConstArgs1..$].until!(x=>x).walkLength;
+		auto numConstArgs2=ft.isConst[numConstArgs1+numArgs..$].until!(x=>!x).walkLength;
 		if(numConstArgs1+numArgs+numConstArgs2!=tpl.length){
 			ok=false;
 			if(sc) sc.error("reversed function cannot mix 'const' and consumed arguments", loc);
@@ -2249,7 +2249,7 @@ FunTy reverseType(FunTy fTy, Location loc, Scope sc, bool check) {
 		ok=false;
 		if(sc) sc.error("reversed function cannot have classical components in consumed arguments", loc);
 	}
-	returnType=fTy.cod;
+	returnType=ft.cod;
 	if(check&&returnType.hasClassicalComponent()){
 		ok=false;
 		if(sc) sc.error("reversed function cannot have classical components in return value", loc);
@@ -2260,10 +2260,10 @@ FunTy reverseType(FunTy fTy, Location loc, Scope sc, bool check) {
 	auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
 	auto nreturnTypes=argTypes;
 	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
-	auto cod=nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
+	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
 	auto isConst=chain(true.repeat(constArgTypes1.length),only(returnType.impliesConst()),true.repeat(constArgTypes2.length)).array;
-	auto annotation=fTy.annotation;
-	return funTy(isConst,dom,cod,fTy.isSquare,isConst.length!=1,annotation,true);
+	auto annotation=ft.annotation;
+	return funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
 }
 
 Expression makeReverser(FunTy fTy, Location loc, Scope sc, bool check) {
