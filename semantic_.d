@@ -3859,6 +3859,7 @@ DatDecl datDeclSemantic(DatDecl dat,Scope sc){
 	assert(!!bdy);
 	dat.body_=bdy;
 	dat.type=unit;
+	if(dat.sstate!=SemState.error) dat.sstate=SemState.completed;
 	return dat;
 }
 

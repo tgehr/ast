@@ -128,7 +128,7 @@ class FunctionDef: Declaration{
 	void addCapture(Identifier id){
 		captures~=id;
 	}
-	@property string contextName()in{assert(!!context);}do{ return context.getName; }
+	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
 	Expression ret; // return type
 	FunTy ftype;
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined
@@ -229,6 +229,63 @@ class DatDecl: Declaration{
 	}
 	@property string contextName()in{assert(!!context);}do{ return context.getName; }
 	@property bool isNested(){ return !!cast(NestedScope)scope_; }
+
+	FunctionDef fd;
+	FunctionDef toFunctionDef()in{ // TODO: parse DatDecl with params as function with a local DatDecl inside in the first place?
+		assert(hasParams&&sstate==SemState.completed);
+	}do{
+		if(fd) return fd;
+		auto fparams=params.map!((dparam){
+			auto name=new Identifier(dparam.getName);
+			name.loc=dparam.name.loc;
+			auto param=new Parameter(dparam.isConst, name, dparam.dtype);
+			param.loc=dparam.loc;
+			param.vtype=dparam.vtype;
+			param.sstate=dparam.sstate;
+			return param;
+		}).array;
+		auto id=new Identifier(getName);
+		id.loc=this.loc;
+		id.meaning=this;
+		import ast.semantic_:typeForDecl;
+		id.type=typeForDecl(this);
+		id.sstate=SemState.completed;
+		auto ids=fparams.map!((fparam){
+			auto id=new Identifier(fparam.getName);
+			id.loc=fparam.loc;
+			id.meaning=fparam;
+			id.type=fparam.vtype;
+			id.sstate=SemState.completed;
+			return id;
+		}).array;
+		Expression arg=ids[0];
+		if(isTuple){
+			arg=new TupleExp(ids.map!((Expression id)=>id).array);
+			arg.loc=ids.length?ids[0].loc.to(ids[$-1].loc):this.loc;
+			arg.type=tupleTy(ids.map!(id=>id.type).array);
+			arg.sstate=SemState.completed;
+		}
+		auto call=new CallExp(id,arg,true,false);
+		call.loc=id.loc.to(arg.loc);
+		auto ret=new ReturnExp(call);
+		ret.type=unit;
+		ret.sstate=SemState.completed;
+		auto bdy=new CompoundExp([ret]);
+		bdy.type=unit;
+		fd=new FunctionDef(null, fparams, isTuple, null, bdy);
+		fd.isSquare=true;
+		fd.annotation=Annotation.qfree;
+		fd.ftype=cast(ProductTy)id.type;
+		assert(fd.ftype);
+		assert(!captures.length,"nested dat decl not supported");
+		fd.fscope_=new FunctionScope(this.dscope_.parent,fd);
+		fd.context=this.context;
+		fd.ret=typeTy;
+		fd.hasReturn=true;
+		fd.retNames=["r"];
+		fd.sstate=SemState.completed;
+		return fd;
+	}
 }
 
 abstract class DefExp: Expression{
