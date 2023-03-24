@@ -1901,14 +1901,42 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	sc.resetConst(constSave);
 	propErr(ae.e2,ae);
-	if(ae.sstate!=SemState.error&&!isSubtype(ae.e2.type,ae.e1.type)){
-		if(auto id=cast(Identifier)ae.e1){
-			sc.error(format("cannot assign %s to variable %s of type %s",ae.e2.type,id,id.type),ae.loc);
-			assert(!!id.meaning);
-			sc.note("declared here",id.meaning.loc);
-		}else sc.error(format("cannot assign %s to %s",ae.e2.type,ae.e1.type),ae.loc);
-		ae.sstate=SemState.error;
+	void checkCompat(Expression lhs,Expression type){
+		if(auto id=cast(Identifier)lhs)
+			return; // strong update allowed
+		if(auto tpl=cast(TupleExp)lhs){
+			if(auto tt=type.isTupleTy){
+				if(tpl.length!=tt.length){
+					sc.error(text("inconsistent number of tuple entries for assignment: ",tpl.length," vs. ",tt.length),lhs.loc);
+					ae.sstate=SemState.error;
+				}else{
+					foreach(i,exp;tpl.e)
+						checkCompat(exp,tt[i]);
+				}
+			}else if(auto at=cast(ArrayTy)type){
+				foreach(exp;tpl.e)
+					checkCompat(exp,at.next);
+			}else{
+				sc.error(format("cannot unpack type %s as a tuple",type),lhs.loc);
+				ae.sstate=SemState.error;
+			}
+		}else if(auto idx=cast(IndexExp)lhs){
+			// TODO: allow strong component updates
+			if(!isSubtype(type,lhs.type)){
+				sc.error(format("cannot assign '%s' to array entry '%s' of type '%s'",type,lhs,lhs.type),lhs.loc);
+				ae.sstate=SemState.error;
+			}
+		}else if(auto fe=cast(FieldExp)lhs){
+			// TODO: add strong field updates
+			if(!isSubtype(type,lhs.type)){
+				sc.error(format("cannot assign '%s' to field '%s' of type '%s'",type,lhs,lhs.type),lhs.loc);
+				ae.sstate=SemState.error;
+			}
+		}else if(auto tae=cast(TypeAnnotationExp)lhs){
+			checkCompat(tae.e,type); // TODO: ok?
+		}else assert(ae.sstate==SemState.error);
 	}
+	if(ae.e2.type) checkCompat(ae.e1,ae.e2.type);
 	static if(language==silq){
 	enum Stage{
 		collectDeps,
@@ -1942,7 +1970,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 						if(rename !in defined){
 							if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
 							auto name=id.meaning.name.name;
-							auto var=addVar(name,id.type,lhs.loc,sc);
+							auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
 							defined[rename]=[];
 						}
 						break;
@@ -2051,10 +2079,6 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 	ce=expressionSemantic(ce,context.nestConsumed);
 	propErr(ce, be);
 	checkULhs(be.e1);
-	if(be.sstate!=SemState.error&&!isSubtype(ce.type, be.e1.type)){
-		sc.error(format("incompatible operand types %s and %s",be.e1.type,be.e2.type),be.loc);
-		be.sstate=SemState.error;
-	}
 	static if(language==silq){
 		if(be.sstate!=SemState.error&&!be.e1.type.isClassical()){
 			auto id=cast(Identifier)be.e1;
@@ -2076,11 +2100,11 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 					sc.pushConsumed();
 					sc.addDependency(id.meaning,dependency);
 					auto name=id.meaning.name.name;
-					auto var=addVar(name,id.type,be.loc,sc);
+					auto var=addVar(name,ce.type,be.loc,sc);
 				}else{
 					sc.consume(id.meaning);
 					sc.pushConsumed();
-					auto var=addVar(id.meaning.name.name,id.type,be.loc,sc);
+					auto var=addVar(id.meaning.name.name,ce.type,be.loc,sc);
 				}
 			}
 		}
