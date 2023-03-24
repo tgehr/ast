@@ -77,8 +77,9 @@ bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 bool isSubtype(Expression lhs,Expression rhs){
 	if(!lhs||!rhs) return false;
 	auto l=lhs.eval(), r=rhs.eval();
+	if(l.isClassical()&&!r.isClassical()) return isSubtype(l,r.getClassical());
+	if(!l.isClassical()&&r.isClassical()) return false;
 	auto wl=whichNumeric(l), wr=whichNumeric(r);
-	if(!lhs.isClassical()&&rhs.isClassical()) return false;
 	if(wl==NumericType.none||wr==NumericType.none) return l.isSubtypeImpl(r);
 	return wl<=wr;
 }
