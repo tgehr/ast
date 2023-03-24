@@ -133,7 +133,7 @@ Expression presemantic(Declaration expr,Scope sc){
 				assert(dsc.decl.isTuple||args.length==1);
 				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),expSemContext(sc,ConstResult.no,InType.yes));
 				ctxty.sstate=SemState.completed;
-				assert(ctxty.type == typeTy);
+				assert(isType(ctxty));
 			}
 			if(dsc.decl.name.name==fd.name.name){
 				assert(!!fd.body_.blscope_);
@@ -579,9 +579,11 @@ Expression builtIn(Identifier id,Scope sc){
 		case "π","pi": t=ℝ(true); break;
 		case "Marginal","sampleFrom","quantumPrimitive","__query","__show": t=unit; break; // those are actually magic polymorphic functions
 		case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
-		case "*","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
-			id.type=typeTy;
-			if(id.name=="*") return typeTy;
+		case "*","type","ctype","qtype","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+			id.type=ctypeTy;
+			if(id.name=="*"||id.name=="type") return typeTy;
+			if(id.name=="ctype") return ctypeTy;
+			if(id.name=="qtype") return qtypeTy;
 			if(id.name=="𝟙") return unit;
 			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
 			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
@@ -1596,7 +1598,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			propErr(be,de);
 		}
 		if(cast(TopScope)sc){
-			if(!be.e2.isConstant() && !cast(PlaceholderExp)be.e2 && be.e2.type!=typeTy){
+			if(!be.e2.isConstant() && !cast(PlaceholderExp)be.e2 && !isType(be.e2)){
 				sc.error("global constant initializer must be a constant",e2orig.loc);
 				if(de){ de.setError(); be.sstate=SemState.error; }
 			}
@@ -1852,7 +1854,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 			return false;
 		}
 	}
-	if(vd.vtype==typeTy){
+	if(isTypeTy(vd.vtype)){
 		sc.error("cannot reassign type variables", loc);
 		return false;
 	}
@@ -2425,7 +2427,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					if(auto decl=cast(DatDecl)id.meaning){
 						if(auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.consuming)){
 							if(auto cty=cast(FunTy)typeForDecl(constructor)){
-								assert(ft.cod is typeTy);
+								assert(isTypeTy(ft.cod));
 								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.annotation,true);
 							}
 						}
@@ -2486,7 +2488,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		if(r !is ce) ce=null;
 	}else if(auto at=isRhs?isDataTyId(fun):null){
 		auto decl=at.decl;
-		assert(fun.type is typeTy);
+		assert(isType(fun));
 		auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.consuming);
 		auto ty=cast(FunTy)typeForDecl(constructor);
 		if(ty&&decl.hasParams){
@@ -2841,7 +2843,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		sc.error("invalid forward reference",id.loc);
 		id.sstate=SemState.error;
 	}
-	if(id.type != typeTy()){
+	if(isType(id)){
 		if(auto dsc=isInDataScope(meaning.scope_)){
 			if(auto decl=sc.getDatDecl()){
 				if(decl is dsc.decl){
@@ -2857,7 +2859,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	auto vd=cast(VarDecl)meaning;
 	if(vd){
-		if(cast(TopScope)vd.scope_||vd.vtype==typeTy&&vd.initializer){
+		if(cast(TopScope)vd.scope_||isTypeTy(vd.vtype)&&vd.initializer){
 			if(!vd.initializer||vd.initializer.sstate!=SemState.completed)
 				id.sstate=SemState.error;
 			id.substitute=true;
@@ -3025,7 +3027,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		ce.loc=idx.loc;
 		return callSemantic(ce,context.nestConsumed);
 	}
-	if(idx.e.type==typeTy){
+	if(isType(idx.e)){
 		assert(!replaceIndex);
 		if(auto tty=typeSemantic(idx,sc))
 			return tty;
@@ -3497,7 +3499,7 @@ Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
-	static if(language==silq) if(une.e.type==typeTy){
+	static if(language==silq) if(isType(une.e)){
 		if(auto ty=typeSemantic(une.e,sc)){
 			if(ty.sstate==SemState.completed){
 				if(auto r=ty.getClassical()){
@@ -3525,7 +3527,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	propErr(e2,e);
 	if(e.sstate==SemState.error)
 		return e;
-	if(e1.type==typeTy&&name=="power"){
+	if(isType(e1)&&name=="power"){
 		/+if(auto le=cast(LiteralExp)e2){
 			if(le.lit.type==Tok!"0"){
 				if(!le.lit.str.canFind(".")){
@@ -3644,7 +3646,7 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context){
 	auto sc=context.sc;
 	// TODO: allow nested declarations
-	pr.type=typeTy();
+	pr.type=typeTy; // TODO: ok?
 	auto t1=typeSemantic(pr.e1,sc);
 	auto t2=typeSemantic(pr.e2,sc);
 	if(!t1||!t2){
@@ -3663,7 +3665,7 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context)
 
 Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context){
 	auto sc=context.sc;
-	ex.type=typeTy();
+	ex.type=typeTy; // TODO: ok?
 	Q!(bool[],Expression) getConstAndType(Expression e){
 		Q!(bool[],Expression) base(Expression e){
 			static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
@@ -3703,7 +3705,7 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context
 
 Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
 	auto sc=context.sc;
-	fa.type=typeTy();
+	fa.type=typeTy; // TODO: ok?
 	auto fsc=new RawProductScope(sc,fa.annotation);
 	scope(exit) fsc.forceClose();
 	declareParameters(fa,fa.isSquare,fa.params,fsc); // parameter variables
@@ -3993,9 +3995,9 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 
 
 Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
-	if(expr.type==typeTy) return expr;
+	if(isType(expr)) return expr;
 	if(auto lit=cast(LiteralExp)expr){
-		lit.type=typeTy;
+		lit.type=ctypeTy;
 		if(lit.lit.type==Tok!"0"){
 			if(lit.lit.str=="1")
 				return unit;
@@ -4005,10 +4007,10 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	if(at){
 		if(auto tpl=cast(TupleExp)at.a){
 			if(tpl.length==0){
-				expr.type=typeTy;
 				auto next=typeSemantic(at.e,sc);
 				propErr(at.e,expr);
 				if(!next) return null;
+				expr.type=next.type;
 				return arrayTy(next);
 			}
 		}
@@ -4016,7 +4018,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	auto context=expSemContext(sc,ConstResult.yes,InType.yes);
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
-	if(e.type!=typeTy){
+	if(!isType(e)){
 		auto id=cast(Identifier)expr;
 		if(id&&id.meaning){
 			auto decl=id.meaning;
@@ -4032,11 +4034,15 @@ Expression typeForDecl(Declaration decl){
 	if(auto dat=cast(DatDecl)decl){
 		if(!dat.dtype&&dat.scope_) dat=cast(DatDecl)presemantic(dat,dat.scope_);
 		assert(cast(AggregateTy)dat.dtype);
-		if(!dat.hasParams) return typeTy;
+		static if(language==silq){
+			assert(dat.isQuantum);
+			auto ttype=qtypeTy;
+		}else auto ttype=typeTy;
+		if(!dat.hasParams) return ttype;
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?
 		assert(dat.isTuple||dat.params.length==1);
 		auto pt=dat.isTuple?tupleTy(dat.params.map!(p=>p.vtype).array):dat.params[0].vtype;
-		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,typeTy,true,dat.isTuple,deterministic,true);
+		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,ttype,true,dat.isTuple,deterministic,true);
 	}
 	if(auto vd=cast(VarDecl)decl){
 		return vd.vtype;
@@ -4210,7 +4216,7 @@ Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 
 Expression handleQuantumPrimitive(CallExp ce, ExpSemContext context){
 	Scope sc=context.sc;
-	ce.arg=expressionSemantic(ce.arg, context.nestConst);
+	ce.arg=expressionSemantic(ce.arg,context.nestConst);
 	Expression[] args;
 	if(auto tpl=cast(TupleExp)ce.arg) args=tpl.e;
 	else {
@@ -4229,7 +4235,7 @@ Expression handleQuantumPrimitive(CallExp ce, ExpSemContext context){
 		ce.sstate=SemState.error;
 		return ce;
 	}
-	if(args[1].type != typeTy) {
+	if(!isType(args[1])){
 		sc.error("second argument to quantumPrimitive must be a type",args[0].loc);
 		ce.sstate=SemState.error;
 		return ce;

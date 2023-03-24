@@ -404,13 +404,13 @@ class Identifier: Expression{
 		if(name !in subst) return false;
 		if(subst[name]==this) return false;
 		static if(language==silq){
-			if(type==typeTy&&rhs.type==typeTy)
+			if(isType(this)&&isType(rhs))
 				if(rhs.isClassical()<classical) return false;
 		}
 		if(subst[name]){
 			if(!subst[name].unify(rhs,subst,meet))
 				return false;
-			if(subst[name].type==typeTy&&rhs.type==typeTy)
+			if(isType(subst[name])&&isType(rhs))
 				if(auto cmb=combineTypes(subst[name],rhs,meet)) // TODO: good?
 					subst[name]=cmb;
 			return true;
@@ -427,18 +427,18 @@ class Identifier: Expression{
 	}
 
 	override bool isClassical(){
-		assert(type==typeTy);
+		assert(isType(this));
 		return classical;
 	}
 	override bool hasClassicalComponent(){
-		assert(type==typeTy);
-		return true;
+		assert(isType(this));
+		return true; // TODO: ok?
 	}
 	override Expression getClassical(){
 		static if(language==silq){
-			assert(type==typeTy);
+			assert(isType(this));
 			if(classical) return this;
-			if(!meaning) return varTy(name,typeTy,true);
+			if(!meaning) return varTy(name,ctypeTy,true);
 			auto r=new Identifier(name);
 			r.classical=true;
 			r.type=type;
@@ -783,7 +783,7 @@ class CallExp: Expression{
 	override bool isSubtypeImpl(Expression rhs){
 		if(this == rhs) return true;
 		auto rcall = cast(CallExp)rhs;
-		if(rcall && type==typeTy && rhs.type==typeTy && e==rcall.e && isSquare==rcall.isSquare){
+		if(rcall && isType(this) && isType(rhs) && e==rcall.e && isSquare==rcall.isSquare){
 			if(!isClassical_ && rcall.isClassical_) return false;
 			if(auto id=cast(Identifier)e){
 				if(id.meaning){
@@ -815,7 +815,7 @@ class CallExp: Expression{
 	override Expression combineTypesImpl(Expression rhs, bool meet){
 		if(this == rhs) return this;
 		auto rcall = cast(CallExp)rhs;
-		if(rcall && type==typeTy && rhs.type==typeTy && e==rcall.e && isSquare==rcall.isSquare){
+		if(rcall && isType(type) && isType(rhs) && e==rcall.e && isSquare==rcall.isSquare){
 			if(e==rcall.e&&arg==rcall.arg){
 				if(isClassical_ && !rcall.isClassical_){
 					return meet?this:rcall;
@@ -866,10 +866,10 @@ class CallExp: Expression{
 	}
 	override Expression getClassical(){
 		static if(language==silq){
-			assert(type==typeTy);
+			assert(isType(this));
 			if(auto r=super.getClassical()) return r;
 			auto r=new CallExp(e,arg,isSquare,true);
-			r.type=typeTy;
+			r.type=ctypeTy;
 			r.sstate=sstate;
 			return r;
 		}else return this;

@@ -280,7 +280,7 @@ class DatDecl: Declaration{
 		assert(!captures.length,"nested dat decl not supported");
 		fd.fscope_=new FunctionScope(this.dscope_.parent,fd);
 		fd.context=this.context;
-		fd.ret=typeTy;
+		fd.ret=typeTy; // TODO: fix
 		fd.hasReturn=true;
 		fd.retNames=["r"];
 		fd.sstate=SemState.completed;

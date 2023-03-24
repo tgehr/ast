@@ -457,7 +457,7 @@ class TupleTy: Type,ITupleTy{
 	Expression opIndex(size_t i){ return types[i]; }
 	Expression opSlice(size_t l,size_t r){ return tupleTy(types[l..r]); }
 	private this(Expression[] types)in{
-		assert(types.all!(x=>x.type==typeTy));
+		assert(types.all!isType);
 		assert(!types.length||!types[1..$].all!(x=>x==types[0]));
 	}do{
 		this.types=types;
@@ -537,7 +537,7 @@ class TupleTy: Type,ITupleTy{
 		return 0;
 	}
 	override Expression evalImpl(Expression ntype){
-		assert(ntype==typeTy);
+		assert(isTypeTy(ntype));
 		auto ntypes=types.map!(t=>t.eval()).array;
 		if(ntypes==types) return this;
 		return tupleTy(ntypes);
@@ -547,7 +547,7 @@ class TupleTy: Type,ITupleTy{
 Type unit(){ return tupleTy([]); }
 
 Type tupleTy(Expression[] types)in{
-	assert(types.all!(x=>x.type&&x.type==typeTy));
+	assert(types.all!isType);
 }do{
 	import ast.lexer: Token,Tok;
 	if(types.length&&types.all!(x=>x==types[0])){
@@ -566,7 +566,7 @@ size_t numComponents(Expression t){
 class ArrayTy: Type{
 	Expression next;
 	private this(Expression next)in{
-		assert(next.type==typeTy);
+		assert(isType(next));
 	}do{
 		this.next=next;
 	}
@@ -593,7 +593,7 @@ class ArrayTy: Type{
 		return false;
 	}
 	override ArrayTy evalImpl(Expression ntype){
-		assert(ntype==typeTy);
+		assert(isTypeTy(ntype));
 		return arrayTy(next.eval());
 	}
 	override bool opEquals(Object o){
@@ -647,7 +647,7 @@ class ArrayTy: Type{
 }
 
 ArrayTy arrayTy(Expression next)in{
-	assert(next&&next.type==typeTy);
+	assert(isType(next));
 }do{
 	return memoize!((Expression next)=>new ArrayTy(next))(next);
 }
@@ -673,7 +673,7 @@ class VectorTy: Type, ITupleTy{
 		return vectorTy(next,len);
 	}
 	private this(Expression next,Expression num)in{
-		assert(next.type==typeTy);
+		assert(isType(next));
 	}do{
 		this.next=next;
 		this.num=num;
@@ -698,7 +698,7 @@ class VectorTy: Type, ITupleTy{
 		return false;
 	}
 	override VectorTy evalImpl(Expression ntype){
-		assert(ntype==typeTy);
+		assert(isTypeTy(ntype));
 		return vectorTy(next.eval(),num.eval());
 	}
 	override bool opEquals(Object o){
@@ -766,7 +766,7 @@ class VectorTy: Type, ITupleTy{
 }
 
 VectorTy vectorTy(Expression next,Expression num)in{
-	assert(next&&next.type==typeTy);
+	assert(isType(next));
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
 	return memoize!((Expression next,Expression num)=>new VectorTy(next,num))(next,num);
@@ -873,7 +873,7 @@ class ProductTy: Type{
 			assert(names.length==1);
 			assert(isConst.length==1);
 		}
-		assert(cod.type==typeTy,text(cod));
+		assert(isType(cod),text(cod));
 	}do{
 		this.isConst=isConst; // TODO: don't track this in PSI
 		this.names=names; this.dom=dom; this.cod=cod;
@@ -1205,7 +1205,7 @@ class ProductTy: Type{
 		return 0; // TODO: ok?
 	}
 	override Expression evalImpl(Expression ntype){
-		assert(ntype==typeTy);
+		assert(isTypeTy(ntype));
 		auto ndom=dom.eval(),ncod=cod.eval();
 		if(ndom==dom&&ncod==cod) return this;
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
@@ -1314,3 +1314,9 @@ class TypeTy: Type{
 }
 private TypeTy theTypeTy;
 TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
+
+Expression qtypeTy(){ return typeTy; }
+Expression ctypeTy(){ return typeTy; }
+
+bool isTypeTy(Expression e){ return isSubtype(e,typeTy); }
+bool isType(Expression e){ return isTypeTy(e.type); }
