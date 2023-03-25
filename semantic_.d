@@ -2377,7 +2377,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			if(exp.sstate==SemState.error) return;
 			static if(language==silq){
 				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
-				if((!classical||!qfree)&&ft.cod.hasFreeVar(ft.names[i])){
+				if((!classical||!qfree)&&ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
 					if(classical){ // TODO: could just automatically deduce existential type
 						sc.error(format("argument must be 'qfree' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
@@ -2388,7 +2388,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 			}else static if(language==psi){
 				bool pure_=exp.isPure();
-				if(!pure_&&ft.cod.hasFreeVar(ft.names[i])){
+				if(!pure_&&ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
 					sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 					sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					exp.sstate=SemState.error;
