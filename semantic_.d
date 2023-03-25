@@ -1600,7 +1600,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			propErr(be,de);
 		}
 		if(cast(TopScope)sc){
-			if(!be.e2.isConstant() && !cast(PlaceholderExp)be.e2 && !isType(be.e2)){
+			if(!be.e2.isConstant() && !cast(PlaceholderExp)be.e2 && !(isType(be.e2)||isQNumeric(be.e2))){
 				sc.error("global constant initializer must be a constant",e2orig.loc);
 				if(de){ de.setError(); be.sstate=SemState.error; }
 			}
@@ -2353,7 +2353,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					ce.sstate=SemState.error;
 				}
 				static if(language==silq && isRhs){
-					if(isType(ce)&&ce.isClassical_)
+					if((isType(ce)||isQNumeric(ce))&&ce.isClassical_)
 						ce.type=getClassicalTy(ce.type);
 					if(ce.e.type.isClassical()&&ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
 						if(auto classical=ce.type.getClassical())
@@ -3031,9 +3031,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		ce.loc=idx.loc;
 		return callSemantic(ce,context.nestConsumed);
 	}
-	if(isType(idx.e)){
+	if(isType(idx.e)||isQNumeric(idx.e)){
 		assert(!replaceIndex);
-		if(auto tty=typeSemantic(idx,sc))
+		if(auto tty=typeSemantic(idx,sc,true))
 			return tty;
 	}
 	idx.a=expressionSemantic(idx.a,context.nestConst);
@@ -3503,8 +3503,8 @@ Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
-	static if(language==silq) if(isType(une.e)){
-		if(auto ty=typeSemantic(une.e,sc)){
+	static if(language==silq) if(isType(une.e)||isQNumeric(une.e)){
+		if(auto ty=isQNumeric(une.e)?une.e:typeSemantic(une.e,sc)){
 			if(ty.sstate==SemState.completed){
 				if(auto r=ty.getClassical()){
 					return typeSemantic(r,sc);
@@ -3531,7 +3531,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	propErr(e2,e);
 	if(e.sstate==SemState.error)
 		return e;
-	if(isType(e1)&&name=="power"){
+	if((isType(e1)||isQNumeric(e1))&&name=="power"){
 		/+if(auto le=cast(LiteralExp)e2){
 			if(le.lit.type==Tok!"0"){
 				if(!le.lit.str.canFind(".")){
@@ -3651,8 +3651,8 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context)
 	auto sc=context.sc;
 	// TODO: allow nested declarations
 	pr.type=typeTy; // TODO: ok?
-	auto t1=typeSemantic(pr.e1,sc);
-	auto t2=typeSemantic(pr.e2,sc);
+	auto t1=typeSemantic(pr.e1,sc,true);
+	auto t2=typeSemantic(pr.e2,sc,true);
 	if(!t1||!t2){
 		pr.sstate=SemState.error;
 		return pr;
@@ -3998,8 +3998,8 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 }
 
 
-Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
-	if(isType(expr)) return expr;
+Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{assert(!!expr&&!!sc);}do{
+	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return expr;
 	if(auto lit=cast(LiteralExp)expr){
 		lit.type=utypeTy;
 		if(lit.lit.type==Tok!"0"){
@@ -4011,7 +4011,7 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	if(at){
 		if(auto tpl=cast(TupleExp)at.a){
 			if(tpl.length==0){
-				auto next=typeSemantic(at.e,sc);
+				auto next=typeSemantic(at.e,sc,allowQNumeric);
 				propErr(at.e,expr);
 				if(!next) return null;
 				expr.type=next.type;
@@ -4022,13 +4022,15 @@ Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	auto context=expSemContext(sc,ConstResult.yes,InType.yes);
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
-	if(!isType(e)){
+	if(!isType(e)&&!(allowQNumeric&&isQNumeric(e))){
 		auto id=cast(Identifier)expr;
 		if(id&&id.meaning){
 			auto decl=id.meaning;
 			sc.error(format("%s %s is not a type",decl.kind,decl.name),id.loc);
 			sc.note("declared here",decl.loc);
-		}else sc.error("not a type",expr.loc);
+		}else{
+			sc.error("not a type",expr.loc);
+		}
 		expr.sstate=SemState.error;
 		return null;
 	}else return e;

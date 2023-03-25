@@ -422,7 +422,7 @@ class TupleTy: Type,ITupleTy{
 	Expression opIndex(size_t i){ return types[i]; }
 	Expression opSlice(size_t l,size_t r){ return tupleTy(types[l..r]); }
 	private this(Expression[] types)in{
-		assert(types.all!isType);
+		assert(types.all!(e=>isType(e)||isQNumeric(e)));
 		assert(!types.length||!types[1..$].all!(x=>x==types[0]));
 	}do{
 		this.types=types;
@@ -508,7 +508,7 @@ class TupleTy: Type,ITupleTy{
 Type unit(){ return tupleTy([]); }
 
 Type tupleTy(Expression[] types)in{
-	assert(types.all!isType);
+	assert(types.all!(e=>isType(e)||isQNumeric(e)));
 }do{
 	import ast.lexer: Token,Tok;
 	if(types.length&&types.all!(x=>x==types[0])){
@@ -527,7 +527,7 @@ size_t numComponents(Expression t){
 class ArrayTy: Type{
 	Expression next;
 	private this(Expression next)in{
-		assert(isType(next));
+		assert(isType(next)||isQNumeric(next));
 	}do{
 		this.next=next;
 		this.type=typeOfArrayTy(next);
@@ -604,7 +604,7 @@ class ArrayTy: Type{
 }
 
 ArrayTy arrayTy(Expression next)in{
-	assert(isType(next));
+	assert(isType(next)||isQNumeric(next));
 }do{
 	return memoize!((Expression next)=>new ArrayTy(next))(next);
 }
@@ -630,7 +630,7 @@ class VectorTy: Type, ITupleTy{
 		return vectorTy(next,len);
 	}
 	private this(Expression next,Expression num)in{
-		assert(isType(next));
+		assert(isType(next)||isQNumeric(next));
 		assert(isSubtype(num.type,ℕt(true)));
 	}do{
 		this.next=next;
@@ -720,7 +720,7 @@ class VectorTy: Type, ITupleTy{
 }
 
 VectorTy vectorTy(Expression next,Expression num)in{
-	assert(isType(next));
+	assert(isType(next)||isQNumeric(next));
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
 	return memoize!((Expression next,Expression num)=>new VectorTy(next,num))(next,num);
@@ -1403,28 +1403,56 @@ Expression typeOfBoolTy(bool classical){
 	return classical?ctypeTy:qtypeTy;
 }
 
+static if(language==silq)
+class QNumericTy: Type{
+	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
+	override QNumericTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "qnumeric";
+	}
+	override bool opEquals(Object o){
+		return !!cast(QNumericTy)o;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+}
+static if(language==silq){
+	private QNumericTy theQNumericTy;
+	QNumericTy qnumericTy(){ return theQNumericTy?theQNumericTy:(theQNumericTy=new QNumericTy()); }
+}
+bool isQNumericTy(Expression e){ return e==qnumericTy; }
+bool isQNumeric(Expression e){ return e&&isQNumericTy(e.type); }
+
 Expression typeOfNumericTy(bool classical){
 	if(classical) return ctypeTy;
-	return typeTy; // TODO: return qnumericTy
+	static if(language==silq) return qnumericTy;
+	else return typeTy;
 }
 
 Expression typeOfTupleTy(scope Expression[] e...)in{
-	assert(e.all!isType);
+	assert(e.all!(e=>isType(e)||isQNumeric(e)));
 }do{
 	if(!e.length) return utypeTy;
+	if(e.any!isQNumeric) return qnumericTy;
 	if(e.all!isClassical) return ctypeTy;
 	if(e.all!isQuantum) return qtypeTy;
 	return typeTy;
 }
 
 Expression typeOfArrayTy(Expression e)in{
-	assert(isType(e));
+	assert(isType(e)||isQNumeric(e));
 }do{
+	if(isQNumeric(e)) return qnumericTy;
 	return typeOfTupleTy(e,ctypeTy);
 }
 
 Expression typeOfVectorTy(Expression e,Expression num)in{
-	assert(isType(e));
+	assert(isType(e)||isQNumeric(e));
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
 	// TODO: num=0 ↦ utype
