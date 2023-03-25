@@ -356,7 +356,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				}
 				reversed.loc=ce.e.loc;
 			}
-			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical);
+			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
 			newrhs.loc=newarg.loc;
 			return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
 		}

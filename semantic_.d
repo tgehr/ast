@@ -795,7 +795,9 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		fe.var.name=vd.getName;
 		fe.loopVar=vd;
 		if(vd.name.name!="_"&&!fesc.insert(vd))
-			fe.sstate=SemState.error;
+			fe.sstate=vd.sstate=SemState.error;
+		if(vd.sstate!=SemState.error)
+			vd.sstate=SemState.completed;
 		bdy=compoundExpSemantic(bdy,sc);
 		assert(!!bdy);
 		propErr(bdy,fe);
@@ -2171,27 +2173,27 @@ Identifier getReverse(Location loc, Scope isc){
 }
 
 Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
-	auto fTy=cast(FunTy)f.type;
-	if(!fTy) return null;
+	auto ft=cast(FunTy)f.type;
+	if(!ft) return null;
 
 	bool ok = true;
 
-	if(check && fTy.annotation<Annotation.mfree){
+	if(check && ft.annotation<Annotation.mfree){
 		sc.error("reversed function must be 'mfree'",f.loc);
 		ok = false;
 	}
-	if(check && !fTy.isClassical()){
+	if(check && !ft.isClassical_){
 		sc.error("reversed function must be classical",f.loc);
 		ok = false;
 	}
-	if(fTy.isSquare){
-		auto ft3=cast(FunTy)fTy.cod;
+	if(ft.isSquare){
+		auto ft3=cast(FunTy)ft.cod;
 		if(!ft3) return null;
 		if(ft3.isSquare) return null;
-		auto params=iota(fTy.nargs).map!((i){
-			bool isConst=fTy.isConst[i];
-			auto name=new Identifier("`arg_"~fTy.names[i]);
-			auto type=fTy.argTy(i);
+		auto params=iota(ft.nargs).map!((i){
+			bool isConst=ft.isConst[i];
+			auto name=new Identifier("`arg_"~ft.names[i]);
+			auto type=ft.argTy(i);
 			name.loc=loc;
 			name.type=type;
 			auto param=new Parameter(isConst,name,type);
@@ -2205,8 +2207,8 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 			Expression r=id;
 			return r;
 		}).array;
-		assert(fTy.isTuple||args.length==1);
-		auto narg=fTy.isTuple?new TupleExp(args):args[0];
+		assert(ft.isTuple||args.length==1);
+		auto narg=ft.isTuple?new TupleExp(args):args[0];
 		narg.loc=loc;
 		auto ce1=new CallExp(f.copy,narg,true,false);
 		ce1.loc=loc;
@@ -2216,7 +2218,7 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 		ret.loc=loc;
 		auto body_=new CompoundExp([ret]);
 		body_.loc=loc;
-		auto def=new FunctionDef(null,params,fTy.isTuple,null,body_);
+		auto def=new FunctionDef(null,params,ft.isTuple,null,body_);
 		def.isSquare=true;
 		def.annotation=Annotation.qfree;
 		def.loc=loc;
@@ -2225,8 +2227,8 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 		return le;
 	}
 
-	if(fTy.cod.hasAnyFreeVar(fTy.names)) return null;
-	Expression reverser = makeReverser(fTy, loc, sc, check);
+	if(ft.cod.hasAnyFreeVar(ft.names)) return null;
+	Expression reverser = makeReverser(ft, loc, sc, check);
 	if(!reverser) {
 		ok = false;
 		reverser = getReverse(loc, sc);
@@ -2351,6 +2353,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					ce.sstate=SemState.error;
 				}
 				static if(language==silq && isRhs){
+					if(isType(ce)&&ce.isClassical_)
+						ce.type=getClassicalTy(ce.type);
 					if(ce.e.type.isClassical()&&ce.arg.type.isClassical()&&ft.annotation>=Annotation.qfree){
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
@@ -2867,8 +2871,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		}
 	}
 	if(id.type&&meaning.scope_.getFunction()){
-		bool isQuantum=!id.type.isClassical();
-		bool captureChecked=!isQuantum;
+		bool hasQuantumComponent=id.type.hasQuantumComponent();
+		bool captureChecked=!hasQuantumComponent;
 		assert(sc.isNestedIn(meaning.scope_));
 		auto startScope=sc;
 		for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
@@ -2897,11 +2901,11 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 					captureChecked=true;
 					if(!checkCapture()) break;
 				}
-				if(isQuantum){
+				if(hasQuantumComponent){
 					if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
 						if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
 						else{
-							assert(fsc.fd.ftype.isClassical());
+							assert(fsc.fd.ftype.isClassical_);
 							sc.error("cannot capture quantum variable in classical function", id.loc);
 							id.sstate=SemState.error;
 							break;
@@ -3997,7 +4001,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 Expression typeSemantic(Expression expr,Scope sc)in{assert(!!expr&&!!sc);}do{
 	if(isType(expr)) return expr;
 	if(auto lit=cast(LiteralExp)expr){
-		lit.type=ctypeTy;
+		lit.type=utypeTy;
 		if(lit.lit.type==Tok!"0"){
 			if(lit.lit.str=="1")
 				return unit;

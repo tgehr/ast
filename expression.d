@@ -70,7 +70,7 @@ abstract class Expression: Node{
 	}
 	final Expression substitute(Expression[string] subst){
 		auto r=substituteImpl(subst);
-		if(type){
+		if(type&&!r.type){
 			if(type == this) r.type=r;
 			else r.type=type.substitute(subst);
 		}
@@ -163,20 +163,14 @@ abstract class Expression: Node{
 	ITupleTy isTupleTy(){
 		return null;
 	}
-	bool isClassical(){
-		return false;
-	}
 	bool impliesConst(){
 		static if(language==silq){
 			if(auto tpl=isTupleTy()) if(tpl.length==0) return false;
-			return isClassical();
+			return isClassical(this);
 		}else return true;
 	}
-	bool hasClassicalComponent(){
-		return true;
-	}
 	Expression getClassical(){
-		if(isClassical()) return this;
+		if(isClassical(this)) return this;
 		return null;
 	}
 	Annotation getAnnotation(){
@@ -405,7 +399,7 @@ class Identifier: Expression{
 		if(subst[name]==this) return false;
 		static if(language==silq){
 			if(isType(this)&&isType(rhs))
-				if(rhs.isClassical()<classical) return false;
+				if(rhs.isClassical<classical) return false;
 		}
 		if(subst[name]){
 			if(!subst[name].unify(rhs,subst,meet))
@@ -426,14 +420,6 @@ class Identifier: Expression{
 		return false;
 	}
 
-	override bool isClassical(){
-		assert(isType(this));
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		assert(isType(this));
-		return true; // TODO: ok?
-	}
 	override Expression getClassical(){
 		static if(language==silq){
 			assert(isType(this));
@@ -441,7 +427,7 @@ class Identifier: Expression{
 			if(!meaning) return varTy(name,ctypeTy,true);
 			auto r=new Identifier(name);
 			r.classical=true;
-			r.type=type;
+			r.type=getClassicalTy(type);
 			r.meaning=meaning;
 			r.sstate=SemState.completed;
 			return r;
@@ -744,7 +730,7 @@ class CallExp: Expression{
 		static if(language==silq) this.isClassical_=isClassical_;
 	}
 	override CallExp copyImpl(CopyArgs args){
-		return new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical);
+		return new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical_);
 	}
 	override string toString(){
 		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~arg.tupleToString(isSquare));
@@ -820,7 +806,7 @@ class CallExp: Expression{
 				if(isClassical_ && !rcall.isClassical_){
 					return meet?this:rcall;
 				}else{
-					assert(rcall.isClassical && !isClassical_);
+					assert(rcall.isClassical_ && !isClassical_);
 					return !meet?this:rcall;
 				}
 			}
@@ -850,7 +836,7 @@ class CallExp: Expression{
 							auto combined=iota(tup.length).map!(i=>combine(dat.params[i].variance,tup[i],rtup[i])).array;
 							if(combined.any!(x=>x is null)) return null;
 							auto rarg=new TupleExp(combined);
-							return callSemantic(new CallExp(e,rarg,isSquare,isClassical),expSemContext(null,ConstResult.no,InType.yes));
+							return callSemantic(new CallExp(e,rarg,isSquare,isClassical_),expSemContext(null,ConstResult.no,InType.yes));
 						}
 					}
 				}
@@ -858,18 +844,12 @@ class CallExp: Expression{
 		}
 		return super.combineTypesImpl(rhs,meet);
 	}
-	override bool isClassical(){
-		return isClassical_;
-	}
-	override bool hasClassicalComponent(){
-		return isClassical_;
-	}
 	override Expression getClassical(){
 		static if(language==silq){
 			assert(isType(this));
 			if(auto r=super.getClassical()) return r;
 			auto r=new CallExp(e,arg,isSquare,true);
-			r.type=ctypeTy;
+			r.type=getClassicalTy(type);
 			r.sstate=sstate;
 			return r;
 		}else return this;

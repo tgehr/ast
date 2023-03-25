@@ -76,6 +76,7 @@ bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
 bool isSubtype(Expression lhs,Expression rhs){
 	if(!lhs||!rhs) return false;
+	if(lhs is rhs) return true;
 	auto l=lhs.eval(), r=rhs.eval();
 	if(l.isClassical()&&!r.isClassical()) return isSubtype(l,r.getClassical());
 	if(!l.isClassical()&&r.isClassical()) return false;
@@ -107,7 +108,6 @@ abstract class Type: Expression{
 	override @property string kind(){ return "type"; }
 	override string toString(){ return "T"; }
 	abstract override bool opEquals(Object r);
-	abstract override bool isClassical();
 	override Annotation getAnnotation(){ return deterministic; }
 }
 
@@ -117,13 +117,16 @@ class ErrorTy: Type{
 		return this;
 	}
 	override string toString(){return "__error";}
-	override bool isClassical(){ return true; }
 	mixin VariableFree;
 }
 
 class BoolTy: Type{
 	private bool classical;
-	private this(bool classical){ this.classical=classical; }
+	private this(bool classical){
+		this.classical=classical;
+		this.type=typeOfBoolTy(classical);
+		super();
+	}
 	override BoolTy copyImpl(CopyArgs args){
 		return this;
 	}
@@ -134,12 +137,6 @@ class BoolTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(BoolTy)o;
 		return r && classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override BoolTy getClassical(){
 		return Bool(true);
@@ -163,6 +160,8 @@ class ℕTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type=typeOfNumericTy(classical);
+		super();
 	}
 	override ℕTy copyImpl(CopyArgs args){
 		return this;
@@ -174,12 +173,6 @@ class ℕTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(ℕTy)o;
 		return r&&classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override ℕTy getClassical(){
 		return ℕt(true);
@@ -204,6 +197,8 @@ class ℤTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type=typeOfNumericTy(classical);
+		super();
 	}
 	override ℤTy copyImpl(CopyArgs args){
 		return this;
@@ -215,12 +210,6 @@ class ℤTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(ℤTy)o;
 		return r&&classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override ℤTy getClassical(){
 		return ℤt(true);
@@ -244,6 +233,8 @@ class ℚTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type=typeOfNumericTy(classical);
+		super();
 	}
 	override ℚTy copyImpl(CopyArgs args){
 		return this;
@@ -255,12 +246,6 @@ class ℚTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(ℚTy)o;
 		return r&&classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override ℚTy getClassical(){
 		return ℚt(true);
@@ -284,6 +269,8 @@ class ℝTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type=typeOfNumericTy(classical);
+		super();
 	}
 	override ℝTy copyImpl(CopyArgs args){
 		return this;
@@ -295,12 +282,6 @@ class ℝTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(ℝTy)o;
 		return r&&classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override ℝTy getClassical(){
 		return ℝ(true);
@@ -324,6 +305,8 @@ class ℂTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type=typeOfNumericTy(classical);
+		super();
 	}
 	override ℂTy copyImpl(CopyArgs args){
 		return this;
@@ -335,12 +318,6 @@ class ℂTy: Type{
 	override bool opEquals(Object o){
 		auto r=cast(ℂTy)o;
 		return r&&classical==r.classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override ℂTy getClassical(){
 		return ℂ(true);
@@ -385,13 +362,7 @@ class AggregateTy: Type{
 		return false;
 	}
 	override string toString(){
-		return decl.name.name;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
+		return decl&&decl.name?decl.name.name:"<anonymous aggregate>";
 	}
 	override AggregateTy getClassical(){
 		static if(language==silq) return classicalTy;
@@ -417,12 +388,6 @@ class ContextTy: Type{
 	override bool opEquals(Object o){
 		auto ctx=cast(ContextTy)o;
 		return ctx&&ctx.classical==classical;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return classical;
 	}
 	override string toString(){
 		static if(language==silq) return (classical?"!":"")~"`Ctx";
@@ -461,6 +426,8 @@ class TupleTy: Type,ITupleTy{
 		assert(!types.length||!types[1..$].all!(x=>x==types[0]));
 	}do{
 		this.types=types;
+		this.type=typeOfTupleTy(types);
+		super();
 	}
 	override TupleTy copyImpl(CopyArgs args){
 		return this;
@@ -521,12 +488,6 @@ class TupleTy: Type,ITupleTy{
 		}
 		return null;
 	}
-	override bool isClassical(){
-		return all!(x=>x.isClassical())(types);
-	}
-	override bool hasClassicalComponent(){
-		return any!(x=>x.isClassical())(types);
-	}
 	override Expression getClassical(){
 		auto ntypes=types.map!(x=>x.getClassical()).array;
 		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
@@ -569,6 +530,8 @@ class ArrayTy: Type{
 		assert(isType(next));
 	}do{
 		this.next=next;
+		this.type=typeOfArrayTy(next);
+		super();
 	}
 	override ArrayTy copyImpl(CopyArgs args){
 		return this;
@@ -630,12 +593,6 @@ class ArrayTy: Type{
 		}
 		return null;
 	}
-	override bool isClassical(){
-		return next.isClassical();
-	}
-	override bool hasClassicalComponent(){
-		return true; // length is classical
-	}
 	override Expression getClassical(){
 		auto nnext=next.getClassical();
 		if(!nnext) return null;
@@ -674,9 +631,12 @@ class VectorTy: Type, ITupleTy{
 	}
 	private this(Expression next,Expression num)in{
 		assert(isType(next));
+		assert(isSubtype(num.type,ℕt(true)));
 	}do{
 		this.next=next;
 		this.num=num;
+		this.type=typeOfVectorTy(next,num);
+		super();
 	}
 	override string toString(){
 		bool p=cast(FunTy)next||next.isTupleTy&&next!is unit;
@@ -748,12 +708,6 @@ class VectorTy: Type, ITupleTy{
 		}
 		return null;
 	}
-	override bool isClassical(){
-		return next.isClassical();
-	}
-	override bool hasClassicalComponent(){
-		return next.hasClassicalComponent();
-	}
 	override Expression getClassical(){
 		auto nnext=next.getClassical();
 		if(!nnext) return null;
@@ -782,7 +736,7 @@ class StringTy: Type{
 	static if(language==silq) bool classical;
 	else enum classical=true;
 	private this(bool classical){
-		static if(language==silq) this.classical=classical;
+		this.type=typeOfStringTy(classical);
 	}
 	override StringTy copyImpl(CopyArgs args){
 		return this;
@@ -793,12 +747,6 @@ class StringTy: Type{
 	}
 	override bool opEquals(Object o){
 		return !!cast(StringTy)o;
-	}
-	override bool isClassical(){
-		return classical;
-	}
-	override bool hasClassicalComponent(){
-		return true; // length is classical
 	}
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
@@ -838,12 +786,6 @@ class RawProductTy: Expression{
 	override string toString(){
 		return "<unanalyzed Π type>"; // TODO: format nicely.
 	}
-	override bool isClassical(){
-		assert(0);
-	}
-	override bool hasClassicalComponent(){
-		assert(0);
-	}
 
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
@@ -859,8 +801,8 @@ class ProductTy: Type{
 	bool isSquare,isTuple;
 	Annotation annotation;
 	static if(language==silq){
-		bool isClassical_;
 		private ProductTy classicalTy;
+		bool isClassical_;
 	}else enum isClassical_=true;
 	private this(bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical_)in{
 		// TODO: assert that all names are distinct
@@ -879,8 +821,12 @@ class ProductTy: Type{
 		this.names=names; this.dom=dom; this.cod=cod;
 		this.isSquare=isSquare; this.isTuple=isTuple;
 		this.annotation=annotation;
-		static if(language==silq){this.isClassical_=isClassical_;
-			if(this.isClassical) classicalTy=this;
+		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
+		super();
+		assert(isClassical(this)==isClassical_);
+		static if(language==silq){
+			this.isClassical_=isClassical_;
+			if(isClassical_) classicalTy=this;
 			else classicalTy=new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,true);
 		}
 		// TODO: report DMD bug, New!ProductTy does not work
@@ -921,7 +867,7 @@ class ProductTy: Type{
 					if(isSquare) d=del[0]~d~del[1];
 				}else d=addp(isConst[0],dom,del);
 			}else d=addp(isConst[0],dom,del);
-			static if(language==silq) auto arrow=(isClassical?"!":"")~"→";
+			static if(language==silq) auto arrow=(isClassical_?"!":"")~"→";
 			else enum arrow="→";
 			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
@@ -931,7 +877,7 @@ class ProductTy: Type{
 				args=zip(isConst,names,iota(tdom.length).map!(i=>tdom[i])).map!(x=>(x[0]?"const ":"")~x[1]~":"~x[2].toString()).join(",");
 				if(nargs==1) args~=",";
 			}else args=(isConst[0]&&!dom.impliesConst()?"const ":"")~names[0]~":"~dom.toString();
-			static if(language==silq) auto pi=(isClassical?"!":"")~"∏";
+			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
 			r=pi~del[0]~args~del[1]~annotationToString(annotation)~". "~c;
 		}
@@ -1082,11 +1028,11 @@ class ProductTy: Type{
 		if(!isSubtype(arg.type,dom)) return null;
 		Expression[string] subst;
 		if(isTuple){
-			auto tdom=dom.isTupleTy();
+			auto targTy=arg.type.isTupleTy();
 			assert(!!tdom);
 			foreach(i,n;names){
 				auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
-				exp.type=tdom[i];
+				exp.type=targTy[i];
 				exp.sstate=SemState.completed;
 				subst[n]=exp.eval();
 			}
@@ -1116,7 +1062,7 @@ class ProductTy: Type{
 		if(!r) return false;
 		if(isConst!=r.isConst||isSquare!=r.isSquare||nargs!=r.nargs)
 			return false;
-		if(annotation<r.annotation||!isClassical&&r.isClassical)
+		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
 			return false;
 		auto name=freshName("x",r);
 		auto vars=varTy(name,r.dom);
@@ -1130,7 +1076,7 @@ class ProductTy: Type{
 		auto r=cast(ProductTy)rhs;
 		if(!r) return null;
 		auto nannotation=meet?min(annotation,r.annotation):max(annotation,r.annotation);
-		auto nisClassical=meet?isClassical||r.isClassical:isClassical&&r.isClassical;
+		auto nisClassical=meet?isClassical_||r.isClassical_:isClassical_&&r.isClassical_;
 		auto ndom=combineTypes(dom,r.dom,!meet);
 		if(!ndom) return null;
 		auto tpl=isTuple?ndom.isTupleTy():null;
@@ -1167,7 +1113,7 @@ class ProductTy: Type{
 		}
 	}
 	final ProductTy setAnnotation(Annotation annotation){
-		return productTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical);
+		return productTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
 	}
 	private ProductTy setTuple(bool tuple)in{
 		assert(!tuple||dom.isTupleTy());
@@ -1189,13 +1135,7 @@ class ProductTy: Type{
 			nIsConst=[isConst2.empty?unit.impliesConst():isConst2.front];
 		}
 		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
-		return productTy(nIsConst,nnames,dom,cod,isSquare,tuple,annotation,isClassical_);
-	}
-	override bool isClassical(){
-		return isClassical_;
-	}
-	override bool hasClassicalComponent(){
-		return true; // code is classical
+		return productTy(nIsConst,nnames,dom,cod,isSquare,tuple,annotation,isClassical(this));
 	}
 	override ProductTy getClassical(){
 		static if(language==silq) return classicalTy;
@@ -1289,8 +1229,122 @@ bool hasFreeIdentifier(Expression self,string name){
 	return false;
 }
 
+static if(language==silq)
+class UTypeTy: Type{
+	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
+	override UTypeTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "utype";
+	}
+	override bool opEquals(Object o){
+		return !!cast(UTypeTy)o;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+	override bool isSubtypeImpl(Expression r){
+		return util.among(r,this,ctypeTy,qtypeTy,typeTy);
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		if(meet){
+			if(isSubtypeImpl(r)) return this;
+			return null;
+		}else{
+			if(isSubtypeImpl(r)) return r;
+			return null;
+		}
+	}
+}
+static if(language==silq){
+	private UTypeTy theUTypeTy;
+	UTypeTy utypeTy(){ return theUTypeTy?theUTypeTy:(theUTypeTy=new UTypeTy()); }
+}else alias utypeTy=typeTy;
+
+static if(language==silq)
+class CTypeTy: Type{
+	this(){ this.type=this; super(); } // TODO: types capturing quantum values?
+	override CTypeTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "ctype";
+	}
+	override bool opEquals(Object o){
+		return !!cast(CTypeTy)o;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+	override bool isSubtypeImpl(Expression r){
+		return util.among(r,this,typeTy);
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		if(meet){
+			if(r==qtypeTy) return utypeTy;
+			if(r==typeTy) return this;
+			return null;
+		}else{
+			if(r==qtypeTy||r==typeTy) return typeTy;
+			return null;
+		}
+	}
+}
+static if(language==silq){
+	private CTypeTy theCTypeTy;
+	CTypeTy ctypeTy(){ return theCTypeTy?theCTypeTy:(theCTypeTy=new CTypeTy()); }
+}else alias ctypeTy=typeTy;
+
+static if(language==silq)
+class QTypeTy: Type{
+	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
+	override QTypeTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "qtype";
+	}
+	override bool opEquals(Object o){
+		return !!cast(QTypeTy)o;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+	override bool isSubtypeImpl(Expression r){
+		return r==this||r==typeTy;
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		if(meet){
+			if(r==ctypeTy) return utypeTy;
+			if(r==typeTy) return this;
+			return null;
+		}else{
+			if(r==ctypeTy||r==typeTy) return typeTy;
+			return null;
+		}
+	}
+}
+static if(language==silq){
+	private QTypeTy theQTypeTy;
+	QTypeTy qtypeTy(){ return theQTypeTy?theQTypeTy:(theQTypeTy=new QTypeTy()); }
+}else alias qtypeTy=typeTy;
+
+
 class TypeTy: Type{
-	this(){ this.type=this; super(); }
+	this(){
+		static if(language==silq){
+			// TODO: types capturing quantum values?
+			this.type=ctypeTy; // this.type=this?
+		}else this.type=this;
+		super();
+	}
 	override TypeTy copyImpl(CopyArgs args){
 		return this;
 	}
@@ -1300,23 +1354,85 @@ class TypeTy: Type{
 	override bool opEquals(Object o){
 		return !!cast(TypeTy)o;
 	}
-	override bool isClassical(){
-		return true; // quantum superposition of multiple types not allowed
-	}
-	override bool hasClassicalComponent(){
-		return true;
-	}
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
 	}
+	override bool isSubtypeImpl(Expression r){
+		return r==typeTy;
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		if(meet){
+			if(r.isSubtypeImpl(this)) return r;
+			return null;
+		}else{
+			if(r.isSubtypeImpl(this)) return this;
+			return null;
+		}
+	}
 }
 private TypeTy theTypeTy;
 TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
 
-Expression qtypeTy(){ return typeTy; }
-Expression ctypeTy(){ return typeTy; }
-
 bool isTypeTy(Expression e){ return isSubtype(e,typeTy); }
-bool isType(Expression e){ return isTypeTy(e.type); }
+bool isType(Expression e){ return e&&isTypeTy(e.type); }
+
+bool isClassicalTy(Expression e){ return isSubtype(e,ctypeTy); }
+bool isClassical(Expression e){ return e&&isClassicalTy(e.type); }
+
+bool isQuantumTy(Expression e){
+	static if(language==silq) return isSubtype(e,qtypeTy);
+	else return false;
+}
+bool isQuantum(Expression e){ return e&&isQuantumTy(e.type); }
+
+Expression getClassicalTy(Expression e)in{ // typeof(!x) for x:e
+	assert(isType(e));
+}do{
+	return ctypeTy;
+}
+
+bool hasClassicalComponentTy(Expression e){ return !isQuantumTy(e); }
+bool hasClassicalComponent(Expression e){ return e&&hasClassicalComponentTy(e.type); }
+
+bool hasQuantumComponentTy(Expression e){ return !isClassicalTy(e); }
+bool hasQuantumComponent(Expression e){ return e&&hasQuantumComponentTy(e.type); }
+
+Expression typeOfBoolTy(bool classical){
+	return classical?ctypeTy:qtypeTy;
+}
+
+Expression typeOfNumericTy(bool classical){
+	if(classical) return ctypeTy;
+	return typeTy; // TODO: return qnumericTy
+}
+
+Expression typeOfTupleTy(scope Expression[] e...)in{
+	assert(e.all!isType);
+}do{
+	if(!e.length) return utypeTy;
+	if(e.all!isClassical) return ctypeTy;
+	if(e.all!isQuantum) return qtypeTy;
+	return typeTy;
+}
+
+Expression typeOfArrayTy(Expression e)in{
+	assert(isType(e));
+}do{
+	return typeOfTupleTy(e,ctypeTy);
+}
+
+Expression typeOfVectorTy(Expression e,Expression num)in{
+	assert(isType(e));
+	assert(num&&isSubtype(num.type,ℕt(true)));
+}do{
+	// TODO: num=0 ↦ utype
+	return e.type;
+}
+
+Expression typeOfStringTy(bool classical){ return classical?ctypeTy:typeTy; }
+
+Expression typeOfProductTy(bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
+	return isClassical?ctypeTy:typeTy;
+}

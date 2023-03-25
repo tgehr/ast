@@ -445,7 +445,7 @@ abstract class Scope{
 			assert(toPush.length==0,text(toPush));
 		}do{
 			if(decl.sstate==SemState.error) return true;
-			assert(decl.sstate==SemState.completed);
+			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
 			return dependencies.canForget(decl.getName);
 		}
 
