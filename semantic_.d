@@ -579,11 +579,12 @@ Expression builtIn(Identifier id,Scope sc){
 		case "π","pi": t=ℝ(true); break;
 		case "Marginal","sampleFrom","quantumPrimitive","__query","__show": t=unit; break; // those are actually magic polymorphic functions
 		case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
-		case "*","type","ctype","qtype","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+		case "*","type","ctype","qtype","qnumeric","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
 			id.type=ctypeTy;
 			if(id.name=="*"||id.name=="type") return typeTy;
 			if(id.name=="ctype") return ctypeTy;
 			if(id.name=="qtype") return qtypeTy;
+			if(id.name=="qnumeric") return qnumericTy;
 			if(id.name=="𝟙") return unit;
 			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
 			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
