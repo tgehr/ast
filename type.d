@@ -477,7 +477,12 @@ class TupleTy: Type,ITupleTy{
 			auto rtypes=zip(ltup.types,iota(rtup.length).map!(i=>rtup[i])).map!((t)=>combineTypes(t.expand,meet)).array;
 			if(all!(x=>x !is null)(rtypes)) return tupleTy(rtypes);
 		}
-		if(auto rarr=cast(ArrayTy)r){
+		auto rarr=cast(ArrayTy)r;
+		if(!rarr&&!meet){
+			if(auto rvec=cast(VectorTy)r)
+				rarr=arrayTy(rvec.next);
+		}
+		if(rarr){
 			if(meet){
 				auto rtypes=zip(ltup.types,iota(length).map!(i=>rarr.next)).map!((t)=>combineTypes(t.expand,meet)).array;
 				if(all!(x=>x !is null)(rtypes)) return tupleTy(rtypes);
