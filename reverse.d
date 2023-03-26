@@ -567,6 +567,9 @@ ComputationClass classifyStatement(Expression e){
 		if(auto ce=cast(CommaExp)e) assert(0);
 		if(auto de=cast(DefineExp)e){
 			assert(!!de.e2.type);
+			if(auto tpl=cast(TupleExp)de.e2)
+				if(tpl.length==0) // TODO: this is a hack, support properly
+					return ComputationClass.quantum;
 			return classifyExpression(de.e2);
 		}
 		if(auto de=cast(DefExp)e){
