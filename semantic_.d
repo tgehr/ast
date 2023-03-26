@@ -3627,6 +3627,7 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	if(ce.sstate==SemState.error)
 		return ce;
 	auto vt1=cast(VectorTy)ce.e1.type,vt2=cast(VectorTy)ce.e2.type;
+	// TODO: concatenation of tuples
 	assert(!ce.type);
 	if(vt1&&vt2){
 		if(auto netype=joinTypes(vt1.next,vt2.next)){
@@ -3636,11 +3637,15 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 			auto ntype=vectorTy(netype,add.eval()); // TODO: evaluation context
 			ce.type=ntype;
 		}
+	}else if(ce.e1.type==unit||ce.e2.type==unit){
+		auto ntype=ce.e1.type==unit?ce.e2.type:ce.e1.type;
+		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
+			ce.type=ntype;
 	}else{
 		auto ntype=joinTypes(ce.e1.type,ce.e2.type);
 		if(cast(ArrayTy)ntype)
 			ce.type=ntype;
-		}
+	}
 	if(!ce.type){
 		sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 		ce.sstate=SemState.error;
