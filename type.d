@@ -1137,8 +1137,8 @@ class ProductTy: Type{
 			auto isConst2=iota(nargs).filter!(i=>!argTy(i).impliesConst()).map!(i=>isConst[i]);
 			if(!isConst2.empty&&!isConst2.all!(x=>x==isConst2.front))
 				return null;
-			nnames=["x"];
-			nIsConst=[isConst2.empty?unit.impliesConst():isConst2.front];
+			nnames=["t"];
+			nIsConst=[isConst2.empty?nargs!=0||unit.impliesConst():isConst2.front];
 		}
 		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
 		Expression narg;
