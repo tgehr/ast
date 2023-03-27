@@ -1129,7 +1129,8 @@ class ProductTy: Type{
 		if(tuple){
 			auto tpl=dom.isTupleTy();
 			assert(!!tpl);
-			nnames=iota(tpl.length).map!(i=>"x"~lowNum(i)).array;
+			assert(!isTuple&&names.length==1);
+			nnames=iota(tpl.length).map!(i=>names[0]~lowNum(i)).array;
 			assert(isConst.length==1);
 			nIsConst=isConst[0].repeat(tpl.length).array;
 		}else{
@@ -1140,7 +1141,22 @@ class ProductTy: Type{
 			nIsConst=[isConst2.empty?unit.impliesConst():isConst2.front];
 		}
 		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
-		return productTy(nIsConst,nnames,dom,cod,isSquare,tuple,annotation,isClassical(this));
+		Expression narg;
+		if(tuple){
+			auto tpl=dom.isTupleTy();
+			assert(!!tpl);
+			assert(!isTuple&&names.length==1);
+			auto vars=new TupleExp(iota(nnames.length).map!(i=>cast(Expression)varTy(nnames[i],tpl[i])).array);
+			vars.type=dom;
+			vars.sstate=SemState.completed;
+			narg=vars;
+		}else{
+			assert(isTuple&&nnames.length==1);
+			narg=varTy(nnames[0],dom);
+		}
+		auto ncod=tryApply(narg,isSquare);
+		assert(!!ncod);
+		return productTy(nIsConst,nnames,dom,ncod,isSquare,tuple,annotation,isClassical(this));
 	}
 	override ProductTy getClassical(){
 		static if(language==silq) return classicalTy;
