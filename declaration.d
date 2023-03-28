@@ -84,7 +84,7 @@ class Parameter: VarDecl{
 	}
 	override string toString(){
 		static if(language==silq){
-			return (isConst&&(!vtype||!vtype.impliesConst())?"const ":"")~getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():"");
+			return (isConst?"const ":"moved ")~getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():"");
 		}else return getName~(vtype?": "~vtype.toString():dtype?": "~dtype.toString():"");
 	}
 	@property override string kind(){ return "parameter"; }
@@ -166,7 +166,7 @@ class DatParameter: Parameter{
 	Variance variance;
 	this(Variance variance, Identifier name, Expression type){
 		this.variance=variance;
-		super(false,name,type);
+		super(true,name,type);
 	}
 	override DatParameter copyImpl(CopyArgs args){
 		return new DatParameter(variance,name?name.copy(args):null,dtype.copy(args));

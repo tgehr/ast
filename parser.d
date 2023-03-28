@@ -339,13 +339,16 @@ struct Parser{
 		return e;
 	}
 
-	Parameter parseParameter(){
+	Parameter parseParameter(bool constDefault){
 		mixin(SetLoc!Parameter);
-		bool isConst=false;
+		bool isConst=constDefault;
 		static if(language==silq){
 			if(ttype==Tok!"const"){
 				nextToken();
 				isConst=true;
+			}else if(ttype==Tok!"moved"){
+				nextToken();
+				isConst=false;
 			}
 		}
 		auto i=parseIdentifier();
@@ -357,7 +360,10 @@ struct Parser{
 		return res=New!Parameter(isConst,i,t);
 	}
 
-	Q!(Expression[],bool) parseArgumentList(bool nonempty=false, Entry=AssignExp, T...)(TokenType delim, T args){
+	Q!(Expression[],bool) parseArgumentList(bool nonempty=false, Entry=AssignExp, T...)(TokenType delim, T args)if(!is(Entry==Parameter)&&!is(Entry==DatParameter)){
+		return parseArgumentList!(nonempty,Entry,T)(false,delim,args);
+	}
+	Q!(Expression[],bool) parseArgumentList(bool nonempty=false, Entry=Parameter, T...)(bool constDefault,TokenType delim, T args){
 		auto e=appender!(Expression[])();
 		foreach(x;args) e.put(x); // static foreach
 		bool trailingComma=false;
@@ -365,7 +371,14 @@ struct Parser{
 		static if(!nonempty) if(ttype==delim) return q(e.data,trailingComma);
 		do{
 			trailingComma=false;
-			mixin(doParse!(Entry,"e1")); e.put(e1);
+			static if(is(Entry==Parameter)){
+				auto e1=parseParameter(constDefault);
+			}else static if(is(Entry==DatParameter)){
+				auto e1=parseDatParameter(constDefault);
+			}else{
+				mixin(doParse!(Entry,"e1"));
+			}
+			e.put(e1);
 			if(ttype==Tok!","){ nextToken(); trailingComma=true; }
 			else break;
 		}while(ttype!=delim && ttype!=Tok!"EOF");
@@ -473,7 +486,7 @@ struct Parser{
 					bool isSquare=false;
 					if(ttype==Tok!"[") isSquare=true;
 					expect(isSquare?Tok!"[":Tok!"(");
-					auto params=parseArgumentList!(false,Parameter)(isSquare?Tok!"]":Tok!")");
+					auto params=parseArgumentList!(false,Parameter)(isSquare,isSquare?Tok!"]":Tok!")");
 					expect(isSquare?Tok!"]":Tok!")");
 					Expression cod;
 					auto annotation=Annotation.none;
@@ -516,6 +529,9 @@ struct Parser{
 				case Tok!"const":
 					nextToken();
 					return res=New!(UnaryExp!(Tok!"const"))(parseExpression(nbp));
+				case Tok!"moved":
+					nextToken();
+					return res=New!(UnaryExp!(Tok!"moved"))(parseExpression(nbp));
 			}
 			case Tok!"__error": mixin(rule!(ErrorExp,"_"));
 			//case Tok!"[": mixin(rule!(ArrayLiteralExp,"_","OPT",ArgumentList,"]"));
@@ -777,7 +793,8 @@ struct Parser{
 		bool isSquare=false;
 		if(ttype==Tok!"[") isSquare=true;
 		expect(isSquare?Tok!"[":Tok!"(");
-		auto params=parseArgumentList!(false,Parameter)(isSquare?Tok!"]":Tok!")");
+		auto constDefault=isSquare;
+		auto params=parseArgumentList!(false,Parameter)(constDefault,isSquare?Tok!"]":Tok!")");
 		expect(isSquare?Tok!"]":Tok!")");
 		auto annotation=Annotation.none;
 		bool isLifted=false;
@@ -829,7 +846,7 @@ struct Parser{
 		res.annotation=annotation;
 		return res;
 	}
-	DatParameter parseDatParameter(){
+	DatParameter parseDatParameter(bool constDefault){
 		mixin(SetLoc!DatParameter);
 		auto variance=Variance.invariant_;
 		if(ttype==Tok!"+"){
@@ -856,7 +873,8 @@ struct Parser{
 		if(ttype==Tok!"["){
 			nextToken();
 			hasParams=true;
-			params=parseArgumentList!(false,DatParameter)(Tok!"]");
+			enum isSquare=true;
+			params=parseArgumentList!(false,DatParameter)(isSquare,Tok!"]");
 			expect(Tok!"]");
 		}
 		bool isQuantum=false;

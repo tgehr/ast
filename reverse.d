@@ -277,11 +277,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
 				return error();
 			}
-			auto numConstArgs1=ft.isConst.until!(x=>!x).walkLength;
-			auto numArgs=ft.isConst[numConstArgs1..$].until!(x=>x).walkLength;
-			auto numConstArgs2=ft.isConst[numConstArgs1+numArgs..$].until!(x=>!x).walkLength;
+			bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+			auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
+			auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
+			auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
 			if(numConstArgs1+numArgs+numConstArgs2!=ft.nargs){
-				sc.error("reversed function cannot mix 'const' and consumed arguments",ce.arg.loc); // TODO: automatically reorder arguments
+				sc.error("reversed function cannot mix order of 'const' and 'moved' parameters",ce.arg.loc); // TODO: automatically reorder arguments
 				return error();
 			}
 			// if(!numArgs&&rhs.isLifted()) return res=new ForgetExp(rhs,lhs); // TODO?
@@ -398,14 +399,15 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Expression returnType;
 	if(!ft.isTuple){
 		assert(ft.isConst.length==1);
-		if(ft.isConst[0]) constArgTypes1=[ft.dom];
+		if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
 		else argTypes=[ft.dom];
 	}else{
 		auto tpl=ft.dom.isTupleTy;
 		assert(!!tpl && tpl.length==ft.isConst.length);
-		auto numConstArgs1=ft.isConst.until!(x=>!x).walkLength;
-		auto numArgs=ft.isConst[numConstArgs1..$].until!(x=>x).walkLength;
-		auto numConstArgs2=ft.isConst[numConstArgs1+numArgs..$].until!(x=>!x).walkLength;
+		bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
+		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
+		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
 		enforce(numConstArgs1+numArgs+numConstArgs2==tpl.length,"reversed function cannot mix 'const' and consumed arguments");
 		constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
 		argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
@@ -417,7 +419,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto nreturnTypes=argTypes;
 	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
 	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
-	auto isConst=chain(true.repeat(constArgTypes1.length),only(returnType.impliesConst()),true.repeat(constArgTypes2.length)).array;
+	auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
 	auto annotation=ft.annotation;
 	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
 	if(!ret){

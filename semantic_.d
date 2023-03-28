@@ -999,10 +999,6 @@ VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 		assert(vd.dtype,text(vd));
 		vd.vtype=typeSemantic(vd.dtype,sc);
 	}
-	if(auto prm=cast(Parameter)vd){
-		if(vd.vtype&&vd.vtype.impliesConst())
-			prm.isConst=true;
-	}
 	if(!vd.vtype) vd.sstate=SemState.error;
 	if(vd.sstate!=SemState.error)
 		vd.sstate=SemState.completed;
@@ -2258,17 +2254,18 @@ FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
 	bool ok=true;
 	if(!ft.isTuple){
 		assert(ft.isConst.length==1);
-		if(ft.isConst[0]) constArgTypes1=[ft.dom];
+		if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
 		else argTypes=[ft.dom];
 	}else{
 		auto tpl=ft.dom.isTupleTy;
 		assert(!!tpl && tpl.length==ft.isConst.length);
-		auto numConstArgs1=ft.isConst.until!(x=>!x).walkLength;
-		auto numArgs=ft.isConst[numConstArgs1..$].until!(x=>x).walkLength;
-		auto numConstArgs2=ft.isConst[numConstArgs1+numArgs..$].until!(x=>!x).walkLength;
+		bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
+		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
+		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
 		if(numConstArgs1+numArgs+numConstArgs2!=tpl.length){
 			ok=false;
-			if(sc) sc.error("reversed function cannot mix 'const' and consumed arguments", loc);
+			if(sc) sc.error("reversed function cannot mix 'const' and 'moved' parameters", loc);
 		}
 		constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
 		argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
@@ -2276,7 +2273,7 @@ FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
 	}
 	if(check&&argTypes.any!(t=>t.hasClassicalComponent())){
 		ok=false;
-		if(sc) sc.error("reversed function cannot have classical components in consumed arguments", loc);
+		if(sc) sc.error("reversed function cannot have classical components in 'moved' arguments", loc);
 	}
 	returnType=ft.cod;
 	if(check&&returnType.hasClassicalComponent()){
@@ -2290,7 +2287,7 @@ FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
 	auto nreturnTypes=argTypes;
 	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
 	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
-	auto isConst=chain(true.repeat(constArgTypes1.length),only(returnType.impliesConst()),true.repeat(constArgTypes2.length)).array;
+	auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
 	auto annotation=ft.annotation;
 	return funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
 }
@@ -3682,7 +3679,7 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context
 				return q([true],typeSemantic(ce.e,sc));
 			}
 			auto ty=typeSemantic(e,sc);
-			return q([ty&&ty.impliesConst()||ex.isLifted],ty);
+			return q([ex.isLifted],ty);
 		}
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e){
 			auto merge1=!pr.e1.brackets&&cast(BinaryExp!(Tok!"×"))pr.e1;

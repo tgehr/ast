@@ -163,12 +163,6 @@ abstract class Expression: Node{
 	ITupleTy isTupleTy(){
 		return null;
 	}
-	bool impliesConst(){
-		static if(language==silq){
-			if(auto tpl=isTupleTy()) if(tpl.length==0) return false;
-			return isClassical(this);
-		}else return true;
-	}
 	Expression getClassical(){
 		if(isClassical(this)) return this;
 		return null;

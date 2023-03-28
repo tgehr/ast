@@ -849,39 +849,55 @@ class ProductTy: Type{
 	override string toString(){
 		auto c=cod.toString();
 		auto del=isSquare?"[]":"()";
+		string getParamKind(bool const_){
+			string paramKind=null;
+			static if(language==silq){
+				if(const_&&!isSquare) paramKind="const ";
+				if(!const_&&isSquare) paramKind="moved ";
+			}
+			return paramKind;
+		}
 		string r;
 		if(!cod.hasAnyFreeVar(names)){
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
-				static if(language==silq){
-					if(const_&&a.impliesConst()) const_=false;
-				}else const_=false;
-				if(cast(FunTy)a) return del[0]~(const_?"const (":"")~a.toString()~(const_?")":"")~del[1];
-				if(a.isTupleTy()) return (const_?"const (":"")~a.toString()~(const_?")":"");
-				return (const_?"const ":"")~a.toString();
+				auto paramKind=getParamKind(const_);
+				if(cast(FunTy)a) return del[0]~(paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"")~del[1];
+				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
+				return paramKind~a.toString();
 			}
-			if(all!(x=>!x)(isConst)){
+			if(isSquare&&all(isConst)||!isSquare&&all!(x=>!x)(isConst)){
 				d=dom.toString();
-				if(isSquare) d=del[0]~d~del[1];
 			}else if(auto tpl=dom.isTupleTy()){
 				if(isTuple){
 					assert(!!tpl.length);
-					if(tpl.length==1) return "("~(isConst[0]&&!tpl[0].impliesConst()?"const ":"")~tpl[0].toString()~")¹";
-					assert(tpl.length==isConst.length);
-					d=zip(isConst,iota(tpl.length).map!(i=>tpl[i])).map!(a=>(a[1].isTupleTy()&&a[1]!is unit?"("~(a[0]&&!a[1].impliesConst()?"const ":"")~a[1].toString()~")":addp(a[0],a[1]))).join(" × ");
-					if(isSquare) d=del[0]~d~del[1];
+					auto paramKind=getParamKind(isConst[0]);
+					if(tpl.length!=1){
+						assert(tpl.length==isConst.length);
+						d=zip(isConst,iota(tpl.length).map!(i=>tpl[i])).map!((a){
+							auto paramKind=getParamKind(a[0]);
+							return (a[1].isTupleTy()&&a[1]!is unit?"("~paramKind~a[1].toString()~")":addp(a[0],a[1]));
+						}).join(" × ");
+					}else d="("~paramKind~tpl[0].toString()~")¹";
 				}else d=addp(isConst[0],dom,del);
 			}else d=addp(isConst[0],dom,del);
 			static if(language==silq) auto arrow=(isClassical_?"!":"")~"→";
 			else enum arrow="→";
+			if(isSquare) d=del[0]~d~del[1];
 			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
 			assert(names.length);
 			string args;
 			if(isTuple){
-				args=zip(isConst,names,iota(tdom.length).map!(i=>tdom[i])).map!(x=>(x[0]?"const ":"")~x[1]~":"~x[2].toString()).join(",");
+				args=zip(isConst,names,iota(tdom.length).map!((i)=>tdom[i])).map!((x){
+					auto paramKind=getParamKind(x[0]);
+					return paramKind~x[1]~":"~x[2].toString();
+				}).join(",");
 				if(nargs==1) args~=",";
-			}else args=(isConst[0]&&!dom.impliesConst()?"const ":"")~names[0]~":"~dom.toString();
+			}else{
+				auto paramKind=getParamKind(isConst[0]);
+				args=paramKind~names[0]~":"~dom.toString();
+			}
 			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
 			r=pi~del[0]~args~del[1]~annotationToString(annotation)~". "~c;
@@ -962,20 +978,7 @@ class ProductTy: Type{
 		auto nsubst=subst.dup;
 		foreach(n;names) nsubst.remove(n);
 		auto ncod=cod.substitute(nsubst);
-		auto nIsConst=isConst;
-		if(isTuple){
-			auto tpl=ndom.isTupleTy();
-			assert(tpl&&tpl.length==nIsConst.length);
-			if(iota(nIsConst.length).any!(i=>!nIsConst[i]&&tpl[i].impliesConst)){
-				nIsConst=nIsConst.dup;
-				foreach(i;0..nIsConst.length) if(!nIsConst[i]&&tpl[i].impliesConst) nIsConst[i]=true;
-			}
-		}else{
-			assert(nIsConst.length==1);
-			if(ndom.impliesConst&&!nIsConst[0])
-				nIsConst=[true];
-		}
-		return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
 		auto r=cast(ProductTy)rhs; // TODO: get rid of duplication (same code in opEquals)
@@ -1134,11 +1137,10 @@ class ProductTy: Type{
 			assert(isConst.length==1);
 			nIsConst=isConst[0].repeat(tpl.length).array;
 		}else{
-			auto isConst2=iota(nargs).filter!(i=>!argTy(i).impliesConst()).map!(i=>isConst[i]);
-			if(!isConst2.empty&&!isConst2.all!(x=>x==isConst2.front))
+			if(!isConst.empty&&!isConst.all!(x=>x==isConst.front))
 				return null;
 			nnames=["t"];
-			nIsConst=[isConst2.empty?nargs!=0||unit.impliesConst():isConst2.front];
+			nIsConst=[isConst.empty?false:isConst.front];
 		}
 		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
 		Expression narg;
