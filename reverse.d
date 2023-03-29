@@ -277,7 +277,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
 				return error();
 			}
-			bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+			bool isConst(size_t i){ return ft.isConstForReverse[i]; }
 			auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
 			auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
 			auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
@@ -404,7 +404,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}else{
 		auto tpl=ft.dom.isTupleTy;
 		assert(!!tpl && tpl.length==ft.isConst.length);
-		bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+		bool isConst(size_t i){ return ft.isConstForReverse[i]; }
 		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
 		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
 		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;

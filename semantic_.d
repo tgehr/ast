@@ -2169,6 +2169,10 @@ Identifier getReverse(Location loc, Scope isc){
 	return getPreludeSymbol("reverse", loc, isc);
 }
 
+auto isConstForReverse(FunTy ft){
+	return iota(ft.nargs).map!(i=>ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum);
+}
+
 Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
@@ -2183,14 +2187,28 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 		sc.error("reversed function must be classical",f.loc);
 		ok = false;
 	}
-	if(ft.isSquare){
-		auto ft3=cast(FunTy)ft.cod;
-		if(!ft3) return null;
-		if(ft3.isSquare) return null;
+	if(ft.isSquare&&ft.isConst.all){
+		auto ft2=cast(FunTy)ft.cod;
+		if(!ft2) return null;
+		if(ft2.isSquare) return null;
 		auto params=iota(ft.nargs).map!((i){
 			bool isConst=ft.isConst[i];
 			auto name=new Identifier("`arg_"~ft.names[i]);
 			auto type=ft.argTy(i);
+			if(type==typeTy){
+				bool check(Expression ty){
+					if(ty.isQuantum) return true;
+					return !ty.hasFreeVar(ft.names[i]);
+				}
+				bool ok=true;
+				foreach(j;0..ft2.nargs){
+					if(ft2.isConstForReverse[j]) continue;
+					ok&=check(ft2.argTy(j));
+					if(!ok) break;
+				}
+				if(ok) ok&=check(ft2.cod);
+				if(!ok) type=qtypeTy;
+			}
 			name.loc=loc;
 			name.type=type;
 			auto param=new Parameter(isConst,name,type);
@@ -2244,9 +2262,9 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 	return ce;
 }
 
-FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
+FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check)in{
 	assert(!ft.cod.hasAnyFreeVar(ft.names));
-
+}do{
 	Expression[] constArgTypes1;
 	Expression[] argTypes;
 	Expression[] constArgTypes2;
@@ -2259,7 +2277,7 @@ FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check) {
 	}else{
 		auto tpl=ft.dom.isTupleTy;
 		assert(!!tpl && tpl.length==ft.isConst.length);
-		bool isConst(size_t i){ return ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum; }
+		bool isConst(size_t i){ return ft.isConstForReverse[i]; }
 		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
 		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
 		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
