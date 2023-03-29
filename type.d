@@ -824,6 +824,7 @@ class ProductTy: Type{
 	}do{
 		this.isConst=isConst; // TODO: don't track this in PSI
 		this.names=names; this.dom=dom; this.cod=cod;
+		assert(!cod.hasFreeVar(""));
 		this.isSquare=isSquare; this.isTuple=isTuple;
 		this.annotation=annotation;
 		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
@@ -952,14 +953,17 @@ class ProductTy: Type{
 	}
 	private string[] freshNames(Expression block){
 		auto nnames=names.dup;
-		foreach(i,ref nn;nnames)
+		foreach(i,ref nn;nnames){
+			if(nn=="") nn="x";
 			while(hasFreeVar(nn)||block.hasFreeVar(nn)||nnames[0..i].canFind(nn)) nn~="'";
+		}
 		return nnames;
 	}
 	private ProductTy relabelAll(string[] nnames)out(r){
 		assert(nnames.length==names.length);
 		foreach(n;nnames) assert(!hasFreeVar(n));
 	}do{
+		if(nnames==names) return this;
 		Expression[string] subst;
 		foreach(i;0..names.length) subst[names[i]]=varTy(nnames[i],argTy(i));
 		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,annotation,isClassical_);
@@ -990,7 +994,11 @@ class ProductTy: Type{
 		if(isSquare!=r.isSquare||annotation>r.annotation||
 		   isClassical_!=r.isClassical_||nargs!=r.nargs)
 			return false;
-		r=r.relabelAll(freshNames(r));
+		if(names.any!(name=>r.hasFreeVar(name)))
+			return false;
+		if(r.names.any!(name=>hasFreeVar(name)))
+			return false;
+		r=r.relabelAll(iota(names.length).map!(i=>names[i]!=""?names[i]:r.names[i]).array);
 		Expression[string] nsubst;
 		foreach(k,v;subst) if(!names.canFind(k)) nsubst[k]=v;
 		auto res=dom.unify(r.dom,nsubst,!meet)&&cod.unify(r.cod,nsubst,meet);
@@ -1212,7 +1220,9 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClas
 	return funTy(dom,cod,isSquare,isTuple,deterministic,isClassical);
 }
 
-Identifier varTy(string name,Expression type,bool classical=false){
+Identifier varTy(string name,Expression type,bool classical=false)in{
+	assert(name!=""&&type);
+}do{
 	return memoize!((string name,Expression type,bool classical){
 		auto r=new Identifier(name);
 		static if(language==silq) r.classical=classical;
