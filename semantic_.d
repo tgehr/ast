@@ -12,7 +12,7 @@ string freshName(){ // TODO: improve mechanism for generating temporaries
 	return text("__tmp",counter++);
 }
 
-Expression moved(Expression e){
+Expression moveExp(Expression e){
 	// TODO: implement
 	return e;
 }
@@ -1416,9 +1416,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				auto idx=crepl.write.copy();
 				idx.loc=crepl.write.loc;
 				idx.byRef=true;
-				auto read=new BinaryExp!(Tok!":=")(id,idx);
+				auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
 				read.loc=crepl.write.loc;
-				reads~=move(read);
+				reads~=read;
 			}
 			auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 			prologue=statementSemantic(new CompoundExp(reads),sc);
@@ -1432,9 +1432,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				auto idx=crepl.write.copy();
 				idx.loc=crepl.write.loc;
 				idx.byRef=true;
-				auto write=new BinaryExp!(Tok!":=")(idx,id);
+				auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
 				write.loc=crepl.write.loc;
-				writes~=move(write);
+				writes~=write;
 			}
 			epilogue=new CompoundExp(writes);
 			epilogue.loc=be.loc;

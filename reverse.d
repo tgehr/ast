@@ -116,7 +116,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		enforce(tpll.e.length==tplr.e.length);
 		Expression[] es;
 		foreach_reverse(i;0..tpll.e.length){
-			es~=lowerDefine!flags(tpll.e[i],move(tplr.e[i]),loc,sc,unchecked); // TODO: evaluation order of rhs okay?
+			es~=lowerDefine!flags(tpll.e[i],moveExp(tplr.e[i]),loc,sc,unchecked); // TODO: evaluation order of rhs okay?
 		}
 		if(es.any!(x=>!x)) return null;
 		auto d2=new CompoundExp(es);
