@@ -498,11 +498,35 @@ abstract class Scope{
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		bool errors=false;
-		foreach(sym;symtab.dup){
+		foreach(psym;symtab.dup){
+			auto sym=psym;
+			import ast.semantic_: typeForDecl;
+			bool symExists=true,needMerge=sym.scope_ is scopes[0];
+			void removeSym(){
+				symtab.remove(sym.name.ptr);
+				if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+				symExists=false;				
+			}
+			void promoteSym(Expression ntype){
+				symtab.remove(sym.name.ptr);
+				if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+				addVariable(sym,ntype);
+				sym=symtab[sym.name.ptr];
+				needMerge=true;
+			}
+			scope(success){
+				if(symExists&&needMerge){
+					auto ntype=typeForDecl(sym);
+					if(sym.scope_ is scopes[0]) sym.scope_=this; // TODO: get rid of this
+					else if(ntype){
+						// if(sym.scope_ is scopes[0]) promoteSym(ntype); // TODO
+						scopes[0].mergeVar(psym,ntype);
+					}else sym.scope_=this;
+				}
+			}
 			foreach(sc;scopes[1..$]){
 				if(sym.name.ptr !in sc.symtab){
-					symtab.remove(sym.name.ptr);
-					if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+					removeSym();
 					static if(language==silq){
 						if(sym.isLinear()&&!scopes[0].canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
@@ -511,16 +535,15 @@ abstract class Scope{
 					}
 				}else{
 					auto osym=sc.symtab[sym.name.ptr];
-					if((sym.scope_ is scopes[0]||osym.scope_ is sc)){
-						import ast.semantic_: typeForDecl;
+					if(sym!=osym){
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
 						if(!st) st=ot;
 						if(ot&&st){
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
-								symtab.remove(sym.name.ptr);
-								if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+								// TODO: automatically promote to quantum if possible
+								removeSym();
 								static if(language==silq){
 									if(sym.isLinear()&&!scopes[0].canForget(sym)||
 									   osym.isLinear()&&!sc.canForget(osym)){
@@ -530,11 +553,7 @@ abstract class Scope{
 									}
 								}
 							}else{
-								// TODO: automatically promote to quantum if possible
-								symtab.remove(sym.name.ptr);
-								if(sym.rename) rnsymtab.remove(sym.rename.ptr);
-								addVariable(sym,nt);
-								scopes[0].mergeVar(sym,nt);
+								promoteSym(nt);
 								sc.mergeVar(osym,nt);
 							}
 						}
