@@ -516,10 +516,8 @@ abstract class Scope{
 			}
 			scope(success){
 				if(symExists&&needMerge){
-					auto ntype=typeForDecl(sym);
-					if(sym.scope_ is scopes[0]) sym.scope_=this; // TODO: get rid of this
-					else if(ntype){
-						// if(sym.scope_ is scopes[0]) promoteSym(ntype); // TODO
+					if(auto ntype=typeForDecl(sym)){
+						if(sym.scope_ is scopes[0]) promoteSym(ntype);
 						scopes[0].mergeVar(psym,ntype);
 					}else sym.scope_=this;
 				}
@@ -584,8 +582,8 @@ abstract class Scope{
 					dependencies.dependencies.remove(k);
 			}
 		}
-		foreach(k,v;symtab) if(!this.isNestedIn(v.scope_)) v.scope_=this;
-		foreach(k,v;rnsymtab) if(!this.isNestedIn(v.scope_)) v.scope_=this;
+		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_));
+		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_));
 		return errors;
 	}
 
