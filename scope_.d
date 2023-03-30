@@ -274,20 +274,23 @@ abstract class Scope{
 		final void resetComponentReplacement(){ }
 	}
 
-	final bool consume(Declaration decl){
-		if(decl.name.ptr !in symtab) return false;
-		symtab.remove(decl.name.ptr);
-		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-		static if(language==silq) {
-			toPush~=decl.getName;
-			for(Scope sc=this; decl.scope_ !is sc; sc=(cast(NestedScope)sc).parent){
-				sc.consumedOuter~=decl;
-			}
-		}
-		return true;
-	}
 	static if(language==silq){
+		final bool consume(Declaration decl){
+			if(decl.name.ptr !in symtab) return false;
+			Expression type;
+			if(!consumeImpl(decl,type))
+				return false;
+			return true;
+		}
 		Declaration[] consumedOuter;
+		protected bool consumeImpl(Declaration decl,ref Expression type){
+			if(!decl||symtab.get(decl.name.ptr,null) !is decl) return false;
+			if(decl.scope_&&decl.scope_ !is this) consumedOuter~=decl;
+			symtab.remove(decl.name.ptr);
+			if(decl.rename) rnsymtab.remove(decl.rename.ptr);
+			toPush~=decl.getName;
+			return true;
+		}
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
@@ -488,11 +491,11 @@ abstract class Scope{
 	bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
 		static if(language==silq){
-			assert(toPush.length==0);
 			assert(scopes.all!(sc=>sc.toPush.length==0));
 		}
 		//debug assert(allowMerge);
 	}do{
+		toPush=[];
 		foreach(sc;scopes)
 			activeNestedScopes.remove(sc);
 		allowMerge=false;
@@ -516,7 +519,7 @@ abstract class Scope{
 			void promoteSym(Expression ntype){
 				symtab.remove(sym.name.ptr);
 				if(sym.rename) rnsymtab.remove(sym.rename.ptr);
-				addVariable(sym,ntype);
+				addVariable(sym,ntype,true);
 				sym=symtab[sym.name.ptr];
 				needMerge=true;
 			}
@@ -756,6 +759,32 @@ class NestedScope: Scope{
 	Scope parent;
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
+
+	override bool consumeImpl(Declaration decl,ref Expression type){
+		if(!super.consumeImpl(decl,type))
+			return false;
+		symtab.remove(decl.name.ptr);
+		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
+		if(this is decl.scope_) return true;
+		if(!decl.scope_) return true;
+		if(!parent.consumeImpl(decl,type))
+			return true;
+		auto parentDep=parent.dependencies.dependencies[decl.getName];
+		//parent.pushConsumed();
+		foreach(sc;parent.activeNestedScopes){
+			if(this is sc) continue;
+			if(sc.consumeImpl(decl,type)){
+				sc.pushConsumed();
+				import ast.semantic_: typeForDecl;
+				if(!type) type=typeForDecl(decl);
+				if(type){
+					sc.addDependency(decl,parentDep);
+					sc.addVariable(decl,type,true);
+				}
+			}
+		}
+		return true;
+	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
 		if(auto decl=lookupHereImpl(ident,rnsym,kind,origin)) return decl;
