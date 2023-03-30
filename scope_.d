@@ -278,10 +278,16 @@ abstract class Scope{
 		if(decl.name.ptr !in symtab) return false;
 		symtab.remove(decl.name.ptr);
 		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-		static if(language==silq) toPush~=decl.getName;
+		static if(language==silq) {
+			toPush~=decl.getName;
+			for(Scope sc=this; decl.scope_ !is sc; sc=(cast(NestedScope)sc).parent){
+				sc.consumedOuter~=decl;
+			}
+		}
 		return true;
 	}
 	static if(language==silq){
+		Declaration[] consumedOuter;
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
