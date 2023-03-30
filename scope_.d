@@ -529,15 +529,16 @@ abstract class Scope{
 										errors=true;
 									}
 								}
+							}else{
+								// TODO: automatically promote to quantum if possible
+								if(st!=nt){ // TODO: more efficient implementation for more than 2 scopes
+									symtab.remove(sym.name.ptr);
+									if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+									addVariable(sym,nt);
+									scopes[0].mergeVar(sym,nt);
+								}
+								sc.mergeVar(osym,nt);
 							}
-							// TODO: automatically promote to quantum if possible
-							if(st&&nt&&st!=nt){ // TODO: more efficient implementation for more than 2 scopes
-								symtab.remove(sym.name.ptr);
-								if(sym.rename) rnsymtab.remove(sym.rename.ptr);
-								addVariable(sym,nt);
-								scopes[0].mergeVar(sym,nt);
-							}
-							if(ot&&nt&&ot!=nt) sc.mergeVar(osym,nt);
 						}
 					}
 				}
