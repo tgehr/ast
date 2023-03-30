@@ -505,7 +505,7 @@ abstract class Scope{
 			void removeSym(){
 				symtab.remove(sym.name.ptr);
 				if(sym.rename) rnsymtab.remove(sym.rename.ptr);
-				symExists=false;				
+				symExists=false;
 			}
 			void promoteSym(Expression ntype){
 				symtab.remove(sym.name.ptr);
