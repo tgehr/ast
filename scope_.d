@@ -278,26 +278,28 @@ abstract class Scope{
 		final Declaration consume(Declaration decl){
 			if(decl.name.ptr !in symtab) return null;
 			Expression type;
-			if(auto r=consumeImpl(decl,type,true)) // TODO: separate splitting and consuming
+			if(auto r=consumeImpl(decl,decl,type,true)) // TODO: separate splitting and consuming
 				return r;
 			return null;
 		}
 		Declaration[] consumedOuter;
 		Declaration[] splitVars;
 		final void splitVar(Declaration splitFrom,Declaration splitInto){
-			splitFrom.splitInto=splitInto;
+			splitFrom.splitInto~=splitInto;
 			splitInto.splitFrom=splitFrom;
 			splitVars~=splitInto;
 		}
-		protected Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
-			assert(decl.scope_ is this);
-			if(symtab.get(decl.name.ptr,null) !is decl) return null;
+		protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
+			assert(odecl is ndecl||!remove);
+		}do{
+			assert(odecl.scope_ is this&&ndecl.scope_ is this);
+			if(symtab.get(odecl.name.ptr,null) !is odecl) return null;
 			if(remove){
-				symtab.remove(decl.name.ptr);
-				if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-				toPush~=decl.getName;
+				symtab.remove(odecl.name.ptr);
+				if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
+				toPush~=odecl.getName;
 			}
-			return decl;
+			return ndecl;
 		}
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
@@ -479,8 +481,8 @@ abstract class Scope{
 	Declaration[] mergedVars;
 	Declaration[] producedOuter;
 	final void mergeVar(Declaration mergedFrom,Declaration mergedInto){
+		mergedInto.mergedFrom~=mergedFrom;
 		mergedFrom.mergedInto=mergedInto;
-		mergedInto.mergedFrom=mergedFrom;
 		mergedVars~=mergedFrom;
 	}
 
@@ -507,6 +509,7 @@ abstract class Scope{
 		}
 		//debug assert(allowMerge);
 	}do{
+		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
 		toPush=[];
 		foreach(sc;scopes)
 			activeNestedScopes.remove(sc);
@@ -773,34 +776,38 @@ class NestedScope: Scope{
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
 
-	override Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
-		if(this is decl.scope_) return super.consumeImpl(decl,type,remove);
-		if(symtab.get(decl.name.ptr,null) !is decl) return null;
+	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
+		assert(odecl is ndecl||!remove);
+	}do{
+		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove);
+		if(symtab.get(odecl.name.ptr,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
-		if(!type) type=typeForDecl(decl);
+		if(!type) type=typeForDecl(ndecl);
 		if(remove||type){
-			symtab.remove(decl.name.ptr);
-			if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-			removeDependency(decl.getName);
+			symtab.remove(odecl.name.ptr);
+			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
+			if(type) removeDependency(odecl.getName);
 		}
-		Declaration result=decl;
+		if(remove) ndecl.splitInto=[];
+		Declaration result=ndecl;
 		if(type){
-			auto parentDep=parent.dependencies.dependencies[decl.getName];
-			addDependency(decl,parentDep);
-			addVariable(decl,type,true);
-			result=symtab.get(decl.name.ptr,decl); // TODO: refactor, a bit hacky
-			splitVar(decl,result);
+			auto parentDep=parent.dependencies.dependencies[odecl.getName];
+			addDependency(ndecl,parentDep);
+			addVariable(ndecl,type,true);
+			result=symtab.get(ndecl.name.ptr,ndecl); // TODO: refactor, a bit hacky
+			splitVar(ndecl,result);
 		}
 		if(remove){
-			if(auto ndecl=parent.consumeImpl(decl,type,true)){
+			assert(odecl is ndecl);
+			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
-					if(sc.consumeImpl(ndecl,type,false))
+					if(sc.consumeImpl(odecl,nndecl,type,false))
 						sc.pushConsumed();
 				}
 			}
-		}else consumedOuter~=decl;
+		}else consumedOuter~=ndecl;
 		if(!remove) return result;
 		return type?consume(result):result;
 	}
