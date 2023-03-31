@@ -284,8 +284,8 @@ abstract class Scope{
 		}
 		Declaration[] consumedOuter;
 		protected Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
+			assert(decl.scope_ is this);
 			if(symtab.get(decl.name.ptr,null) !is decl) return null;
-			if(decl.scope_&&decl.scope_ !is this) consumedOuter~=decl;
 			if(remove){
 				symtab.remove(decl.name.ptr);
 				if(decl.rename) rnsymtab.remove(decl.rename.ptr);
@@ -776,13 +776,16 @@ class NestedScope: Scope{
 			addDependency(decl,parentDep);
 			addVariable(decl,type,true);
 		}
-		if(remove&&parent.consumeImpl(decl,type,true)){
-			foreach(sc;parent.activeNestedScopes){
-				if(this is sc) continue;
-				if(sc.consumeImpl(decl,type,false))
-					sc.pushConsumed();
+		if(remove){
+			if(auto ndecl=parent.consumeImpl(decl,type,true)){
+				consumedOuter~=ndecl;
+				foreach(sc;parent.activeNestedScopes){
+					if(this is sc) continue;
+					if(sc.consumeImpl(ndecl,type,false))
+						sc.pushConsumed();
+				}
 			}
-		}
+		}else consumedOuter~=decl;
 		if(!remove) return symtab.get(decl.name.ptr,decl);
 		return consume(symtab.get(decl.name.ptr,decl)); // TODO: refactor, a bit hacky
 	}
