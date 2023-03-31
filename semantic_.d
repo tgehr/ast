@@ -1727,7 +1727,8 @@ struct ArrayConsumer{
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
 			if(e.e.sstate!=SemState.completed)
 				return;
-			assert(id.meaning is oldMeaning,text(id.meaning," ",oldMeaning," ",id.loc));
+			// assert(id.meaning is oldMeaning); // TODO. (id.meaning should already move into local scope earlier)
+			assert(id.meaning is oldMeaning||oldMeaning.scope_!is context.sc&&id.meaning.scope_ is context.sc,text(id.meaning," ",oldMeaning," ",id.loc));
 			assert(id.name==oldMeaning.getName);
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);

@@ -275,21 +275,23 @@ abstract class Scope{
 	}
 
 	static if(language==silq){
-		final bool consume(Declaration decl){
-			if(decl.name.ptr !in symtab) return false;
+		final Declaration consume(Declaration decl){
+			if(decl.name.ptr !in symtab) return null;
 			Expression type;
-			if(!consumeImpl(decl,type))
-				return false;
-			return true;
+			if(auto r=consumeImpl(decl,type,true)) // TODO: separate splitting and consuming
+				return r;
+			return null;
 		}
 		Declaration[] consumedOuter;
-		protected bool consumeImpl(Declaration decl,ref Expression type){
-			if(!decl||symtab.get(decl.name.ptr,null) !is decl) return false;
+		protected Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
+			if(symtab.get(decl.name.ptr,null) !is decl) return null;
 			if(decl.scope_&&decl.scope_ !is this) consumedOuter~=decl;
-			symtab.remove(decl.name.ptr);
-			if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-			toPush~=decl.getName;
-			return true;
+			if(remove){
+				symtab.remove(decl.name.ptr);
+				if(decl.rename) rnsymtab.remove(decl.rename.ptr);
+				toPush~=decl.getName;
+			}
+			return decl;
 		}
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
@@ -327,7 +329,8 @@ abstract class Scope{
 				}
 				if(doConsume){
 					if(auto vd=cast(VarDecl)r) assert(!vd.isConst);
-					consume(r);
+					if(auto nr=consume(r))
+						r=nr;
 				}
 			}
 			if(kind==Lookup.constant&&r&&r.isLinear()){
@@ -760,30 +763,28 @@ class NestedScope: Scope{
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
 
-	override bool consumeImpl(Declaration decl,ref Expression type){
-		if(!super.consumeImpl(decl,type))
-			return false;
+	override Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
+		if(this is decl.scope_) return super.consumeImpl(decl,type,remove);
+		if(symtab.get(decl.name.ptr,null) !is decl) return null;
 		symtab.remove(decl.name.ptr);
 		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-		if(this is decl.scope_) return true;
-		if(!decl.scope_) return true;
-		if(!parent.consumeImpl(decl,type))
-			return true;
-		auto parentDep=parent.dependencies.dependencies[decl.getName];
-		//parent.pushConsumed();
-		foreach(sc;parent.activeNestedScopes){
-			if(this is sc) continue;
-			if(sc.consumeImpl(decl,type)){
-				sc.pushConsumed();
-				import ast.semantic_: typeForDecl;
-				if(!type) type=typeForDecl(decl);
-				if(type){
-					sc.addDependency(decl,parentDep);
-					sc.addVariable(decl,type,true);
-				}
+		removeDependency(decl.getName);
+		import ast.semantic_: typeForDecl;
+		if(!type) type=typeForDecl(decl);
+		if(type){
+			auto parentDep=parent.dependencies.dependencies[decl.getName];
+			addDependency(decl,parentDep);
+			addVariable(decl,type,true);
+		}
+		if(remove&&parent.consumeImpl(decl,type,true)){
+			foreach(sc;parent.activeNestedScopes){
+				if(this is sc) continue;
+				if(sc.consumeImpl(decl,type,false))
+					sc.pushConsumed();
 			}
 		}
-		return true;
+		if(!remove) return symtab.get(decl.name.ptr,decl);
+		return consume(symtab.get(decl.name.ptr,decl)); // TODO: refactor, a bit hacky
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
