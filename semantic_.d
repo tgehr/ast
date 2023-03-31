@@ -2783,16 +2783,19 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	}
 	classicalForget(fe.var);
 	if(fe.val){
+		if(fe.var.type){
+			auto nval=new TypeAnnotationExp(fe.val,fe.var.type,TypeAnnotationType.coercion);
+			nval.loc=fe.val.loc;
+			fe.val=nval;
+		}
 		fe.val=expressionSemantic(fe.val,context.nestConst);
 		propErr(fe.val,fe);
 		static if(language==silq) if(fe.sstate!=SemState.error&&!fe.val.isLifted(sc)){
-				sc.error("forget expression must be 'lifted'",fe.val.loc);
-				fe.sstate=SemState.error;
-			}
-		if(fe.var.type&&fe.val.type && !joinTypes(fe.var.type,fe.val.type)){ // TODO: use cmpTypes here
-			sc.error(format("incompatible types '%s' and '%s' for forget",fe.var.type,fe.val.type),fe.loc);
+			sc.error("forget expression must be 'lifted'",fe.val.loc);
 			fe.sstate=SemState.error;
 		}
+		if(fe.sstate!=SemState.error&&fe.var.type&&fe.val.type)
+			assert(fe.var.type==fe.val.type);
 		static if(language!=silq){
 			if(!canForgetImplicitly){
 				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);

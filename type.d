@@ -85,7 +85,7 @@ bool isSubtype(Expression lhs,Expression rhs){
 	return wl<=wr;
 }
 
-Expression combineTypes(Expression lhs,Expression rhs,bool meet){ // TODO: more general solution // TODO: ⊤/⊥?
+Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
 	if(!lhs) return rhs;
 	if(!rhs) return lhs;
 	if(lhs == rhs) return lhs;
@@ -93,7 +93,9 @@ Expression combineTypes(Expression lhs,Expression rhs,bool meet){ // TODO: more 
 	auto wl=whichNumeric(l), wr=whichNumeric(r);
 	if(wl==NumericType.none&&wr==NumericType.none) return l.combineTypesImpl(r,meet);
 	if(wl==NumericType.none||wr==NumericType.none) return null;
-	return getNumeric(meet?min(wl,wr):max(wl,wr),meet?lhs.isClassical()||rhs.isClassical():lhs.isClassical()&&rhs.isClassical());
+	auto result=getNumeric(meet?min(wl,wr):max(wl,wr),meet?lhs.isClassical()||rhs.isClassical():lhs.isClassical()&&rhs.isClassical());
+	if(!allowQNumeric&&isQNumeric(result)) return null;
+	return result;
 }
 
 Expression joinTypes(Expression lhs,Expression rhs){
