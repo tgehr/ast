@@ -24,6 +24,8 @@ abstract class Declaration: Expression{
 	// semantic information
 	Identifier rename=null;
 	int semanticDepth=0;
+	Declaration splitFrom=null,splitInto=null;
+	Declaration mergedFrom=null,mergedInto=null;
 }
 
 class CompoundDecl: Expression{

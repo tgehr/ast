@@ -283,6 +283,12 @@ abstract class Scope{
 			return null;
 		}
 		Declaration[] consumedOuter;
+		Declaration[] splitVars;
+		final void splitVar(Declaration splitFrom,Declaration splitInto){
+			splitFrom.splitInto=splitInto;
+			splitInto.splitFrom=splitFrom;
+			splitVars~=splitInto;
+		}
 		protected Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
 			assert(decl.scope_ is this);
 			if(symtab.get(decl.name.ptr,null) !is decl) return null;
@@ -470,9 +476,12 @@ abstract class Scope{
 			return false;
 		}
 	}
-	Q!(Declaration,Expression)[] mergedVars;
-	final void mergeVar(Declaration decl,Expression ntype){
-		mergedVars~=q(decl,ntype);
+	Declaration[] mergedVars;
+	Declaration[] producedOuter;
+	final void mergeVar(Declaration mergedFrom,Declaration mergedInto){
+		mergedFrom.mergedInto=mergedInto;
+		mergedInto.mergedFrom=mergedFrom;
+		mergedVars~=mergedFrom;
 	}
 
 	bool allowMerge=false;
@@ -526,14 +535,6 @@ abstract class Scope{
 				sym=symtab[sym.name.ptr];
 				needMerge=true;
 			}
-			scope(success){
-				if(symExists&&needMerge){
-					if(auto ntype=typeForDecl(sym)){
-						if(sym.scope_ is scopes[0]) promoteSym(ntype);
-						scopes[0].mergeVar(psym,ntype);
-					}else sym.scope_=this;
-				}
-			}
 			foreach(sc;scopes[1..$]){
 				if(sym.name.ptr !in sc.symtab){
 					removeSym();
@@ -562,13 +563,22 @@ abstract class Scope{
 										errors=true;
 									}
 								}
-							}else{
-								promoteSym(nt);
-								sc.mergeVar(osym,nt);
-							}
+							}else promoteSym(nt);
 						}
 					}
 				}
+			}
+			if(symExists&&needMerge){
+				if(auto ntype=typeForDecl(sym)){
+					if(sym.scope_ is scopes[0]) promoteSym(ntype);
+					scopes[0].mergeVar(psym,sym);
+					foreach(sc;scopes[1..$]){
+						assert(sym.name.ptr in sc.symtab);
+						auto osym=sc.symtab[sym.name.ptr];
+						sc.mergeVar(osym,sym);
+					}
+				}else sym.scope_=this;
+				producedOuter~=sym;
 			}
 		}
 		static if(language==silq){
@@ -766,15 +776,20 @@ class NestedScope: Scope{
 	override Declaration consumeImpl(Declaration decl,ref Expression type,bool remove){
 		if(this is decl.scope_) return super.consumeImpl(decl,type,remove);
 		if(symtab.get(decl.name.ptr,null) !is decl) return null;
-		symtab.remove(decl.name.ptr);
-		if(decl.rename) rnsymtab.remove(decl.rename.ptr);
-		removeDependency(decl.getName);
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(decl);
+		if(remove||type){
+			symtab.remove(decl.name.ptr);
+			if(decl.rename) rnsymtab.remove(decl.rename.ptr);
+			removeDependency(decl.getName);
+		}
+		Declaration result=decl;
 		if(type){
 			auto parentDep=parent.dependencies.dependencies[decl.getName];
 			addDependency(decl,parentDep);
 			addVariable(decl,type,true);
+			result=symtab.get(decl.name.ptr,decl); // TODO: refactor, a bit hacky
+			splitVar(decl,result);
 		}
 		if(remove){
 			if(auto ndecl=parent.consumeImpl(decl,type,true)){
@@ -786,8 +801,8 @@ class NestedScope: Scope{
 				}
 			}
 		}else consumedOuter~=decl;
-		if(!remove) return symtab.get(decl.name.ptr,decl);
-		return consume(symtab.get(decl.name.ptr,decl)); // TODO: refactor, a bit hacky
+		if(!remove) return result;
+		return type?consume(result):result;
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
