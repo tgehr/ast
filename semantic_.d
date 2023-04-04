@@ -1924,6 +1924,8 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkLhs(idx.e);
 		}else if(auto fe=cast(FieldExp)lhs){
+			if(isBuiltIn(fe))
+				goto LbadAssgnmLhs;
 			checkLhs(fe.e);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
 			checkLhs(tae.e);
@@ -3068,8 +3070,11 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 		if(auto vt=cast(VectorTy)fe.e.type){
 			bool hasSideEffect=false;
 			static if(language==silq) hasSideEffect=!fe.e.isQfree();
-			if(fe.f.name=="length"&&!hasSideEffect)
-				return expressionSemantic(vt.num.copy(),context.nestConsumed);// TODO: preserve semantic on clone
+			if(fe.f.name=="length"&&!hasSideEffect){
+				auto num=vt.num.copy();
+				num.loc=fe.loc;
+				return expressionSemantic(num,context);// TODO: preserve semantic on clone
+			}
 		}
 		return r;
 	}
