@@ -1975,28 +1975,44 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	}
 	if(ae.e2.type) checkCompat(ae.e1,ae.e2.type);
 	static if(language==silq){
-	enum Stage{
-		collectDeps,
-		consumeLhs,
-		defineVars
+		enum Stage{
+			collectDeps,
+			consumeLhs,
+			defineVars,
+		}
+	}else{
+		enum Stage{
+			consumeLhs,
+			defineVars,
+		}
 	}
-	Dependency[string] dependencies;
-	int curDependency;
+	static if(language==silq){
+		Dependency[string] dependencies;
+		int curDependency;
+	}
 	void[0][string] consumed;
 	void[0][string] defined;
-	void updateDependencies(Expression lhs,Expression rhs,bool expandTuples,Stage stage,bool indexed){
+	void updateVars(Expression lhs,Expression rhs,bool expandTuples,Stage stage,bool indexed){
 		if(auto id=cast(Identifier)lhs){
 			if(id&&id.meaning&&id.meaning.name){
+				static if(language==psi){
+					if(auto fd=sc.getFunction){
+						if(id.meaning is fd.context)
+							return; // TODO: this is a hack. treat "this" parameter as ref instead.
+					}
+				}
 				auto rename=id.meaning.getName;
 				final switch(stage){
-					case Stage.collectDeps:
-						if(rhs.isQfree()){
-							auto dep=rhs.getDependency(sc);
-							if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-							if(rename in dependencies) dep.joinWith(dependencies[rename]);
-							dependencies[rename]=dep;
-						}
-						break;
+					static if(language==silq){
+						case Stage.collectDeps:
+							if(rhs.isQfree()){
+								auto dep=rhs.getDependency(sc);
+								if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+								if(rename in dependencies) dep.joinWith(dependencies[rename]);
+								dependencies[rename]=dep;
+							}
+							break;
+					}
 					case Stage.consumeLhs:
 						if(rename !in consumed){
 							sc.consume(id.meaning);
@@ -2005,7 +2021,9 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 						break;
 					case Stage.defineVars:
 						if(rename !in defined){
-							if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
+							static if(language==silq){
+								if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
+							}
 							auto name=id.meaning.name.name;
 							auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
 							defined[rename]=[];
@@ -2019,29 +2037,31 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 				if(auto tplr=cast(TupleExp)rhs){
 					if(tpll.e.length==tplr.e.length){
 						foreach(i;0..tpll.e.length)
-							updateDependencies(tpll.e[i],tplr.e[i],true,stage,indexed);
+							updateVars(tpll.e[i],tplr.e[i],true,stage,indexed);
 						ok=true;
 					}
 				}
 			}
-			if(!ok) foreach(exp;tpll.e) updateDependencies(exp,rhs,false,stage,indexed);
+			if(!ok) foreach(exp;tpll.e) updateVars(exp,rhs,false,stage,indexed);
 		}else if(auto idx=cast(IndexExp)lhs){
-			updateDependencies(idx.e,rhs,false,stage,true); // TODO: pass indices down?
+			updateVars(idx.e,rhs,false,stage,true); // TODO: pass indices down?
 		}else if(auto fe=cast(FieldExp)lhs){
-			updateDependencies(fe.e,rhs,false,stage,indexed);
+			updateVars(fe.e,rhs,false,stage,true);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
-			updateDependencies(tae.e,rhs,expandTuples,stage,indexed);
+			updateVars(tae.e,rhs,expandTuples,stage,indexed);
 		}else assert(0);
 	}
 	if(ae.sstate!=SemState.error){
-		updateDependencies(ae.e1,ae.e2,true,Stage.collectDeps,false);
-		updateDependencies(ae.e1,ae.e2,true,Stage.consumeLhs,false);
-		foreach(ref dependency;dependencies)
-			foreach(name;sc.toPush)
-				sc.pushUp(dependency, name);
-		sc.pushConsumed();
-		updateDependencies(ae.e1,ae.e2,true,Stage.defineVars,false);
-	}
+		static if(language==silq)
+			updateVars(ae.e1,ae.e2,true,Stage.collectDeps,false);
+		updateVars(ae.e1,ae.e2,true,Stage.consumeLhs,false);
+		static if(language==silq){
+			foreach(ref dependency;dependencies)
+				foreach(name;sc.toPush)
+					sc.pushUp(dependency, name);
+			sc.pushConsumed();
+		}
+		updateVars(ae.e1,ae.e2,true,Stage.defineVars,false);
 	}
 	if(ae.sstate!=SemState.error) ae.sstate=SemState.completed;
 	return ae;
@@ -2127,22 +2147,34 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 				be.sstate=SemState.error;
 			}
 		}
-		if(be.sstate!=SemState.error){
-			auto id=cast(Identifier)be.e1;
-			if(id&&id.meaning&&id.meaning.name){
+	}
+	if(be.sstate!=SemState.error){
+		auto id=cast(Identifier)be.e1;
+		if(id&&id.meaning&&id.meaning.name){
+			void consume(){
+				sc.consume(id.meaning);
+				static if(language==silq)
+					sc.pushConsumed();
+			}
+			void define(){
+				auto name=id.meaning.name.name;
+				addVar(name,ce.type,be.loc,sc);
+			}
+			static if(language==silq){
+				bool ok=false;
 				if(be.e2.isQfree()){
 					auto dependency=sc.getDependency(id.meaning);
 					dependency.joinWith(be.e2.getDependency(sc));
-					sc.consume(id.meaning);
-					sc.pushConsumed();
+					consume();
 					sc.addDependency(id.meaning,dependency);
-					auto name=id.meaning.name.name;
-					auto var=addVar(name,ce.type,be.loc,sc);
+					define();
 				}else{
-					sc.consume(id.meaning);
-					sc.pushConsumed();
-					auto var=addVar(id.meaning.name.name,ce.type,be.loc,sc);
+					consume();
+					define();
 				}
+			}else{
+				consume();
+				define();
 			}
 		}
 	}
