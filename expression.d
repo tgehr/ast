@@ -1476,7 +1476,9 @@ class ReturnExp: Expression{
 		this.e=e;
 	}
 	override ReturnExp copyImpl(CopyArgs args){
-		return new ReturnExp(e.copy(args));
+		auto r=new ReturnExp(e.copy(args));
+		r.expected=expected;
+		return r;
 	}
 	override string toString(){ return "return"~(e?" "~e.toString():""); }
 	override @property string kind(){ return "return statement"; }
