@@ -2908,7 +2908,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		sc.error("invalid forward reference",id.loc);
 		id.sstate=SemState.error;
 	}
-	if(isType(id)){
+	if(!isType(id)){
 		if(auto dsc=isInDataScope(meaning.scope_)){
 			if(auto decl=sc.getDatDecl()){
 				if(decl is dsc.decl){
