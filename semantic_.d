@@ -440,7 +440,7 @@ BuiltIn isBuiltIn(Identifier id){
 		case "*":
 			return BuiltIn.typeTy;
 		case "𝟙":
-			return BuiltIn.query;
+			return BuiltIn.unit;
 		case "𝔹","B","𝟚":
 			return BuiltIn.B;
 		case "ℕ","N":
@@ -575,16 +575,34 @@ Expression distributionTy(Expression base,Scope sc){
 Expression builtIn(Identifier id,Scope sc){
 	Expression t=null;
 	switch(id.name){
-		case "readCSV": t=funTy(stringTy(true),arrayTy(ℝ(true)),false,false,true); break;
+		static if(language==psi){
+			case "readCSV": t=funTy(stringTy(true),arrayTy(ℝ(true)),false,false,true); break;
+		}
 		case "π","pi": t=ℝ(true); break;
-		case "Marginal","sampleFrom","quantumPrimitive","__query","__show": t=unit; break; // those are actually magic polymorphic functions
-		case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
-		case "*","type","ctype","qtype","qnumeric","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+		static if(language==psi){
+			case "Marginal","sampleFrom":
+				t=unit;
+				break;
+		}
+		static if(language==silq){
+			case "quantumPrimitive","__query","__show":
+				t=unit;
+				break; // those are actually magic polymorphic functions
+		}
+		static if(language==psi){
+			case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
+		}
+		static if(language==silq){
+			case "type","ctype","qtype","qnumeric":
+				goto case;
+		}
+		case "*","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
 			id.type=ctypeTy;
 			if(id.name=="*"||id.name=="type") return typeTy;
 			if(id.name=="ctype") return ctypeTy;
 			if(id.name=="qtype") return qtypeTy;
-			if(id.name=="qnumeric") return qnumericTy;
+			static if(language==silq)
+				if(id.name=="qnumeric") return qnumericTy;
 			if(id.name=="𝟙") return unit;
 			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
 			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
@@ -1039,6 +1057,7 @@ bool isLifted(Expression e,Scope sc){
 	}
 	return false;
 }
+}
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e)
 		return true;
@@ -1048,13 +1067,13 @@ bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 		return isLiftedBuiltIn(tae.e);
 	return false;
 }
-}
 
 struct DefineLhsContext{
 	ExpSemContext expSem;
 	@property sc(){ return expSem.sc; }
 	@property constResult(){ return expSem.constResult; }
 	@property inType(){ return expSem.inType; }
+	static if(language==silq)
 	string nameIndex(IndexExp index){
 		auto name=freshName();
 		sc.nameIndex(index,name);
@@ -1119,6 +1138,8 @@ Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
 	// TODO: add new fields to records?
 	return defineLhsSemanticImplUnsupported(fe,context);
 }
+
+static if(language==silq){
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		auto next=unwrap(e.e);
@@ -1193,6 +1214,11 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
 	id.loc=idx.loc;
 	return id;
+}
+}else{ // language!=silq
+Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(idx,context);
+}
 }
 Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	// return defineLhsSemanticImplLifted(slc,context);
@@ -1354,6 +1380,7 @@ Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
 	return defineLhsSemantic!true(lhs,context);
 }
 
+static if(language==silq)
 Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 	bool isSwap=false;
 	auto tpl1=cast(TupleExp)unwrap(be.e1);
@@ -1382,7 +1409,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	Expression prologue=null,epilogue=null;
 	Expression finish(Expression r){
-		sc.pushConsumed();
+		static if(language==silq) sc.pushConsumed();
 		if(!prologue&&!epilogue) return r;
 		assert(!prologue||util.among(prologue.sstate,SemState.completed,SemState.error));
 		Expression[] s;
@@ -1400,6 +1427,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		foreach(e;s) propErr(e,res);
 		return res;
 	}
+	static if(language==silq)
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
 		auto dcontext=defineLhsContext(econtext);
@@ -1456,7 +1484,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	}
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	if(sc.allowsLinear){
-		assert(!sc.toPush.length,text(be));
+		static if(language==silq){
+			assert(!sc.toPush.length,text(be));
+		}
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 		propErr(be.e2,be);
@@ -1464,22 +1494,27 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			enum flags=LowerDefineFlags.createFresh, unchecked=false;
 			if(auto e=lowerDefine!flags(be,sc,unchecked)){
 				if(e.sstate!=SemState.error){
-					sc.toPush=[];
+					static if(language==silq){
+						sc.toPush=[];
+					}
 					sc.restoreStateSnapshot(preState);
 					auto r=statementSemantic(e,sc);
-					finishIndexReplacement(be,sc);
+					static if(language==silq)
+						finishIndexReplacement(be,sc);
 					if(be.sstate==SemState.error)
 						return be;
 					return finish(r);
 				}
-				finishIndexReplacement(be,sc);
+				static if(language==silq)
+					finishIndexReplacement(be,sc);
 				return finish(e);
 			}
 		}else{
 			epilogue=null; // (avoids error messages)
 			// TODO: clean up other temporaries
 		}
-		finishIndexReplacement(be,sc);
+		static if(language==silq)
+			finishIndexReplacement(be,sc);
 	}else{
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 	}
@@ -2157,6 +2192,7 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 	return e;
 }
 
+static if(language==silq)
 Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	ce.arg=expressionSemantic(ce.arg,/+context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
@@ -2170,10 +2206,12 @@ Identifier getReverse(Location loc, Scope isc){
 	return getPreludeSymbol("reverse", loc, isc);
 }
 
+static if(language==silq)
 auto isConstForReverse(FunTy ft){
 	return iota(ft.nargs).map!(i=>ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum);
 }
 
+static if(language==silq)
 Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
@@ -2263,6 +2301,7 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 	return ce;
 }
 
+static if(language==silq)
 FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check)in{
 	assert(!ft.cod.hasAnyFreeVar(ft.names));
 }do{
@@ -2311,6 +2350,7 @@ FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check)in{
 	return funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
 }
 
+static if(language==silq)
 Expression makeReverser(FunTy fTy, Location loc, Scope sc, bool check) {
 	FunTy revTy = reverseType(fTy, loc, sc, check);
 	if(!revTy) return null;
@@ -2344,8 +2384,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	propErr(ce.e,ce);
 	if(ce.sstate==SemState.error)
 		return ce;
+	auto sc=context.sc, constResult=context.constResult, inType=context.inType;
 	scope(success){
-		auto sc=context.sc, constResult=context.constResult, inType=context.inType;
 		if(ce&&ce.sstate!=SemState.error){
 			if(auto ft=cast(FunTy)ce.e.type){
 				if(inType){
@@ -2384,7 +2424,6 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 		}
 	}
-	auto sc=context.sc;
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
 		void checkArg(size_t i,Expression exp)in{
@@ -2845,12 +2884,14 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			id.sstate=SemState.error;
 			return id;
 		}else{
-			if(!id.indexedDirectly){
-				auto crepls=sc.componentReplacements(meaning);
-				if(crepls.length){
-					sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);
-					if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
-					id.sstate=SemState.error;
+			static if(language==silq){
+				if(!id.indexedDirectly){
+					auto crepls=sc.componentReplacements(meaning);
+					if(crepls.length){
+						sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);
+						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+						id.sstate=SemState.error;
+					}
 				}
 			}
 		}
@@ -3010,6 +3051,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	propErr(idx.e,idx);
 	bool replaceIndex=false;
 	size_t replaceIndexLoc=size_t.max;
+	static if(language==silq)
 	if(auto cid=getIdFromIndex(idx)) if(cid.meaning){
 		auto crepls=sc.componentReplacements(cid.meaning);
 		foreach(i,ref crepl;crepls){
@@ -3126,6 +3168,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
 		idx.sstate=SemState.error;
 	}
+	static if(language==silq)
 	if(replaceIndex){
 		idx.byRef=true;
 		auto cid=getIdFromIndex(idx);
@@ -3751,10 +3794,23 @@ Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
 
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
-	if(auto ce=cast(CommaExp)expr){ sc.error("nested comma expressions are disallowed",ce.loc); }
-	else if(auto ce=cast(UnaryExp!(Tok!"const"))expr){ sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc); }
-	else if(expr.kind=="expression"){ sc.error("not supported as an expression",expr.loc); }
-	else sc.error(expr.kind~" cannot appear within an expression",expr.loc);
+	bool ok=false;
+	if(auto ce=cast(CommaExp)expr){
+		sc.error("nested comma expressions are disallowed",ce.loc);
+		ok=true;
+	}
+	static if(language==silq){
+		if(!ok){
+			if(auto ce=cast(UnaryExp!(Tok!"const"))expr){
+				sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc);
+				ok=true;
+			}
+		}
+	}
+	if(!ok){
+		if(expr.kind=="expression"){ sc.error("not supported as an expression",expr.loc); }
+		else sc.error(expr.kind~" cannot appear within an expression",expr.loc);
+	}
 	expr.sstate=SemState.error;
 	return expr;
 }
@@ -4222,6 +4278,7 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 }
 
 Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
+	auto context=ExpSemContext(sc,ConstResult.yes,inType);
 	if(inType){
 		sc.error("cannot use sampleFrom directly within type",ce.loc);
 		ce.sstate=SemState.error;

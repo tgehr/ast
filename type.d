@@ -831,12 +831,12 @@ class ProductTy: Type{
 		this.annotation=annotation;
 		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
 		super();
-		assert(isClassical(this)==isClassical_);
 		static if(language==silq){
 			this.isClassical_=isClassical_;
 			if(isClassical_) classicalTy=this;
 			else classicalTy=new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,true);
 		}
+		assert(isClassical(this)==this.isClassical_);
 		// TODO: report DMD bug, New!ProductTy does not work
 	}
 	override ProductTy copyImpl(CopyArgs args){
@@ -1459,9 +1459,12 @@ class QNumericTy: Type{
 static if(language==silq){
 	private QNumericTy theQNumericTy;
 	QNumericTy qnumericTy(){ return theQNumericTy?theQNumericTy:(theQNumericTy=new QNumericTy()); }
+	bool isQNumericTy(Expression e){ return e==qnumericTy; }
+	bool isQNumeric(Expression e){ return e&&isQNumericTy(e.type); }
+}else{
+	bool isQNumericTy(Expression e){ return false; }
+	bool isQNumeric(Expression e){ return false; }
 }
-bool isQNumericTy(Expression e){ return e==qnumericTy; }
-bool isQNumeric(Expression e){ return e&&isQNumericTy(e.type); }
 
 Expression typeOfNumericTy(bool classical){
 	if(classical) return ctypeTy;
@@ -1473,7 +1476,9 @@ Expression typeOfTupleTy(scope Expression[] e...)in{
 	assert(e.all!(e=>isType(e)||isQNumeric(e)));
 }do{
 	if(!e.length) return utypeTy;
-	if(e.any!isQNumeric) return qnumericTy;
+	static if(language==silq){
+		if(e.any!isQNumeric) return qnumericTy;
+	}
 	if(e.all!isClassical) return ctypeTy;
 	if(e.all!isQuantum) return qtypeTy;
 	return typeTy;
@@ -1482,7 +1487,9 @@ Expression typeOfTupleTy(scope Expression[] e...)in{
 Expression typeOfArrayTy(Expression e)in{
 	assert(isType(e)||isQNumeric(e));
 }do{
-	if(isQNumeric(e)) return qnumericTy;
+	static if(language==silq){
+		if(isQNumeric(e)) return qnumericTy;
+	}
 	return typeOfTupleTy(e,ctypeTy);
 }
 

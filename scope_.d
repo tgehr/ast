@@ -274,33 +274,34 @@ abstract class Scope{
 		final void resetComponentReplacement(){ }
 	}
 
-	static if(language==silq){
-		final Declaration consume(Declaration decl){
-			if(decl.name.ptr !in symtab) return null;
-			Expression type;
-			if(auto r=consumeImpl(decl,decl,type,true)) // TODO: separate splitting and consuming
-				return r;
-			return null;
-		}
-		Declaration[] consumedOuter;
-		Declaration[] splitVars;
-		final void splitVar(Declaration splitFrom,Declaration splitInto){
-			splitFrom.splitInto~=splitInto;
-			splitInto.splitFrom=splitFrom;
-			splitVars~=splitInto;
-		}
-		protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
-			assert(odecl is ndecl||!remove);
-		}do{
-			assert(odecl.scope_ is this&&ndecl.scope_ is this);
-			if(symtab.get(odecl.name.ptr,null) !is odecl) return null;
-			if(remove){
-				symtab.remove(odecl.name.ptr);
-				if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
+	final Declaration consume(Declaration decl){
+		if(decl.name.ptr !in symtab) return null;
+		Expression type;
+		if(auto r=consumeImpl(decl,decl,type,true)) // TODO: separate splitting and consuming
+			return r;
+		return null;
+	}
+	Declaration[] consumedOuter;
+	Declaration[] splitVars;
+	final void splitVar(Declaration splitFrom,Declaration splitInto){
+		splitFrom.splitInto~=splitInto;
+		splitInto.splitFrom=splitFrom;
+		splitVars~=splitInto;
+	}
+	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
+		assert(odecl is ndecl||!remove);
+	}do{
+		assert(odecl.scope_ is this&&ndecl.scope_ is this);
+		if(symtab.get(odecl.name.ptr,null) !is odecl) return null;
+		if(remove){
+			symtab.remove(odecl.name.ptr);
+			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
+			static if(language==silq)
 				toPush~=odecl.getName;
-			}
-			return ndecl;
 		}
+		return ndecl;
+	}
+	static if(language==silq){
 		/+private+/ string[] toPush;
 		final void pushUp(ref Dependency dependency,string removed){
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
@@ -510,7 +511,9 @@ abstract class Scope{
 		//debug assert(allowMerge);
 	}do{
 		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
-		toPush=[];
+		static if(language==silq){
+			toPush=[];
+		}
 		foreach(sc;scopes)
 			activeNestedScopes.remove(sc);
 		allowMerge=false;
@@ -665,6 +668,7 @@ abstract class Scope{
 		return 0;
 	}
 
+	static if(language==silq)
 	void nameIndex(IndexExp index,string name){ // semantic checks that those do not alias
 		import ast.semantic_:getIdFromIndex;
 		auto id=getIdFromIndex(index);
@@ -709,7 +713,8 @@ abstract class Scope{
 		bool restoreable=false;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false)in{
-		assert(!toPush.length);
+		static if(language==silq)
+			assert(!toPush.length);
 	}do{
 		Declaration[string] nsymtab;
 		foreach(_,decl;symtab) nsymtab[decl.getName]=decl;
@@ -720,11 +725,15 @@ abstract class Scope{
 		}
 	}
 	void restoreStateSnapshot(ref ScopeState state)in{
-		assert(!toPush.length);
+		static if(language==silq){
+			assert(!toPush.length);
+		}
 		assert(state.restoreable);
 	}do{
-		dependencies=state.dependencies;
-		resetDeclProps(state.declProps);
+		static if(language==silq){
+			dependencies=state.dependencies;
+			resetDeclProps(state.declProps);
+		}
 		symtab.clear();
 		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=decl;
 		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
@@ -786,13 +795,17 @@ class NestedScope: Scope{
 		if(remove||type){
 			symtab.remove(odecl.name.ptr);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
-			if(type) removeDependency(odecl.getName);
+			static if(language==silq){
+				if(type) removeDependency(odecl.getName);
+			}
 		}
 		if(remove) ndecl.splitInto=[];
 		Declaration result=ndecl;
 		if(type){
-			auto parentDep=parent.dependencies.dependencies[odecl.getName];
-			addDependency(ndecl,parentDep);
+			static if(language==silq){
+				auto parentDep=parent.dependencies.dependencies[odecl.getName];
+				addDependency(ndecl,parentDep);
+			}
 			addVariable(ndecl,type,true);
 			result=symtab.get(ndecl.name.ptr,ndecl); // TODO: refactor, a bit hacky
 			splitVar(ndecl,result);
@@ -803,8 +816,11 @@ class NestedScope: Scope{
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
-					if(sc.consumeImpl(odecl,nndecl,type,false))
-						sc.pushConsumed();
+					if(sc.consumeImpl(odecl,nndecl,type,false)){
+						static if(language==silq){
+							sc.pushConsumed();
+						}
+					}
 				}
 			}
 		}else consumedOuter~=ndecl;

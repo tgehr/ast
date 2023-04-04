@@ -1657,6 +1657,10 @@ auto dispatchStm(alias f,alias default_=unknownStmError,T...)(Expression s,auto 
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
 	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
 
+	static if(language==psi){
+		if(auto dd=cast(DatDecl)s) return f(dd,forward!args);
+	}
+
 	if(auto ce=cast(CommaExp)s) return f(ce,forward!args);
 	// TODO: supertypes for define and assign?
 
