@@ -3067,13 +3067,19 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			return fe;
 		}else return noMember();
 	}else if(auto r=builtIn(fe,sc)){
-		if(auto vt=cast(VectorTy)fe.e.type){
-			bool hasSideEffect=false;
-			static if(language==silq) hasSideEffect=!fe.e.isQfree();
-			if(fe.f.name=="length"&&!hasSideEffect){
-				auto num=vt.num.copy();
-				num.loc=fe.loc;
-				return expressionSemantic(num,context);// TODO: preserve semantic on clone
+		bool hasSideEffect(){
+			static if(language==silq) return !fe.e.isQfree();
+			else return false;
+		}
+		if(fe.f.name=="length"&&!hasSideEffect){
+			if(auto vt=cast(VectorTy)fe.e.type){
+				auto len=vt.num.copy();
+				len.loc=fe.loc;
+				return expressionSemantic(len,context);// TODO: preserve semantic on clone
+			}else if(auto tt=cast(TupleTy)fe.e.type){
+				auto len=LiteralExp.makeInteger(tt.length);
+				len.loc=fe.loc;
+				return expressionSemantic(len,context);
 			}
 		}
 		return r;
