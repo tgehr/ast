@@ -398,7 +398,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Expression returnType;
 	if(!ft.isTuple){
 		assert(ft.isConst.length==1);
-		if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
+		if(ft.isConstForReverse[0]) constArgTypes1=[ft.dom];
 		else argTypes=[ft.dom];
 	}else{
 		auto tpl=ft.dom.isTupleTy;

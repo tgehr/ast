@@ -2264,6 +2264,58 @@ auto isConstForReverse(FunTy ft){
 	return iota(ft.nargs).map!(i=>ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum);
 }
 
+Parameter[] makeParams(C,R,T)(C isConst,R paramNames,T types,Location loc)in{
+	assert(isConst.length==paramNames.length);
+}do{
+	return zip(isConst,paramNames,types).map!((x){
+		auto isConst=x[0], name=new Identifier(x[1]), type=x[2];
+		name.loc=loc;
+		name.type=type;
+		auto param=new Parameter(isConst,name,type);
+		param.loc=loc;
+		return param;
+	}).array;
+}
+
+Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
+	assert(isTuple||params.length==1);
+}do{
+	auto args=params.map!((p){
+		auto id=new Identifier(p.name.name);
+		id.meaning=p;
+		id.loc=p.loc;
+		Expression r=id;
+		return r;
+	}).array;
+	auto narg=isTuple?new TupleExp(args):args[0];
+	narg.loc=loc;
+	return narg;
+}
+
+Expression makeReverseCall(Expression ce1,bool check,Scope sc,Location loc){
+	auto ce2=new CallExp(getReverse(loc,sc,check),ce1,false,false);
+	ce2.loc=loc;
+	return ce2;
+}
+
+CompoundExp makeLambdaBody(Expression ce2,Location loc){
+	auto ret=new ReturnExp(ce2);
+	ret.loc=loc;
+	auto body_=new CompoundExp([ret]);
+	body_.loc=loc;
+	return body_;
+}
+
+Expression makeLambda(Parameter[] params,bool isTuple,bool isSquare,Annotation annotation,CompoundExp body_,Location loc){
+	auto def=new FunctionDef(null,params,isTuple,null,body_);
+	def.isSquare=isSquare;
+	def.annotation=annotation;
+	def.loc=loc;
+	auto le=new LambdaExp(def);
+	le.loc=loc;
+	return le;
+}
+
 Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	auto calledId=cast(Identifier)ce.e;
@@ -2284,9 +2336,8 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
-		auto params=iota(ft.nargs).map!((i){
-			bool isConst=ft.isConst[i];
-			auto name=new Identifier("`arg_"~ft.names[i]);
+		auto names=iota(ft.names.length).map!(i=>"`arg_"~(ft.names[i]?ft.names[i]:text(i)));
+		auto types=iota(ft.nargs).map!((i){
 			auto type=ft.argTy(i);
 			if(type==typeTy){
 				bool check(Expression ty){
@@ -2302,39 +2353,17 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 				if(ok) ok&=check(ft2.cod);
 				if(!ok) type=qtypeTy;
 			}
-			name.loc=loc;
-			name.type=type;
-			auto param=new Parameter(isConst,name,type);
-				param.loc=loc;
-				return param;
-			}).array;
-		auto args=params.map!((p){
-			auto id=new Identifier(p.name.name);
-			id.meaning=p;
-			id.loc=loc;
-			Expression r=id;
-			return r;
-		}).array;
-		assert(ft.isTuple||args.length==1);
-		auto narg=ft.isTuple?new TupleExp(args):args[0];
-		narg.loc=loc;
+			return type;
+		});
+		auto params=makeParams(ft.isConst,names,types,loc);
+		auto narg=lookupParams(params,ft.isTuple,loc);
 		auto ce1=new CallExp(f.copy,narg,true,false);
 		ce1.loc=loc;
-		auto ce2=new CallExp(getReverse(loc,sc,check),ce1,false,false);
-		ce2.loc=loc;
-		auto ret=new ReturnExp(ce2);
-		ret.loc=loc;
-		auto body_=new CompoundExp([ret]);
-		body_.loc=loc;
-		auto def=new FunctionDef(null,params,ft.isTuple,null,body_);
-		def.isSquare=true;
-		def.annotation=Annotation.qfree;
-		def.loc=loc;
-		auto le=new LambdaExp(def);
-		le.loc=loc;
+		auto ce2=makeReverseCall(ce1,check,sc,loc);
+		auto body_=makeLambdaBody(ce2,loc);
+		auto le=makeLambda(params,ft.isTuple,ft.isSquare,Annotation.qfree,body_,loc);
 		return expressionSemantic(le,context);
 	}
-
 	if(ce.sstate!=SemState.error&&!ft.cod.hasAnyFreeVar(ft.names)){
 		Expression[] constArgTypes1;
 		Expression[] argTypes;
@@ -2342,8 +2371,7 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		Expression returnType;
 		bool ok=true;
 		if(!ft.isTuple){
-			assert(ft.isConst.length==1);
-			if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
+			if(ft.isConstForReverse[0]) constArgTypes1=[ft.dom];
 			else argTypes=[ft.dom];
 		}else{
 			auto tpl=ft.dom.isTupleTy;

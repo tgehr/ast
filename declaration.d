@@ -97,10 +97,10 @@ class Parameter: VarDecl{
 class FunctionDef: Declaration{
 	Parameter[] params;
 	bool isTuple;
-	Expression rret;
-	CompoundExp body_;
 	bool isSquare=false;
 	auto annotation=Annotation.none;
+	Expression rret;
+	CompoundExp body_;
 	this(Identifier name, Parameter[] params, bool isTuple, Expression rret, CompoundExp body_)in{
 		assert(isTuple||params.length==1);
 	}do{
