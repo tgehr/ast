@@ -350,11 +350,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				}
 			}
 			if(!reversed&&!newrhs){
-				reversed = tryReverseExpr(ce.e, ce.loc, sc, !unchecked);
-				if(!reversed) {
-					sc.error("cannot reverse expression", ce.e.loc);
-					return error();
-				}
+				auto checked=!unchecked;
+				auto rev=getReverse(ce.e.loc,sc,checked);
+				if(rev.sstate!=SemState.completed) return error();
+				reversed=new CallExp(rev,ce.e,false,false);
 				reversed.loc=ce.e.loc;
 			}
 			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);

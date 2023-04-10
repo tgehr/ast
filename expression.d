@@ -356,7 +356,12 @@ class Identifier: Expression{
 			r.calledDirectly=calledDirectly;
 			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
+				r.checkReverse=checkReverse;
 				r.classical=classical;
+			}
+		}else{
+			static if(language==silq){
+				r.checkReverse=checkReverse;
 			}
 		}
 		return r;
@@ -461,6 +466,7 @@ class Identifier: Expression{
 	bool calledDirectly=false;
 	bool indexedDirectly=false;
 	static if(language==silq){
+		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 		bool classical=false;
 	}
 	else enum classical=true;

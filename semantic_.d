@@ -2226,44 +2226,56 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 	return e;
 }
 
-static if(language==silq)
-Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
-	auto sc=context.sc;
-	ce.arg=expressionSemantic(ce.arg,/+context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
-	Expression e = tryReverseExpr(ce.arg, ce.loc, sc, true);
-	if(!e) return null;
-	return expressionSemantic(e, context);
+
+static if(language==silq){
+
+Identifier getReverse(Location loc,Scope isc, bool checked){
+	auto r=getPreludeSymbol("reverse",loc,isc);
+	if(!checked) r.checkReverse=false; // TODO: is there a better solution than this for frontend reverse?
+	return r;
 }
 
-static if(language==silq)
-Identifier getReverse(Location loc, Scope isc){
-	return getPreludeSymbol("reverse", loc, isc);
+bool isReverse(Identifier id){
+	if(!id) return false;
+	if(id.name!="reverse") return false;
+	return id.meaning&&isReverse(id.meaning);
 }
 
-static if(language==silq)
+bool isReverse(Declaration decl){
+	if(preludePath() !in modules) return false;
+	auto exprssc=modules[preludePath()];
+	auto sc=exprssc[1];
+	if(!decl||decl.scope_ !is sc) return false;
+	if(!decl.name) return false;
+	return decl.getName=="reverse";
+}
+
 auto isConstForReverse(FunTy ft){
 	return iota(ft.nargs).map!(i=>ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum);
 }
 
-static if(language==silq)
-Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
+Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
+	auto sc=context.sc;
+	auto calledId=cast(Identifier)ce.e;
+	assert(calledId&&isReverse(calledId));
+	bool check=calledId.checkReverse;
+	ce.arg=expressionSemantic(ce.arg,/+context.nest((rft.isConst.length?rft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
+	auto f=ce.arg;
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
-
-	bool ok = true;
-
 	if(check && ft.annotation<Annotation.mfree){
 		sc.error("reversed function must be 'mfree'",f.loc);
-		ok = false;
+		ce.sstate=SemState.error;
 	}
 	if(check && !ft.isClassical_){
 		sc.error("reversed function must be classical",f.loc);
-		ok = false;
+		ce.sstate=SemState.error;
 	}
 	if(ft.isSquare&&ft.isConst.all){
 		auto ft2=cast(FunTy)ft.cod;
 		if(!ft2) return null;
 		if(ft2.isSquare) return null;
+		auto loc=f.loc;
 		auto params=iota(ft.nargs).map!((i){
 			bool isConst=ft.isConst[i];
 			auto name=new Identifier("`arg_"~ft.names[i]);
@@ -2285,9 +2297,9 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 			name.loc=loc;
 			name.type=type;
 			auto param=new Parameter(isConst,name,type);
-			param.loc=loc;
-			return param;
-		}).array;
+				param.loc=loc;
+				return param;
+			}).array;
 		auto args=params.map!((p){
 			auto id=new Identifier(p.name.name);
 			id.meaning=p;
@@ -2300,7 +2312,7 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 		narg.loc=loc;
 		auto ce1=new CallExp(f.copy,narg,true,false);
 		ce1.loc=loc;
-		auto ce2=new CallExp(getReverse(loc, sc),ce1,false,false);
+		auto ce2=new CallExp(getReverse(loc,sc,check),ce1,false,false);
 		ce2.loc=loc;
 		auto ret=new ReturnExp(ce2);
 		ret.loc=loc;
@@ -2312,96 +2324,60 @@ Expression tryReverseExpr(Expression f, Location loc, Scope sc, bool check) {
 		def.loc=loc;
 		auto le=new LambdaExp(def);
 		le.loc=loc;
-		return le;
+		return expressionSemantic(le,context);
 	}
 
-	if(ft.cod.hasAnyFreeVar(ft.names)) return null;
-	Expression reverser = makeReverser(ft, loc, sc, check);
-	if(!reverser) {
-		ok = false;
-		reverser = getReverse(loc, sc);
-	}
-
-	auto ce = new CallExp(reverser, f, false, false);
-	ce.loc = loc;
-	if(!ok) {
-		ce.sstate = SemState.error;
-		return ce;
-	}
-
-	assert((cast(FunTy)reverser.type).dom is f.type);
-	ce.type = (cast(FunTy)reverser.type).cod;
-	ce.sstate = SemState.completed;
-	return ce;
-}
-
-static if(language==silq)
-FunTy reverseType(FunTy ft, Location loc, Scope sc, bool check)in{
-	assert(!ft.cod.hasAnyFreeVar(ft.names));
-}do{
-	Expression[] constArgTypes1;
-	Expression[] argTypes;
-	Expression[] constArgTypes2;
-	Expression returnType;
-	bool ok=true;
-	if(!ft.isTuple){
-		assert(ft.isConst.length==1);
-		if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
-		else argTypes=[ft.dom];
-	}else{
-		auto tpl=ft.dom.isTupleTy;
-		assert(!!tpl && tpl.length==ft.isConst.length);
-		bool isConst(size_t i){ return ft.isConstForReverse[i]; }
-		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
-		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
-		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
-		if(numConstArgs1+numArgs+numConstArgs2!=tpl.length){
-			ok=false;
-			if(sc) sc.error("reversed function cannot mix 'const' and 'moved' parameters", loc);
+	if(ce.sstate!=SemState.error&&!ft.cod.hasAnyFreeVar(ft.names)){
+		Expression[] constArgTypes1;
+		Expression[] argTypes;
+		Expression[] constArgTypes2;
+		Expression returnType;
+		bool ok=true;
+		if(!ft.isTuple){
+			assert(ft.isConst.length==1);
+			if(ft.isConst[0]||ft.dom.isClassical&&!ft.dom.isQuantum) constArgTypes1=[ft.dom];
+			else argTypes=[ft.dom];
+		}else{
+			auto tpl=ft.dom.isTupleTy;
+			assert(!!tpl && tpl.length==ft.isConst.length);
+			bool isConst(size_t i){ return ft.isConstForReverse[i]; }
+			auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
+			auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
+			auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
+			if(numConstArgs1+numArgs+numConstArgs2!=tpl.length){
+				ok=false;
+				sc.error("reversed function cannot mix 'const' and 'moved' parameters", f.loc);
+				ce.sstate=SemState.error;
+			}
+			constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
+			argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
+			constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
 		}
-		constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
-		argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
-		constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
+		if(check && argTypes.any!(t=>t.hasClassicalComponent())){
+			ok=false;
+			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+			ce.sstate=SemState.error;
+		}
+		returnType=ft.cod;
+		if(check && returnType.hasClassicalComponent()){
+			ok=false;
+			sc.error("reversed function cannot have classical components in return value", f.loc);
+			ce.sstate=SemState.error;
+		}
+		if(ok){
+			auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
+			auto nreturnTypes=argTypes;
+			auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
+			auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
+			auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
+			auto annotation=ft.annotation;
+			ce.type=funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
+			return ce;
+		}
 	}
-	if(check&&argTypes.any!(t=>t.hasClassicalComponent())){
-		ok=false;
-		if(sc) sc.error("reversed function cannot have classical components in 'moved' arguments", loc);
-	}
-	returnType=ft.cod;
-	if(check&&returnType.hasClassicalComponent()){
-		ok=false;
-		if(sc) sc.error("reversed function cannot have classical components in return value", loc);
-	}
-
-	if(!ok) return null;
-
-	auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
-	auto nreturnTypes=argTypes;
-	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
-	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
-	auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
-	auto annotation=ft.annotation;
-	return funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
+	return null;
 }
 
-static if(language==silq)
-Expression makeReverser(FunTy fTy, Location loc, Scope sc, bool check) {
-	FunTy revTy = reverseType(fTy, loc, sc, check);
-	if(!revTy) return null;
-
-	auto qp = new Identifier("quantumPrimitive");
-	qp.loc = loc;
-	auto qpTy = funTy(fTy, revTy, false, false, true);
-	qpTy.loc = loc;
-	auto qpName = LiteralExp.makeString("reverse", loc);
-	auto qpArgs = new TupleExp([qpName, qpTy]);
-	qpArgs.loc = loc;
-	qpArgs.type = tupleTy([qpName.type, qpTy.type]);
-	auto qpCall = new CallExp(qp, qpArgs, false, false);
-	qpCall.loc = loc;
-	qpCall.type = qpTy;
-	qpCall.sstate = SemState.completed;
-	return qpCall;
 }
 
 Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
