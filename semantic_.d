@@ -719,7 +719,7 @@ Expression statementSemanticImpl(IndexExp idx,Scope sc){
 	if(auto ft=cast(FunTy)idx.e.type){
 		auto ce=new CallExp(idx.e,idx.a,true,false);
 		ce.loc=idx.loc;
-		return callSemantic(ce,context);
+		return callSemantic(ce,context.nestConst);
 	}else return statementSemanticImplDefault(idx,sc);
 }
 
@@ -988,7 +988,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 		}
 	}
 	if(isDefineOrAssign(e)) return defineOrAssignSemantic(e,sc);
-	return e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault)(sc);
+	return e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc);
 }
 
 CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression control,Annotation restriction_)in{
