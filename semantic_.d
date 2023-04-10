@@ -713,6 +713,16 @@ Expression statementSemanticImpl(CallExp ce,Scope sc){
 	return callSemantic(ce,context.nestConst);
 }
 
+Expression statementSemanticImpl(IndexExp idx,Scope sc){
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	idx.e=expressionSemantic(idx.e,context.nestConst);
+	if(auto ft=cast(FunTy)idx.e.type){
+		auto ce=new CallExp(idx.e,idx.a,true,false);
+		ce.loc=idx.loc;
+		return callSemantic(ce,context);
+	}else return statementSemanticImplDefault(idx,sc);
+}
+
 Expression statementSemanticImpl(CompoundExp ce,Scope sc){
 	foreach(ref s;ce.s){
 		s=statementSemantic(s,sc);
@@ -2271,10 +2281,8 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		sc.error("reversed function must be classical",f.loc);
 		ce.sstate=SemState.error;
 	}
-	if(ft.isSquare&&ft.isConst.all){
-		auto ft2=cast(FunTy)ft.cod;
-		if(!ft2) return null;
-		if(ft2.isSquare) return null;
+	auto ft2=cast(FunTy)ft.cod;
+	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
 		auto params=iota(ft.nargs).map!((i){
 			bool isConst=ft.isConst[i];
@@ -3110,7 +3118,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		assert(!replaceIndex);
 		auto ce=new CallExp(idx.e,idx.a,true,false);
 		ce.loc=idx.loc;
-		return callSemantic(ce,context.nestConsumed);
+		return callSemantic(ce,context);
 	}
 	if(isType(idx.e)||isQNumeric(idx.e)){
 		assert(!replaceIndex);

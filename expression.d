@@ -1656,10 +1656,11 @@ auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,aut
 private noreturn unknownStmError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown statement: ",typeid(s)," ",s));
 }
-auto dispatchStm(alias f,alias default_=unknownStmError,T...)(Expression s,auto ref T args){
+auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T...)(Expression s,auto ref T args){
 	import core.lifetime:forward;
 	// TODO: implement without cast cascade
 	if(auto ce=cast(CallExp)s) return f(ce,forward!args);
+	static if(unanalyzed) if(auto idx=cast(IndexExp)e) return f(idx,forward!args);
 	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
