@@ -3,7 +3,7 @@
 module ast.declaration;
 import astopt;
 
-import std.array, std.algorithm, std.conv, std.exception;
+import std.array, std.algorithm, std.range, std.conv, std.exception;
 import ast.lexer, ast.type, ast.expression, ast.scope_, util;
 
 abstract class Declaration: Expression{
@@ -305,7 +305,7 @@ abstract class DefExp: Expression{
 	abstract int varDecls(scope int delegate(VarDecl) dg);
 }
 
-class SingleDefExp: DefExp{
+class SingleDefExp: DefExp{ // TODO: get rid of this?
 	VarDecl decl;
 	override VarDecl[] decls(){ return [decl]; }
 	this(VarDecl decl, BinaryExp!(Tok!":=") init){
@@ -320,7 +320,15 @@ class SingleDefExp: DefExp{
 
 	override void setType(Expression type){
 		if(!decl) return;
-		assert(!!type);
+		if(auto ce=cast(CallExp)initializer.e1){
+			auto ft=cast(ProductTy)ce.e.type;
+			if(!ft||ft.isSquare!=ce.isSquare)
+				return;
+			import ast.semantic_: isConstForReverse;
+			assert(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i]));
+			decl.vtype=ft.dom;
+			return;
+		}
 		decl.vtype=type;
 		if(!decl.vtype) decl.sstate=SemState.error;
 	}
@@ -345,7 +353,7 @@ class SingleDefExp: DefExp{
 	}
 }
 
-class MultiDefExp: DefExp{
+class MultiDefExp: DefExp{ // TODO: get rid of this?
 	VarDecl[] decls_;
 	override VarDecl[] decls(){ return decls_; }
 	this(VarDecl[] decls_,BinaryExp!(Tok!":=") init){
@@ -358,7 +366,23 @@ class MultiDefExp: DefExp{
 		return initializer.toString();
 	}
 	override void setType(Expression type){
-		assert(!!type);
+		if(auto ce=cast(CallExp)initializer.e1){
+			auto ft=cast(ProductTy)ce.e.type;
+			if(!ft||ft.isSquare!=ce.isSquare)
+				return;
+			if(ft.isTuple){
+				if(auto tpl=cast(TupleExp)ce.arg){
+					import ast.semantic_: isConstForReverse;
+					auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
+					assert(movedIndices.walkLength==decls.length);
+					foreach(i,j;enumerate(movedIndices)){
+						decls[i].vtype=ft.argTy(j);
+					}
+				}
+			}
+			return;
+		}
+		if(!type) return;
 		if(auto tt=type.isTupleTy()){
 			if(tt.length==decls_.length){
 				foreach(i,decl;decls_){
@@ -369,7 +393,7 @@ class MultiDefExp: DefExp{
 			foreach(i,decl;decls_){
 				if(decl) decl.vtype=at.next;
 			}
-		}else assert(0,"TODO!");
+		}
 	}
 	override void setInitializer(){
 		assert(!!initializer);

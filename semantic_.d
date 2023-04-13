@@ -275,21 +275,65 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}else if(auto tpl=cast(TupleExp)be.e1){
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
-				if(auto idx=cast(IndexExp)exp) vds~=null; // TODO
-				else if(auto id=cast(Identifier)exp) vds~=makeVar(id);
-				else goto LnoIdTuple;
+				if(auto id=cast(Identifier)exp) vds~=makeVar(id);
+				else goto LbadDefLhs;
 			}
 			auto de=new MultiDefExp(vds,be);
 			de.loc=be.loc;
 			foreach(vd;vds) if(vd) propErr(vd,de);
 			return de;
+		}else if(auto ce=cast(CallExp)be.e1){
+			auto f=ce.e,ft=cast(ProductTy)f.type;
+			if(!ft||ft.isSquare!=ce.isSquare)
+				goto LbadDefLhs;
+			if(ft.annotation<Annotation.mfree){
+				sc.error("reversed function must be 'mfree'",f.loc);
+				ce.sstate=SemState.error;
+				be.sstate=SemState.error;
+				success=false;
+			}
+			if(!ft.isClassical_){
+				sc.error("reversed function must be classical",f.loc);
+				ce.sstate=SemState.error;
+				be.sstate=SemState.error;
+				success=false;
+			}
+			if(ft.isTuple){
+				if(auto tpl=cast(TupleExp)ce.arg){
+					auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
+					VarDecl[] vds;
+					foreach(exp;movedIndices.map!(i=>tpl.e[i])){
+						if(auto id=cast(Identifier)exp) vds~=makeVar(id);
+						else goto LbadDefLhs;
+					}
+					auto de=new MultiDefExp(vds,be);
+					de.loc=be.loc;
+					propErr(be,de);
+					foreach(vd;vds) if(vd) propErr(vd,de);
+					return de;
+				}
+				if(iota(1,ft.nargs).any!(i=>ft.isConstForReverse[i]!=ft.isConstForReverse[0]))
+					goto LbadDefLhs;
+			}
+			assert(!ft.isTuple||!cast(TupleExp)ce.arg);
+			if(!ft.isConstForReverse[0]){
+				if(auto id=cast(Identifier)ce.arg){
+					auto vd=makeVar(id);
+					auto de=new SingleDefExp(vd,be);
+					de.loc=be.loc;
+					propErr(be,de);
+					propErr(vd,de);
+					return de;
+				}else goto LbadDefLhs;
+			}
+			return new MultiDefExp([],be);
 		}else if(cast(IndexExp)be.e1){
 			auto de=new SingleDefExp(null,be);
 			de.loc=be.loc;
 			return de;
-		}else LnoIdTuple:{
+		}else LbadDefLhs:{
 			if(be.sstate!=SemState.error){
-				sc.error("left-hand side of definition must be identifier or tuple of identifiers",be.e1.loc);
+				sc.error("invalid definition left-hand side",be.e1.loc);
 				be.sstate=SemState.error;
 			}
 			success=false;
@@ -545,11 +589,17 @@ string isQuantumPrimitive(Expression e){
 	return opLit.lit.str;
 }
 
+bool isInPrelude(){
+	auto exprssc=modules[preludePath()];
+	return exprssc[1] is null;
+}
+
 Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	import ast.semantic_: modules;
 	if(preludePath() !in modules) return null;
 	auto exprssc=modules[preludePath()];
 	auto sc=exprssc[1];
+	assert(!!sc);
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
@@ -557,7 +607,7 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	if(!res.meaning){
 		res.sstate=SemState.error;
 	}else{
-		res.type=typeForDecl(res.meaning);
+		res.type=res.typeFromMeaning;
 		res.constLookup=false;
 		res.sstate=SemState.completed;
 	}
@@ -689,7 +739,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	auto asc=cd.ascope_;
 	if(!asc) asc=new AggregateScope(sc);
 	++asc.getDatDecl().semanticDepth;
-	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&!asc.close()) cd.sstate=SemState.error;
+	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&!asc.close()) cd.sstate=SemState.error; // TODO: fix
 	cd.ascope_=asc;
 	bool success=true; // dummy
 	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc);
@@ -1160,7 +1210,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			propErr(next,e);
 			if(id.meaning){
 				if(id.meaning.rename) id.name=id.meaning.rename.name;
-				id.type=typeForDecl(id.meaning);
+				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
 					ce.loc=idx.loc;
@@ -1531,27 +1581,6 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	bool success=true;
 	auto e2orig=be.e2;
 	auto tpl=cast(TupleExp)be.e1;
-	/+static if(language==silq){
-		bool semanticDone=false;
-		if(tpl&&tpl.e.any!(x=>!!cast(IndexExp)x)&&tpl.e.all!(x=>!cast(IndexExp)x||getIdFromIndex(cast(IndexExp)x))){
-			auto indicesToReplace=tpl.e.map!(x=>cast(IndexExp)x).filter!(x=>!!x).array;
-			auto e=indexReplaceSemantic(indicesToReplace,be.e2,be.loc,sc,be.isSwap);
-			foreach(i,k;zip(iota(tpl.e.length).filter!(i=>cast(IndexExp)tpl.e[i]),iota(e.length))){
-				if(e[k]){
-					tpl.e[i]=e[k];
-					propErr(e[k],be);
-				}else be.sstate=SemState.error;
-			}
-			semanticDone=true;
-		}else if(auto idx=cast(IndexExp)be.e1){
-			auto idxs=indexReplaceSemantic([idx],be.e2,be.loc,sc,be.isSwap);
-			assert(idxs.length==1);
-			be.e1=idxs[0];
-			propErr(be.e1,be);
-			semanticDone=true;
-		}
-	}else enum semanticDone=false;
-	if(!semanticDone) be.e2=expressionSemantic(be.e2,context.nestConsumed);+/
 	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
 	static if(language==silq)/+ if(!semanticDone)+/{
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
@@ -1582,7 +1611,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				sc.addDependencies(dependencies);
 			}
 			bool ok=false;
-			if(auto tpl1=cast(TupleExp)be.e1){
+			if(auto id=getIdFromDefLhs(be.e1)){
+				addDependencies([id],[be.e2]);
+			}else if(auto tpl1=cast(TupleExp)be.e1){
 				if(auto tpl2=cast(TupleExp)be.e2){
 					if(tpl1.length==tpl2.length){
 						ok=true;
@@ -1593,8 +1624,8 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					auto dep=be.e2.getDependency(sc);
 					addDependencyMulti(tpl1.e,dep);
 				}
-			}else if(auto id=getIdFromDefLhs(be.e1)){
-				addDependencies([id],[be.e2]);
+			}else if(auto ce=cast(CallExp)be.e1){
+				// TODO: add dependencies
 			}else badUnpackLhs=true;
 		}
 	}
@@ -1616,9 +1647,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 		}
 		if(de){
+			de.setType(be.e2.type);
+			de.setInitializer();
 			if(de.sstate!=SemState.error){
-				de.setType(be.e2.type);
-				de.setInitializer();
 				foreach(i,vd;de.decls){
 					if(vd){
 						auto nvd=varDeclSemantic(vd,sc);
@@ -2104,7 +2135,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 			if(meaning){
 				id.meaning=meaning;
 				id.name=meaning.getName;
-				id.type=typeForDecl(meaning);
+				id.type=id.typeFromMeaning;
 				id.scope_=sc;
 				id.sstate=SemState.completed;
 			}else{
@@ -2239,8 +2270,10 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 
 static if(language==silq){
 
-Identifier getReverse(Location loc,Scope isc, bool checked){
-	auto r=getPreludeSymbol("reverse",loc,isc);
+Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool checked)in{
+	assert(annotation>=Annotation.mfree);
+}do{
+	auto r=getPreludeSymbol(annotation==Annotation.qfree?"__reverse_qfree":"reverse",loc,isc);
 	if(!checked) r.checkReverse=false; // TODO: is there a better solution than this for frontend reverse?
 	return r;
 }
@@ -2277,6 +2310,26 @@ Parameter[] makeParams(C,R,T)(C isConst,R paramNames,T types,Location loc)in{
 	}).array;
 }
 
+Expression[] makeIdentifiers(S)(S names,Location loc){
+	return names.map!((name){
+		Expression id=new Identifier(name);
+		id.loc=loc;
+		return id;
+	}).array;
+}
+
+Expression[] makeIndexLookups(I)(string name,I indices,Location loc){
+	return indices.map!((i){
+		auto id=new Identifier(name);
+		id.loc=loc;
+		auto index=LiteralExp.makeInteger(i);
+		index.loc=loc;
+		Expression idx=new IndexExp(id,index);
+		idx.loc=loc;
+		return idx;
+	}).array;
+}
+
 Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
 	assert(isTuple||params.length==1);
 }do{
@@ -2292,8 +2345,8 @@ Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
 	return narg;
 }
 
-Expression makeReverseCall(Expression ce1,bool check,Scope sc,Location loc){
-	auto ce2=new CallExp(getReverse(loc,sc,check),ce1,false,false);
+Expression makeReverseCall(Expression ce1,Annotation annotation,bool check,Scope sc,Location loc){
+	auto ce2=new CallExp(getReverse(loc,sc,annotation,check),ce1,false,false);
 	ce2.loc=loc;
 	return ce2;
 }
@@ -2359,56 +2412,122 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		auto narg=lookupParams(params,ft.isTuple,loc);
 		auto ce1=new CallExp(f.copy,narg,true,false);
 		ce1.loc=loc;
-		auto ce2=makeReverseCall(ce1,check,sc,loc);
+		auto ce2=makeReverseCall(ce1,Annotation.mfree,check,sc,loc);
 		auto body_=makeLambdaBody(ce2,loc);
 		auto le=makeLambda(params,ft.isTuple,ft.isSquare,Annotation.qfree,body_,loc);
 		return expressionSemantic(le,context);
 	}
 	if(ce.sstate!=SemState.error&&!ft.cod.hasAnyFreeVar(ft.names)){
-		Expression[] constArgTypes1;
-		Expression[] argTypes;
-		Expression[] constArgTypes2;
-		Expression returnType;
-		bool ok=true;
-		if(!ft.isTuple){
-			if(ft.isConstForReverse[0]) constArgTypes1=[ft.dom];
-			else argTypes=[ft.dom];
-		}else{
-			auto tpl=ft.dom.isTupleTy;
-			assert(!!tpl && tpl.length==ft.isConst.length);
-			bool isConst(size_t i){ return ft.isConstForReverse[i]; }
-			auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
-			auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
-			auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
-			if(numConstArgs1+numArgs+numConstArgs2!=tpl.length){
-				ok=false;
-				sc.error("reversed function cannot mix 'const' and 'moved' parameters", f.loc);
-				ce.sstate=SemState.error;
-			}
-			constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
-			argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
-			constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
-		}
-		if(check && argTypes.any!(t=>t.hasClassicalComponent())){
-			ok=false;
+		auto constIndices=iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]);
+		auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
+		if(equal(ft.isConst,ft.isConstForReverse)&&equal(constIndices,only(0))&&equal(movedIndices,only(1))&&ft.annotation==Annotation.mfree)
+			return null; // no adaptation necessary
+		auto loc=f.loc;
+		bool constTuple=constIndices.walkLength!=1||movedIndices.empty&&ft.isTuple;
+		bool movedTuple=movedIndices.walkLength!=1||constIndices.empty&&ft.isTuple;
+		auto constType=constTuple?tupleTy(constIndices.map!(i=>ft.argTy(i)).array):ft.argTy(constIndices.front);
+		auto movedType=movedTuple?tupleTy(movedIndices.map!(i=>ft.argTy(i)).array):ft.argTy(movedIndices.front);
+		if(check && movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 			ce.sstate=SemState.error;
 		}
-		returnType=ft.cod;
+		auto returnType=ft.cod;
 		if(check && returnType.hasClassicalComponent()){
-			ok=false;
 			sc.error("reversed function cannot have classical components in return value", f.loc);
 			ce.sstate=SemState.error;
 		}
-		if(ok){
-			auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
-			auto nreturnTypes=argTypes;
-			auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
-			auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
-			auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
-			auto annotation=ft.annotation;
-			ce.type=funTy(isConst,dom,cod,ft.isSquare,isConst.length!=1,annotation,true);
+		if(ce.sstate==SemState.error)
 			return ce;
+		auto names=only(freshName,freshName);
+		auto params=makeParams(only(true,false),names,only(constType,movedType),loc);
+		Expression unpackExp=null;
+		Expression[] movedArgs;
+		Expression[] constArgs;
+		if(constTuple){
+			constArgs=makeIndexLookups(names[0],iota(constIndices.walkLength),loc);
+		}else{
+			auto id=new Identifier(names[0]);
+			id.loc=loc;
+			constArgs=[id];
+		}
+		if(movedTuple){
+			auto unpackNames=movedIndices.map!((i)=>"`arg_"~ft.names[i]?ft.names[i]:text(i));
+			auto unpackLhs=new TupleExp(makeIdentifiers(unpackNames,loc));
+			unpackLhs.loc=loc;
+			auto unpackRhs=new Identifier(names[1]);
+			unpackRhs.loc=loc;
+			unpackExp=new BinaryExp!(Tok!":=")(unpackLhs,unpackRhs);
+			unpackExp.loc=loc;
+			movedArgs=makeIdentifiers(unpackNames,loc);
+		}else movedArgs=makeIdentifiers(only(names[1]),loc);
+		auto nargs=new Expression[](ft.nargs);
+		foreach(i,carg;zip(constIndices,constArgs)){
+			assert(!nargs[i]);
+			nargs[i]=carg;
+		}
+		foreach(i,marg;zip(movedIndices,movedArgs)){
+			assert(!nargs[i]);
+			nargs[i]=marg;
+		}
+		assert(nargs.all!(x=>!!x));
+		Expression narg;
+		bool isTuple=(constArgs.length!=0||movedTuple)&&(movedArgs.length!=0||constTuple);
+		if(isTuple){
+			narg=new TupleExp(nargs);
+			narg.loc=loc;
+		}else{
+			assert(nargs.length==1);
+			narg=nargs[0];
+		}
+		auto ce1=new CallExp(f.copy,narg,ft.isSquare,false);
+		ce1.loc=loc;
+		Expression ret=new ReturnExp(ce1);
+		ret.loc=loc;
+		auto body_=new CompoundExp((unpackExp?[unpackExp]:[])~[ret]);
+		body_.loc=loc;
+		auto annotation=ft.annotation;
+		auto le=makeLambda(params,true,false,annotation,body_,loc);
+		auto rev=makeReverseCall(le,annotation,check,sc,loc);
+		bool constLast=ft.nargs&&!ft.isConstForReverse[0]&&ft.isConstForReverse[$-1];
+		if(constArgs.length!=0&&movedArgs.length!=0&&!ft.isSquare&&!constLast)
+			return expressionSemantic(rev,context);
+		if(constArgs.length==0){
+			auto nparams=makeParams(only(false),only(names[1]),only(returnType),loc);
+			auto nconst=new TupleExp([]);
+			nconst.loc=loc;
+			auto nmoved=new Identifier(names[1]);
+			nmoved.loc=loc;
+			auto nnarg=new TupleExp([nconst,nmoved]);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,false,ft.isSquare,annotation,body2,loc);
+			return expressionSemantic(le2,context);
+		}else if(returnType==unit){
+			auto nparams=makeParams(only(true),only(names[0]),only(constType),loc);
+			auto nconst=new Identifier(names[0]);
+			nconst.loc=loc;
+			auto nmoved=new TupleExp([]);
+			nmoved.loc=loc;
+			auto nnarg=new TupleExp([nconst,nmoved]);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,false,ft.isSquare,annotation,body2,loc);
+			return expressionSemantic(le2,context);
+		}else{
+			auto nparams=constLast ? makeParams(only(true,false).retro,names.retro,only(constType,returnType).retro,loc)
+				: makeParams(only(true,false),names,only(constType,returnType),loc);
+			auto nnargs=makeIdentifiers(names,loc);
+			auto nnarg=new TupleExp(nnargs);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,true,ft.isSquare,annotation,body2,loc);
+			return expressionSemantic(le2,context);
 		}
 	}
 	return null;
@@ -2810,9 +2929,10 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	le.fd=functionDefSemantic(nfd,sc);
 	assert(!!le.fd);
 	propErr(le.fd,le);
-	if(le.fd.sstate==SemState.completed)
+	if(le.fd.sstate==SemState.completed){
 		le.type=typeForDecl(le.fd);
-	if(le.fd.sstate==SemState.completed) le.sstate=SemState.completed;
+		le.sstate=SemState.completed;
+	}
 	return le;
 }
 
@@ -2949,7 +3069,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	id.name=meaning.getName;
 	propErr(meaning,id);
-	id.type=typeForDecl(meaning);
+	id.type=id.typeFromMeaning;
 	if(!id.type&&id.sstate!=SemState.error){
 		sc.error("invalid forward reference",id.loc);
 		id.sstate=SemState.error;
@@ -3065,7 +3185,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			fe.f.meaning=meaning;
 			fe.f.name=meaning.getName;
 			fe.f.scope_=sc;
-			fe.f.type=typeForDecl(meaning);
+			fe.f.type=fe.f.typeFromMeaning;
 			if(fe.f.type&&aggrd.hasParams){
 				auto subst=aggrd.getSubst(arg);
 				fe.f.type=fe.f.type.substitute(subst);

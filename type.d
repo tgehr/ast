@@ -468,7 +468,7 @@ class TupleTy: Type,ITupleTy{
 	override bool isSubtypeImpl(Expression r){
 		auto ltup=this,rtup=r.isTupleTy();
 		if(rtup&&ltup.types.length==rtup.length)
-		   return all!(i=>isSubtype(ltup.types[i],rtup[i]))(iota(ltup.types.length));
+			return all!(i=>isSubtype(ltup.types[i],rtup[i]))(iota(ltup.types.length));
 		auto rarr=cast(ArrayTy)r;
 		if(rarr) return all!(i=>isSubtype(ltup.types[i],rarr.next))(iota(ltup.types.length));
 		return false;

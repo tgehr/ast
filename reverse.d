@@ -59,6 +59,20 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		return cast(Identifier)e||cast(IndexExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
+	if(auto ce=cast(CallExp)olhs){
+		auto f=ce.e, ft=cast(ProductTy)f.type;
+		if(!ft) return false;
+		if(ce.isSquare!=ft.isSquare) return false;
+		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])) return true;
+		if(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i])){
+			if(auto tpl=cast(TupleExp)ce.arg)
+				return tpl.e.all!validDefEntry;
+			return validDefEntry(ce.arg);
+		}
+		auto tpl=cast(TupleExp)ce.arg;
+		if(!tpl) return false;
+		return iota(ft.nargs).all!(i=>ft.isConstForReverse[i]||validDefEntry(tpl.e[i]));
+	}
 	return validDefEntry(olhs);
 }
 
@@ -351,7 +365,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 			if(!reversed&&!newrhs){
 				auto checked=!unchecked;
-				auto rev=getReverse(ce.e.loc,sc,checked);
+				auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked);
 				if(rev.sstate!=SemState.completed) return error();
 				reversed=new CallExp(rev,ce.e,false,false);
 				reversed.loc=ce.e.loc;

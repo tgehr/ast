@@ -649,8 +649,7 @@ abstract class Scope{
 	private bool insertCapture(Identifier id,Scope outermost){
 		if(!id.meaning) return false;
 		if(!id.meaning.isLinear()) return true;
-		import ast.semantic_: typeForDecl;
-		auto type=typeForDecl(id.meaning);
+		auto type=id.typeFromMeaning;
 		if(!type) return false;
 		return insertCaptureImpl(id,type,outermost);
 	}

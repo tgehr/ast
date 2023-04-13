@@ -361,7 +361,7 @@ class Identifier: Expression{
 			}
 		}else{
 			static if(language==silq){
-				r.checkReverse=checkReverse;
+				r.classical=classical;
 			}
 		}
 		return r;
@@ -431,6 +431,14 @@ class Identifier: Expression{
 			r.sstate=SemState.completed;
 			return r;
 		}else return this;
+	}
+
+	final @property Expression typeFromMeaning(){
+		if(!meaning) return null;
+		import ast.semantic_:typeForDecl;
+		auto r=typeForDecl(meaning);
+		if(isTypeTy(r)&&classical) return ctypeTy;
+		return r;
 	}
 
 	override Annotation getAnnotation(){ return deterministic; }
@@ -1419,7 +1427,7 @@ class LambdaExp: Expression{
 	}
 	override string toString(){
 		string d=fd.isSquare?"[]":"()";
-		return _brk(d[0]~join(map!(to!string)(fd.params),",")~d[1]~fd.body_.toStringFunctionDef());
+		return _brk(d[0]~join(map!(to!string)(fd.params),",")~d[1]~(fd.annotation?text(fd.annotation):"")~fd.body_.toStringFunctionDef());
 	}
 
 	mixin VariableFree; // TODO!
