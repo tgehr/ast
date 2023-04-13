@@ -314,7 +314,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 					return de;
 				}else goto LbadDefLhs;
 			}
-			return new MultiDefExp([],be);
+			auto d=new MultiDefExp([],be);
+			d.loc=be.loc;
+			return d;
 		}else if(cast(IndexExp)be.e1){
 			auto de=new SingleDefExp(null,be);
 			de.loc=be.loc;
