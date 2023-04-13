@@ -286,18 +286,6 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				goto LbadDefLhs;
-			if(ft.annotation<Annotation.mfree){
-				sc.error("reversed function must be 'mfree'",f.loc);
-				ce.sstate=SemState.error;
-				be.sstate=SemState.error;
-				success=false;
-			}
-			if(!ft.isClassical_){
-				sc.error("reversed function must be classical",f.loc);
-				ce.sstate=SemState.error;
-				be.sstate=SemState.error;
-				success=false;
-			}
 			if(ft.isTuple){
 				if(auto tpl=cast(TupleExp)ce.arg){
 					auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
@@ -1580,9 +1568,8 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	}
 	bool success=true;
 	auto e2orig=be.e2;
-	auto tpl=cast(TupleExp)be.e1;
 	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
-	static if(language==silq)/+ if(!semanticDone)+/{
+	static if(language==silq){
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
 			void addDependencies(Expression[] lhs,Expression[] rhs)in{
 				assert(lhs.length==rhs.length);
@@ -1635,6 +1622,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	assert(success && de && de.initializer is be || !de||de.sstate==SemState.error);
 	auto tt=be.e2.type?be.e2.type.isTupleTy:null;
 	if(be.e2.sstate==SemState.completed){
+		auto tpl=cast(TupleExp)be.e1;
 		if(tpl){
 			if(tt){
 				if(tpl.length!=tt.length){
@@ -1644,6 +1632,30 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}else if(!cast(ArrayTy)be.e2.type){
 				sc.error(format("cannot unpack type %s as a tuple",be.e2.type),de.loc);
 				if(de){ de.setError(); be.sstate=SemState.error; }
+			}
+		}else if(auto ce=cast(CallExp)be.e1){
+			auto f=ce.e,ft=cast(ProductTy)f.type;
+			if(ft){
+				bool ok=true;
+				if(ft.annotation<Annotation.mfree){
+					sc.error("reversed function must be 'mfree'",f.loc);
+					ok=false;
+				}
+				if(!ft.isClassical_){
+					sc.error("reversed function must be classical",f.loc);
+					ok=false;
+				}
+				if(ft.cod.hasAnyFreeVar(ft.names)){
+					sc.error("arguments to reversed function call cannot appear in return value",f.loc);
+					ok=false;
+				}else{
+					be.e1.type=ft.cod;
+					if(!isSubtype(be.e2.type,be.e1.type)){
+						sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",be.e1.type,be.e2.type),be.loc);
+						ok=false;
+					}
+				}
+				if(!ok&&de){ de.setError(); be.sstate=SemState.error; }
 			}
 		}
 		if(de){
@@ -2378,14 +2390,6 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto f=ce.arg;
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
-	if(check && ft.annotation<Annotation.mfree){
-		sc.error("reversed function must be 'mfree'",f.loc);
-		ce.sstate=SemState.error;
-	}
-	if(check && !ft.isClassical_){
-		sc.error("reversed function must be classical",f.loc);
-		ce.sstate=SemState.error;
-	}
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
@@ -2414,10 +2418,22 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		ce1.loc=loc;
 		auto ce2=makeReverseCall(ce1,Annotation.mfree,check,sc,loc);
 		auto body_=makeLambdaBody(ce2,loc);
-		auto le=makeLambda(params,ft.isTuple,ft.isSquare,Annotation.qfree,body_,loc);
+		auto le=makeLambda(params,ft.isTuple,ft.isSquare,ft.annotation,body_,loc);
 		return expressionSemantic(le,context);
 	}
-	if(ce.sstate!=SemState.error&&!ft.cod.hasAnyFreeVar(ft.names)){
+	if(check && ft.annotation<Annotation.mfree){
+		sc.error("reversed function must be 'mfree'",f.loc);
+		ce.sstate=SemState.error;
+	}
+	if(check && !ft.isClassical_){
+		sc.error("reversed function must be classical",f.loc);
+		ce.sstate=SemState.error;
+	}
+	if(ft.cod.hasAnyFreeVar(ft.names)){
+		sc.error("arguments of reversed function call cannot appear in return value",f.loc);
+		ce.sstate=SemState.error;
+	}
+	if(ce.sstate!=SemState.error){
 		auto constIndices=iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]);
 		auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
 		if(equal(ft.isConst,ft.isConstForReverse)&&equal(constIndices,only(0))&&equal(movedIndices,only(1))&&ft.annotation==Annotation.mfree)
