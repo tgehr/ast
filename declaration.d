@@ -370,14 +370,17 @@ class MultiDefExp: DefExp{ // TODO: get rid of this?
 			auto ft=cast(ProductTy)ce.e.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				return;
-			if(ft.isTuple){
-				if(auto tpl=cast(TupleExp)ce.arg){
-					import ast.semantic_: isConstForReverse;
-					auto movedIndices=iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]);
-					assert(movedIndices.walkLength==decls.length);
-					foreach(i,j;enumerate(movedIndices)){
-						decls[i].vtype=ft.argTy(j);
-					}
+			if(auto tpl=cast(TupleExp)ce.arg){
+				import ast.semantic_: isConstForReverse;
+				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[ft.isTuple?i:0]);
+				auto tt=ft.dom.isTupleTy();
+				auto argTy(size_t i){
+					if(tt) return tt[i];
+					return null;
+				}
+				assert(movedIndices.walkLength==decls.length);
+				foreach(i,j;enumerate(movedIndices)){
+					decls[i].vtype=argTy(j);
 				}
 			}
 			return;

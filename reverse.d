@@ -5,6 +5,7 @@ import astopt;
 
 import std.stdio,std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
+import util.tuple:Q=Tuple,q=tuple;
 
 Expression constantExp(size_t l){
 	Token tok;
@@ -63,17 +64,160 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
-		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])) return true;
-		if(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i])){
-			if(auto tpl=cast(TupleExp)ce.arg)
-				return tpl.e.all!validDefEntry;
-			return validDefEntry(ce.arg);
+		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
+			auto tpl=cast(TupleExp)ce.arg;
+			auto tt=ft.dom.isTupleTy;
+			return !tpl||tt&&tpl.length==tt.length;
 		}
+		if(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i]))
+			return validDefEntry(ce.arg);
+		assert(ft.isTuple);
 		auto tpl=cast(TupleExp)ce.arg;
-		if(!tpl) return false;
+		if(!tpl||ft.nargs!=tpl.length) return false;
 		return iota(ft.nargs).all!(i=>ft.isConstForReverse[i]||validDefEntry(tpl.e[i]));
 	}
 	return validDefEntry(olhs);
+}
+
+ReverseCallRewriter reverseCallRewriter(Expression f_,ProductTy ft_)in{
+	//assert(f_.type is ft_);
+}do{
+	auto r=ReverseCallRewriter(f_,ft_);
+	with(r){
+		constTuple=constIndices.walkLength!=1||movedIndices.empty&&ft.isTuple;
+		movedTuple=movedIndices.walkLength!=1||constIndices.empty&&ft.isTuple;
+		constType=constTuple?tupleTy(constIndices.map!(i=>ft.argTy(i)).array):ft.argTy(constIndices.front);
+		movedType=movedTuple?tupleTy(movedIndices.map!(i=>ft.argTy(i)).array):ft.argTy(movedIndices.front);
+		returnType=ft.cod;
+		return r;
+	}
+}
+
+struct ReverseCallRewriter{
+	Expression f;
+	ProductTy ft;
+	bool constTuple,movedTuple;
+	Expression constType,movedType,returnType;
+	@property constIndices()return scope{ return iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]); }
+	@property movedIndices()return scope{ return iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]); }
+	@property bool constLast(){ return ft.nargs&&!ft.isConstForReverse[0]&&ft.isConstForReverse[$-1]; }
+	@property bool innerNeeded(){
+		return !(equal(ft.isConst,ft.isConstForReverse)&&equal(constIndices,only(0))&&equal(movedIndices,only(1))&&ft.annotation==Annotation.mfree);
+	}
+	Q!(Expression,Expression) reorderArguments(TupleExp tpl)in{
+		assert(ft.isTuple&&ft.nargs==tpl.length);
+	}do{
+		auto loc=tpl.loc;
+		auto constArgs=constIndices.map!(i=>tpl.e[i]);
+		auto movedArgs=movedIndices.map!(i=>tpl.e[i]);
+		Expression constArg,movedArg;
+		if(constTuple){
+			constArg=new TupleExp(constArgs.array);
+			constArg.loc=loc;
+		}else constArg=constArgs.front;
+		if(movedTuple){
+			movedArg=new TupleExp(movedArgs.array);
+			movedArg.loc=loc;
+		}else movedArg=movedArgs.front;
+		return q(constArg,movedArg);
+	}
+	Expression wrapInner(){
+		auto loc=f.loc;
+		auto names=only(freshName,freshName);
+		auto params=makeParams(only(true,false),names,only(constType,movedType),loc);
+		Expression unpackExp=null;
+		Expression[] movedArgs;
+		Expression[] constArgs;
+		if(constTuple){
+			constArgs=makeIndexLookups(names[0],iota(constIndices.walkLength),loc);
+		}else{
+			auto id=new Identifier(names[0]);
+			id.loc=loc;
+			constArgs=[id];
+		}
+		if(movedTuple){
+			auto unpackNames=movedIndices.map!((i)=>"`arg_"~ft.names[i]?ft.names[i]:text(i));
+			auto unpackLhs=new TupleExp(makeIdentifiers(unpackNames,loc));
+			unpackLhs.loc=loc;
+			auto unpackRhs=new Identifier(names[1]);
+			unpackRhs.loc=loc;
+			unpackExp=new BinaryExp!(Tok!":=")(unpackLhs,unpackRhs);
+			unpackExp.loc=loc;
+			movedArgs=makeIdentifiers(unpackNames,loc);
+		}else movedArgs=makeIdentifiers(only(names[1]),loc);
+		auto nargs=new Expression[](ft.nargs);
+		foreach(i,carg;zip(constIndices,constArgs)){
+			assert(!nargs[i]);
+			nargs[i]=carg;
+		}
+		foreach(i,marg;zip(movedIndices,movedArgs)){
+			assert(!nargs[i]);
+			nargs[i]=marg;
+		}
+		assert(nargs.all!(x=>!!x));
+		Expression narg;
+		bool isTuple=(constArgs.length!=0||movedTuple)&&(movedArgs.length!=0||constTuple);
+		if(isTuple){
+			narg=new TupleExp(nargs);
+			narg.loc=loc;
+		}else{
+			assert(nargs.length==1);
+			narg=nargs[0];
+		}
+		auto ce1=new CallExp(f.copy,narg,ft.isSquare,false);
+		ce1.loc=loc;
+		Expression ret=new ReturnExp(ce1);
+		ret.loc=loc;
+		auto body_=new CompoundExp((unpackExp?[unpackExp]:[])~[ret]);
+		body_.loc=loc;
+		auto le=makeLambda(params,true,false,ft.annotation,body_,loc);
+		return le;
+	}
+	@property bool outerNeeded(){
+		return constIndices.empty||movedIndices.empty||ft.isSquare||constLast;
+	}
+	Expression wrapOuter(Expression rev,bool simplify){
+		auto loc=f.loc;
+		auto names=only(freshName,freshName);
+		if(simplify&&constIndices.empty){
+			auto nparams=makeParams(only(false),only(names[1]),only(returnType),loc);
+			auto nconst=new TupleExp([]);
+			nconst.loc=loc;
+			auto nmoved=new Identifier(names[1]);
+			nmoved.loc=loc;
+			auto nnarg=new TupleExp([nconst,nmoved]);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,false,ft.isSquare,ft.annotation,body2,loc);
+			return le2;
+		}else if(simplify&&returnType==unit){
+			auto nparams=makeParams(only(true),only(names[0]),only(constType),loc);
+			auto nconst=new Identifier(names[0]);
+			nconst.loc=loc;
+			auto nmoved=new TupleExp([]);
+			nmoved.loc=loc;
+			auto nnarg=new TupleExp([nconst,nmoved]);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,false,ft.isSquare,ft.annotation,body2,loc);
+			return le2;
+		}else{
+			auto nparams=constLast ? makeParams(only(true,false).retro,names.retro,only(constType,returnType).retro,loc)
+				: makeParams(only(true,false),names,only(constType,returnType),loc);
+			auto nnargs=makeIdentifiers(names,loc);
+			auto nnarg=new TupleExp(nnargs);
+			nnarg.loc=loc;
+			auto ce2=new CallExp(rev,nnarg,false,false);
+			ce2.loc=loc;
+			auto body2=makeLambdaBody(ce2,loc);
+			auto le2=makeLambda(nparams,true,ft.isSquare,ft.annotation,body2,loc);
+			return le2;
+		}
+	}
 }
 
 Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked)in{
@@ -283,44 +427,61 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 					return error();
 				}
 			}
-			if(ft.annotation<Annotation.mfree){
+			if(!unchecked&&ft.annotation<Annotation.mfree){
 				sc.error("reversed function must be 'mfree'",ce.e.loc);
 				return error;
 			}
-			if(!ft.isClassical){
+			if(!unchecked&&!ft.isClassical){
 				sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
 				return error();
 			}
-			bool isConst(size_t i){ return ft.isConstForReverse[i]; }
-			auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
-			auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
-			auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
-			if(numConstArgs1+numArgs+numConstArgs2!=ft.nargs){
-				sc.error("reversed function cannot mix order of 'const' and 'moved' parameters",ce.arg.loc); // TODO: automatically reorder arguments
+			auto f=ce.e;
+			auto r=reverseCallRewriter(f,ft);
+			if(!unchecked&&r.movedType.hasClassicalComponent()){
+				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 				return error();
 			}
-			// if(!numArgs&&rhs.isLifted()) return res=new ForgetExp(rhs,lhs); // TODO?
+			if(!unchecked&&r.returnType.hasClassicalComponent()){
+				sc.error("reversed function cannot have classical components in return value", f.loc);
+				return error();
+			}
+			Expression newstm=null;
 			Expression newlhs,newarg;
-			// TODO: if analyzed, predetermine a type for newlhs
-			if(!numArgs){
-				if(ft.annotation>=Annotation.qfree) return forget();
-				newlhs=new TupleExp([]);
-				newlhs.loc=ce.arg.loc;
-				newarg=new TupleExp([ce.arg,orhs]);
-				newarg.loc=olhs.loc;
+			if(ft.isConstForReverse.all!(x=>x==ft.isConstForReverse[0])){
+				if(!ft.isConstForReverse.any){
+					newlhs=ce.arg;
+					newarg=orhs;
+				}else{
+					newlhs=new TupleExp([]);
+					newlhs.loc=ce.arg.loc;
+					if(r.returnType==unit){
+						auto tpl=new TupleExp([]);
+						tpl.loc=orhs.loc;
+						newstm=new DefineExp(tpl,orhs);
+						newstm.loc=orhs.loc;
+						newarg=ce.arg;
+					}else{
+						newarg=new TupleExp([ce.arg,orhs]);
+						newarg.loc=ce.arg.loc.to(orhs.loc);
+					}
+				}
 			}else if(auto tpl=cast(TupleExp)ce.arg){
-				auto newlhss=tpl.e[numConstArgs1..numConstArgs1+numArgs];
-				if(newlhss.length==1) newlhs=newlhss[0];
-				else newlhs=new TupleExp(newlhss);
-				newlhs.loc=ce.arg.loc;
-				auto newargs=tpl.e[0..numConstArgs1]~[rhs]~tpl.e[numConstArgs1+numArgs..$];
-				if(newargs.length==1) newarg=newargs[0];
-				else newarg=new TupleExp(newargs);
-				newarg.loc=olhs.loc;
-			}else if(numArgs==ft.nargs){
-				newlhs=ce.arg;
-				newarg=orhs;
-				newarg.loc=loc;
+				assert(ft.isTuple);
+				if(ft.nargs==tpl.length){
+					auto constMovedArgs=r.reorderArguments(tpl); // note: this changes order of assertion failures. ok?
+					newlhs=constMovedArgs[1];
+					if(r.constIndices.empty){
+						newarg=constMovedArgs[1];
+					}else if(r.returnType==unit){
+						newarg=constMovedArgs[0];
+					}else{
+						newarg=new TupleExp([constMovedArgs[0],orhs]);
+						newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
+					}
+				}else{
+					sc.error(format("wrong number of arguments to reversed function call (%s instead of %s)",tpl.length,ft.nargs),ce.loc);
+					return error();
+				}
 			}else{
 				sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
 				return error();
