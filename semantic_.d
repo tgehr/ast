@@ -2436,7 +2436,8 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		ce.sstate=SemState.error;
 	}
 	if(ce.sstate!=SemState.error){
-		auto r=reverseCallRewriter(f,ft);
+		auto loc=f.loc;
+		auto r=reverseCallRewriter(ft,loc);
 		if(!r.innerNeeded) return null;
 		if(check&&r.movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
@@ -2448,8 +2449,7 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		}
 		if(ce.sstate==SemState.error)
 			return ce;
-		auto loc=f.loc;
-		auto le=r.wrapInner();
+		auto le=r.wrapInner(f);
 		auto rev=makeReverseCall(le,ft.annotation,check,sc,loc);
 		if(!r.outerNeeded) return expressionSemantic(rev,context);
 		auto le2=r.wrapOuter(rev,true);

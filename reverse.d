@@ -79,10 +79,8 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	return validDefEntry(olhs);
 }
 
-ReverseCallRewriter reverseCallRewriter(Expression f_,ProductTy ft_)in{
-	//assert(f_.type is ft_);
-}do{
-	auto r=ReverseCallRewriter(f_,ft_);
+ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
+	auto r=ReverseCallRewriter(ft_,loc);
 	with(r){
 		constTuple=constIndices.walkLength!=1||movedIndices.empty&&ft.isTuple;
 		movedTuple=movedIndices.walkLength!=1||constIndices.empty&&ft.isTuple;
@@ -94,8 +92,8 @@ ReverseCallRewriter reverseCallRewriter(Expression f_,ProductTy ft_)in{
 }
 
 struct ReverseCallRewriter{
-	Expression f;
 	ProductTy ft;
+	Location loc;
 	bool constTuple,movedTuple;
 	Expression constType,movedType,returnType;
 	@property constIndices()return scope{ return iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]); }
@@ -121,8 +119,8 @@ struct ReverseCallRewriter{
 		}else movedArg=movedArgs.front;
 		return q(constArg,movedArg);
 	}
-	Expression wrapInner(){
-		auto loc=f.loc;
+	Expression wrapInner(Expression f){
+		auto loc=this.loc;
 		auto names=only(freshName,freshName);
 		auto params=makeParams(only(true,false),names,only(constType,movedType),loc);
 		Expression unpackExp=null;
@@ -177,7 +175,7 @@ struct ReverseCallRewriter{
 		return constIndices.empty||movedIndices.empty||ft.isSquare||constLast;
 	}
 	Expression wrapOuter(Expression rev,bool simplify){
-		auto loc=f.loc;
+		auto loc=this.loc;
 		auto names=only(freshName,freshName);
 		if(simplify&&constIndices.empty){
 			auto nparams=makeParams(only(false),only(names[1]),only(returnType),loc);
@@ -436,7 +434,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				return error();
 			}
 			auto f=ce.e;
-			auto r=reverseCallRewriter(f,ft);
+			auto r=reverseCallRewriter(ft,f.loc);
 			if(!unchecked&&r.movedType.hasClassicalComponent()){
 				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 				return error();
@@ -567,40 +565,15 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 				fd.sstate=SemState.error;
 		}
 	}
-	Expression[] constArgTypes1; // TODO: get rid of code dupliction
-	Expression[] argTypes;
-	Expression[] constArgTypes2;
-	Expression returnType;
-	if(!ft.isTuple){
-		assert(ft.isConst.length==1);
-		if(ft.isConstForReverse[0]) constArgTypes1=[ft.dom];
-		else argTypes=[ft.dom];
-	}else{
-		auto tpl=ft.dom.isTupleTy;
-		assert(!!tpl && tpl.length==ft.isConst.length);
-		bool isConst(size_t i){ return ft.isConstForReverse[i]; }
-		auto numConstArgs1=iota(ft.nargs).map!isConst.until!(x=>!x).walkLength;
-		auto numArgs=iota(numConstArgs1,ft.nargs).map!isConst.until!(x=>x).walkLength;
-		auto numConstArgs2=iota(numConstArgs1+numArgs,ft.nargs).map!isConst.until!(x=>!x).walkLength;
-		enforce(numConstArgs1+numArgs+numConstArgs2==tpl.length,"reversed function cannot mix 'const' and consumed arguments");
-		constArgTypes1=iota(numConstArgs1).map!(i=>tpl[i]).array;
-		argTypes=iota(numConstArgs1,numConstArgs1+numArgs).map!(i=>tpl[i]).array;
-		constArgTypes2=iota(numConstArgs1+numArgs,tpl.length).map!(i=>tpl[i]).array;
-	}
+	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
-	returnType=ft.cod;
-	auto nargTypes=constArgTypes1~[returnType]~constArgTypes2;
-	auto nreturnTypes=argTypes;
-	auto dom=nargTypes.length==1?nargTypes[0]:tupleTy(nargTypes);
-	auto cod=!(ft.isTuple&&ft.names.length==1)&&nreturnTypes.length==1?nreturnTypes[0]:tupleTy(nreturnTypes);
-	auto isConst=chain(true.repeat(constArgTypes1.length),only(false),true.repeat(constArgTypes2.length)).array;
-	auto annotation=ft.annotation;
+	enum simplify=true;
 	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
 	if(!ret){
 		sc.error("reversing early returns not supported yet",fd.loc);
 		enforce(0,text("errors while reversing function"));
 	}
-	string rpname;
+	string cpname=null,rpname;
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
 		if(validDefLhs!flags(id,sc)){
@@ -609,75 +582,129 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		}
 	}
 	if(!retDefReplaced) rpname=freshName();
-	auto pnames=chain(fd.params[0..constArgTypes1.length].map!(p=>p.name.name),only(rpname),fd.params[chain(constArgTypes1,argTypes).length..$].map!(p=>p.name.name));
-	auto params=iota(nargTypes.length).map!((i){
+	Expression dom, cod;
+	bool isTuple;
+	bool[] isConst;
+	string[] pnames;
+	Expression constUnpack=null;
+	if(simplify&&r.constIndices.empty){
+		dom=r.returnType;
+		cod=r.movedType;
+		isTuple=false;
+		isConst=[false];
+		pnames=[rpname];
+	}else if(simplify&&r.returnType==unit){
+		dom=r.constType;
+		cod=r.movedType;
+		isTuple=r.constTuple;
+		isConst=r.constIndices.map!(_=>true).array;
+		pnames=r.constIndices.map!(i=>fd.params[i].name.name).array;
+	}else{
+		dom=tupleTy(r.constLast?[r.movedType,r.constType]:[r.constType,r.movedType]);
+		cod=r.movedType;
+		isTuple=true;
+		isConst=r.constLast?[false,true]:[true,false];
+		auto cids=r.constIndices.map!((i){
+			auto name=fd.params[i].name.name;
+			Expression id=new Identifier(name);
+			id.loc=fd.params[i].loc;
+			return id;
+		}).array;
+		assert(r.constTuple||cids.length==1);
+		if(r.constTuple){
+			cpname=freshName();
+			auto clhs=new TupleExp(cids);
+			auto cloc=cids.length?cids[0].loc.to(cids[$-1].loc):fd.loc;
+			clhs.loc=cloc;
+			auto crhs=new Identifier(cpname);
+			crhs.loc=cloc;
+			constUnpack=new DefineExp(clhs,crhs);
+			// TODO: unpacked variables will not be const declarations, maybe conflicts with implicit dup?
+		}else{
+			assert(cids.length==1);
+			auto id=cast(Identifier)cids[0];
+			assert(!!id);
+			cpname=id.name;
+		}
+		pnames=r.constLast?[rpname,cpname]:[cpname,rpname];
+	}
+	assert(pnames.length==isConst.length);
+	auto params=iota(pnames.length).map!((i){
 		auto pname=new Identifier(pnames[i]);
 		pname.loc=fd.loc;
-		auto param=new Parameter(isConst[i],pname,nargTypes[i]);
+		Expression type;
+		if(!isTuple){
+			assert(i==0);
+			type=dom;
+		}else{
+			auto tt=dom.isTupleTy;
+			assert(!!tt&&tt.length==pnames.length);
+			type=tt[i];
+		}
+		auto param=new Parameter(isConst[i],pname,type);
 		param.loc=pname.loc;
 		return param;
 	}).array;
 	auto retRhs=new Identifier(rpname);
 	retRhs.loc=ret.loc;
-	retRhs.type=returnType;
+	retRhs.type=r.returnType;
 	retRhs.loc=ret.loc;
 	auto body_=new CompoundExp([]);
 	body_.loc=fd.body_.loc;
-	auto result=new FunctionDef(null,params,params.length!=1,cod,body_);
+	auto result=new FunctionDef(null,params,isTuple,cod,body_);
 	result.isSquare=fd.isSquare;
 	result.annotation=fd.annotation;
 	result.scope_=sc;
 	result=cast(FunctionDef)presemantic(result,sc);
 	assert(!!result);
-	if(fd.annotation>=Annotation.qfree && argTypes.length==0){
-		assert(!constArgTypes2.length);
-		auto makeConstArg(size_t i){
-			if(constArgTypes1[i]==unit){
-				Expression r=new TupleExp([]);
-				r.loc=ret.loc;
-				r.type=unit;
-				return r;
-			}else{
-				Expression id=new Identifier(fd.params[i].name.name);
-				id.loc=fd.loc;
-				id.type=constArgTypes1[i];
-				return id;
-			}
+	if(fd.annotation>=Annotation.qfree && r.movedIndices.empty){
+		Expression argExp;
+		bool needCall=true;
+		if(r.constType==unit) argExp=new TupleExp([]);
+		else if(simplify&&r.returnType==unit){
+			needCall=false;
+		}else{
+			assert(cpname!is null);
+			argExp=new Identifier(cpname);
 		}
-		auto argExp=constArgTypes1.length==1?makeConstArg(0):new TupleExp(iota(constArgTypes1.length).map!makeConstArg.array);
-		argExp.loc=fd.loc; // TODO: use precise parameter locations
-		auto nfd=fd.copy();
-		auto fun=new LambdaExp(nfd);
-		fun.loc=fd.loc;
-		auto call=new CallExp(fun,argExp,fd.isSquare,false);
-		call.loc=fd.loc;
+		Expression call=null;
+		if(needCall){
+			argExp.loc=fd.loc; // TODO: use precise parameter locations
+			argExp.type=r.constType;
+			auto nfd=fd.copy();
+			auto fun=new LambdaExp(nfd);
+			fun.loc=fd.loc;
+			call=new CallExp(fun,argExp,fd.isSquare,false);
+			call.loc=fd.loc;
+		}
 		auto fe=New!ForgetExp(retRhs,call);
 		fe.loc=argExp.loc;
 		body_.s=[fe];
 	}else{
-		bool retDefNecessary=!(returnType==unit&&cast(TupleExp)ret.e||retDefReplaced);
+		bool retDefNecessary=!(r.returnType==unit&&cast(TupleExp)ret.e||retDefReplaced);
 		auto retDef=retDefNecessary?lowerDefine!flags(ret.e,retRhs,ret.loc,result.fscope_,unchecked):null;
-		auto argNames=fd.params[constArgTypes1.length..constArgTypes1.length+argTypes.length].map!(p=>p.name.name);
-		auto makeArg(size_t i){
-			if(argTypes[i]==unit){ // unit is classical yet can be consumed
-				Expression r=new TupleExp([]);
-				r.loc=ret.loc;
-				r.type=unit;
-				return r;
-			}else{
-				Expression id=new Identifier(argNames[i]);
-				id.loc=ret.loc;
-				id.type=argTypes[i];
-				return id;
-			}
+		auto movedNames=r.movedIndices.map!(i=>fd.params[i].name.name).array;
+		Expression[] movedTypes;
+		if(r.movedTuple){
+			auto tt=r.movedType.isTupleTy();
+			assert(!tt);
+			movedTypes=iota(tt.length).map!(i=>tt[i]).array;
+		}else movedTypes=[r.movedType];
+		auto makeMoved(size_t i){
+			Expression r;
+			if(movedTypes[i]==unit) r=new TupleExp([]); // unit is classical yet can be consumed
+			else r=new Identifier(movedNames[i]);
+			r.loc=ret.loc;
+			r.type=movedTypes[i];
+			return r;
 		}
-		auto argExp=!(ft.isTuple&&ft.names.length==1)&&argTypes.length==1?makeArg(0):new TupleExp(iota(argTypes.length).map!makeArg.array);
+		auto argExp=r.movedTuple?new TupleExp(iota(movedTypes.length).map!makeMoved.array):makeMoved(0);
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		argExp=new TypeAnnotationExp(argExp,cod,TypeAnnotationType.coercion);
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_,unchecked)~[argRet]);
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~(retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_,unchecked)~[argRet]);
 	}
 	import options;
 	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
@@ -687,7 +714,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}
 	result=functionDefSemantic(result,sc);
 	enforce(result.sstate==SemState.completed,text("semantic errors while reversing function"));
-	if(argTypes.length==1) result.reversed=fd;
+	if(equal(ft.isConst,only(true,false))) result.reversed=fd;
 	fd.reversed=result;
 	return result;
 }
