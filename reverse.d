@@ -61,6 +61,8 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
 	if(auto ce=cast(CallExp)olhs){
+		if(isQuantumPrimitive(cast(CallExp)unwrap(ce.e)))
+			return false;
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
@@ -600,7 +602,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		isConst=r.constIndices.map!(_=>true).array;
 		pnames=r.constIndices.map!(i=>fd.params[i].name.name).array;
 	}else{
-		dom=tupleTy(r.constLast?[r.movedType,r.constType]:[r.constType,r.movedType]);
+		dom=tupleTy(r.constLast?[r.returnType,r.constType]:[r.constType,r.returnType]);
 		cod=r.movedType;
 		isTuple=true;
 		isConst=r.constLast?[false,true]:[true,false];
@@ -714,7 +716,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}
 	result=functionDefSemantic(result,sc);
 	enforce(result.sstate==SemState.completed,text("semantic errors while reversing function"));
-	if(equal(ft.isConst,only(true,false))) result.reversed=fd;
+	if(equal(fd.ftype.isConst,only(true,false))) result.reversed=fd; // TODO: fix condition
 	fd.reversed=result;
 	return result;
 }
