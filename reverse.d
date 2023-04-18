@@ -66,6 +66,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
+		if(!equal(ft.isConst,ft.isConstForReverse)) return false;
 		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
 			auto tpl=cast(TupleExp)ce.arg;
 			auto tt=ft.dom.isTupleTy;
@@ -449,8 +450,17 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			Expression newlhs,newarg;
 			if(ft.isConstForReverse.all!(x=>x==ft.isConstForReverse[0])){
 				if(!ft.isConstForReverse.any){
-					newlhs=ce.arg;
-					newarg=orhs;
+					if(cast(TupleExp)ce.arg){
+						auto tmp=new Identifier(freshName);
+						newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical);
+						newlhs.loc=loc;
+						auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked);
+						auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked);
+						return res=new CompoundExp([def,argUnpack]);
+					}else{
+						newlhs=ce.arg;
+						newarg=orhs;
+					}
 				}else{
 					newlhs=new TupleExp([]);
 					newlhs.loc=ce.arg.loc;
@@ -689,7 +699,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		Expression[] movedTypes;
 		if(r.movedTuple){
 			auto tt=r.movedType.isTupleTy();
-			assert(!tt);
+			assert(!!tt);
 			movedTypes=iota(tt.length).map!(i=>tt[i]).array;
 		}else movedTypes=[r.movedType];
 		auto makeMoved(size_t i){
