@@ -28,7 +28,10 @@ bool hasImplicitDup(Expression olhs,Scope sc){
 	if(auto idx=cast(IndexExp)olhs)
 		return true;
 	if(auto id=cast(Identifier)olhs){
-		if(isClassicalExp(olhs)) return true;
+		if(isClassicalExp(olhs)){
+			if(olhs.type==unit) return false; // TODO: this is a hack, get rid of this
+			return true;
+		}
 		if(id.meaning){
 			if(typeForDecl(id.meaning).isClassical())
 				return true;
@@ -66,7 +69,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
-		if(!equal(ft.isConst,ft.isConstForReverse)) return false;
+		// if(!equal(ft.isConst,ft.isConstForReverse)) return false; // TODO: can we completely rewrite away isConstForReverse?
 		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
 			auto tpl=cast(TupleExp)ce.arg;
 			auto tt=ft.dom.isTupleTy;
@@ -142,9 +145,16 @@ struct ReverseCallRewriter{
 			unpackLhs.loc=loc;
 			auto unpackRhs=new Identifier(names[1]);
 			unpackRhs.loc=loc;
-			unpackExp=new BinaryExp!(Tok!":=")(unpackLhs,unpackRhs);
-			unpackExp.loc=loc;
-			movedArgs=makeIdentifiers(unpackNames,loc);
+			if(!movedIndices.empty){ // TODO: get rid of this branch
+				unpackExp=new BinaryExp!(Tok!":=")(unpackLhs,unpackRhs);
+				unpackExp.loc=loc;
+				movedArgs=makeIdentifiers(unpackNames,loc);
+			}else{
+				// TODO: remove this once classical move semantics is implemented
+				unpackExp=new ForgetExp(unpackRhs,unpackLhs);
+				unpackExp.loc=loc;
+				movedArgs=[];
+			}
 		}else movedArgs=makeIdentifiers(only(names[1]),loc);
 		auto nargs=new Expression[](ft.nargs);
 		foreach(i,carg;zip(constIndices,constArgs)){
@@ -253,8 +263,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	Expression forget(){ return res=new ForgetExp(rhs,lhs); }
 	static if(reverseMode){
-		if(hasImplicitDup(olhs,sc)) // TODO: automatically synthesize implicit dups in semantic?
+		if(hasImplicitDup(olhs,sc)){ // TODO: automatically synthesize implicit dups in semantic
+			if(auto tpl=cast(TupleExp)unwrap(orhs))
+				if(tpl&&tpl.e.length==0) // TODO: this is a hack, support properly
+					return res=new DefineExp(lhs,rhs);
 			return forget();
+		}
 	}
 	if(auto arr=cast(ArrayExp)olhs){
 		auto newLhs=new TupleExp(arr.copy().e);
@@ -512,10 +526,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 						break;
 					case "P":
 						reversed=ce.e;
-						auto tpl=cast(TupleExp)newarg;
-						enforce(tpl&&tpl.length==2);
 						// note: this ignores side-effects of rhs, if any
-						auto negated=new UMinusExp(tpl.e[0]);
+						auto negated=new UMinusExp(newarg);
 						negated.loc=newarg.loc;
 						newarg=negated;
 						break;
@@ -782,7 +794,10 @@ ComputationClass classifyStatement(Expression e){
 		if(auto ce=cast(CommaExp)e) assert(0);
 		if(auto de=cast(DefineExp)e){
 			assert(!!de.e2.type);
-			if(auto tpl=cast(TupleExp)de.e2)
+			if(auto tpl=cast(TupleExp)unwrap(de.e2))
+				if(tpl.length==0) // TODO: this is a hack, support properly
+					return ComputationClass.quantum;
+			if(auto tpl=cast(TupleExp)unwrap(de.e1))
 				if(tpl.length==0) // TODO: this is a hack, support properly
 					return ComputationClass.quantum;
 			return classifyExpression(de.e2);
