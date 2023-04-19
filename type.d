@@ -1200,7 +1200,7 @@ FunTy funTy(bool[] isConst,Expression dom,Expression cod,bool isSquare,bool isTu
 	assert(dom&&cod);
 	if(isTuple){
 		auto tdom=dom.isTupleTy();
-		assert(isConst.length==tdom.length);
+		assert(tdom&&isConst.length==tdom.length);
 	}else assert(isConst.length==1);
 }do{
 	auto nargs=1+[].length;
