@@ -2465,12 +2465,14 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	static argSemantic(Expression e,T context)in{
 		assert(!!e);
 	}do{
-		static if(isRhs) return expressionSemantic(e,context);
-		else return defineLhsSemantic!isPresemantic(e,context);
+		static if(!isRhs){
+			if(context.constResult) return expressionSemantic(e,context.expSem);
+			return defineLhsSemantic!isPresemantic(e,context);
+		}else return expressionSemantic(e,context);
 	}
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
 	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestConsumed);
-	else ce.e=expressionSemantic(ce.e,context.expSem.nestConst);
+	else ce.e=expressionSemantic(ce.e,context.expSem.nestConsumed);
 	propErr(ce.e,ce);
 	if(ce.sstate==SemState.error)
 		return ce;
@@ -2543,7 +2545,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				foreach(i,ref exp;tpl.e){
-					exp=argSemantic(exp,context.nest((ft.isConst.length==tpl.e.length?ft.isConst[i]:true)?ConstResult.yes:ConstResult.no));
+					static if(isRhs){
+						auto isConst=(ft.isConst.length==tpl.e.length?ft.isConst[i]:true);
+					}else{
+						auto isConst=(ft.isConst.length==tpl.e.length?ft.isConstForReverse[i]:true);
+					}
+					exp=argSemantic(exp,context.nest(isConst?ConstResult.yes:ConstResult.no));
 					static if(isRhs) checkArg(i,exp);
 					propErr(exp,tpl);
 				}
@@ -2553,7 +2560,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}
 			}else{
-				ce.arg=argSemantic(ce.arg,context.nest((ft.isConst.length?ft.isConst[0]:true)?ConstResult.yes:ConstResult.no));
+				static if(isRhs){
+					auto isConst=(ft.isConst.length?ft.isConst[0]:true);
+				}else{
+					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:true);
+				}
+				ce.arg=argSemantic(ce.arg,context.nest(isConst?ConstResult.yes:ConstResult.no));
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
@@ -2563,7 +2575,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 		}else{
 			assert(ft.isConst.length==1);
-			ce.arg=argSemantic(ce.arg,context.nest(ft.isConst[0]?ConstResult.yes:ConstResult.no));
+			static if(isRhs){
+				auto isConst=ft.isConst[0];
+			}else{
+				auto isConst=ft.isConstForReverse[0];
+			}
+			ce.arg=argSemantic(ce.arg,context.nest(isConst?ConstResult.yes:ConstResult.no));
 			assert(ft.names.length==1);
 			static if(isRhs) checkArg(0,ce.arg);
 		}
