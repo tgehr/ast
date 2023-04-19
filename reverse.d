@@ -452,6 +452,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 			auto f=ce.e;
 			auto r=reverseCallRewriter(ft,f.loc);
+			bool simplify=r.innerNeeded;
 			if(!unchecked&&r.movedType.hasClassicalComponent()){
 				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 				return error();
@@ -494,9 +495,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				if(ft.nargs==tpl.length){
 					auto constMovedArgs=r.reorderArguments(tpl); // note: this changes order of assertion failures. ok?
 					newlhs=constMovedArgs[1];
-					if(r.constIndices.empty){
+					if(simplify&&r.constIndices.empty){
 						newarg=constMovedArgs[1];
-					}else if(r.returnType==unit){
+					}else if(simplify&&r.returnType==unit){
 						newarg=constMovedArgs[0];
 					}else{
 						newarg=new TupleExp([constMovedArgs[0],orhs]);
@@ -591,7 +592,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
-	enum simplify=true;
+	bool simplify=r.innerNeeded;
 	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
 	if(!ret){
 		sc.error("reversing early returns not supported yet",fd.loc);
@@ -718,7 +719,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		}else movedTypes=[r.movedType];
 		auto makeMoved(size_t i){
 			Expression r;
-			if(movedTypes[i]==unit) r=new TupleExp([]); // unit is classical yet can be consumed
+			if(movedTypes[i]==unit) r=new TupleExp([]); // TODO: use last-use analysis instead
 			else r=new Identifier(movedNames[i]);
 			r.loc=ret.loc;
 			r.type=movedTypes[i];
