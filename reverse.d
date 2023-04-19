@@ -669,7 +669,9 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		param.loc=pname.loc;
 		return param;
 	}).array;
-	auto retRhs=new Identifier(rpname);
+	Expression retRhs;
+	if(simplify&&r.returnType==unit) retRhs=new TupleExp([]);
+	else retRhs=new Identifier(rpname);
 	retRhs.loc=ret.loc;
 	retRhs.type=r.returnType;
 	retRhs.loc=ret.loc;
