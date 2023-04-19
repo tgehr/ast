@@ -1648,7 +1648,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					ok=false;
 				}
 				if(ft.cod.hasAnyFreeVar(ft.names)){
-					sc.error("arguments to reversed function call cannot appear in return value",f.loc);
+					sc.error("arguments to reversed function call cannot appear in result type",f.loc);
 					ok=false;
 				}else{
 					be.e1.type=ft.cod;
@@ -2438,7 +2438,27 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	if(ce.sstate!=SemState.error){
 		auto loc=f.loc;
 		auto r=reverseCallRewriter(ft,loc);
-		if(!r.innerNeeded) return null;
+		if(!r.innerNeeded){
+			if(!calledId.checkReverse){
+				if(equal(ft.isConst,only(true,false))){
+					auto τ=ft.argTy(0),χ=ft.argTy(1),φ=ft.cod;
+					auto arg=new TupleExp([τ,χ,φ]);
+					arg.loc=ce.e.loc;
+					arg.type=tupleTy([τ.type,χ.type,φ.type]);
+					arg.sstate=SemState.completed;
+					auto nce=new CallExp(ce.e,arg,true,false);
+					nce.loc=ce.e.loc;
+					auto rtype=funTy([true,false],tupleTy([τ,φ]),χ,ft.isSquare,true,ft.annotation,ft.isClassical);
+					nce.type=funTy([true],ce.arg.type,rtype,false,false,Annotation.qfree,ft.isClassical);
+					nce.sstate=SemState.completed;
+					auto res=new CallExp(nce,ce.arg,ce.isSquare,ce.isClassical);
+					res.type=rtype;
+					res.sstate=SemState.completed;
+					return res;
+				}
+			}
+			return null;
+		}
 		if(check&&r.movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 			ce.sstate=SemState.error;
@@ -2544,21 +2564,41 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
-				foreach(i,ref exp;tpl.e){
-					static if(isRhs){
-						auto isConst=(ft.isConst.length==tpl.e.length?ft.isConst[i]:true);
+				bool defaultIsConst=true;
+				if(ft.nargs!=tpl.length){
+					if(ft.isConst.any!(c=>c!=ft.isConst[0])){
+						static if(isRhs) enum msg="wrong number of arguments for function (%s instead of %s)";
+						else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
+						sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
+						tpl.sstate=SemState.error;
 					}else{
-						auto isConst=(ft.isConst.length==tpl.e.length?ft.isConstForReverse[i]:true);
-					}
-					exp=argSemantic(exp,context.nest(isConst?ConstResult.yes:ConstResult.no));
-					static if(isRhs) checkArg(i,exp);
-					propErr(exp,tpl);
-				}
-				static if(isRhs){
-					if(tpl.sstate!=SemState.error){
-						tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+						defaultIsConst=ft.isConst.all;
 					}
 				}
+				if(tpl.sstate!=SemState.error){
+					foreach(i,ref exp;tpl.e){
+						static if(isRhs){
+							auto isConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
+						}else{
+							auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
+						}
+						exp=argSemantic(exp,context.nest(isConst?ConstResult.yes:ConstResult.no));
+						static if(isRhs) checkArg(i,exp);
+						propErr(exp,tpl);
+					}
+					static if(!isRhs){
+						foreach(i,ref exp;tpl.e){
+							if(ft.isConstForReverse[i])
+								continue;
+							if(auto id=cast(Identifier)exp){
+								if(!id.type)
+									id.type=ft.argTy(i);
+							}
+						}
+					}
+				}
+				if(tpl.sstate!=SemState.error&&(isRhs||tpl.e.all!(e=>!!e.type))) // TODO: ensure type is always set
+					tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 			}else{
 				static if(isRhs){
 					auto isConst=(ft.isConst.length?ft.isConst[0]:true);
@@ -2628,7 +2668,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			static if(isRhs){
 				ce.type=ft.tryApply(ce.arg,ce.isSquare);
 				return !!ce.type;
-			}else return true; // TODO: ok?
+			}else{
+				if(ft.cod.hasAnyFreeVar(ft.names)){
+					sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
+					ce.sstate=SemState.error;
+					return true;
+				}else{
+					ce.type=ft.cod;
+					return true;
+				}
+			}
 		}
 		static if(language==silq && isRhs){ // TODO: probably this can work on lhs
 			auto calledId=cast(Identifier)ce.e;

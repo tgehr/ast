@@ -361,6 +361,7 @@ class Identifier: Expression{
 			}
 		}else{
 			static if(language==silq){
+				r.checkReverse=checkReverse;
 				r.classical=classical;
 			}
 		}
