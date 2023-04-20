@@ -2566,13 +2566,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
+				void wrongNumberOfArgs(){
+					static if(isRhs) enum msg="wrong number of arguments for function (%s instead of %s)";
+					else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
+					sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
+					tpl.sstate=SemState.error;
+				}
 				bool defaultIsConst=true;
 				if(ft.nargs!=tpl.length){
 					if(ft.isConst.any!(c=>c!=ft.isConst[0])){
-						static if(isRhs) enum msg="wrong number of arguments for function (%s instead of %s)";
-						else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
-						sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
-						tpl.sstate=SemState.error;
+						wrongNumberOfArgs();
 					}else{
 						defaultIsConst=ft.isConst.all;
 					}
@@ -2588,13 +2591,19 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						static if(isRhs) checkArg(i,exp);
 						propErr(exp,tpl);
 					}
-					static if(!isRhs){
-						foreach(i,ref exp;tpl.e){
-							if(ft.isConstForReverse[i])
-								continue;
-							if(auto id=cast(Identifier)exp){
-								if(!id.type)
-									id.type=ft.argTy(i);
+				}
+				if(tpl.sstate!=SemState.error){
+					if(ft.nargs!=tpl.length){
+						wrongNumberOfArgs();
+					}else{
+						static if(!isRhs){
+							foreach(i,ref exp;tpl.e){
+								if(ft.isConstForReverse[i])
+									continue;
+								if(auto id=cast(Identifier)exp){
+									if(!id.type)
+										id.type=ft.argTy(i);
+								}
 							}
 						}
 					}
