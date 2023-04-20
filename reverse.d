@@ -583,9 +583,10 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto sc=fd.scope_, ft=fd.ftype;
 	auto asc=sc;
 	foreach(id;fd.captures){ // TODO: this is a bit hacky
-		if(id.meaning&&id.meaning.scope_&&!id.meaning.scope_.lookupHere(id,false,Lookup.probing)){
+		if(id.meaning&&id.meaning.scope_&&!id.meaning.scope_.lookup(id,true,true,Lookup.probing)){
 			auto scope_=id.meaning.scope_;
 			id.meaning.scope_=null;
+			id.meaning.rename=null;
 			if(!scope_.insert(id.meaning,true))
 				fd.sstate=SemState.error;
 		}
