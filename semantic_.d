@@ -262,6 +262,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			vd.loc=id.loc;
 			if(be.e2.sstate!=SemState.error||!sc.lookupHere(nid,false,Lookup.probing))
 				success&=sc.insert(vd);
+			id.meaning=vd;
 			id.name=vd.getName;
 			id.scope_=sc;
 			return vd;
@@ -339,6 +340,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			vd.vtype=typeSemantic(vd.dtype,sc);
 			vd.loc=id.loc;
 			success&=sc.insert(vd);
+			id.meaning=vd;
 			id.name=vd.getName;
 			id.scope_=sc;
 			return vd;
