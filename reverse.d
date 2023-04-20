@@ -434,30 +434,32 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			ce.e=expressionSemantic(ce.e,expSemContext(sc,ConstResult.yes,InType.no));
 		}
 		if(auto ft=cast(FunTy)ce.e.type){
+			bool needWrapper=false;
 			if(ft.isSquare&&!ce.isSquare){
 				if(auto ft2=cast(FunTy)ft.cod){
 					ft=ft2;
+					needWrapper=true;
 				}else{
 					sc.error("implicit function call not supported as definition left-hand side",ce.loc); // TODO?
 					return error();
 				}
 			}
-			if(!unchecked&&ft.annotation<Annotation.mfree){
+			if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
 				sc.error("reversed function must be 'mfree'",ce.e.loc);
 				return error;
 			}
-			if(!unchecked&&!ft.isClassical){
+			if(!unchecked&&!needWrapper&&!ft.isClassical){
 				sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
 				return error();
 			}
 			auto f=ce.e;
 			auto r=reverseCallRewriter(ft,f.loc);
 			bool simplify=r.innerNeeded;
-			if(!unchecked&&r.movedType.hasClassicalComponent()){
+			if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
 				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 				return error();
 			}
-			if(!unchecked&&r.returnType.hasClassicalComponent()){
+			if(!unchecked&&!needWrapper&&r.returnType.hasClassicalComponent()){
 				sc.error("reversed function cannot have classical components in return value", f.loc);
 				return error();
 			}
