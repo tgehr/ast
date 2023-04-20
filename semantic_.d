@@ -3090,7 +3090,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return id;
 		}
 	}
-	if(id.type&&meaning.scope_.getFunction()){
+	if(id.type&&meaning.scope_&&meaning.scope_.getFunction()){
 		bool hasQuantumComponent=id.type.hasQuantumComponent();
 		bool captureChecked=!hasQuantumComponent;
 		assert(sc.isNestedIn(meaning.scope_));
