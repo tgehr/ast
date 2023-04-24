@@ -646,15 +646,15 @@ abstract class Scope{
 		return Annotation.none;
 	}
 
-	private bool insertCapture(Identifier id,Scope outermost){
-		if(!id.meaning) return false;
-		if(!id.meaning.isLinear()) return true;
-		auto type=id.typeFromMeaning;
+	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost){
+		if(!meaning) return false;
+		if(!meaning.isLinear()) return true;
+		auto type=id.typeFromMeaning(meaning);
 		if(!type) return false;
-		return insertCaptureImpl(id,type,outermost);
+		return insertCaptureImpl(id,meaning,type,outermost);
 	}
 
-	protected bool insertCaptureImpl(Identifier id,Expression type,Scope outermost){ return true; }
+	protected bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){ return true; }
 
 	abstract FunctionDef getFunction();
 	abstract DatDecl getDatDecl();
@@ -841,14 +841,14 @@ class NestedScope: Scope{
 
 	override bool isNestedIn(Scope rhs){ return rhs is this || parent.isNestedIn(rhs); }
 
-	protected override bool insertCaptureImpl(Identifier id,Expression type,Scope outermost){
+	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
 		if(this is outermost) return true;
 		foreach(sc;parent.activeNestedScopes){
 			if(this is sc) continue;
-			if(!sc.addVariable(id.meaning,type,true))
+			if(!sc.addVariable(meaning,type,true))
 				return false;
 		}
-		return parent.insertCaptureImpl(id,type,outermost);
+		return parent.insertCaptureImpl(id,meaning,type,outermost);
 	}
 
 	override FunctionDef getFunction(){ return parent.getFunction(); }
@@ -873,10 +873,57 @@ class CapturingScope(T): NestedScope{
 		super(parent);
 		this.decl=decl;
 	}
-	final bool addCapture(Identifier id,Scope startScope){
-		startScope.insertCapture(id,this);
+	protected bool addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
+		if(kind==Lookup.probing) return false;
+		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return false; // no need to capture global declarations
+		if(id.sstate==SemState.error) return false;
+		auto type=id.typeFromMeaning(meaning);
+		if(!type) return false;
+		auto vd=cast(VarDecl)meaning;
+		bool isConstVar=vd&&vd.isConst||origin.isConst(vd);
+		bool isConstLookup=kind==Lookup.constant||isConstVar;
+		if(type.hasQuantumComponent()){
+			if(origin.componentReplacements(meaning).length)
+				return false; // not captured, will be replaced (TODO: ok?)
+			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
+				if(isConstVar){
+					origin.error("cannot capture 'const' quantum variable", id.loc);
+					if(auto read=origin.isConst(vd))
+						origin.note("variable was made 'const' here", read.loc);
+					id.sstate=SemState.error;
+					return false;
+				}else{
+					if(kind==Lookup.constant){
+						origin.error("cannot capture quantum variable as constant", id.loc);
+						id.sstate=SemState.error;
+						return false;
+					}
+				}
+			}
+			static if(is(T==FunctionDef)){
+				auto fd=decl;
+				if(fd&&fd.context&&fd.context.vtype==contextTy(true)){
+					if(!fd.ftype) fd.context.vtype=contextTy(false);
+					else{
+						assert(fd.ftype.isClassical_);
+						origin.error("cannot capture quantum variable in classical function", id.loc);
+						id.sstate=SemState.error;
+						return false;
+					}
+				}
+			}
+		}
+		if(!isConstLookup) origin.insertCapture(id,meaning,this);
 		decl.addCapture(id);
 		return true;
+	}
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
+		if(auto decl=lookupHereImpl(ident,rnsym,kind,origin)) return decl;
+		if(auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin)){
+			addCapture(ident,decl,kind,origin);
+			return decl;
+		}
+		return null;
 	}
 }
 

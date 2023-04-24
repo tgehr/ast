@@ -1953,7 +1953,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
-				// TODO: method calls are also implicit assignments.
+			// TODO: method calls are also implicit assignments.
 			sc.error("cannot assign to variable in closure context (capturing by value)",loc);
 			return false;
 		}
@@ -3097,61 +3097,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				id.sstate=SemState.error;
 			id.substitute=true;
 			return id;
-		}
-	}
-	if(id.type&&meaning.scope_&&meaning.scope_.getFunction()){
-		bool hasQuantumComponent=id.type.hasQuantumComponent();
-		bool captureChecked=!hasQuantumComponent;
-		assert(sc.isNestedIn(meaning.scope_));
-		auto startScope=sc;
-		for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
-			bool checkCapture(){
-				static if(language==silq){
-					if(id.meaning&&sc.componentReplacements(id.meaning).length){
-						return false; // not captured, will be replaced
-					}else if(!astopt.allowUnsafeCaptureConst){
-						if(context.constResult){
-							sc.error("cannot capture quantum variable as constant", id.loc);
-							id.sstate=SemState.error;
-							return false;
-						}else if(vd&&(vd.isConst||sc.isConst(vd))){
-							sc.error("cannot capture 'const' quantum variable", id.loc);
-							if(auto read=sc.isConst(vd))
-								sc.note("variable was made 'const' here", read.loc);
-							id.sstate=SemState.error;
-							return false;
-						}
-					}
-				}
-				return true;
-			}
-			if(auto fsc=cast(FunctionScope)csc){
-				if(!captureChecked){
-					captureChecked=true;
-					if(!checkCapture()) break;
-				}
-				if(hasQuantumComponent){
-					if(fsc.fd&&fsc.fd.context&&fsc.fd.context.vtype==contextTy(true)){
-						if(!fsc.fd.ftype) fsc.fd.context.vtype=contextTy(false);
-						else{
-							assert(fsc.fd.ftype.isClassical_);
-							sc.error("cannot capture quantum variable in classical function", id.loc);
-							id.sstate=SemState.error;
-							break;
-						}
-					}
-				}
-				fsc.addCapture(id,startScope);
-				startScope=fsc;
-			}
-			if(auto dsc=cast(DataScope)csc){
-				if(!captureChecked){
-					captureChecked=true;
-					if(!checkCapture()) break;
-				}
-				dsc.addCapture(id,startScope);
-				startScope=dsc;
-			}
 		}
 	}
 	return id;

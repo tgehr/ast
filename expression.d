@@ -434,12 +434,15 @@ class Identifier: Expression{
 		}else return this;
 	}
 
-	final @property Expression typeFromMeaning(){
+	final Expression typeFromMeaning(Declaration meaning){
 		if(!meaning) return null;
 		import ast.semantic_:typeForDecl;
 		auto r=typeForDecl(meaning);
 		if(isTypeTy(r)&&classical) return ctypeTy;
 		return r;
+	}
+	final Expression typeFromMeaning(){
+		return typeFromMeaning(meaning);
 	}
 
 	override Annotation getAnnotation(){ return deterministic; }
