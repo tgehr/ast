@@ -867,30 +867,9 @@ class RawProductScope: NestedScope{
 	void forceClose(){}
 }
 
-class FunctionScope: NestedScope{
-	FunctionDef fd;
-	this(Scope parent,FunctionDef fd){
-		super(parent);
-		this.fd=fd;
-	}
-	final bool addCapture(Identifier id,Scope startScope){
-		startScope.insertCapture(id,this);
-		fd.addCapture(id);
-		return true;
-	}
-	override Annotation restriction(){
-		return fd.annotation;
-	}
-	void forceClose(){}
-	// ~this(){ import std.stdio; writeln(fd.loc.rep); }
-	override FunctionDef getFunction(){ return fd; }
-}
-class DataScope: NestedScope{
-	DatDecl decl;
-	override bool allowsLinear(){
-		return false; // TODO!
-	}
-	this(Scope parent,DatDecl decl){
+class CapturingScope(T): NestedScope{
+	T decl;
+	this(Scope parent,T decl){
 		super(parent);
 		this.decl=decl;
 	}
@@ -899,7 +878,27 @@ class DataScope: NestedScope{
 		decl.addCapture(id);
 		return true;
 	}
+}
 
+class FunctionScope: CapturingScope!FunctionDef{
+	alias fd=decl;
+	this(Scope parent,FunctionDef fd){
+		super(parent,fd);
+	}
+	override Annotation restriction(){
+		return fd.annotation;
+	}
+	void forceClose(){}
+	// ~this(){ import std.stdio; writeln(fd.loc.rep); }
+	override FunctionDef getFunction(){ return fd; }
+}
+class DataScope: CapturingScope!DatDecl{
+	override bool allowsLinear(){
+		return false; // TODO!
+	}
+	this(Scope parent,DatDecl decl){
+		super(parent,decl);
+	}
 	override DatDecl getDatDecl(){ return decl; }
 }
 class BlockScope: NestedScope{
