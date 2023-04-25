@@ -924,7 +924,7 @@ class CapturingScope(T): NestedScope{
 			meaning=consume(meaning);
 			origin.insertCapture(id,meaning,this);
 		}
-		decl.addCapture(id);
+		decl.addCapture(meaning,id);
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){

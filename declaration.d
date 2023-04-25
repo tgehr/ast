@@ -128,9 +128,11 @@ class FunctionDef: Declaration{
 	VarDecl context;
 	VarDecl contextVal;
 	VarDecl thisVar; // for constructors
-	Identifier[] captures;
-	void addCapture(Identifier id){
-		captures~=id;
+	Identifier[][Declaration] captures;
+	void addCapture(Declaration meaning,Identifier id)in{
+		assert(!!meaning);
+	}do{
+		captures[meaning]~=id;
 	}
 	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
 	Expression ret; // return type
@@ -227,9 +229,9 @@ class DatDecl: Declaration{
 	// semantic information
 	DataScope dscope_;
 	VarDecl context;
-	Identifier[] captures;
-	void addCapture(Identifier id){
-		captures~=id;
+	Identifier[][Declaration] captures;
+	void addCapture(Declaration meaning,Identifier id){
+		captures[meaning]~=id;
 	}
 	@property string contextName()in{assert(!!context);}do{ return context.getName; }
 	@property bool isNested(){ return !!cast(NestedScope)scope_; }
