@@ -100,24 +100,27 @@ abstract class Scope{
 		return true;
 	}
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
-		if(auto d=symtabLookup(decl.name,false,Lookup.probing,this)){
+		if(auto d=symtabLookup(decl.name,false)){
 			if(decl.sstate!=SemState.error) redefinitionError(decl, d);
 			decl.sstate=SemState.error;
 			return false;
 		}
 		rename(decl);
+		if(decl.rename) assert(decl.rename.ptr !in rnsymtab);
+		symtabInsert(decl);
+		decl.scope_=this;
+		return true;
+	}
+
+	void symtabInsert(Declaration decl){
 		symtab[decl.name.ptr]=decl;
-		if(decl.rename){
-			assert(decl.rename.ptr !in rnsymtab);
-			rnsymtab[decl.rename.ptr]=decl;
-		}
+		if(decl.rename) rnsymtab[decl.rename.ptr]=decl;
 		static if(language==silq){
 			if(decl.getName !in dependencies.dependencies||toPush.canFind(decl.getName))
 				addDependency(decl,Dependency(true));
 		}
-		decl.scope_=this;
-		return true;
 	}
+
 	void redefinitionError(Declaration decl, Declaration prev) in{
 		assert(decl);
 	}do{
@@ -313,47 +316,53 @@ abstract class Scope{
 		}
 	}
 
-	protected final Declaration symtabLookup(Identifier ident,bool rnsym,Lookup kind,Scope origin){
+	protected final Declaration symtabLookup(Identifier ident,bool rnsym){
 		if(allowMerge) return null;
 		auto r=symtab.get(ident.ptr, null);
 		if(rnsym&&!r) r=rnsymtab.get(ident.ptr,null);
+		return r;
+	}
+
+	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq){
-			if(kind==Lookup.consuming&&r&&r.isLinear()){
+			if(kind==Lookup.consuming&&meaning&&meaning.isLinear()){
 				bool doConsume=true;
-				if(auto vd=cast(VarDecl)r){
+				if(auto vd=cast(VarDecl)meaning){
 					import ast.semantic_:typeConstBlockNote;
 					if(vd.typeConstBlocker){
-						error(format("cannot consume 'const' variable '%s'",ident), ident.loc);
+						error(format("cannot consume 'const' variable '%s'",id), id.loc);
 						typeConstBlockNote(vd,this);
 						doConsume=false;
 					}
 				}
 				if(doConsume){
-					if(auto read=isConst(r)){
-						error(format("cannot consume 'const' variable '%s'",ident), ident.loc);
+					if(auto read=isConst(meaning)){
+						error(format("cannot consume 'const' variable '%s'",id), id.loc);
 						note("variable was made 'const' here", read.loc);
-						ident.sstate=SemState.error;
+						id.sstate=SemState.error;
 						doConsume=false;
 					}
 				}
-				if(doConsume){
-					if(auto vd=cast(VarDecl)r) assert(!vd.isConst);
-					if(auto nr=consume(r))
-						r=nr;
+				if(doConsume&&meaning.scope_){
+					if(auto vd=cast(VarDecl)meaning) assert(!vd.isConst);
+					if(auto nmeaning=consume(meaning))
+						meaning=nmeaning;
 				}
 			}
-			if(kind==Lookup.constant&&r&&r.isLinear()){
-				if(!origin.isConstHere(r))
-					origin.blockConst(r,ident);
+			if(kind==Lookup.constant&&meaning&&meaning.isLinear()){
+				if(!isConstHere(meaning))
+					blockConst(meaning,id);
 			}
 		}
-		return r;
+		return meaning;
 	}
+
 	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
-		return lookupImpl(ident,rnsym,lookupImports,kind,this);
+		auto meaning=lookupImpl(ident,rnsym,lookupImports,kind,this);
+		return postprocessLookup(ident,meaning,kind);
 	}
 	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		return lookupHereImpl(ident,rnsym,kind,origin);
+		return lookupHereImpl(ident,rnsym);
 	}
 	Identifier getRenamed(Identifier cname){
 		for(;;){ // TODO: quite hacky
@@ -371,10 +380,11 @@ abstract class Scope{
 		decl.rename=getRenamed(cname);
 	}
 	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind){
-		return lookupHereImpl(ident,rnsym,kind,this);
+		auto meaning=lookupHereImpl(ident,rnsym);
+		return postprocessLookup(ident,meaning,kind);
 	}
-	final Declaration lookupHereImpl(Identifier ident,bool rnsym,Lookup kind,Scope origin){
-		return symtabLookup(ident,rnsym,kind,origin);
+	final Declaration lookupHereImpl(Identifier ident,bool rnsym){
+		return symtabLookup(ident,rnsym);
 	}
 
 	bool isNestedIn(Scope rhs){ return rhs is this; }
@@ -615,7 +625,7 @@ abstract class Scope{
 		return errors;
 	}
 
-	final bool addVariable(Declaration decl,Expression type,bool isFirstDef=false){
+	final Declaration addVariable(Declaration decl,Expression type,bool isFirstDef=false){
 		auto id=new Identifier(decl.name.name);
 		id.loc=decl.name.loc;
 		auto var=new VarDecl(id);
@@ -624,22 +634,21 @@ abstract class Scope{
 			var.rename=new Identifier(decl.rename.name);
 			var.rename.loc=decl.rename.loc;
 		}
-		if(auto d=symtabLookup(var.name,false,Lookup.probing,this)){
+		if(auto d=symtabLookup(var.name,false)){
 			if(isFirstDef) redefinitionError(d,var);
 			else redefinitionError(var,d);
-			return false;
+			return null;
 		}
 		static if(language==silq){
 			if(decl.getName !in dependencies.dependencies||toPush.canFind(decl.getName))
 				addDependency(decl,Dependency(true));
 		}
-		symtab[var.name.ptr]=var;
-		if(var.rename) rnsymtab[var.rename.ptr]=var;
+		symtabInsert(var);
 		var.vtype=type;
 		var.scope_=this;
 		import ast.semantic_:varDeclSemantic;
 		varDeclSemantic(var,this);
-		return var.sstate==SemState.completed;
+		return var;
 	}
 
 	Annotation restriction(){
@@ -805,8 +814,8 @@ class NestedScope: Scope{
 				auto parentDep=parent.dependencies.dependencies[odecl.getName];
 				addDependency(ndecl,parentDep);
 			}
-			addVariable(ndecl,type,true);
-			result=symtab.get(ndecl.name.ptr,ndecl); // TODO: refactor, a bit hacky
+			auto added=addVariable(ndecl,type,true);
+			if(added) result=added;
 			splitVar(ndecl,result);
 		}
 		if(remove){
@@ -828,7 +837,7 @@ class NestedScope: Scope{
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		if(auto decl=lookupHereImpl(ident,rnsym,kind,origin)) return decl;
+		if(auto decl=lookupHereImpl(ident,rnsym)) return decl;
 		return parent.lookupImpl(ident,rnsym,lookupImports,kind,origin);
 	}
 
@@ -843,11 +852,8 @@ class NestedScope: Scope{
 
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
 		if(this is outermost) return true;
-		foreach(sc;parent.activeNestedScopes){
-			if(this is sc) continue;
-			if(!sc.addVariable(meaning,type,true))
-				return false;
-		}
+		foreach(sc;parent.activeNestedScopes)
+			sc.symtabInsert(meaning);
 		return parent.insertCaptureImpl(id,meaning,type,outermost);
 	}
 
@@ -873,30 +879,30 @@ class CapturingScope(T): NestedScope{
 		super(parent);
 		this.decl=decl;
 	}
-	protected bool addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
-		if(kind==Lookup.probing) return false;
-		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return false; // no need to capture global declarations
-		if(id.sstate==SemState.error) return false;
+	protected Declaration addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
+		if(kind==Lookup.probing) return null;
+		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
+		if(id.sstate==SemState.error) return null;
 		auto type=id.typeFromMeaning(meaning);
-		if(!type) return false;
+		if(!type) return null;
 		auto vd=cast(VarDecl)meaning;
 		bool isConstVar=vd&&vd.isConst||origin.isConst(vd);
 		bool isConstLookup=kind==Lookup.constant||isConstVar;
 		if(type.hasQuantumComponent()){
 			if(origin.componentReplacements(meaning).length)
-				return false; // not captured, will be replaced (TODO: ok?)
+				return null; // not captured, will be replaced (TODO: ok?)
 			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
 				if(isConstVar){
 					origin.error("cannot capture 'const' quantum variable", id.loc);
 					if(auto read=origin.isConst(vd))
 						origin.note("variable was made 'const' here", read.loc);
 					id.sstate=SemState.error;
-					return false;
+					return null;
 				}else{
 					if(kind==Lookup.constant){
 						origin.error("cannot capture quantum variable as constant", id.loc);
 						id.sstate=SemState.error;
-						return false;
+						return null;
 					}
 				}
 			}
@@ -908,19 +914,24 @@ class CapturingScope(T): NestedScope{
 						assert(fd.ftype.isClassical_);
 						origin.error("cannot capture quantum variable in classical function", id.loc);
 						id.sstate=SemState.error;
-						return false;
+						return null;
 					}
 				}
 			}
 		}
-		if(!isConstLookup) origin.insertCapture(id,meaning,this);
+		if(!isConstLookup&&meaning.isLinear()){
+			symtabInsert(meaning);
+			meaning=consume(meaning);
+			origin.insertCapture(id,meaning,this);
+		}
 		decl.addCapture(id);
-		return true;
+		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		if(auto decl=lookupHereImpl(ident,rnsym,kind,origin)) return decl;
+		if(auto decl=lookupHereImpl(ident,rnsym)) return decl;
 		if(auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin)){
-			addCapture(ident,decl,kind,origin);
+			if(auto r=addCapture(ident,decl,kind,origin))
+				return r;
 			return decl;
 		}
 		return null;
