@@ -129,9 +129,11 @@ class FunctionDef: Declaration{
 	VarDecl contextVal;
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
+	Declaration[] capturedDecls;
 	void addCapture(Declaration meaning,Identifier id)in{
 		assert(!!meaning);
 	}do{
+		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
 	}
 	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
@@ -230,7 +232,9 @@ class DatDecl: Declaration{
 	DataScope dscope_;
 	VarDecl context;
 	Identifier[][Declaration] captures;
+	Declaration[] capturedDecls;
 	void addCapture(Declaration meaning,Identifier id){
+		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
 	}
 	@property string contextName()in{assert(!!context);}do{ return context.getName; }
