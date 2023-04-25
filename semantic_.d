@@ -1131,12 +1131,19 @@ struct DefineLhsContext{
 		sc.nameIndex(index,name);
 		return name;
 	}
+	Expression type;
 }
-auto defineLhsContext(ExpSemContext expSem){
-	return DefineLhsContext(expSem);
+auto defineLhsContext(ExpSemContext expSem,Expression type){
+	return DefineLhsContext(expSem,type);
 }
-auto nest(DefineLhsContext context,ConstResult newConstResult){
-	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$]);
+auto nest(DefineLhsContext context,ConstResult newConstResult,Expression newType){
+	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$-1],newType);
+}
+auto nestConst(ref DefineLhsContext context,Expression newType){
+	return context.nest(ConstResult.yes,newType);
+}
+auto nestConsumed(ref DefineLhsContext context,Expression newType){
+	return context.nest(ConstResult.no,newType);
 }
 
 template defineLhsSemanticImpls(bool isPresemantic){
@@ -1167,8 +1174,38 @@ Expression defineLhsSemanticImpl(FunctionDef fd,DefineLhsContext context){
 Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(re,context); // TODO: get rid of this case
 }
-Expression defineLhsSemanticImpl(CallExp e,DefineLhsContext context){
-	return callSemantic!isPresemantic(e,context);
+Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
+	static if(!isPresemantic){ // TODO: move into callSemantic!(false,DefineLhsContext)?
+		auto sc=context.sc;
+		assert(util.among(ce.e.sstate,SemState.error,SemState.completed));
+		bool ok=true;
+		if(ce.e.sstate!=SemState.error){
+			auto f=ce.e,ft=cast(ProductTy)f.type;
+			if(ft){
+				if(ft.annotation<Annotation.mfree){
+					sc.error("reversed function must be 'mfree'",f.loc);
+					ok=false;
+				}
+				if(!ft.isClassical_){
+					sc.error("reversed function must be classical",f.loc);
+					ok=false;
+				}
+				if(ft.cod.hasAnyFreeVar(ft.names)){
+					sc.error("arguments to reversed function call cannot appear in result type",f.loc);
+					ok=false;
+				}else{
+					ce.type=ft.cod;
+					if(!isSubtype(ce.type,context.type)){
+						sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
+						ok=false;
+					}
+				}
+			}
+		}
+	}
+	auto result=callSemantic!isPresemantic(ce,context);
+	static if(!isPresemantic) if(!ok) result.sstate=SemState.error;
+	return result;
 }
 
 static if(language==psi)
@@ -1193,6 +1230,7 @@ Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
 
 static if(language==silq){
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
+	assert(!context.constResult);
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		auto next=unwrap(e.e);
 		if(auto id=cast(Identifier)next){
@@ -1206,7 +1244,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
 					ce.loc=idx.loc;
-					return callSemantic!isPresemantic(ce,context);
+					if(context.constResult) return callSemantic(ce,context.expSem);
+					else return callSemantic!isPresemantic(ce,context);
 				}
 			}else{
 				context.sc.error(format("undefined identifier %s",id.name),id.loc);
@@ -1217,7 +1256,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			}
 		}
 		if(auto idx=cast(IndexExp)next){
-			if(auto r=analyzeAggregate(idx,context.nestConst)){
+			if(auto r=analyzeAggregate(idx,context.nestConst(null))){
 				e.e=r;
 				return e;
 			}
@@ -1278,9 +1317,25 @@ Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	return defineLhsSemanticImplCurrentlyUnsupported(slc,context);
 }
 Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
-	foreach(ref e;tpl.e){
-		e=defineLhsSemantic!isPresemantic(e,context);
+	auto tt=context.type?context.type.isTupleTy:null;
+	foreach(i,ref e;tpl.e){
+		auto ttype=tt&&i<tt.length?tt[i]:null;
+		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype));
 		propErr(e,tpl);
+	}
+	static if(!isPresemantic){
+		auto sc=context.sc;
+		if(context.type){
+			if(tt){
+				if(tpl.length!=tt.length){
+					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc);
+					tpl.sstate=SemState.error;
+				}
+			}else if(!cast(ArrayTy)context.type){
+				sc.error(format("cannot unpack type %s as a tuple",context.type),tpl.loc);
+				tpl.sstate=SemState.error;
+			}
+		}else tpl.sstate=SemState.error; // TODO: ok?
 	}
 	return tpl;
 }
@@ -1424,8 +1479,15 @@ alias defineLhsSemanticImplDefault(bool isPresemantic)=defineLhsSemanticImpls!is
 
 
 Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsContext context){
-	if(context.constResult) return expressionSemantic(lhs,context.expSem);
-	return dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic)(lhs,context);
+	Expression r;
+	static if(!isPresemantic) scope(exit){
+		if(r.sstate!=SemState.error){
+			//assert(!!r.type); // TODO
+			r.sstate=SemState.completed;
+		}
+	}
+	if(context.constResult) return r=expressionSemantic(lhs,context.expSem);
+	return r=dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic)(lhs,context);
 }
 
 Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
@@ -1482,7 +1544,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	static if(language==silq)
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
-		auto dcontext=defineLhsContext(econtext);
+		auto dcontext=defineLhsContext(econtext,null);
 		auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
@@ -1627,42 +1689,12 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto tt=be.e2.type?be.e2.type.isTupleTy:null;
 	if(be.e2.sstate==SemState.completed){
 		auto tpl=cast(TupleExp)be.e1;
-		if(tpl){
-			if(tt){
-				if(tpl.length!=tt.length){
-					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),de.loc);
-					if(de){ de.setError(); be.sstate=SemState.error; }
-				}
-			}else if(!cast(ArrayTy)be.e2.type){
-				sc.error(format("cannot unpack type %s as a tuple",be.e2.type),de.loc);
-				if(de){ de.setError(); be.sstate=SemState.error; }
-			}
-		}else if(auto ce=cast(CallExp)be.e1){
-			auto f=ce.e,ft=cast(ProductTy)f.type;
-			if(ft){
-				bool ok=true;
-				if(ft.annotation<Annotation.mfree){
-					sc.error("reversed function must be 'mfree'",f.loc);
-					ok=false;
-				}
-				if(!ft.isClassical_){
-					sc.error("reversed function must be classical",f.loc);
-					ok=false;
-				}
-				if(ft.cod.hasAnyFreeVar(ft.names)){
-					sc.error("arguments to reversed function call cannot appear in result type",f.loc);
-					ok=false;
-				}else{
-					be.e1.type=ft.cod;
-					if(!isSubtype(be.e2.type,be.e1.type)){
-						sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",be.e1.type,be.e2.type),be.loc);
-						ok=false;
-					}
-				}
-				if(!ok&&de){ de.setError(); be.sstate=SemState.error; }
-			}
+		if(be.e2.type){
+			auto dcontext=defineLhsContext(econtext,be.e2.type);
+			defineLhsSemantic(be.e1,dcontext);
 		}
 		if(de){
+			if(be.e1.sstate==SemState.error) de.setError();
 			de.setType(be.e2.type);
 			de.setInitializer();
 			if(de.sstate!=SemState.error){
@@ -2584,10 +2616,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					foreach(i,ref exp;tpl.e){
 						static if(isRhs){
 							auto isConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
+							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 						}else{
 							auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
+							auto aty=ft.nargs==tpl.e.length?ft.argTy(i):null;
+							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
 						}
-						exp=argSemantic(exp,context.nest(isConst?ConstResult.yes:ConstResult.no));
+						exp=argSemantic(exp,ncontext);
 						static if(isRhs) checkArg(i,exp);
 						propErr(exp,tpl);
 					}
@@ -2613,10 +2648,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}else{
 				static if(isRhs){
 					auto isConst=(ft.isConst.length?ft.isConst[0]:true);
+					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 				}else{
 					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:true);
+					auto aty=ft.dom;
+					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
 				}
-				ce.arg=argSemantic(ce.arg,context.nest(isConst?ConstResult.yes:ConstResult.no));
+				ce.arg=argSemantic(ce.arg,ncontext);
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
@@ -2628,10 +2666,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			assert(ft.isConst.length==1);
 			static if(isRhs){
 				auto isConst=ft.isConst[0];
+				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 			}else{
 				auto isConst=ft.isConstForReverse[0];
+				auto aty=ft.dom;
+				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
 			}
-			ce.arg=argSemantic(ce.arg,context.nest(isConst?ConstResult.yes:ConstResult.no));
+			ce.arg=argSemantic(ce.arg,ncontext);
 			assert(ft.names.length==1);
 			static if(isRhs) checkArg(0,ce.arg);
 		}
@@ -2814,10 +2855,10 @@ auto expSemContext(Scope sc,ConstResult constResult,InType inType){
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
 	with(context) return expSemContext(sc,newConstResult,inType);
 }
-auto nestConst(T)(ref T context){
+auto nestConst(ref ExpSemContext context){
 	return context.nest(ConstResult.yes);
 }
-auto nestConsumed(T)(ref T context){
+auto nestConsumed(ref ExpSemContext context){
 	return context.nest(ConstResult.no);
 }
 
