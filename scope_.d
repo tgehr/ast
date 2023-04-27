@@ -800,31 +800,14 @@ class NestedScope: Scope{
 		if(symtab.get(odecl.name.ptr,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
-		if(remove||type){
-			symtab.remove(odecl.name.ptr);
-			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
-			static if(language==silq){
-				if(type) removeDependency(odecl.getName);
-			}
-		}
-		if(remove) ndecl.splitInto=[];
-		Declaration result=ndecl;
-		if(type){
-			static if(language==silq){
-				auto parentDep=parent.dependencies.dependencies[odecl.getName];
-				addDependency(ndecl,parentDep);
-			}
-			auto added=addVariable(ndecl,type,true);
-			if(added) result=added;
-			splitVar(ndecl,result);
-		}
 		if(remove){
 			assert(odecl is ndecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
+				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
-					if(sc.consumeImpl(odecl,nndecl,type,false)){
+					if(sc.consumeImpl(odecl,ndecl,type,false)){
 						static if(language==silq){
 							sc.pushConsumed();
 						}
@@ -832,6 +815,23 @@ class NestedScope: Scope{
 				}
 			}
 		}else consumedOuter~=ndecl;
+		Declaration result=ndecl;
+		if(remove||type){
+			symtab.remove(odecl.name.ptr);
+			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
+			static if(language==silq){
+				if(type) removeDependency(odecl.getName);
+			}
+		}
+		if(type){
+			static if(language==silq){
+				auto parentDep=parent.dependencies.dependencies[odecl.getName];
+				addDependency(ndecl,parentDep);
+			}
+			if(auto added=addVariable(ndecl,type,true))
+				result=added;
+			splitVar(ndecl,result);
+		}
 		if(!remove) return result;
 		return type?consume(result):result;
 	}
