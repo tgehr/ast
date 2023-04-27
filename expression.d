@@ -83,10 +83,10 @@ abstract class Expression: Node{
 	}
 	abstract bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet);
 
-	abstract int freeVarsImpl(scope int delegate(string) dg);
+	abstract int freeVarsImpl(scope int delegate(Identifier) dg);
 	static struct FreeVars{
 		Expression self;
-		int opApply(scope int delegate(string) dg)in{
+		int opApply(scope int delegate(Identifier) dg)in{
 			assert(!!self);
 		}do{
 			if(auto r=self.freeVarsImpl(dg)) return r;
@@ -105,14 +105,14 @@ abstract class Expression: Node{
 		assert(!!this);
 	}do{
 		foreach(var;freeVars){
-			if(var == name)
+			if(var.name == name)
 				return true;
 		}
 		return false;
 	}
 	final bool hasAnyFreeVar(R)(R r){
 		foreach(var;freeVars){
-			if(r.canFind(var))
+			if(r.canFind(var.name))
 				return true;
 		}
 		return false;
@@ -183,7 +183,7 @@ abstract class Expression: Node{
 }
 
 mixin template VariableFree(){
-	override int freeVarsImpl(scope int delegate(string)){ return 0; }
+	override int freeVarsImpl(scope int delegate(Identifier)){ return 0; }
 	override Expression substituteImpl(Expression[string] subst){ return this; }
 	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null;
@@ -216,7 +216,7 @@ class TypeAnnotationExp: Expression{
 	override bool isConstant(){
 		return e.isConstant();
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
 		return (type?type:t).freeVarsImpl(dg);
 	}
@@ -373,8 +373,8 @@ class Identifier: Expression{
 	}
 	override @property string kind(){return "identifier";}
 
-	override int freeVarsImpl(scope int delegate(string) dg){
-		return dg(name);
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		return dg(this);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	override Expression substituteImpl(Expression[string] subst){
@@ -517,7 +517,7 @@ class UnaryExp(TokenType op): Expression{
 	}
 	override bool isConstant(){ return e.isConstant(); }
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -563,7 +563,7 @@ class PostfixExp(TokenType op): Expression{
 	}
 	override string toString(){return _brk(e.toString()~TokChars!op);}
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -616,7 +616,7 @@ class IndexExp: Expression{ //e[a...]
 		if(ne==e && na==a && ntype == type) return this;
 		return new IndexExp(ne,na);
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
 		if(auto r=a.freeVarsImpl(dg)) return r;
 		return 0;
@@ -689,7 +689,7 @@ class SliceExp: Expression{
 		if(ne==e && nl==l && nr==r && ntype == type) return this;
 		return new SliceExp(ne,nl,nr);
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto x=e.freeVarsImpl(dg)) return x;
 		if(auto x=l.freeVarsImpl(dg)) return x;
 		if(auto x=r.freeVarsImpl(dg)) return x;
@@ -748,7 +748,7 @@ class CallExp: Expression{
 		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~arg.tupleToString(isSquare));
 		else return _brk(e.toString()~arg.tupleToString(isSquare));
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
 		return arg.freeVarsImpl(dg);
 	}
@@ -886,7 +886,7 @@ abstract class ABinaryExp: Expression{
 	override bool isConstant(){
 		return e1.isConstant() && e2.isConstant();
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e1.freeVarsImpl(dg)) return r;
 		if(auto r=e2.freeVarsImpl(dg)) return r;
 		return 0;
@@ -1160,7 +1160,7 @@ class FieldExp: Expression{
 		return _brk(e.toString()~"."~f.toString());
 	}
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -1202,7 +1202,7 @@ class IteExp: Expression{
 	override string toString(){return _brk("if "~cond.toString() ~ " " ~ then.toString() ~ (othw&&othw.s.length?" else " ~ (othw.s.length==1&&cast(IteExp)othw.s[0]?othw.s[0].toString():othw.toString()):""));}
 	override bool isCompound(){ return true; }
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=cond.freeVarsImpl(dg)) return r;
 		if(auto r=then.freeVarsImpl(dg)) return r;
 		if(othw) if(auto r=othw.freeVarsImpl(dg)) return r;
@@ -1345,7 +1345,7 @@ class CompoundExp: Expression{
 	// semantic information
 	BlockScope blscope_;
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(x;s) if(auto r=x.freeVarsImpl(dg)) return r;
 		return 0;
 	}
@@ -1384,7 +1384,7 @@ class TupleExp: Expression{
 	override string toString(){ return _brk("("~e.map!(to!string).join(",")~(e.length==1?",":"")~")"); }
 	final @property size_t length(){ return e.length; }
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(x;e) if(auto r=x.freeVarsImpl(dg)) return r;
 		return 0;
 	}
@@ -1463,7 +1463,7 @@ class ArrayExp: Expression{
 		return r&&e==r.e;
 	}
 
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(x;e) if(auto r=x.freeVarsImpl(dg)) return r;
 		return 0;
 	}

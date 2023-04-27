@@ -443,7 +443,7 @@ class TupleTy: Type,ITupleTy{
 		}
 		return types.map!(a=>a.isTupleTy()&&a!is unit?"("~a.toString()~")":addp(a)).join(" × ");
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(t;types)
 			if(auto r=t.freeVarsImpl(dg))
 				return r;
@@ -547,7 +547,7 @@ class ArrayTy: Type{
 		bool p=cast(FunTy)next||next.isTupleTy()&&next!is unit;
 		return p?"("~next.toString()~")[]":next.toString()~"[]";
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
 	override ArrayTy substituteImpl(Expression[string] subst){
@@ -650,7 +650,7 @@ class VectorTy: Type, ITupleTy{
 		bool q=!cast(Identifier)num&&!cast(LiteralExp)num; // TODO: improve
 		return (p?"("~next.toString()~")^":next.toString()~"^")~(q?"("~num.toString()~")":num.toString());
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=next.freeVarsImpl(dg)) return r;
 		return num.freeVarsImpl(dg);
 	}
@@ -915,9 +915,9 @@ class ProductTy: Type{
 		if(isTuple) return tdom[i];
 		return dom;
 	}
-	override int freeVarsImpl(scope int delegate(string) dg){
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=dom.freeVarsImpl(dg)) return r;
-		return cod.freeVarsImpl(v=>names.canFind(v)?0:dg(v));
+		return cod.freeVarsImpl(v=>names.canFind(v.name)?0:dg(v));
 	}
 	private ProductTy relabel(string oname,string nname)in{
 		assert(names.canFind(oname));

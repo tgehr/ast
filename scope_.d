@@ -885,6 +885,10 @@ class CapturingScope(T): NestedScope{
 		if(id.sstate==SemState.error) return null;
 		auto type=id.typeFromMeaning(meaning);
 		if(!type) return null;
+		foreach(free;type.freeVars){
+			if(free.meaning)
+				addCapture(free,free.meaning,Lookup.constant,origin);
+		}
 		auto vd=cast(VarDecl)meaning;
 		bool isConstVar=vd&&vd.isConst||origin.isConst(vd);
 		bool isConstLookup=kind==Lookup.constant||isConstVar;
