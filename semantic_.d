@@ -1195,7 +1195,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					ok=false;
 				}else{
 					ce.type=ft.cod;
-					if(!isSubtype(ce.type,context.type)){
+					if(!isSubtype(context.type,ce.type)){ // TODO: generate coerce expression instead?
 						sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
 						ok=false;
 					}
@@ -1214,13 +1214,18 @@ Expression defineLhsSemanticImpl(PlaceholderExp pl,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
-	fe.type=unit;
-	// TODO: introduce variables here?
-	return fe;
+	static if(!isPresemantic){
+		fe.type=unit;
+		return fe;
+	}else return defineLhsSemanticImplCurrentlyUnsupported(fe,context);
 }
 Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
-	// id.type= // TODO?
-	// TODO: introduce variable here?
+	if(!isPresemantic){
+		id.meaning=context.sc.lookupHere(id,true,Lookup.probing); // TODO: create variable and insert it here
+		if(context.type){
+			id.type=context.type;
+		}else id.sstate=SemState.error;
+	}
 	return id;
 }
 Expression defineLhsSemanticImpl(FieldExp fe,DefineLhsContext context){
@@ -1272,7 +1277,16 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		propErr(e.e,e);
 	}
 	analyzeIndex(idx);
-	if(idx.byRef) return expressionSemantic(idx,context.expSem);
+	if(idx.byRef){
+		auto result=expressionSemantic(idx,context.expSem);
+		static if(!isPresemantic){
+			if(result.type&&context.type&&!isSubtype(context.type,result.type)){ // TODO: strong updates
+				context.sc.error(format("cannot assign %s to %s",context.type,result.type),result.loc);
+				result.sstate=SemState.error;
+			}
+		}
+		return result;
+	}
 	auto sc=context.sc;
 	if(idx.e.type&&idx.e.type.isClassical()){
 		sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
@@ -1317,9 +1331,11 @@ Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	return defineLhsSemanticImplCurrentlyUnsupported(slc,context);
 }
 Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
-	auto tt=context.type?context.type.isTupleTy:null;
+	auto at=cast(ArrayTy)context.type;
+	// auto vt=cast(VectorTy)context.type; // TODO
+	auto tt=!at&&context.type?context.type.isTupleTy:null;
 	foreach(i,ref e;tpl.e){
-		auto ttype=tt&&i<tt.length?tt[i]:null;
+		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:null;
 		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype));
 		propErr(e,tpl);
 	}
@@ -1331,29 +1347,60 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc);
 					tpl.sstate=SemState.error;
 				}
-			}else if(!cast(ArrayTy)context.type){
+			}else if(!at){
 				sc.error(format("cannot unpack type %s as a tuple",context.type),tpl.loc);
 				tpl.sstate=SemState.error;
 			}
 		}else tpl.sstate=SemState.error; // TODO: ok?
+		if(tpl.e.all!(e=>!!e.type))
+			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 	}
 	return tpl;
 }
 Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 	// TODO: do we even keep this?
-	foreach(ref e;arr.e){
+	auto at=cast(ArrayTy)context.type;
+	// auto vt=cast(VectorTy)context.type; // TODO
+	auto tt=!at&&context.type?context.type.isTupleTy:null;
+	foreach(i,ref e;arr.e){
+		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:null;
 		e=defineLhsSemantic!isPresemantic(e,context);
 		propErr(e,arr);
+	}
+	static if(!isPresemantic){
+		auto sc=context.sc;
+		if(context.type){
+			if(tt){
+				if(arr.e.length!=tt.length){
+					sc.error(text("inconsistent number of array entries for definition: ",arr.e.length," vs. ",tt.length),arr.loc);
+					arr.sstate=SemState.error;
+				}
+			}else if(!at){
+				sc.error(format("cannot unpack type %s as an array",context.type),arr.loc);
+				arr.sstate=SemState.error;
+			}
+		}else arr.sstate=SemState.error; // TODO: ok?
+		if(arr.e.all!(e=>!!e.type)){
+			Expression t=null;
+			foreach(e;arr.e){
+				t=joinTypes(t,e.type);
+				if(!t) break;
+			}
+			if(t) arr.type=arrayTy(t);
+			else arr.type=tupleTy(arr.e.map!(e=>e.type).array);
+		}
 	}
 	return arr;
 }
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	auto sc=context.sc;
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context);
-	// tae.type=typeSemantic(tae.t,sc); // (can't do this here at the moment due to how expressionSemantic works)
+	tae.type=typeSemantic(tae.t,context.sc);
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type));
+	static if(!isPresemantic){
+		return expressionSemantic(tae,context.expSem);
+	}else return tae;
 	// TODO: need to do anything else?
-	return tae;
 }
 
 Expression defineLhsSemanticImpl(UMinusExp ume,DefineLhsContext context){
@@ -1432,12 +1479,17 @@ Expression defineLhsSemanticImpl(NeqExp neq,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
-	ce.e1=defineLhsSemantic!isPresemantic(ce.e1,context);
-	propErr(ce.e1,ce);
-	ce.e2=defineLhsSemantic!isPresemantic(ce.e2,context);
-	propErr(ce.e2,ce);
-	// TODO: determine type?
-	return ce;
+	static if(!isPresemantic){
+		return defineLhsSemanticImplCurrentlyUnsupported(ce,context);
+	}else{
+		auto ntype=null; // TODO
+		auto ncontext=context.nest(context.constResult,ntype);
+		ce.e1=defineLhsSemantic!isPresemantic(ce.e1,ncontext);
+		propErr(ce.e1,ce);
+		ce.e2=defineLhsSemantic!isPresemantic(ce.e2,ncontext);
+		propErr(ce.e2,ce);
+		return ce;
+	}
 }
 
 Expression defineLhsSemanticImpl(BinaryExp!(Tok!"×") pr,DefineLhsContext context){
@@ -1452,7 +1504,16 @@ Expression defineLhsSemanticImpl(RawProductTy fa,DefineLhsContext context){
 
 
 Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
-	return expressionSemantic(e,context.expSem); // TODO: analyze later instead?
+	auto result=expressionSemantic(e,context.expSem);
+	static if(!isPresemantic){
+		if(context.type&&result.type){
+			if(!joinTypes(context.type,result.type)){ // TODO: generate coerce expression instead?
+				context.sc.error(format("'lifted' expression of type '%s' incompatible with right-hand side type '%s'",result.type,context.type),result.loc);
+				result.sstate=SemState.error;
+			}
+		}
+	}
+	return result;
 }
 
 Expression defineLhsSemanticImplCurrentlyUnsupported(Expression e,DefineLhsContext context){
@@ -1480,9 +1541,10 @@ alias defineLhsSemanticImplDefault(bool isPresemantic)=defineLhsSemanticImpls!is
 
 Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsContext context){
 	Expression r;
-	static if(!isPresemantic) scope(exit){
+	static if(!isPresemantic) scope(success){
+		assert(!!r);
 		if(r.sstate!=SemState.error){
-			//assert(!!r.type); // TODO
+			assert(!!r.type);
 			r.sstate=SemState.completed;
 		}
 	}
@@ -3843,6 +3905,28 @@ Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
 	return handleBinary!cmpType("'≠'",ne,ne.e1,ne.e2,context);
 }
 
+Expression concatType(Expression t1,Expression t2){
+	auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
+	// TODO: concatenation of tuples
+	if(vt1&&vt2){
+		if(auto netype=joinTypes(vt1.next,vt2.next)){
+			auto add=new AddExp(vt1.num,vt2.num);
+			add.type=ℕt(true);
+			add.sstate=SemState.completed;
+			return vectorTy(netype,add.eval()); // TODO: evaluation context
+		}
+	}else if(t1==unit||t2==unit){
+		auto ntype=t1==unit?t2:t1;
+		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
+			return ntype;
+	}else{
+		auto ntype=joinTypes(t1,t2);
+		if(cast(ArrayTy)ntype)
+			return ntype;
+	}
+	return null;
+}
+
 Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	ce.e1=expressionSemantic(ce.e1,context);
@@ -3851,26 +3935,8 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	propErr(ce.e2,ce);
 	if(ce.sstate==SemState.error)
 		return ce;
-	auto vt1=cast(VectorTy)ce.e1.type,vt2=cast(VectorTy)ce.e2.type;
-	// TODO: concatenation of tuples
 	assert(!ce.type);
-	if(vt1&&vt2){
-		if(auto netype=joinTypes(vt1.next,vt2.next)){
-			auto add=new AddExp(vt1.num,vt2.num);
-			add.type=ℕt(true);
-			add.sstate=SemState.completed;
-			auto ntype=vectorTy(netype,add.eval()); // TODO: evaluation context
-			ce.type=ntype;
-		}
-	}else if(ce.e1.type==unit||ce.e2.type==unit){
-		auto ntype=ce.e1.type==unit?ce.e2.type:ce.e1.type;
-		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
-			ce.type=ntype;
-	}else{
-		auto ntype=joinTypes(ce.e1.type,ce.e2.type);
-		if(cast(ArrayTy)ntype)
-			ce.type=ntype;
-	}
+	ce.type=concatType(ce.e1.type,ce.e2.type);
 	if(!ce.type){
 		sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 		ce.sstate=SemState.error;
