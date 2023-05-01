@@ -422,7 +422,7 @@ class Identifier: Expression{
 
 	override Expression getClassical(){
 		static if(language==silq){
-			assert(isType(this));
+			assert(isType(this)||isQNumeric(this));
 			if(classical) return this;
 			if(!meaning) return varTy(name,ctypeTy,true);
 			auto r=new Identifier(name);
