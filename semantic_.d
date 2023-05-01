@@ -548,7 +548,7 @@ PreludeSymbol isPreludeSymbol(Declaration decl){
 	auto sc=exprssc[1];
 	if(!decl||decl.scope_ !is sc) return PreludeSymbol.none;
 	if(!decl.name) return PreludeSymbol.none;
-	switch(decl.getName){
+	switch(decl.name.name){
 		default: return PreludeSymbol.none;
 		import std.traits:EnumMembers;
 		static foreach(ps;EnumMembers!PreludeSymbol){
@@ -3791,6 +3791,11 @@ Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
+	static if(language==silq){
+		if(auto id=cast(Identifier)une.e)
+			if(isPreludeSymbol(id)==PreludeSymbol.Z)
+				return ℤt(true);
+	}
 	static if(language==silq) if(isType(une.e)||isQNumeric(une.e)){
 		if(auto ty=isQNumeric(une.e)?une.e:typeSemantic(une.e,sc)){
 			if(ty.sstate==SemState.completed){
