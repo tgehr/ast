@@ -1373,6 +1373,22 @@ class CompoundExp: Expression{
 	}
 }
 
+class ComponentReplaceExp: CompoundExp{
+	Expression reads;
+	Expression statement;
+	Expression writes;
+	this(Expression reads,Expression statement,Expression writes){
+		this.reads=reads;
+		this.statement=statement;
+		this.writes=writes;
+		Expression[] s;
+		if(reads) s~=reads;
+		s~=statement;
+		if(writes) s~=writes;
+		super(s);
+	}
+}
+
 class TupleExp: Expression{
 	Expression[] e;
 	this(Expression[] e){

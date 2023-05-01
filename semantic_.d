@@ -765,7 +765,7 @@ Expression statementSemanticImpl(IndexExp idx,Scope sc){
 	}else return statementSemanticImplDefault(idx,sc);
 }
 
-Expression statementSemanticImpl(CompoundExp ce,Scope sc){
+CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc){
 	foreach(ref s;ce.s){
 		s=statementSemantic(s,sc);
 		propErr(s,ce);
@@ -1583,24 +1583,21 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	Expression prologue=null,epilogue=null;
+	CompoundExp prologue=null,epilogue=null;
 	Expression finish(Expression r){
 		static if(language==silq) sc.pushConsumed();
 		if(!prologue&&!epilogue) return r;
 		assert(!prologue||util.among(prologue.sstate,SemState.completed,SemState.error));
-		Expression[] s;
-		if(prologue) s~=prologue;
 		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
-		s~=r;
 		if(epilogue){
 			propErr(prologue,epilogue);
-			epilogue=statementSemantic(epilogue,sc);
-			s~=epilogue;
+			epilogue=statementSemanticImpl(epilogue,sc);
+			if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
 		}
-		auto res=new CompoundExp(s);
+		auto res=new ComponentReplaceExp(prologue,r,epilogue);
 		res.loc=be.loc;
 		res.sstate=SemState.completed;
-		foreach(e;s) propErr(e,res);
+		foreach(e;res.s) propErr(e,res);
 		return res;
 	}
 	static if(language==silq)
@@ -1625,7 +1622,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				reads~=read;
 			}
 			auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
-			prologue=statementSemantic(new CompoundExp(reads),sc);
+			prologue=new CompoundExp(reads);
+			prologue.loc=be.loc;
+			prologue=statementSemanticImpl(prologue,sc);
+			if(prologue.sstate!=SemState.error) prologue.sstate=SemState.completed;
 			sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 			prologue.loc=be.loc;
 			Expression[] writes;
