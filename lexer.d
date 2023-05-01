@@ -877,8 +877,8 @@ private:
 	private Token lexNumber(ref immutable(char)* p){
 		auto s=p;
 		while('0'<=*p && *p<='9') p++;
-		if(*p=='.'&&*(p+1)!='.'){ p++; while('0'<=*p && *p<='9') p++; }
 		bool isFloat=false;
+		if(*p=='.'&&*(p+1)!='.'){ isFloat=true; p++; while('0'<=*p && *p<='9') p++; }
 		if(*p=='e'){ isFloat=true;p++; if(*p=='+'||*p=='-') p++; while('0'<=*p && *p<='9') p++; }
 		Token r;
 		r.type=isFloat?Tok!".0":Tok!"0";

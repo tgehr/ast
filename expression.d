@@ -607,7 +607,7 @@ class IndexExp: Expression{ //e[a...]
 		if(auto arr=cast(ArrayExp)ne) exprs=arr.e;
 		if(exprs.length){
 			if(auto le=cast(LiteralExp)na){
-				if(le.lit.type==Tok!"0"&&!le.lit.str.canFind(".")){
+				if(le.lit.type==Tok!"0"){
 					auto idx=ℤ(le.lit.str);
 					if(0<=idx&&idx<exprs.length) return exprs[cast(size_t)idx].evalImpl(ntype);
 				}
@@ -666,7 +666,7 @@ class SliceExp: Expression{
 		if(tpl||arr){
 			if(auto le=cast(LiteralExp)nl){
 				if(auto re=cast(LiteralExp)nr){
-					if(le.lit.type==Tok!"0"&&!le.lit.str.canFind(".")&&re.lit.type==Tok!"0"&&!re.lit.str.canFind(".")){
+					if(le.lit.type==Tok!"0"&&re.lit.type==Tok!"0"){
 						auto lid=ℤ(le.lit.str), rid=ℤ(re.lit.str);
 						if(cast(size_t)lid==0 && cast(size_t)rid==exprs.length) return e;
 						if(0<=lid&&lid<=rid&&rid<=exprs.length){

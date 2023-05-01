@@ -3598,7 +3598,7 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 				return true;
 			if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 				return true;
-			if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"&&!lit.lit.str.canFind(".")){
+			if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"){
 				auto val=ℤ(lit.lit.str);
 				if(val==0||val==1) return true;
 			}
@@ -3825,17 +3825,6 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	if(e.sstate==SemState.error)
 		return e;
 	if((isType(e1)||isQNumeric(e1))&&name=="power"){
-		/+if(auto le=cast(LiteralExp)e2){
-			if(le.lit.type==Tok!"0"){
-				if(!le.lit.str.canFind(".")){
-					auto n=ℤ(le.lit.str);
-					if(0<=n&&n<long.max)
-						return tupleTy(e1.repeat(cast(size_t)n.toLong()).array);
-				}
-			}
-		}
-		sc.error("expected non-negative integer constant",e2.loc);
-		e.sstate=SemState.error;+/
 		if(!isSubtype(e2.type,ℕt(true))){
 			sc.error(format("vector length should be of type !ℕ, not %s",e2.type), e2.loc);
 			e.sstate=SemState.error;
