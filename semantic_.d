@@ -1859,6 +1859,7 @@ bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope
 }
 
 bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+	if(guaranteedSameLocations(e1,e2,loc,sc,inType)) return true; // TODO: more complete check
 	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
 	if(e1.sstate==SemState.error||e2.sstate==SemState.error)
