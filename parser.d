@@ -35,7 +35,7 @@ bool isRelationalOp(TokenType op){
 // left binding power
 template lbp(TokenType type){enum lbp=getLbp(type);}
 // right binding power: ^^, (op)=, ? bind weaker to the right than to the left, '.' binds only primaryExpressions
-template rbp(TokenType type){enum rbp=type==Tok!"."?180:lbp!type-(lbp!type==30||util.among(type,Tok!"^",Tok!"?",Tok!"->",Tok!"→",Tok!"⇒",Tok!"↦",Tok!"=>"));}
+template rbp(TokenType type){enum rbp=type==Tok!"."?180:lbp!type-(util.among(lbp!type,20,31)||util.among(type,Tok!"^",Tok!"?",Tok!"->",Tok!"→",Tok!"⇒",Tok!"↦",Tok!"=>"));}
 
 int getLbp(TokenType type) pure{ // operator precedence
 	switch(type){
@@ -53,8 +53,10 @@ int getLbp(TokenType type) pure{ // operator precedence
 	case Tok!"&&←", Tok!"||←", Tok!"~←":
 	case Tok!":=":
 		return 20;
-	case Tok!":",Tok!"as",Tok!"coerce",Tok!"pun": // type annotation, statically safe type conversion, unsafe type conversion, type punning
+	case Tok!"as",Tok!"coerce",Tok!"pun": // statically safe type conversion, unsafe type conversion, type punning
 		return 30;
+	case Tok!":": // type annotation
+		return 31;
 	// logical operators
 	case Tok!"?":  return 40; // conditional operator
 	case Tok!"||": return 50; // logical OR

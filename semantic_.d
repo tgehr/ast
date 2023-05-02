@@ -4312,7 +4312,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 
 
 Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{assert(!!expr&&!!sc);}do{
-	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return expr;
+	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return unwrap(expr);
 	if(auto lit=cast(LiteralExp)expr){
 		lit.type=utypeTy;
 		if(lit.lit.type==Tok!"0"){
@@ -4346,7 +4346,7 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 		}
 		expr.sstate=SemState.error;
 		return null;
-	}else return e;
+	}else return unwrap(e);
 }
 
 Expression typeForDecl(Declaration decl){
