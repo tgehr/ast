@@ -406,7 +406,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	if(auto fe=cast(ForgetExp)olhs){
 		if(!fe.val){
-			sc.error("reversal of implicit forget not supported yet",fe.loc);
+			sc.error("reversal of implicit forget not supported",fe.loc);
 			return error();
 		}
 		auto tpl=cast(TupleExp)rhs;
@@ -425,7 +425,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nval.loc=fe.val.loc;
 		}
 		auto def=lowerDefine!flags(fe.var,nval,loc,sc,unchecked);
-		if(!tpl) return res=new CompoundExp([rhs,def]);
+		auto arhs=rhs;
+		if(orhs.type!=unit){
+			arhs=new TypeAnnotationExp(arhs,unit,TypeAnnotationType.annotation);
+			arhs.type=unit;
+			arhs.loc=orhs.loc;
+		}
+		if(!tpl) return res=new CompoundExp([arhs,def]);
 		return def;
 	}
 	static if(language==silq)

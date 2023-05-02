@@ -1013,8 +1013,12 @@ Expression statementSemanticImpl(ForgetExp fe,Scope sc){
 }
 
 Expression statementSemanticImplDefault(Expression e,Scope sc){
-	sc.error("not supported at this location",e.loc);
-	e.sstate=SemState.error;
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	e=expressionSemantic(e,context);
+	if(e.sstate!=SemState.error){
+		sc.error("not supported at this location",e.loc);
+		e.sstate=SemState.error;
+	}
 	return e;
 }
 
@@ -1216,8 +1220,13 @@ Expression defineLhsSemanticImpl(PlaceholderExp pl,DefineLhsContext context){
 Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
 	static if(!isPresemantic){
 		fe.type=unit;
-		return fe;
-	}else return defineLhsSemanticImplCurrentlyUnsupported(fe,context);
+	}else{
+		if(context.type&&fe.type&&!isSubtype(context.type,fe.type)){
+			context.sc.error(format("cannot assign %s to %s",context.type,fe.type),fe.loc);
+			fe.sstate=SemState.error;
+		}
+	}
+	return fe;
 }
 Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 	if(!isPresemantic){

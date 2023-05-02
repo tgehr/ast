@@ -31,7 +31,7 @@ string[2][] complexTokens =
 	 ["``c",   "StringLiteralC"            ],
 	 ["``w",   "StringLiteralW"            ],
 	 ["``d",   "StringLiteralD"            ],
-	 ["' '",   "CharacterLiteral"          ],
+	 ["''",    "CharacterLiteral"          ],
 	 ["0",     "IntLiteral"                ],
 	 ["0U",    "UintLiteral"               ],
 	 ["0L",    "LongLiteral"               ],
@@ -302,7 +302,7 @@ struct Token{
 				return '"'~escape(str)~`"w`;
 			case Tok!"``d":
 				return '"'~escape(str)~`"d`;
-			case Tok!"' '":
+			case Tok!"''":
 				return '\''~escape(to!string(cast(dchar)int64),false)~'\'';
 			case Tok!"0", Tok!"0U":
 			case Tok!"0L", Tok!"0LU":
@@ -586,7 +586,7 @@ private:
 				// character literals
 				case '\'':
 					s = p; sl = line;
-					res[0].type = Tok!"' '";
+					res[0].type = Tok!"''";
 					if(*p=='\\'){
 						try p++, res[0].int64 = cast(ulong)readEscapeSeq(p);
 						catch(EscapeSeqException e) if(e.msg) errors~=tokError(e.msg,e.loc); else invCharSeq();

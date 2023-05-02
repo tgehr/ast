@@ -132,7 +132,7 @@ private template doOptParse(T...){
 	enum doOptParse=parseDefOnly!T~"if(ttype==Tok!\""~T[0]~"\"){\n"~doParseImpl!(false,"_",T[1..$])~"}\n";
 }
 
-enum literals=["``","``c","``w","``d","' '","0","0U","0L","0LU",".0f",".0",".0L",".0fi",".0i",".0Li","true","false"];
+enum literals=["``","``c","``w","``d","''","0","0U","0L","0LU",".0f",".0",".0L",".0fi",".0i",".0Li","true","false"];
 private string getTTCases(string[] s,string[] excl = []){
 	string r="case ";
 	foreach(x;s) if(!excl.canFind(x)) r~=`Tok!"`~x~`",`;
@@ -433,6 +433,7 @@ struct Parser{
 				}
 				mixin(rule!(LiteralExp,Existing,"t"));
 			mixin(getTTCases(literals,["``","``c","``w","``d","true","false"])); {res=New!LiteralExp(tok); nextToken(); return res;}
+			case Tok!"forget": return parseForget();
 			case Tok!"true",Tok!"⊤":{
 				nextToken();
 				auto tok=Token(Tok!"0");
@@ -733,7 +734,6 @@ struct Parser{
 			case Tok!"assert": return parseAssert();
 			static if(language==psi) case Tok!"observe": return parseObserve();
 			static if(language==psi) case Tok!"cobserve": return parseCObserve();
-			case Tok!"forget": return parseForget();
 			default: break;
 		}
 		Expression left;
