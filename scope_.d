@@ -322,6 +322,9 @@ abstract class Scope{
 		if(rnsym&&!r) r=rnsymtab.get(ident.ptr,null);
 		return r;
 	}
+	final Declaration peekSymtab(string name){
+		return symtab.get(name.ptr,rnsymtab.get(name.ptr,null));
+	}
 
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq){
@@ -402,6 +405,7 @@ abstract class Scope{
 						import ast.semantic_: unrealizable;
 						if(d.sstate!=SemState.error){
 							bool show=true;
+							if(d.sstate==SemState.error) show=false;
 							if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
 							if(show){
 								if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);

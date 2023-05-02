@@ -1975,6 +1975,8 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 			sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
 			indicesToReplace[i].sstate=SemState.error;
 			be.sstate=SemState.error;
+			if(auto meaning=sc.peekSymtab(crepls[i].name))
+				meaning.sstate=SemState.error;
 		}
 	}
 	consumer.redefineArrays(be.loc,sc);
