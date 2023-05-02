@@ -2913,8 +2913,8 @@ Expression unwrap(Expression e){
 	return e;
 }
 
-bool unrealizable(Expression e){ // TODO: can we get rid of this concept?
-	return util.among(e,ℕt(false),ℤt(false),ℚt(false),ℝ(false),ℂ(false));
+bool unrealizable(Expression e){
+	return !isType(e);
 }
 
 struct ExpSemContext{
@@ -4089,7 +4089,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 					}
 				}
 			}
-			if(unrealizable(expr.type)){
+			if(expr.type&&unrealizable(expr.type)){
 				sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
 				expr.sstate=SemState.error;
 			}
