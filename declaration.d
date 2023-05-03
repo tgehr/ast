@@ -28,6 +28,10 @@ abstract class Declaration: Expression{
 	Declaration[] splitInto=[];
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
+
+	bool isSplitFrom(Declaration outer){
+		return recurrence!"a[n-1].splitFrom"(this).until!(d=>d is null).any!(d=>d is outer);
+	}
 }
 
 class CompoundDecl: Expression{
@@ -130,8 +134,9 @@ class FunctionDef: Declaration{
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
 	Declaration[] capturedDecls;
+	bool sealedLinearCaptures=false;
 	void addCapture(Declaration meaning,Identifier id)in{
-		assert(!!meaning);
+		assert(!!meaning||!sealedLinearCaptures||!meaning.isLinear);
 	}do{
 		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
@@ -143,6 +148,10 @@ class FunctionDef: Declaration{
 	bool hasReturn;
 	bool isConstructor;
 	string[] retNames;
+
+	void seal(){
+		sealedLinearCaptures=true;
+	}
 
 	@property Scope realScope(){
 		if(isConstructor) return scope_.getDatDecl().scope_;

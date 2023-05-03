@@ -829,8 +829,10 @@ class NestedScope: Scope{
 		}
 		if(type){
 			static if(language==silq){
-				auto parentDep=parent.dependencies.dependencies[odecl.getName];
-				addDependency(ndecl,parentDep);
+				if(odecl.getName in parent.dependencies.dependencies){
+					auto parentDep=parent.dependencies.dependencies[odecl.getName];
+					addDependency(ndecl,parentDep);
+				}
 			}
 			if(auto added=addVariable(ndecl,type,true))
 				result=added;
@@ -887,6 +889,52 @@ class CapturingScope(T): NestedScope{
 		if(kind==Lookup.probing) return null;
 		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
 		if(id.sstate==SemState.error) return null;
+		static if(is(T==FunctionDef)){
+			if(meaning.isSplitFrom(decl)){
+				decl.seal();
+				foreach(capture;decl.capturedDecls){
+					if(capture.isSplitFrom(decl)) continue;
+					auto recapture=new Identifier(capture.getName);
+					recapture.loc=id.loc;
+					import ast.semantic_:lookupMeaning,typeForDecl;
+					lookupMeaning(recapture,kind,origin);
+					bool callErrorShown=false;
+					void callError(){
+						if(callErrorShown) return;
+						callErrorShown=true;
+						origin.error(format("cannot recursively call function '%s' at this location",decl.name),id.loc);
+						id.sstate=SemState.error;
+					}
+					if(!recapture.meaning){
+						callError();
+						origin.note(format("capture '%s' is missing",capture.name),capture.loc);
+						recapture.sstate=SemState.error;
+					}
+					recapture.type=recapture.typeFromMeaning;
+					assert(recapture.type||recapture.sstate==SemState.error);
+					if(recapture.sstate!=SemState.error){
+						recapture.sstate=SemState.completed;
+						auto oldType=typeForDecl(capture);
+						if(!isSubtype(recapture.type,oldType)){
+							if(recapture.sstate!=SemState.error){
+								callError();
+								origin.note(format("capture '%s' changed type from '%s' to '%s'",capture.name,oldType,recapture.type),capture.loc);
+								if(recapture.meaning)
+									origin.note("capture is redeclared here",recapture.meaning.loc);
+								recapture.sstate=SemState.error;
+							}
+						}
+					}
+					if(recapture.sstate==SemState.error)
+						id.sstate=SemState.error;
+				}
+			}else if(decl.sealedLinearCaptures&&meaning.isLinear()&&meaning !in decl.captures){
+				if(id.sstate!=SemState.error){
+					origin.error("capturing additional quantum variables after a recursive call is not supported yet", id.loc);
+					id.sstate=SemState.error;
+				}
+			}
+		}
 		auto type=id.typeFromMeaning(meaning);
 		if(!type) return null;
 		foreach(free;type.freeVars){
@@ -910,20 +958,19 @@ class CapturingScope(T): NestedScope{
 					if(kind==Lookup.constant){
 						origin.error("cannot capture quantum variable as constant", id.loc);
 						id.sstate=SemState.error;
-						return null;
 					}
 				}
 			}
 			static if(is(T==FunctionDef)){
 				auto fd=decl;
 				if(fd&&fd.context&&fd.context.vtype==contextTy(true)){
-					if(!fd.ftype) fd.context.vtype=contextTy(false);
-					else{
+					if(fd.ftype){
 						assert(fd.ftype.isClassical_);
-						origin.error("cannot capture quantum variable in classical function", id.loc);
-						id.sstate=SemState.error;
-						return null;
-					}
+						if(id.sstate!=SemState.error){
+							origin.error("cannot capture quantum variable in classical function", id.loc);
+							id.sstate=SemState.error;
+						}
+					}else fd.context.vtype=contextTy(false);
 				}
 			}
 		}
@@ -932,7 +979,8 @@ class CapturingScope(T): NestedScope{
 			meaning=consume(meaning);
 			origin.insertCapture(id,meaning,this);
 		}
-		decl.addCapture(meaning,id);
+		if(id.sstate!=SemState.error)
+			decl.addCapture(meaning,id);
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){

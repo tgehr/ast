@@ -3136,11 +3136,11 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	return fe;
 }
 
-Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc){
-	if(id.meaning) return id.meaning;
+Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisting=false){
+	if(!ignoreExisting&&id.meaning) return id.meaning;
 	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
 	id.meaning=sc.lookup(id,false,true,lookup);
-	if(nerr!=sc.handler.nerrors){
+	if(nerr!=sc.handler.nerrors&&id.sstate!=SemState.error){ // TODO: still needed?
 		sc.note("looked up here",id.loc);
 		id.sstate=SemState.error;
 	}
@@ -3169,7 +3169,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	id.sstate=SemState.started;
 	auto meaning=id.meaning;
 	if(!meaning){
-		meaning=lookupMeaning(id,context.constResult?Lookup.constant:Lookup.consuming,sc);
+		id.meaning=lookupMeaning(id,Lookup.probing,sc);
+		meaning=lookupMeaning(id,context.constResult?Lookup.constant:Lookup.consuming,sc,true);
 		if(id.sstate==SemState.error) return id;
 		if(!meaning){
 			if(auto r=builtIn(id,sc)){
@@ -4113,7 +4114,10 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype) return true;
 	if(!fd.ret) return false;
-	//if(!force&&fd.isNested) return false;
+	if(fd.isNested){
+		if(!force) return false;
+		fd.seal();
+	}
 	bool[] pc;
 	string[] pn;
 	Expression[] pty;
@@ -4201,7 +4205,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		while(n in vars) n~="'";
 		vars[n]=[];
 	}
-	if(fd.isNested && fd.capturedDecls.any!(d=>recurrence!"a[n-1].splitFrom"(d).until!(d=>d is null).any!(d=>d is fd))){
+	if(fd.isNested && fd.capturedDecls.any!(d=>d.isSplitFrom(fd))){
 		sc.error("recursive nested functions not supported yet",fd.loc);
 		fd.sstate=SemState.error;
 	}
@@ -4391,6 +4395,7 @@ Expression typeForDecl(Declaration decl){
 		return vd.vtype;
 	}
 	if(auto fd=cast(FunctionDef)decl){
+		if(!fd.ftype) setFtype(fd,true);
 		if(!fd.ftype&&fd.scope_) fd=functionDefSemantic(fd,fd.scope_);
 		assert(!!fd);
 		return fd.ftype;
