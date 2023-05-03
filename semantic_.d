@@ -94,7 +94,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		declareParameters(fd,fd.isSquare,fd.params,fsc); // parameter variables
 		if(fd.rret){
 			fd.ret=typeSemantic(fd.rret,fsc);
-			if(!setFtype(fd)) fd.sstate=SemState.error;
+			setFtype(fd,false);
 			if(!fd.body_){
 				switch(fd.getName){
 					case "invQImpl":
@@ -3151,6 +3151,22 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	auto sc=context.sc;
 	id.scope_=sc;
 	if(id.sstate==SemState.error) return id;
+	if(id.sstate==SemState.started){
+		auto fd=cast(FunctionDef)id.meaning;
+		if(fd){
+			if(setFtype(fd,true)){
+				id.type=fd.ftype;
+				id.sstate=SemState.completed;
+				return id;
+			}
+		}
+		sc.error("cyclic dependency",id.loc);
+		id.sstate=SemState.error;
+		if(fd&&!fd.rret)
+			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
+		return id;
+	}
+	id.sstate=SemState.started;
 	auto meaning=id.meaning;
 	if(!meaning){
 		meaning=lookupMeaning(id,context.constResult?Lookup.constant:Lookup.consuming,sc);
@@ -4053,18 +4069,7 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 Expression expressionSemantic(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
 	if(expr.sstate==SemState.completed||expr.sstate==SemState.error) return expr;
-	if(expr.sstate==SemState.started){
-		sc.error("cyclic dependency",expr.loc);
-		expr.sstate=SemState.error;
-		FunctionDef fd=null;
-		if(auto le=cast(LambdaExp)expr) fd=le.fd;
-		else if(auto id=cast(Identifier)expr) fd=cast(FunctionDef)id.meaning;
-		if(fd&&!fd.rret)
-			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
-		return expr;
-	}
-	assert(expr.sstate==SemState.initial);
-	expr.sstate=SemState.started;
+	assert(expr.sstate==SemState.initial||cast(Identifier)expr&&expr.sstate==SemState.started);
 	Scope.ConstBlockContext constSave;
 	if(!context.constResult) constSave=sc.saveConst();
 	scope(success){
@@ -4105,9 +4110,10 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 }
 
 
-bool setFtype(FunctionDef fd){
+bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype) return true;
 	if(!fd.ret) return false;
+	//if(!force&&fd.isNested) return false;
 	bool[] pc;
 	string[] pn;
 	Expression[] pty;
@@ -4135,6 +4141,7 @@ bool setFtype(FunctionDef fd){
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(fd.sstate==SemState.completed) return fd;
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
+	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
 	auto fsc=fd.fscope_;
 	++fd.semanticDepth;
 	assert(!!fsc,text(fd));
@@ -4177,7 +4184,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 	}
 	if(!fd.ret) fd.ret=unit; // TODO: add bottom type
-	setFtype(fd);
+	if(!setFtype(fd,true))
+		fd.sstate=SemState.error;
 	foreach(ref n;fd.retNames){
 		if(n is null) n="r";
 		else n=n.stripRight('\'');
@@ -4192,6 +4200,10 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			n~=lowNum(++counts2[n]);
 		while(n in vars) n~="'";
 		vars[n]=[];
+	}
+	if(fd.isNested && fd.capturedDecls.any!(d=>recurrence!"a[n-1].splitFrom"(d).until!(d=>d is null).any!(d=>d is fd))){
+		sc.error("recursive nested functions not supported yet",fd.loc);
+		fd.sstate=SemState.error;
 	}
 	if(fd.sstate!=SemState.error)
 		fd.sstate=SemState.completed;
@@ -4211,6 +4223,14 @@ DatDecl datDeclSemantic(DatDecl dat,Scope sc){
 
 void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future){
 	if(e.type) return future(e.type);
+	void handleFunctionDef(FunctionDef fd)in{
+		assert(fd&&fd.scope_);
+	}do{
+		setFtype(fd,true);
+		if(auto ty=fd.ftype)
+			return future(ty);
+		fd.ftypeCallbacks~=future;
+	}
 	if(auto le=cast(LambdaExp)e){
 		assert(!!le.fd);
 		if(!le.fd.scope_){
@@ -4218,11 +4238,12 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 			le.fd=cast(FunctionDef)presemantic(le.fd,context.sc);
 			assert(!!le.fd);
 		}
-		if(auto ty=le.fd.ftype)
-			return future(ty);
-		le.fd.ftypeCallbacks~=future;
-		return;
+		return handleFunctionDef(le.fd);
 	}
+	if(auto id=cast(Identifier)e)
+		if(auto fd=cast(FunctionDef)id.meaning)
+			if(fd.scope_)
+				return handleFunctionDef(fd);
 	e=expressionSemantic(e,context);
 	return future(e.type);
 }
@@ -4240,7 +4261,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(!fd.rret && !fd.ret){
 		determineType(ret.e,context,(ty){
 			fd.ret=ty;
-			setFtype(fd);
+			setFtype(fd,true);
 		});
 	}
 	ret.e=expressionSemantic(ret.e,context);
