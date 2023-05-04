@@ -890,8 +890,11 @@ class CapturingScope(T): NestedScope{
 		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
 		if(id.sstate==SemState.error) return null;
 		static if(is(T==FunctionDef)){
+			// for recursive nested closures
+			// TODO: mutual recursion support?
 			if(meaning.isSplitFrom(decl)){
 				decl.seal();
+				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
 					auto recapture=new Identifier(capture.getName);
@@ -915,7 +918,7 @@ class CapturingScope(T): NestedScope{
 					if(recapture.sstate!=SemState.error){
 						recapture.sstate=SemState.completed;
 						auto oldType=typeForDecl(capture);
-						if(!isSubtype(recapture.type,oldType)){
+						/+if(!isSubtype(recapture.type,oldType)){
 							if(recapture.sstate!=SemState.error){
 								callError();
 								origin.note(format("capture '%s' changed type from '%s' to '%s'",capture.name,oldType,recapture.type),capture.loc);
@@ -923,6 +926,10 @@ class CapturingScope(T): NestedScope{
 									origin.note("capture is redeclared here",recapture.meaning.loc);
 								recapture.sstate=SemState.error;
 							}
+						}+/
+						if(!recapture.meaning.isDerivedFrom(capture)){
+							callError();
+							origin.note(format("capture '%s' was modified",capture.name),capture.loc);
 						}
 					}
 					if(recapture.sstate==SemState.error)
@@ -974,13 +981,15 @@ class CapturingScope(T): NestedScope{
 				}
 			}
 		}
-		if(!isConstLookup&&meaning.isLinear()){
-			symtabInsert(meaning);
-			meaning=consume(meaning);
-			origin.insertCapture(id,meaning,this);
+		if(!meaning.isSplitFrom(decl)){
+			if(!isConstLookup&&meaning.isLinear()){
+				symtabInsert(meaning);
+				meaning=consume(meaning);
+				origin.insertCapture(id,meaning,this);
+			}
+			if(id.sstate!=SemState.error)
+				decl.addCapture(meaning,id);
 		}
-		if(id.sstate!=SemState.error)
-			decl.addCapture(meaning,id);
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){

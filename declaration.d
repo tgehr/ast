@@ -29,8 +29,28 @@ abstract class Declaration: Expression{
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
 
+	@property splitSequence(){
+		return recurrence!"a[n-1].splitFrom"(this).until!(d=>d is null);
+	}
 	bool isSplitFrom(Declaration outer){
-		return recurrence!"a[n-1].splitFrom"(this).until!(d=>d is null).any!(d=>d is outer);
+		return splitSequence.any!(d=>d is outer);
+	}
+
+	@property Declaration[] derivedSequence(){
+		auto result=[this];
+		if(splitFrom) result~=splitFrom.derivedSequence;
+		foreach(d;mergedFrom)
+			result~=d.derivedSequence;
+		return result;
+	}
+	bool isDerivedFrom(Declaration origin){
+		if(this is origin) return true;
+		if(splitFrom&&splitFrom.isDerivedFrom(origin))
+			return true;
+		foreach(d;mergedFrom)
+			if(d.isSplitFrom(origin))
+				return true;
+		return false;
 	}
 }
 

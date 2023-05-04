@@ -473,6 +473,7 @@ class Identifier: Expression{
 	}
 	// semantic information:
 	Declaration meaning;
+	bool lazyCapture=false;
 	bool substitute=false;
 	Scope scope_;
 	bool calledDirectly=false;

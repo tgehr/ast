@@ -4205,10 +4205,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		while(n in vars) n~="'";
 		vars[n]=[];
 	}
-	if(fd.isNested && fd.capturedDecls.any!(d=>d.isSplitFrom(fd))){
-		sc.error("recursive nested functions not supported yet",fd.loc);
-		fd.sstate=SemState.error;
-	}
 	if(fd.sstate!=SemState.error)
 		fd.sstate=SemState.completed;
 	return fd;
