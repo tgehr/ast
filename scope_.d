@@ -543,9 +543,12 @@ abstract class Scope{
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
+			void removeOSym(Scope sc,Declaration osym){
+				sc.symtab.remove(osym.name.ptr);
+				if(osym.rename) rnsymtab.remove(osym.rename.ptr);
+			}
 			void removeSym(){
-				symtab.remove(sym.name.ptr);
-				if(sym.rename) rnsymtab.remove(sym.rename.ptr);
+				removeOSym(this,sym);
 				symExists=false;
 			}
 			void promoteSym(Expression ntype){
@@ -574,15 +577,16 @@ abstract class Scope{
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								// TODO: automatically promote to quantum if possible
-								removeSym();
 								static if(language==silq){
-									if(sym.isLinear()&&!scopes[0].canForget(sym)||
-									   osym.isLinear()&&!sc.canForget(osym)){
+									if((sym.isLinear()&&!scopes[0].canForgetAppend(sym))|
+									   (osym.isLinear()&&!sc.canForgetAppend(osym))){
 										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
 										errors=true;
 									}
 								}
+								removeSym();
+								removeOSym(sc,osym);
 							}else promoteSym(nt);
 						}
 					}

@@ -801,7 +801,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 		else scs=[ite.then.blscope_,ite.othw.blscope_];
 	}else scs=[ite.then.blscope_,ite.othw.blscope_];
 	if(sc.merge(quantumControl,scs)){
-		sc.note("consumed in one branch of if expression", ite.loc);
+		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.sstate=SemState.error;
 	}
 	ite.type=unit;
