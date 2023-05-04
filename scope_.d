@@ -545,7 +545,7 @@ abstract class Scope{
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
 			void removeOSym(Scope sc,Declaration osym){
 				sc.symtab.remove(osym.name.ptr);
-				if(osym.rename) rnsymtab.remove(osym.rename.ptr);
+				if(osym.rename) sc.rnsymtab.remove(osym.rename.ptr);
 			}
 			void removeSym(){
 				removeOSym(this,sym);
