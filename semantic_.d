@@ -418,7 +418,7 @@ static if(language==silq)
 enum BuiltIn{
 	none,
 	π,pi=π,
-	quantumPrimitive,
+	primitive,
 	show,
 	query,
 	typeTy,
@@ -459,8 +459,8 @@ BuiltIn isBuiltIn(Identifier id){
 				return BuiltIn.readCSV;
 		}
 		static if(language==silq){
-			case "quantumPrimitive":
-				return BuiltIn.quantumPrimitive;
+			case "__primitive":
+				return BuiltIn.primitive;
 			case "__show":
 				return BuiltIn.show;
 			case "__query":
@@ -568,12 +568,12 @@ BuiltIn isBuiltInCall(CallExp ce){
 }
 
 static if(language==silq)
-string isQuantumPrimitive(Expression e){
+string isPrimitive(Expression e){
 	auto ce=cast(CallExp)e;
 	if(!ce) return null;
 	auto id=cast(Identifier)ce.e;
 	if(!id) return null;
-	if(id.meaning || id.name != "quantumPrimitive") return null;
+	if(id.meaning || id.name != "__primitive") return null;
 	auto args=cast(TupleExp)ce.arg;
 	enforce(!!args&&args.e.length==2);
 	auto opLit=cast(LiteralExp)args.e[0];
@@ -627,7 +627,7 @@ Expression builtIn(Identifier id,Scope sc){
 				break;
 		}
 		static if(language==silq){
-			case "quantumPrimitive","__query","__show":
+			case "__primitive","__query","__show":
 				t=unit;
 				break; // those are actually magic polymorphic functions
 		}
@@ -2869,8 +2869,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto id=cast(Identifier)ce.e;
 			switch(id.name){
 				static if(language==silq){
-					case "quantumPrimitive":
-						return handleQuantumPrimitive(ce, context);
+					case "__primitive":
+						return handlePrimitive(ce, context);
 					case "__show":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
 						auto lit=cast(LiteralExp)ce.arg;
@@ -4559,29 +4559,29 @@ Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 }
 }else static if(language==silq){
 
-Expression handleQuantumPrimitive(CallExp ce, ExpSemContext context){
+Expression handlePrimitive(CallExp ce, ExpSemContext context){
 	Scope sc=context.sc;
 	ce.arg=expressionSemantic(ce.arg,context.nestConst);
 	Expression[] args;
 	if(auto tpl=cast(TupleExp)ce.arg) args=tpl.e;
 	else {
-		sc.error("expected literal arguments to quantumPrimitive",ce.loc);
+		sc.error("expected literal arguments to __primitive",ce.loc);
 		ce.sstate=SemState.error;
 		return ce;
 	}
 	if(args.length!=2){
-		sc.error("expected two arguments to quantumPrimitive",ce.loc);
+		sc.error("expected two arguments to __primitive",ce.loc);
 		ce.sstate=SemState.error;
 		return ce;
 	}
 	auto literal=cast(LiteralExp)args[0];
 	if(!literal||literal.lit.type!=Tok!"``"){
-		sc.error("first argument to quantumPrimitive must be string literal",args[0].loc);
+		sc.error("first argument to __primitive must be string literal",args[0].loc);
 		ce.sstate=SemState.error;
 		return ce;
 	}
 	if(!isType(args[1])){
-		sc.error("second argument to quantumPrimitive must be a type",args[0].loc);
+		sc.error("second argument to __primitive must be a type",args[0].loc);
 		ce.sstate=SemState.error;
 		return ce;
 	}

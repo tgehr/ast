@@ -64,7 +64,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
 	if(auto ce=cast(CallExp)olhs){
-		if(isQuantumPrimitive(cast(CallExp)unwrap(ce.e)))
+		if(isPrimitive(cast(CallExp)unwrap(ce.e)))
 			return false;
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
@@ -521,7 +521,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 			Expression reversed=null,newrhs=null;
 			static if(language==silq) {
-				auto op = isQuantumPrimitive(cast(CallExp)unwrap(ce.e));
+				auto op = isPrimitive(cast(CallExp)unwrap(ce.e));
 				switch(op) {
 					case null:
 						break;
@@ -551,7 +551,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 						newarg=newtpl;
 						break; // DMD bug: does not detect if this is missing
 					default:
-						sc.error(format("cannot reverse quantum primitive '%s'",op),ce.e.loc);
+						sc.error(format("cannot reverse primitive '%s'",op),ce.e.loc);
 						return error();
 				}
 			}
