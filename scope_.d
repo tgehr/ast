@@ -895,9 +895,11 @@ class CapturingScope(T): NestedScope{
 		if(id.sstate==SemState.error) return null;
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
-			// TODO: mutual recursion support?
-			if(meaning.isSplitFrom(decl)){
-				decl.seal();
+			//auto fd2=chain(meaning.derivedSequence.map!(x=>cast(FunctionDef)x).filter!(x=>!!x),only(null)).front;
+			if(meaning.isSplitFrom(decl)/+||fd2&&!fd2.isLinear()+/){
+				//if(fd2&&!fd2.isLinear()) meaning=fd2; // TODO: this is a bit hacky
+				//if(fd2&&fd2.sstate!=SemState.completed) fd2.seal();
+				if(meaning.isSplitFrom(decl)) decl.seal();
 				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
@@ -985,7 +987,7 @@ class CapturingScope(T): NestedScope{
 				}
 			}
 		}
-		if(!meaning.isSplitFrom(decl)){
+		if(!id.lazyCapture){
 			if(!isConstLookup&&meaning.isLinear()){
 				symtabInsert(meaning);
 				meaning=consume(meaning);
