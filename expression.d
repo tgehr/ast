@@ -167,6 +167,10 @@ abstract class Expression: Node{
 		if(isClassical(this)) return this;
 		return null;
 	}
+	Expression getQuantum(){
+		if(isQuantum(this)) return this;
+		return null;
+	}
 	Annotation getAnnotation(){
 		return Annotation.none;
 	}
@@ -432,6 +436,26 @@ class Identifier: Expression{
 			r.sstate=SemState.completed;
 			return r;
 		}else return this;
+	}
+	override Expression getQuantum(){
+		static if(language==silq){
+			assert(isType(this));
+			if(isQuantum(this)) return this;
+			if(meaning){
+				import ast.semantic_:typeForDecl;
+				auto prev=typeForDecl(meaning);
+				if(isQuantumTy(prev)){
+					auto r=new Identifier(name);
+					r.classical=false;
+					r.meaning=meaning;
+					r.type=r.typeFromMeaning;
+					assert(isQuantumTy(r.type));
+					r.sstate=SemState.completed;
+					return r;
+				}
+			}
+			return null;
+		}else return null;
 	}
 
 	final Expression typeFromMeaning(Declaration meaning){
@@ -866,6 +890,18 @@ class CallExp: Expression{
 			r.sstate=sstate;
 			return r;
 		}else return this;
+	}
+	override Expression getQuantum(){
+		static if(language==silq){
+			assert(isType(this));
+			if(isInt(this)||isUint(this)){ // TODO: generalize
+				auto r=new CallExp(e,arg,isSquare,false);
+				r.type=qtypeTy;
+				r.sstate=sstate;
+				return r;
+			}
+			return null;
+		}else return null;
 	}
 
 	override Annotation getAnnotation(){

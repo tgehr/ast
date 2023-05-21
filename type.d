@@ -143,6 +143,9 @@ class BoolTy: Type{
 	override BoolTy getClassical(){
 		return Bool(true);
 	}
+	override BoolTy getQuantum(){
+		return Bool(false);
+	}
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -179,7 +182,6 @@ class ℕTy: Type{
 	override ℕTy getClassical(){
 		return ℕt(true);
 	}
-
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -345,14 +347,19 @@ class AggregateTy: Type{
 	static if(language==silq){
 		bool classical;
 		private AggregateTy classicalTy;
+		private AggregateTy quantumTy;
 	}else enum classical=true;
-	this(DatDecl decl,bool classical){
+	this(DatDecl decl,bool classical,AggregateTy classicalTy=null,AggregateTy quantumTy=null){
 		if(!classical) assert(decl.isQuantum);
 		this.decl=decl;
 		static if(language==silq){
 			this.classical=classical;
-			if(classical) classicalTy=this;
-			else classicalTy=New!AggregateTy(decl,true);
+			if(classical) this.classicalTy=this;
+			else this.classicalTy=classicalTy?classicalTy:New!AggregateTy(decl,true,null,decl.isQuantum?this:null);
+			if(decl.isQuantum){
+				if(!classical) this.quantumTy=this;
+				else this.quantumTy=quantumTy?quantumTy:New!AggregateTy(decl,false,this,null);
+			}
 		}
 	}
 	override AggregateTy copyImpl(CopyArgs args){
@@ -368,6 +375,10 @@ class AggregateTy: Type{
 	}
 	override AggregateTy getClassical(){
 		static if(language==silq) return classicalTy;
+		else return this;
+	}
+	override AggregateTy getQuantum(){
+		static if(language==silq) return quantumTy;
 		else return this;
 	}
 
@@ -500,6 +511,11 @@ class TupleTy: Type,ITupleTy{
 		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
 		return null;
 	}
+	override Expression getQuantum(){
+		auto ntypes=types.map!(x=>x.getQuantum()).array;
+		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
+		return null;
+	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		foreach(x;types) if(auto r=dg(x)) return r;
 		return 0;
@@ -602,6 +618,11 @@ class ArrayTy: Type{
 	}
 	override Expression getClassical(){
 		auto nnext=next.getClassical();
+		if(!nnext) return null;
+		return arrayTy(nnext);
+	}
+	override Expression getQuantum(){
+		auto nnext=next.getQuantum();
 		if(!nnext) return null;
 		return arrayTy(nnext);
 	}
@@ -717,6 +738,11 @@ class VectorTy: Type, ITupleTy{
 	}
 	override Expression getClassical(){
 		auto nnext=next.getClassical();
+		if(!nnext) return null;
+		return vectorTy(nnext,num);
+	}
+	override Expression getQuantum(){
+		auto nnext=next.getQuantum();
 		if(!nnext) return null;
 		return vectorTy(nnext,num);
 	}
