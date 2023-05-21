@@ -2774,7 +2774,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						Expression garg;
 						auto tt=nft.tryMatch(ce.arg,garg);
 						if(!tt) return false;
-						auto nce=new CallExp(ce.e,garg,true,false);
+						auto nce=new CallExp(ce.e,garg.copy(),true,false);
 						nce.loc=ce.loc;
 						auto nnce=new CallExp(nce,ce.arg,false,false);
 						nnce.loc=ce.loc;
