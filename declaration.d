@@ -80,7 +80,7 @@ class VarDecl: Declaration{
 	bool isConst;
 	this(Identifier name){ super(name); }
 	override VarDecl copyImpl(CopyArgs args){
-		//enforce(!args.preserveSemantic,"TODO");
+		//enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
 		//return new VarDecl(dtype.copy(args));
 		auto r=new VarDecl(name?name.copy(args):null);
 		if(dtype) r.dtype=dtype.copy(args);
@@ -104,7 +104,7 @@ class Parameter: VarDecl{
 		this.isConst=isConst;
 	}
 	override Parameter copyImpl(CopyArgs args){
-		enforce(!args.preserveSemantic,"TODO");
+		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
 		return new Parameter(isConst,name?name.copy(args):null,dtype?dtype.copy(args):dtype);
 	}
 	override bool isLinear(){
