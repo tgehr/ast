@@ -3349,8 +3349,12 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	}
 	if(isType(idx.e)||isQNumeric(idx.e)){
 		assert(!replaceIndex);
-		if(auto tty=typeSemantic(idx,sc,true))
-			return tty;
+		if(auto tpl=cast(TupleExp)idx.a){
+			if(tpl.length==0){
+				if(auto tty=typeSemantic(idx,sc,true))
+					return tty;
+			}
+		}
 	}
 	idx.a=expressionSemantic(idx.a,context.nestConst);
 	propErr(idx.a,idx);
@@ -3420,6 +3424,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		idx.type=checkTpl(idx.a);
 	}else{
 		sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
+		if(isType(idx.e)||isQNumeric(idx.e)){
+			if(!cast(TupleExp)idx.a)
+				sc.note(format("did you mean to write '%s^%s'?",idx.e,idx.a),idx.loc);
+		}
 		idx.sstate=SemState.error;
 	}
 	static if(language==silq)
@@ -4344,8 +4352,7 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 				return unit;
 		}
 	}
-	auto at=cast(IndexExp)expr;
-	if(at){
+	if(auto at=cast(IndexExp)expr){
 		if(auto tpl=cast(TupleExp)at.a){
 			if(tpl.length==0){
 				auto next=typeSemantic(at.e,sc,allowQNumeric);
