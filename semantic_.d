@@ -848,12 +848,16 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	}
 	bool converged=false;
 	CompoundExp bdy;
+	auto origStateSnapshot=sc.getStateSnapshot();
+	auto prevStateSnapshot=origStateSnapshot;
+	auto nextStateSnapshot=origStateSnapshot;
+	BlockScope forgetScope=null;
 	while(!converged){ // TODO: limit number of iterations?
-		auto prevStateSnapshot=sc.getStateSnapshot();
-		auto forgetScope=new BlockScope(sc);
+		prevStateSnapshot=nextStateSnapshot;
 		Expression.CopyArgs cargs={preserveSemantic: true};
 		bdy=fe.bdy.copy(cargs);
 		auto fesc=bdy.blscope_=new BlockScope(sc);
+		forgetScope=new BlockScope(sc);
 		auto vd=new VarDecl(fe.var);
 		vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
 		assert(fe.sstate==SemState.error||vd.vtype.isClassical());
@@ -886,8 +890,10 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 				converged=true;
 			}
 		}else sc.merge(false,fesc,forgetScope);
-		converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
+		nextStateSnapshot=sc.getStateSnapshot();
+		converged|=bdy.sstate==SemState.error||nextStateSnapshot==prevStateSnapshot;
 	}
+	sc.fixLoopSplitMergeGraph(forgetScope,fe.fescope_,origStateSnapshot,prevStateSnapshot);
 	fe.bdy=bdy;
 	fe.type=unit;
 	return fe;
@@ -903,9 +909,9 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	CompoundExp bdy;
 	while(!converged){ // TODO: limit number of iterations?
 		auto prevStateSnapshot=sc.getStateSnapshot();
-		auto forgetScope=new BlockScope(sc);
 		bdy=we.bdy.copy(cargs);
 		auto wesc=bdy.blscope_=new BlockScope(sc);
+		auto forgetScope=new BlockScope(sc);
 		bdy=compoundExpSemantic(bdy,sc);
 		propErr(bdy,we);
 		auto ncond=we.cond.copy(cargs);

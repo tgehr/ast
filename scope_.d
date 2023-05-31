@@ -287,6 +287,7 @@ abstract class Scope{
 	Declaration[] consumedOuter;
 	Declaration[] splitVars;
 	final void splitVar(Declaration splitFrom,Declaration splitInto){
+		assert(splitFrom.scope_ !is splitInto.scope_);
 		splitFrom.splitInto~=splitInto;
 		splitInto.splitFrom=splitFrom;
 		splitVars~=splitInto;
@@ -301,6 +302,9 @@ abstract class Scope{
 			if(odecl.rename) rnsymtab.remove(odecl.rename.ptr);
 			static if(language==silq)
 				toPush~=odecl.getName;
+		}else if(odecl !is ndecl){
+			assert(odecl.name.ptr is ndecl.name.ptr);
+			symtab[odecl.name.ptr]=ndecl;
 		}
 		return ndecl;
 	}
@@ -754,6 +758,54 @@ abstract class Scope{
 		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=decl;
 		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
 		state=ScopeState.init;
+	}
+	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
+		BlockScope loopScope,   // scope for non-zero-iterations path
+		BlockScope forgetScope, // scope for zero-iterations path
+		ref ScopeState origStateSnapshot, // declarations before loop
+		ref ScopeState prevStateSnapshot, // declarations before last fixed-point iteration
+	)in{
+		assert(!!loopScope);
+		assert(!!forgetScope); // TODO: repeat ... until loop?
+		assert(loopScope.parent is this);
+		assert(forgetScope.parent is this);
+	}do{
+		Declaration adaptOuter(Declaration outer){ // declarations in old snapshots may have been split
+			while(outer.splitInto.length==1&&outer.scope_){
+				if(auto nsc=cast(NestedScope)outer.scope_)
+					if(nsc.parent is this)
+						break;
+				outer=outer.splitInto[0];
+			}
+			return outer;
+		}
+		foreach(ref outer;loopScope.consumedOuter){
+			assert(outer.scope_ is this);
+			if(outer.splitInto.length!=2) continue; // TODO!
+			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
+			auto nonZeroIters=outer.splitInto[0];
+			assert(!!nonZeroIters);
+			assert(nonZeroIters.splitFrom is outer);
+			if(nonZeroIters.scope_ !is loopScope) continue; // TODO?
+			assert(!nonZeroIters.scope_||nonZeroIters.scope_ is loopScope);
+			auto zeroIters=outer.splitInto[1];
+			assert(!!zeroIters);
+			assert(zeroIters.splitFrom is outer);
+			assert(!zeroIters.scope_||zeroIters.scope_ is forgetScope);
+			if(outer.name.name !in origStateSnapshot.symtab) continue; // TODO!
+			assert(outer.name.name in origStateSnapshot.symtab);
+			auto newOuter=adaptOuter(origStateSnapshot.symtab[outer.name.name]);
+			assert(newOuter.splitInto.length==2,text(outer," ",newOuter," ",newOuter.splitInto));
+			assert(!newOuter.scope_||newOuter.scope_);
+			assert(outer.name.name in prevStateSnapshot.symtab);
+			auto prevOuter=adaptOuter(prevStateSnapshot.symtab[nonZeroIters.name.name]);
+			assert(prevOuter.splitInto.length==2);
+			foreach(k;0..2){
+				newOuter.splitInto[k]=prevOuter.splitInto[k];
+				newOuter.splitInto[k].splitFrom=newOuter;
+			}
+			outer=newOuter;
+		}
 	}
 private:
 	static if(language==silq){
