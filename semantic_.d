@@ -796,8 +796,8 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	propErr(ite.othw,ite);
 	NestedScope[] scs;
 	if(!quantumControl){
-		if(definitelyReturns(ite.then)) scs=[ite.othw.blscope_];
-		else if(definitelyReturns(ite.othw)) scs=[ite.then.blscope_];
+		if(definitelyReturns(ite.then)) scs=sc.activeNestedScopes=[ite.othw.blscope_];
+		else if(definitelyReturns(ite.othw)) scs=sc.activeNestedScopes=[ite.then.blscope_];
 		else scs=[ite.then.blscope_,ite.othw.blscope_];
 	}else scs=[ite.then.blscope_,ite.othw.blscope_];
 	if(sc.merge(quantumControl,scs)){
@@ -820,6 +820,31 @@ Expression statementSemanticImpl(DatDecl dd,Scope sc){
 Expression statementSemanticImpl(CommaExp ce,Scope sc){
 	return expectDefineOrAssignSemantic(ce,sc);
 }
+
+struct FixedPointIterState{
+	Scope.ScopeState origStateSnapshot;
+	Scope.ScopeState prevStateSnapshot;
+	Scope.ScopeState nextStateSnapshot;
+	BlockScope loopScope=null;
+	BlockScope forgetScope=null;
+	void beginIteration(){ prevStateSnapshot=nextStateSnapshot; }
+	BlockScope makeScopes(Scope sc){
+		loopScope=new BlockScope(sc);
+		forgetScope=new BlockScope(sc);
+		return loopScope;
+	}
+	void endIteration(Scope sc){ nextStateSnapshot=sc.getStateSnapshot(); }
+	bool converged(){ return nextStateSnapshot==prevStateSnapshot; }
+
+	void fixSplitMergeGraph(Scope sc){
+		sc.fixLoopSplitMergeGraph(loopScope,forgetScope,origStateSnapshot,prevStateSnapshot);
+	}
+}
+FixedPointIterState startFixedPointIteration(Scope sc){
+	auto origStateSnapshot=sc.getStateSnapshot();
+	return FixedPointIterState(origStateSnapshot,origStateSnapshot,origStateSnapshot);
+}
+
 
 // TODO: supertypes for define and assign?
 Expression statementSemanticImpl(ForExp fe,Scope sc){
@@ -848,16 +873,12 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	}
 	bool converged=false;
 	CompoundExp bdy;
-	auto origStateSnapshot=sc.getStateSnapshot();
-	auto prevStateSnapshot=origStateSnapshot;
-	auto nextStateSnapshot=origStateSnapshot;
-	BlockScope forgetScope=null;
+	auto state=startFixedPointIteration(sc);
 	while(!converged){ // TODO: limit number of iterations?
-		prevStateSnapshot=nextStateSnapshot;
+		state.beginIteration();
 		Expression.CopyArgs cargs={preserveSemantic: true};
 		bdy=fe.bdy.copy(cargs);
-		auto fesc=bdy.blscope_=new BlockScope(sc);
-		forgetScope=new BlockScope(sc);
+		auto fesc=bdy.blscope_=state.makeScopes(sc);
 		auto vd=new VarDecl(fe.var);
 		vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
 		assert(fe.sstate==SemState.error||vd.vtype.isClassical());
@@ -877,23 +898,23 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		assert(!!bdy);
 		propErr(bdy,fe);
 		static if(language==silq){
-			if(sc.merge(false,fesc,forgetScope)){
+			if(sc.merge(false,fesc,state.forgetScope)){
 				sc.note("possibly consumed in for loop", fe.loc);
 				fe.sstate=SemState.error;
 				converged=true;
 			}
-			if(forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.length){
 				sc.error("variables potentially consumed multiple times in for loop",fe.loc);
-				foreach(decl;forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars)
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				fe.sstate=SemState.error;
 				converged=true;
 			}
 		}else sc.merge(false,fesc,forgetScope);
-		nextStateSnapshot=sc.getStateSnapshot();
-		converged|=bdy.sstate==SemState.error||nextStateSnapshot==prevStateSnapshot;
+		state.endIteration(sc);
+		converged|=bdy.sstate==SemState.error||state.converged;
 	}
-	sc.fixLoopSplitMergeGraph(forgetScope,fe.fescope_,origStateSnapshot,prevStateSnapshot);
+	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
 	fe.type=unit;
 	return fe;
@@ -907,11 +928,12 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	propErr(cond,we);
 	static if(language==silq) sc.pushConsumed();
 	CompoundExp bdy;
+	auto state=startFixedPointIteration(sc);
 	while(!converged){ // TODO: limit number of iterations?
+		state.beginIteration();
 		auto prevStateSnapshot=sc.getStateSnapshot();
 		bdy=we.bdy.copy(cargs);
-		auto wesc=bdy.blscope_=new BlockScope(sc);
-		auto forgetScope=new BlockScope(sc);
+		auto wesc=bdy.blscope_=state.makeScopes(sc);
 		bdy=compoundExpSemantic(bdy,sc);
 		propErr(bdy,we);
 		auto ncond=we.cond.copy(cargs);
@@ -921,21 +943,23 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 		if(cond.sstate==SemState.completed&&ncond.sstate==SemState.error)
 			sc.note("variable declaration may be missing in while loop body", we.loc);
 		static if(language==silq){
-			if(sc.merge(false,bdy.blscope_,forgetScope)){
+			if(sc.merge(false,bdy.blscope_,state.forgetScope)){
 				sc.note("possibly consumed in while loop", we.loc);
 				we.sstate=SemState.error;
 				converged=true;
 			}
-			if(forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.length){
 				sc.error("variables potentially consumed multiple times in while loop", we.loc);
-				foreach(decl;forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars)
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				we.sstate=SemState.error;
 				converged=true;
 			}
-		}else sc.merge(false,bdy.blscope_,forgetScope);
-		converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
+		}else sc.merge(false,bdy.blscope_,state.forgetScope);
+		state.endIteration(sc);
+		converged|=bdy.sstate==SemState.error||state.converged;
 	}
+	state.fixSplitMergeGraph(sc);
 	we.cond=cond;
 	we.bdy=bdy;
 	we.type=unit;
@@ -954,28 +978,31 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 	bool converged=false;
 	Expression.CopyArgs cargs={preserveSemantic: true};
 	CompoundExp bdy;
+	auto state=startFixedPointIteration(sc);
 	while(!converged){ // TODO: limit number of iterations?
-		auto prevStateSnapshot=sc.getStateSnapshot();
-		auto forgetScope=new BlockScope(sc);
+		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
+		bdy.blscope_=state.makeScopes(sc);
 		bdy=compoundExpSemantic(bdy,sc);
 		propErr(bdy,re);
 		static if(language==silq){
-			if(sc.merge(false,bdy.blscope_,forgetScope)){
+			if(sc.merge(false,bdy.blscope_,state.forgetScope)){
 				sc.note("possibly consumed in repeat loop", re.loc);
 				re.sstate=SemState.error;
 				converged=true;
 			}
-			if(forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.length){
 				sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
-				foreach(decl;forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars)
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				re.sstate=SemState.error;
 				converged=true;
 			}
-		}else sc.merge(false,bdy.blscope_,forgetScope);
-		converged|=bdy.sstate==SemState.error||sc.getStateSnapshot()==prevStateSnapshot;
+		}else sc.merge(false,bdy.blscope_,state.forgetScope);
+		state.endIteration(sc);
+		converged|=bdy.sstate==SemState.error||state.converged;
 	}
+	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
 	re.type=unit;
 	return re;

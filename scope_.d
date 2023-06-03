@@ -506,7 +506,7 @@ abstract class Scope{
 	}
 
 	bool allowMerge=false;
-	SetX!NestedScope activeNestedScopes;
+	NestedScope[] activeNestedScopes;
 	void nest(NestedScope r)in{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
@@ -518,7 +518,7 @@ abstract class Scope{
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		allowMerge=true;
-		activeNestedScopes.insert(r);
+		activeNestedScopes~=r;
 	}
 
 	bool merge(bool quantumControl,NestedScope[] scopes...)in{
@@ -532,8 +532,8 @@ abstract class Scope{
 		static if(language==silq){
 			toPush=[];
 		}
-		foreach(sc;scopes)
-			activeNestedScopes.remove(sc);
+		assert(scopes==activeNestedScopes);
+		activeNestedScopes=[];
 		allowMerge=false;
 		static if(language==silq){
 			dependencies=scopes[0].dependencies.dup;
@@ -790,11 +790,11 @@ abstract class Scope{
 		foreach(ref outer;loopScope.consumedOuter){
 			assert(outer.scope_ is this);
 			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
-			auto nonZeroIters=outer.splitInto[0];
+			auto nonZeroIters=outer.splitInto[1];
 			assert(!!nonZeroIters);
 			assert(nonZeroIters.splitFrom is outer);
 			assert(!nonZeroIters.scope_||nonZeroIters.scope_ is loopScope);
-			auto zeroIters=outer.splitInto[1];
+			auto zeroIters=outer.splitInto[0];
 			assert(!!zeroIters);
 			assert(zeroIters.splitFrom is outer);
 			assert(!zeroIters.scope_||zeroIters.scope_ is forgetScope);
