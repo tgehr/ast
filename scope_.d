@@ -744,6 +744,20 @@ abstract class Scope{
 			return ScopeState(nsymtab,restoreable);
 		}
 	}
+	private Declaration getSplit(Declaration decl,bool clearSplitInto=false){
+		if(decl.scope_ is this){
+			if(clearSplitInto)
+				decl.splitInto=[];
+			return decl;
+		}
+		if(decl.splitInto.length==0)
+			return decl;
+		foreach(ndecl;decl.splitInto){
+			if(this.isNestedIn(ndecl.scope_))
+					return getSplit(ndecl);
+		}
+		assert(0);
+	}
 	void restoreStateSnapshot(ref ScopeState state)in{
 		static if(language==silq){
 			assert(!toPush.length);
@@ -755,18 +769,7 @@ abstract class Scope{
 			resetDeclProps(state.declProps);
 		}
 		symtab.clear();
-		Declaration getSplit(Declaration decl){
-			if(decl.scope_ is this)
-				decl.splitInto=[];
-			if(decl.splitInto.length==0)
-				return decl;
-			foreach(ndecl;decl.splitInto){
-				if(this.isNestedIn(ndecl.scope_))
-					return getSplit(ndecl);
-			}
-			assert(0);
-		}
-		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=getSplit(decl);
+		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=getSplit(decl,true);
 		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
 		state=ScopeState.init;
 	}
@@ -781,14 +784,8 @@ abstract class Scope{
 		assert(loopScope.parent is this);
 		assert(forgetScope.parent is this);
 	}do{
-		Declaration adaptOuter(Declaration outer){ // declarations in old snapshots may have been split
-			while(outer.splitInto.length==1&&outer.scope_){
-				if(auto nsc=cast(NestedScope)outer.scope_)
-					if(nsc.parent is this)
-						break;
-				outer=outer.splitInto[0];
-			}
-			return outer;
+		Declaration adaptOuter(Declaration decl){
+			return getSplit(decl);
 		}
 		foreach(ref outer;loopScope.consumedOuter){
 			assert(outer.scope_ is this);
