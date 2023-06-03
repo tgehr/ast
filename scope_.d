@@ -737,7 +737,7 @@ abstract class Scope{
 			assert(!toPush.length);
 	}do{
 		Declaration[string] nsymtab;
-		foreach(_,decl;symtab) nsymtab[decl.getName]=decl;
+		foreach(_,decl;symtab) nsymtab[decl.name.name]=decl;
 		static if(language==silq){
 			return ScopeState(dependencies.dup,restoreable?saveDeclProps:DeclProps.init,nsymtab,restoreable);
 		}else{
@@ -793,17 +793,26 @@ abstract class Scope{
 			auto nonZeroIters=outer.splitInto[0];
 			assert(!!nonZeroIters);
 			assert(nonZeroIters.splitFrom is outer);
-			if(nonZeroIters.scope_ !is loopScope) continue; // TODO?
 			assert(!nonZeroIters.scope_||nonZeroIters.scope_ is loopScope);
 			auto zeroIters=outer.splitInto[1];
 			assert(!!zeroIters);
 			assert(zeroIters.splitFrom is outer);
 			assert(!zeroIters.scope_||zeroIters.scope_ is forgetScope);
-			if(outer.name.name !in origStateSnapshot.symtab) continue; // TODO!
-			assert(outer.name.name in origStateSnapshot.symtab);
-			auto newOuter=adaptOuter(origStateSnapshot.symtab[outer.name.name]);
-			assert(newOuter.splitInto.length==2,text(outer," ",newOuter," ",newOuter.splitInto));
-			assert(!newOuter.scope_||newOuter.scope_);
+			Declaration newOuter=null;
+			if(outer.name.name !in origStateSnapshot.symtab){
+				// declaration captured from outer scope
+				auto fd=getFunction();
+				assert(!!fd);
+				foreach(decl;fd.capturedDecls){
+					if(decl.name.name is outer.name.name){
+						newOuter=adaptOuter(decl);
+						break;
+					}
+				}
+			}else newOuter=adaptOuter(origStateSnapshot.symtab[outer.name.name]);
+			assert(!!newOuter);
+			assert(newOuter.splitInto.length==2);
+			assert(!newOuter.scope_||newOuter.scope_ is this);
 			assert(outer.name.name in prevStateSnapshot.symtab);
 			auto prevOuter=adaptOuter(prevStateSnapshot.symtab[nonZeroIters.name.name]);
 			assert(prevOuter.splitInto.length==2);
