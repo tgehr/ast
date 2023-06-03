@@ -755,7 +755,18 @@ abstract class Scope{
 			resetDeclProps(state.declProps);
 		}
 		symtab.clear();
-		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=decl;
+		Declaration getSplit(Declaration decl){
+			if(decl.scope_ is this)
+				decl.splitInto=[];
+			if(decl.splitInto.length==0)
+				return decl;
+			foreach(ndecl;decl.splitInto){
+				if(this.isNestedIn(ndecl.scope_))
+					return getSplit(ndecl);
+			}
+			assert(0);
+		}
+		foreach(_,decl;state.symtab) symtab[decl.name.ptr]=getSplit(decl);
 		foreach(_,decl;symtab) if(decl.rename.ptr !in rnsymtab) rnsymtab[decl.rename.ptr]=decl; // TODO: ok?
 		state=ScopeState.init;
 	}
@@ -781,7 +792,6 @@ abstract class Scope{
 		}
 		foreach(ref outer;loopScope.consumedOuter){
 			assert(outer.scope_ is this);
-			if(outer.splitInto.length!=2) continue; // TODO!
 			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
 			auto nonZeroIters=outer.splitInto[0];
 			assert(!!nonZeroIters);
