@@ -1866,7 +1866,7 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 	}
 	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
-	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
+	if(!util.among(e1.type,Bool(true),ℕt(true),ℤt(true))||!util.among(e2.type,Bool(true),ℕt(true),ℤt(true)))
 		return false;
 	Expression neq=new NeqExp(e1,e2);
 	neq.loc=loc;
@@ -1897,7 +1897,7 @@ bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InTy
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
 	if(e1.sstate==SemState.error||e2.sstate==SemState.error)
 		return false;
-	if(!util.among(e1.type,ℕt(true),ℤt(true))||!util.among(e2.type,ℕt(true),ℤt(true)))
+	if(!util.among(e1.type,Bool(true),ℕt(true),ℤt(true))||!util.among(e2.type,Bool(true),ℕt(true),ℤt(true)))
 		return false;
 	Expression eq=new EqExp(e1,e2);
 	eq=expressionSemantic(eq,expSemContext(sc,ConstResult.yes,inType));
@@ -3058,7 +3058,7 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 	switch(le.lit.type){
 		case Tok!"0",Tok!".0":
 			if(!le.type)
-				le.type=le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
+				le.type=/+util.among(le.lit.str,"0","1")?Bool(true):+/le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
 			return le;
 		case Tok!"``":
 			le.type=stringTy(true);
@@ -3642,6 +3642,12 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 			return true;
 		if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
 			return true;
+		if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()
+		   &&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType))
+		) return true;
+		if(vec1&&tpl2&&vec1.num.eval()==LiteralExp.makeInteger(tpl2.length)
+		   &&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType))
+		) return true;
 		if(annotationType==TypeAnnotationType.coercion){
 			if((arr1||vec1)&&to==unit) return true;
 			if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
