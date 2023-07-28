@@ -3827,21 +3827,41 @@ Expression cmpType(Expression t1,Expression t2){
 		auto v1=cast(VectorTy)t1,v2=cast(VectorTy)t2;
 		Expression n1=a1?a1.next:v1?v1.next:null,n2=a2?a2.next:v2?v2.next:null;
 		if(n1&&n2) return cmpType(n1,n2);
-		if(auto tpl1=t1.isTupleTy()){
-			if(auto tpl2=t2.isTupleTy()){
-				Expression r=Bool(true);
-				// different tuple length has canonical
-				// meaning (just like for arrays)
-				// TODO: this may be confusing?
-				// if(tpl1.length!=tpl2.length) return null;
-				foreach(i;0..min(tpl1.length,tpl2.length)){
-					auto ct=cmpType(tpl1[i],tpl2[i]);
-					if(!ct) return null;
-					r=logicType(r,ct);
-					if(!r) return null;
-				}
-				return r;
+		auto tpl1=t1.isTupleTy();
+		auto tpl2=t2.isTupleTy();
+		if(tpl1&&tpl2){
+			Expression r=Bool(true);
+			// different tuple length has canonical
+			// meaning (just like for arrays)
+			// TODO: this may be confusing?
+			// if(tpl1.length!=tpl2.length) return null;
+			foreach(i;0..min(tpl1.length,tpl2.length)){
+				auto ct=cmpType(tpl1[i],tpl2[i]);
+				if(!ct) return null;
+				r=logicType(r,ct);
+				if(!r) return null;
 			}
+			return r;
+		}
+		if(tpl1&&n2){
+			Expression r=Bool(true);
+			foreach(i;0..tpl1.length){
+				auto ct=cmpType(tpl1[i],n2);
+				if(!ct) return null;
+				r=logicType(r,ct);
+				if(!r) return null;
+			}
+			return r;
+		}
+		if(n1&&tpl2){
+			Expression r=Bool(true);
+			foreach(i;0..tpl2.length){
+				auto ct=cmpType(n1,tpl2[i]);
+				if(!ct) return null;
+				r=logicType(r,ct);
+				if(!r) return null;
+			}
+			return r;
 		}
 		if(!isNumeric(t1)||!isNumeric(t2)||cast(ℂTy)t1||cast(ℂTy)t2) return null;
 	}
