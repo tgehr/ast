@@ -1459,6 +1459,9 @@ static if(language==silq)
 Expression defineLhsSemanticImpl(UnaryExp!(Tok!"const") ce,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(ce,context);
 }
+Expression defineLhsSemanticImpl(UnaryExp!(Tok!"moved") ce,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ce,context);
+}
 
 Expression defineLhsSemanticImpl(AddExp ae,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(ae,context);
@@ -2446,10 +2449,6 @@ bool isReverse(Declaration decl){
 	if(!decl||decl.scope_ !is sc) return false;
 	if(!decl.name) return false;
 	return decl.getName=="reverse";
-}
-
-auto isConstForReverse(FunTy ft){
-	return iota(ft.nargs).map!(i=>ft.isConst[i]||ft.argTy(i).isClassical&&!ft.argTy(i).isQuantum);
 }
 
 Parameter[] makeParams(C,R,T)(C isConst,R paramNames,T types,Location loc)in{
@@ -4059,8 +4058,13 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context
 	ex.type=typeTy; // TODO: ok?
 	Q!(bool[],Expression) getConstAndType(Expression e){
 		Q!(bool[],Expression) base(Expression e){
-			static if(language==silq) if(auto ce=cast(UnaryExp!(Tok!"const"))e){
-				return q([true],typeSemantic(ce.e,sc));
+			static if(language==silq){
+				if(auto ce=cast(UnaryExp!(Tok!"const"))e){
+					return q([true],typeSemantic(ce.e,sc));
+				}
+				if(auto ce=cast(UnaryExp!(Tok!"moved"))e){
+					return q([false],typeSemantic(ce.e,sc));
+				}
 			}
 			auto ty=typeSemantic(e,sc);
 			return q([ex.isLifted],ty);
@@ -4122,6 +4126,10 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 		if(!ok){
 			if(auto ce=cast(UnaryExp!(Tok!"const"))expr){
 				sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc);
+				ok=true;
+			}
+			if(auto ce=cast(UnaryExp!(Tok!"moved"))expr){
+				sc.error("invalid 'moved' annotation (note that 'moved' goes before parameter names)", ce.loc);
 				ok=true;
 			}
 		}

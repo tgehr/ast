@@ -1098,13 +1098,19 @@ class ProductTy: Type{
 			return false;
 		return this.isSubtypeImpl(r)&&r.isSubtypeImpl(this);
 	}
+	auto isConstForReverse(){
+		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical&&!argTy(i).isQuantum);
+	}
+	auto isConstForSubtyping(){
+		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical);
+	}
 	override bool isSubtypeImpl(Expression rhs){
 		auto r=cast(ProductTy)rhs;
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
 		r=r.setTuple(isTuple);
 		if(!r) return false;
-		if(isConst!=r.isConst||isSquare!=r.isSquare||nargs!=r.nargs)
+		if(!equal(this.isConstForSubtyping,r.isConstForSubtyping)||isSquare!=r.isSquare||nargs!=r.nargs)
 			return false;
 		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
 			return false;
@@ -1130,8 +1136,9 @@ class ProductTy: Type{
 			if(!nl||!nr) return null;
 			return combineTypes(nl,nr,meet);
 		}
-		if(isConst!=r.isConst||isSquare!=r.isSquare||nargs!=r.nargs)
+		if(!equal(isConstForSubtyping,r.isConstForSubtyping)||isSquare!=r.isSquare||nargs!=r.nargs)
 			return null;
+		auto nIsConst=isConst==r.isConst?isConst:zip(isConst,r.isConst).map!(x=>x[0]&&x[1]).array;
 		if(isTuple){
 			assert(names==r.names);
 			assert(!!tpl);
@@ -1144,7 +1151,7 @@ class ProductTy: Type{
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
-			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}else{
 			auto name=names[0]==r.names[0]?names[0]:freshName("x",r);
 			auto var=varTy(name,ndom);
@@ -1153,7 +1160,7 @@ class ProductTy: Type{
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
-			return productTy(isConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}
 	}
 	final ProductTy setAnnotation(Annotation annotation){

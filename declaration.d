@@ -359,7 +359,6 @@ class SingleDefExp: DefExp{ // TODO: get rid of this?
 			auto ft=cast(ProductTy)ce.e.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				return;
-			import ast.semantic_: isConstForReverse;
 			assert(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i]));
 			decl.vtype=ft.dom;
 			return;
@@ -406,7 +405,6 @@ class MultiDefExp: DefExp{ // TODO: get rid of this?
 			if(!ft||ft.isSquare!=ce.isSquare)
 				return;
 			if(auto tpl=cast(TupleExp)ce.arg){
-				import ast.semantic_: isConstForReverse;
 				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[ft.isTuple?i:0]);
 				auto tt=ft.dom.isTupleTy();
 				auto argTy(size_t i){
