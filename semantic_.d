@@ -2535,7 +2535,7 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
-		auto names=iota(ft.names.length).map!(i=>"`arg_"~(ft.names[i]?ft.names[i]:text(i)));
+		auto names=iota(ft.names.length).map!(i=>"`arg_"~(ft.names[i]!=""?ft.names[i]:text(i)));
 		auto types=iota(ft.nargs).map!((i){
 			auto type=ft.argTy(i);
 			if(type==typeTy){

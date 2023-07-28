@@ -93,6 +93,7 @@ ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
 		constType=constTuple?tupleTy(constIndices.map!(i=>ft.argTy(i)).array):ft.argTy(constIndices.front);
 		movedType=movedTuple?tupleTy(movedIndices.map!(i=>ft.argTy(i)).array):ft.argTy(movedIndices.front);
 		returnType=ft.cod;
+		returnTuple=returnType==unit;
 		return r;
 	}
 }
@@ -100,7 +101,7 @@ ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
 struct ReverseCallRewriter{
 	ProductTy ft;
 	Location loc;
-	bool constTuple,movedTuple;
+	bool constTuple,movedTuple,returnTuple;
 	Expression constType,movedType,returnType;
 	@property constIndices()return scope{ return iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]); }
 	@property movedIndices()return scope{ return iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]); }
@@ -140,7 +141,7 @@ struct ReverseCallRewriter{
 			constArgs=[id];
 		}
 		if(movedTuple){
-			auto unpackNames=movedIndices.map!((i)=>"`arg_"~ft.names[i]?ft.names[i]:text(i));
+			auto unpackNames=movedIndices.map!((i)=>"`arg_"~(ft.names[i]!=""?ft.names[i]:text(i)));
 			auto unpackLhs=new TupleExp(makeIdentifiers(unpackNames,loc));
 			unpackLhs.loc=loc;
 			auto unpackRhs=new Identifier(names[1]);
@@ -184,39 +185,73 @@ struct ReverseCallRewriter{
 		auto le=makeLambda(params,true,false,ft.annotation,body_,loc);
 		return le;
 	}
-	@property bool outerNeeded(){
-		return constIndices.empty||movedIndices.empty||ft.isSquare||constLast;
+	@property bool outerNeeded(bool simplify=true){
+		return simplify&&(constTuple||returnTuple)||ft.isSquare||constLast;
 	}
 	Expression wrapOuter(Expression rev,bool simplify){
+		if(!outerNeeded(simplify)) return rev;
 		auto loc=this.loc;
-		auto names=only(freshName,freshName);
-		if(simplify&&constIndices.empty){
-			auto nparams=makeParams(only(false),only(names[1]),only(returnType),loc);
-			auto nconst=new TupleExp([]);
-			nconst.loc=loc;
-			auto nmoved=new Identifier(names[1]);
-			nmoved.loc=loc;
-			auto nnarg=new TupleExp([nconst,nmoved]);
+		if(simplify&&(constTuple||returnTuple)){
+			auto isConst=(bool[]).init;
+			auto names=(string[]).init;
+			auto types=(Expression[]).init;
+			void add(bool isConst_)(){
+				static if(isConst_){
+					alias isTuple=constTuple;
+					alias type=constType;
+					alias indices=constIndices;
+				}else{
+					alias isTuple=returnTuple;
+					alias type=returnType;
+				}
+				if(isTuple){
+					if(auto tpl=type.isTupleTy()){
+						static if(isConst_){
+							foreach(i,j;enumerate(indices)){
+								isConst~=isConst_;
+								names~="`arg_"~(ft.names[j]!=""?ft.names[j]:text(j));
+								types~=tpl[i];
+							}
+						}else{
+							foreach(i;0..tpl.length){
+								isConst~=isConst_;
+								names~=freshName();
+								types~=tpl[i];
+							}
+						}
+						return;
+					}
+				}
+				isConst~=isConst_;
+				static if(isConst_){
+					auto j=constIndices.front;
+					names~="`arg_"~(ft.names[j]!=""?ft.names[j]:text(j));
+				}else names~=freshName();
+				types~=type;
+			}
+			if(constLast){
+				add!false();
+				add!true();
+			}else{
+				add!true();
+				add!false();
+			}
+			auto nparams=makeParams(isConst,names,types,loc);
+			auto constArgs=makeIdentifiers(iota(isConst.length).filter!(i=>isConst[i]).map!(i=>names[i]),loc);
+			auto constArg=constTuple?new TupleExp(constArgs):constArgs.front;
+			constArg.loc=loc;
+			auto movedArgs=makeIdentifiers(iota(isConst.length).filter!(i=>!isConst[i]).map!(i=>names[i]),loc);
+			auto movedArg=returnTuple?new TupleExp(movedArgs):movedArgs.front;
+			auto nnarg=new TupleExp([constArg,movedArg]);
 			nnarg.loc=loc;
 			auto ce2=new CallExp(rev,nnarg,false,false);
 			ce2.loc=loc;
 			auto body2=makeLambdaBody(ce2,loc);
-			auto le2=makeLambda(nparams,false,ft.isSquare,ft.annotation,body2,loc);
-			return le2;
-		}else if(simplify&&returnType==unit){
-			auto nparams=makeParams(only(true),only(names[0]),only(constType),loc);
-			auto nconst=new Identifier(names[0]);
-			nconst.loc=loc;
-			auto nmoved=new TupleExp([]);
-			nmoved.loc=loc;
-			auto nnarg=new TupleExp([nconst,nmoved]);
-			nnarg.loc=loc;
-			auto ce2=new CallExp(rev,nnarg,false,false);
-			ce2.loc=loc;
-			auto body2=makeLambdaBody(ce2,loc);
-			auto le2=makeLambda(nparams,false,ft.isSquare,ft.annotation,body2,loc);
+			bool isTuple=(constArgs.length!=0||returnTuple)&&(movedArgs.length!=0||constTuple);
+			auto le2=makeLambda(nparams,isTuple,ft.isSquare,ft.annotation,body2,loc);
 			return le2;
 		}else{
+			auto names=only(freshName,freshName);
 			auto nparams=constLast ? makeParams(only(true,false).retro,names.retro,only(constType,returnType).retro,loc)
 				: makeParams(only(true,false),names,only(constType,returnType),loc);
 			auto nnargs=makeIdentifiers(names,loc);
