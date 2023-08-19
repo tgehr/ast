@@ -4355,7 +4355,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(ret.sstate==SemState.error)
 		return ret;
 	static if(language==silq) sc.pushConsumed();
-	if(sc.close()){
+	if(sc.close(ret)){
 		sc.note("at function return",ret.loc);
 		ret.sstate=SemState.error;
 		return ret;

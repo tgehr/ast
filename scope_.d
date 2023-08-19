@@ -399,12 +399,13 @@ abstract class Scope{
 	void error(lazy string err, Location loc){handler.error(err,loc);}
 	void note(lazy string err, Location loc){handler.note(err,loc);}
 
-	final bool close(){
+	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
-				if(d.isLinear()){
-					if(!canForgetAppend(d)){
+				if(d.isLinear()||d.scope_ is this){
+					if(auto p=cast(Parameter)d) if(p.isConst) continue;
+					if(!canForgetAppend(loc,d)){
 						errors=true;
 						import ast.semantic_: unrealizable;
 						if(d.sstate!=SemState.error){
@@ -426,6 +427,10 @@ abstract class Scope{
 			foreach(n,d;rnsymtab) assert(!d.isLinear()||canForget(d));
 		}
 		return errors;
+	}
+
+	final bool close(){
+		return Scope.close(this);
 	}
 
 	static if(language==silq){
@@ -485,16 +490,22 @@ abstract class Scope{
 		}do{
 			if(decl.sstate==SemState.error) return true;
 			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
+			import ast.semantic_:typeForDecl;
+			auto type=typeForDecl(decl);
+			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 			return dependencies.canForget(decl.getName);
 		}
 
 		Declaration[] forgottenVars;
-		final bool canForgetAppend(Declaration decl){
+		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp)){
 			if(canForget(decl)){
-				forgottenVars~=decl;
+				cause.forgottenVars~=decl;
 				return true;
 			}
 			return false;
+		}
+		final bool canForgetAppend(Declaration decl){
+			return canForgetAppend(this,decl);
 		}
 	}
 	Declaration[] mergedVars;

@@ -1570,6 +1570,7 @@ class ReturnExp: Expression{
 
 	// semantic information:
 	Scope scope_;
+	Declaration[] forgottenVars;
 }
 
 class AssertExp: Expression{
