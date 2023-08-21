@@ -17,10 +17,17 @@ Expression moveExp(Expression e){
 	return e;
 }
 
-Expression dupExp(Expression e){
-	// writeln("dupping ",e," ",e.loc);
-	// TODO: implement
-	return e;
+static if(language==silq)
+Identifier getDup(Location loc,Scope isc){
+	return getPreludeSymbol("dup",loc,isc);
+}
+
+Expression dupExp(Expression e,Location loc,Scope isc){
+	static if(language==silq){
+		auto r=new CallExp(getDup(loc,isc),e,false,false);
+		r.loc=loc;
+		return r;
+	}else return e;
 }
 
 void propErr(Expression e1,Expression e2){
@@ -596,8 +603,12 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	import ast.semantic_: modules;
 	if(preludePath() !in modules) return null;
 	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-	assert(!!sc);
+	Scope sc=exprssc[1];
+	if(!sc){
+		sc=isc; // in prelude
+		while(auto nsc=cast(NestedScope)sc)
+			sc=nsc.parent;
+	}
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
@@ -1129,8 +1140,9 @@ Dependency getDependency(Expression e,Scope sc)in{
 				return Dependency(true);
 			result.dependencies.insert(id.name);
 			if(!id.constLookup){
-				auto vd=cast(VarDecl)id.meaning;
-				if(!vd||!(vd.isConst||sc.isConst(vd))) result.replace(id.name,sc.getDependency(id),sc.controlDependency);
+				/+auto vd=cast(VarDecl)id.meaning;
+				if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
+				result.replace(id.name,sc.getDependency(id),sc.controlDependency);
 			}
 		}
 	}
@@ -1138,7 +1150,6 @@ Dependency getDependency(Expression e,Scope sc)in{
 }
 
 bool consumes(Expression e){
-	if(auto id=cast(Identifier)e) if(auto m=cast(VarDecl)id.meaning) if(m.isConst) return false;
 	if(!e.constLookup&&cast(Identifier)e&&(!e.type||!e.type.isClassical())) return true;
 	foreach(c;e.components)
 		if(c.consumes())
@@ -1218,6 +1229,7 @@ Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(re,context); // TODO: get rid of this case
 }
 Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
+	auto result=callSemantic!isPresemantic(ce,context);
 	static if(!isPresemantic){ // TODO: move into callSemantic!(false,DefineLhsContext)?
 		auto sc=context.sc;
 		assert(util.among(ce.e.sstate,SemState.error,SemState.completed));
@@ -1238,15 +1250,17 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					ok=false;
 				}else{
 					ce.type=ft.cod;
-					if(!isSubtype(context.type,ce.type)){ // TODO: generate coerce expression instead?
-						sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
-						ok=false;
+					if(context.type&&!isSubtype(context.type,ce.type)){
+						//sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
+						//ok=false;
+						auto nresult=new TypeAnnotationExp(result,context.type,TypeAnnotationType.coercion);
+						nresult.loc=result.loc;
+						result=defineLhsSemanticImpl(nresult,context);
 					}
 				}
 			}
 		}
 	}
-	auto result=callSemantic!isPresemantic(ce,context);
 	static if(!isPresemantic) if(!ok) result.sstate=SemState.error;
 	return result;
 }
@@ -1444,7 +1458,7 @@ Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	auto sc=context.sc;
 	tae.type=typeSemantic(tae.t,context.sc);
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type));
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,null));
 	static if(!isPresemantic){
 		return expressionSemantic(tae,context.expSem);
 	}else return tae;
@@ -2035,16 +2049,14 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 
 void typeConstBlock(Declaration decl,Expression blocker,Scope sc){
 	if(!isAssignable(decl,sc)) return;
-	if(auto vd=cast(VarDecl)decl){
-		vd.isConst=true;
+	if(auto vd=cast(VarDecl)decl)
 		vd.typeConstBlocker=blocker;
-	}
 	assert(!isAssignable(decl,sc));
 }
 
 bool isAssignable(Declaration meaning,Scope sc){
 	auto vd=cast(VarDecl)meaning;
-	if(!vd||vd.isConst||sc.isConst(vd)) return false;
+	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd)) return false;
 	for(auto csc=sc;csc !is meaning.scope_&&cast(NestedScope)csc;csc=(cast(NestedScope)csc).parent)
 		if(auto fsc=cast(FunctionScope)csc)
 			return false;
@@ -2064,7 +2076,7 @@ void typeConstBlockNote(VarDecl vd,Scope sc)in{
 }
 
 bool isNonConstVar(VarDecl vd,Scope sc){
-	if(!vd||vd.isConst||sc.isConst(vd))
+	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd))
 		return false;
 	return true;
 }
@@ -2072,7 +2084,7 @@ bool isNonConstVar(VarDecl vd,Scope sc){
 bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){
 	auto vd=cast(VarDecl)meaning;
 	if(isNonConstVar(vd,sc)) return true;
-	if(vd&&(vd.isConst||sc.isConst(vd))){
+	if(vd&&(vd.isConst||vd.typeConstBlocker||sc.isConst(vd))){
 		if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
 			sc.error("cannot "~action~" 'const' parameters",loc);
 		else sc.error("cannot "~action~" 'const' variables",loc);
@@ -3117,6 +3129,12 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		}else return true;
 	}
 	auto canForgetImplicitly=checkImplicitForget(fe.var);
+	void setByRef(Expression var){
+		if(auto tpl=cast(TupleExp)var)
+			tpl.e.each!setByRef;
+		var.byRef=true;
+	}
+	setByRef(fe.var);
 	fe.var=expressionSemantic(fe.var,context.nestConsumed);
 	propErr(fe.var,fe);
 	void classicalForget(Expression var){
@@ -3130,14 +3148,6 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		if(!meaning) return;
 		if(!checkNonConstVar!("forget","forgetting")(meaning,id.loc,sc)){
 			fe.sstate=SemState.error;
-			return;
-		}
-		if(id.type&&id.type.isClassical){
-			if(!sc.consume(meaning)){
-				sc.error("cannot forget variable from outer scope",id.loc);
-				fe.sstate=SemState.error;
-				return;
-			}
 			return;
 		}
 	}
@@ -3211,16 +3221,17 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		static if(language==silq){
 			if(implicitDup&&!result.calledDirectly){
 				if(result.sstate!=SemState.error) result.sstate=SemState.completed;
-				return expressionSemantic(dupExp(result),context);
+				return expressionSemantic(dupExp(result,result.loc,context.sc),context);
 			}
 		}
 		return result;
 	}
 	if(!meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc);
+		auto isConst=id.meaning&&id.meaning.isConst;
 		if(id.meaning)
-			implicitDup=!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
-		auto lookup=context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
+			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
+		auto lookup=isConst||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
 		meaning=lookupMeaning(id,lookup,sc,true);
 		if(id.sstate==SemState.error) return id;
 		if(!meaning){

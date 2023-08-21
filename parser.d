@@ -504,7 +504,7 @@ struct Parser{
 								nextToken();
 								annotation=Annotation.mfree;
 							}
-							if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst=true;
+							if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
 						}else static if(language==psi){
 							if(ttype==Tok!"pure"){
 								nextToken();
@@ -809,7 +809,7 @@ struct Parser{
 				nextToken();
 				annotation=Annotation.mfree;
 			}
-			if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst=true;
+			if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
 		}else static if(language==psi){
 			if(ttype==Tok!"pure"){
 				nextToken();

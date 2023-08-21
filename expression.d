@@ -912,6 +912,18 @@ class CallExp: Expression{
 
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.eval(), narg=arg.eval();
+		// TODO: partially evaluate arbitrary functions
+		if(ntype.isClassical()){
+			if(auto ce2=cast(CallExp)ne){
+				if(auto id=cast(Identifier)ce2.e){
+					if(id.name=="dup"){
+						import ast.semantic_:isPreludeSymbol,PreludeSymbol;
+						if(isPreludeSymbol(id.meaning)==PreludeSymbol.dup)
+							return narg; // TODO: ok?
+					}
+				}
+			}
+		}
 		if(ne == e && narg == arg && ntype == type) return this;
 		return new CallExp(ne,narg,isSquare,isClassical_);
 	}

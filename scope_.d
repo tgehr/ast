@@ -336,9 +336,9 @@ abstract class Scope{
 			if(kind==Lookup.consuming){
 				bool doConsume=true;
 				if(auto vd=cast(VarDecl)meaning){
-					import ast.semantic_:typeConstBlockNote;
 					if(vd.typeConstBlocker){
 						error(format("cannot consume 'const' variable '%s'",id), id.loc);
+						import ast.semantic_:typeConstBlockNote;
 						typeConstBlockNote(vd,this);
 						doConsume=false;
 					}
@@ -352,7 +352,7 @@ abstract class Scope{
 					}
 				}
 				if(doConsume&&meaning.scope_){
-					if(auto vd=cast(VarDecl)meaning) assert(!vd.isConst);
+					assert(!meaning.isConst);
 					if(auto nmeaning=consume(meaning))
 						meaning=nmeaning;
 				}
@@ -970,7 +970,13 @@ class CapturingScope(T): NestedScope{
 	}
 	protected Declaration addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
 		if(kind==Lookup.probing) return null;
-		if(!meaning||!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
+		if(!meaning) return null;
+		auto type=id.typeFromMeaning(meaning);
+		if(type&&type.isClassical()&&id.byRef){
+			origin.error("cannot consume classical variable from outer scope", id.loc);
+			id.sstate=SemState.error;
+		}
+		if(!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
 		if(id.sstate==SemState.error) return null;
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
@@ -1027,14 +1033,13 @@ class CapturingScope(T): NestedScope{
 				}
 			}
 		}
-		auto type=id.typeFromMeaning(meaning);
 		if(!type) return null;
 		foreach(free;type.freeVars){
 			if(free.meaning)
 				addCapture(free,free.meaning,Lookup.constant,origin);
 		}
 		auto vd=cast(VarDecl)meaning;
-		bool isConstVar=vd&&vd.isConst||origin.isConst(vd);
+		bool isConstVar=meaning.isConst||(vd&&vd.typeConstBlocker)||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstVar;
 		if(type.hasQuantumComponent()){
 			if(origin.componentReplacements(meaning).length)
@@ -1042,7 +1047,11 @@ class CapturingScope(T): NestedScope{
 			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
 				if(isConstVar){
 					origin.error("cannot capture 'const' quantum variable", id.loc);
-					if(auto read=origin.isConst(vd))
+					if(vd&&vd.typeConstBlocker){
+						import ast.semantic_:typeConstBlockNote;
+						typeConstBlockNote(vd,this);
+					}
+					if(auto read=origin.isConst(meaning))
 						origin.note("variable was made 'const' here", read.loc);
 					id.sstate=SemState.error;
 					return null;

@@ -15,6 +15,7 @@ abstract class Declaration: Expression{
 	override string toString(){ return getName; }
 
 	bool isLinear(){ return true; }
+	bool isConst(){ return false; }
 
 	override Expression evalImpl(Expression ntype){ return this; }
 
@@ -77,7 +78,6 @@ class CompoundDecl: Expression{
 
 class VarDecl: Declaration{
 	Expression dtype;
-	bool isConst;
 	this(Identifier name){ super(name); }
 	override VarDecl copyImpl(CopyArgs args){
 		//enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
@@ -86,7 +86,7 @@ class VarDecl: Declaration{
 		if(dtype) r.dtype=dtype.copy(args);
 		return r;
 	}
-	override string toString(){ return (isConst?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
+	override string toString(){ return (isConst()?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
 	@property override string kind(){ return "variable"; }
 
 	override bool isLinear(){
@@ -99,9 +99,10 @@ class VarDecl: Declaration{
 }
 
 class Parameter: VarDecl{
+	bool isConst_;
 	this(bool isConst, Identifier name, Expression type){
 		super(name); this.dtype=type;
-		this.isConst=isConst;
+		this.isConst_=isConst;
 	}
 	override Parameter copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
@@ -109,6 +110,9 @@ class Parameter: VarDecl{
 	}
 	override bool isLinear(){
 		return !isConst&&(!vtype||!vtype.isClassical());
+	}
+	override bool isConst(){
+		return isConst_;
 	}
 	override string toString(){
 		static if(language==silq){

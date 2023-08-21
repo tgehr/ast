@@ -35,15 +35,13 @@ bool hasImplicitDup(Expression olhs,Scope sc){
 		if(id.meaning){
 			if(typeForDecl(id.meaning).isClassical())
 				return true;
-			if(auto vd=cast(VarDecl)id.meaning){
-				if(vd.isConst)
-					return true;
-			}
+			if(id.meaning.isConst)
+				return true;
 		}
 	}
 	// TODO: get rid of this
 	if(auto id=cast(Identifier)olhs){
-		if(auto meaning=cast(VarDecl)sc.lookup(id,false,false,Lookup.probing)){
+		if(auto meaning=sc.lookup(id,false,false,Lookup.probing)){
 			if(meaning.isConst||typeForDecl(meaning).isClassical)
 				return true;
 		}
