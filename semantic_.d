@@ -1640,6 +1640,7 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 		}
 	}
 	be.isSwap=true;
+	foreach(idx;chain(idx1[],idx2[])) idx.byRef=true;
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	be.e2=expressionSemantic(be.e2,econtext);
 	be.sstate=SemState.completed;
@@ -2321,7 +2322,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 			semanticDone=true;
 		}
 	}else enum semanticDone=false;
-	if(!semanticDone) be.e1=expressionSemantic(be.e1,context.nestConsumed);
+	if(!semanticDone) be.e1=expressionSemantic(be.e1,context/+.nestConsumed+/); // (hack: avoids implicit dup on IndexExp)
 	be.e2=expressionSemantic(be.e2,context.nest(cast(CatAssignExp)be?ConstResult.no:ConstResult.yes));
 	propErr(be.e1,be);
 	propErr(be.e2,be);
@@ -3508,6 +3509,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		auto id=new Identifier(crepls[replaceIndexLoc].name);
 		id.loc=idx.loc;
 		return expressionSemantic(id,context);
+	}
+	if(!idx.byRef&&!context.constResult){ // implicitly duplicate index
+		return expressionSemantic(dupExp(idx,idx.loc,context.sc),context);
 	}
 	return idx;
 }
