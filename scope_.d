@@ -332,7 +332,8 @@ abstract class Scope{
 
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq){
-			if(kind==Lookup.consuming&&meaning&&meaning.isLinear()){
+			if(!meaning) return meaning;
+			if(kind==Lookup.consuming){
 				bool doConsume=true;
 				if(auto vd=cast(VarDecl)meaning){
 					import ast.semantic_:typeConstBlockNote;
@@ -356,7 +357,7 @@ abstract class Scope{
 						meaning=nmeaning;
 				}
 			}
-			if(kind==Lookup.constant&&meaning&&meaning.isLinear()){
+			if(kind==Lookup.constant&&meaning.isLinear()){
 				if(!isConstHere(meaning))
 					blockConst(meaning,id);
 			}

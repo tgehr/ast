@@ -143,7 +143,7 @@ class FunctionDef: Declaration{
 	}
 
 	override bool isCompound(){ return true; }
-	override bool isLinear(){ return ftype && !ftype.isClassical(); }
+	override bool isLinear(){ return ftype ? !ftype.isClassical() : capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
 
 	@property override string kind(){ return "function definition"; }
 

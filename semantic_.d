@@ -17,6 +17,12 @@ Expression moveExp(Expression e){
 	return e;
 }
 
+Expression dupExp(Expression e){
+	// writeln("dupping ",e," ",e.loc);
+	// TODO: implement
+	return e;
+}
+
 void propErr(Expression e1,Expression e2){
 	if(e1.sstate==SemState.error) e2.sstate=SemState.error;
 }
@@ -595,7 +601,7 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
-	res.meaning=sc.lookup(res,false,false,Lookup.consuming);
+	res.meaning=sc.lookup(res,false,false,Lookup.constant);
 	if(!res.meaning){
 		res.sstate=SemState.error;
 	}else{
@@ -2790,7 +2796,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				auto nft=ft;
 				if(auto id=cast(Identifier)fun){
 					if(auto decl=cast(DatDecl)id.meaning){
-						if(auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.consuming)){
+						if(auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.constant)){
 							if(auto cty=cast(FunTy)typeForDecl(constructor)){
 								assert(isTypeTy(ft.cod));
 								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.annotation,true);
@@ -2863,7 +2869,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}else if(auto at=isRhs?isDataTyId(fun):null){
 		auto decl=at.decl;
 		assert(isType(fun));
-		auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.consuming);
+		auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.constant);
 		auto ty=cast(FunTy)typeForDecl(constructor);
 		if(ty&&decl.hasParams){
 			auto nce=cast(CallExp)fun;
@@ -3200,9 +3206,22 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	id.sstate=SemState.started;
 	auto meaning=id.meaning;
+	bool implicitDup=false;
+	Expression dupIfNeeded(Identifier result){
+		static if(language==silq){
+			if(implicitDup&&!result.calledDirectly){
+				if(result.sstate!=SemState.error) result.sstate=SemState.completed;
+				return expressionSemantic(dupExp(result),context);
+			}
+		}
+		return result;
+	}
 	if(!meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc);
-		meaning=lookupMeaning(id,context.constResult?Lookup.constant:Lookup.consuming,sc,true);
+		if(id.meaning)
+			implicitDup=!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
+		auto lookup=context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
+		meaning=lookupMeaning(id,lookup,sc,true);
 		if(id.sstate==SemState.error) return id;
 		if(!meaning){
 			if(auto r=builtIn(id,sc)){
@@ -3214,7 +3233,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 			sc.error(format("undefined identifier %s",id.name),id.loc);
 			id.sstate=SemState.error;
-			return id;
+			return dupIfNeeded(id);
 		}else{
 			static if(language==silq){
 				if(!id.indexedDirectly){
@@ -3260,10 +3279,9 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			if(!vd.initializer||vd.initializer.sstate!=SemState.completed)
 				id.sstate=SemState.error;
 			id.substitute=true;
-			return id;
 		}
 	}
-	return id;
+	return dupIfNeeded(id);
 }
 
 Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
