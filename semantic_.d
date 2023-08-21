@@ -3132,7 +3132,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	void setByRef(Expression var){
 		if(auto tpl=cast(TupleExp)var)
 			tpl.e.each!setByRef;
-		var.byRef=true;
+		if(auto id=cast(Identifier)var)
+			id.byRef=true;
 	}
 	setByRef(fe.var);
 	fe.var=expressionSemantic(fe.var,context.nestConsumed);
