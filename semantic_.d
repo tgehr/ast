@@ -903,9 +903,9 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 				fe.sstate=SemState.error;
 				converged=true;
 			}
-			if(state.forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in for loop",fe.loc);
-				foreach(decl;state.forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				fe.sstate=SemState.error;
 				converged=true;
@@ -948,9 +948,9 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 				we.sstate=SemState.error;
 				converged=true;
 			}
-			if(state.forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in while loop", we.loc);
-				foreach(decl;state.forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				we.sstate=SemState.error;
 				converged=true;
@@ -991,9 +991,9 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 				re.sstate=SemState.error;
 				converged=true;
 			}
-			if(state.forgetScope.forgottenVars.length){
+			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
-				foreach(decl;state.forgetScope.forgottenVars)
+				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
 					sc.note(format("variable '%s'",decl.name),decl.loc);
 				re.sstate=SemState.error;
 				converged=true;

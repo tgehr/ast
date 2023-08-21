@@ -593,8 +593,7 @@ abstract class Scope{
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								// TODO: automatically promote to quantum if possible
 								static if(language==silq){
-									if((sym.isLinear()&&!scopes[0].canForgetAppend(sym))|
-									   (osym.isLinear()&&!sc.canForgetAppend(osym))){
+									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
 										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
 										errors=true;
@@ -624,7 +623,7 @@ abstract class Scope{
 			foreach(sc;scopes[1..$]){
 				foreach(sym;sc.symtab){
 					if(sym.name.ptr !in symtab){
-						if(sym.isLinear()&&!sc.canForgetAppend(sym)){
+						if(!sc.canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
 						}
