@@ -23,12 +23,6 @@ bool isClassicalExp(Expression e){
 	static if(language==silq) return e.type&&e.subexpressions.all!(x=>!x.type||x.type.isClassical())&&e.isQfree()&&!e.consumes;
 	else return true;
 }
-bool hasImplicitDup(Expression olhs,Scope sc){
-	if(olhs.byRef) return false;
-	if(auto idx=cast(IndexExp)olhs)
-		return !olhs.byRef;
-	return false;
-}
 
 enum LowerDefineFlags{
 	none=0,
@@ -38,7 +32,6 @@ enum LowerDefineFlags{
 
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	bool validDefEntry(Expression e){
-		static if(flags&LowerDefineFlags.reverseMode) if(hasImplicitDup(e,sc)) return false;
 		return cast(Identifier)e||cast(IndexExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
@@ -276,14 +269,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res=new DefineExp(lhs,rhs);
 	}
 	Expression forget(){ return res=new ForgetExp(rhs,lhs); }
-	static if(reverseMode){
-		if(hasImplicitDup(olhs,sc)){ // TODO: automatically synthesize implicit dups in semantic
-			if(auto tpl=cast(TupleExp)unwrap(orhs))
-				if(tpl&&tpl.e.length==0) // TODO: this is a hack, support properly
-					return res=new DefineExp(lhs,rhs);
-			return forget();
-		}
-	}
 	if(auto arr=cast(ArrayExp)olhs){
 		auto newLhs=new TupleExp(arr.copy().e);
 		newLhs.loc=olhs.loc;
