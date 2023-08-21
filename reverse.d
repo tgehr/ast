@@ -26,33 +26,14 @@ bool isClassicalExp(Expression e){
 bool hasImplicitDup(Expression olhs,Scope sc){
 	if(olhs.byRef) return false;
 	if(auto idx=cast(IndexExp)olhs)
-		return true;
-	if(auto id=cast(Identifier)olhs){
-		if(isClassicalExp(olhs)){
-			if(olhs.type==unit) return false; // TODO: this is a hack, get rid of this
-			return true;
-		}
-		if(id.meaning){
-			if(typeForDecl(id.meaning).isClassical())
-				return true;
-			if(id.meaning.isConst)
-				return true;
-		}
-	}
-	// TODO: get rid of this
-	if(auto id=cast(Identifier)olhs){
-		if(auto meaning=sc.lookup(id,false,false,Lookup.probing)){
-			if(meaning.isConst||typeForDecl(meaning).isClassical)
-				return true;
-		}
-	}
+		return !olhs.byRef;
 	return false;
 }
 
 enum LowerDefineFlags{
 	none=0,
 	createFresh=1,
-	reverseMode=2, // TODO: just add implicit dups in semantic
+	reverseMode=2,
 }
 
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
