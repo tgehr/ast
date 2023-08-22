@@ -101,14 +101,17 @@ abstract class Expression: Node{
 	}do{
 		return FreeVars(this);
 	}
-	final bool hasFreeVar(string name)in{
+	final bool hasFreeVar(Id id)in{
 		assert(!!this);
 	}do{
 		foreach(var;freeVars){
-			if(var.name == name)
+			if(var.id == id)
 				return true;
 		}
 		return false;
+	}
+	final bool hasFreeVar(string name){
+		return hasFreeVar(Id.intern(name));
 	}
 	final bool hasAnyFreeVar(R)(R r){
 		foreach(var;freeVars){
@@ -339,20 +342,54 @@ class LiteralExp: Expression{
 	mixin VariableFree;
 }
 
+struct Id {
+	string str = null;
+
+	bool opCast(T: bool)() const pure @safe nothrow {
+		return !!str;
+	}
+
+	static Id intern(string s) @safe {
+		static string[string] uniq;
+		return fromInternedString(uniq.require(s, s));
+	}
+
+	static Id fromInternedString(string s) @safe nothrow {
+		Id r;
+		if(s.length > 0) r.str = s;
+		return r;
+	}
+
+	bool opEquals(Id other) const pure @safe nothrow {
+		// return str == other.str;
+		return str.ptr is other.str.ptr;
+	}
+
+	ulong toHash() const pure @safe nothrow {
+		// return hashOf(str);
+		return str ? hashOf(&str[0]) : 0;
+	}
+
+	string toString() const @safe pure {
+		return str;
+	}
+}
+
 class Identifier: Expression{
-	string name;
+	Id id;
+	@property string name(){return id.str;}
 	@property auto ptr(){return name.ptr;}
 	@property auto length(){return name.length;}
+	this(Id id){
+		this.id=id;
+	}
 	this(string name){
-		static string[string] uniq;
-		auto n=uniq.get(name,null);
-		if(n !is null) this.name = n;
-		else this.name = uniq[name] = name;
+		this(Id.intern(name));
 	}
 	override Identifier copyImpl(CopyArgs args){
 		Identifier r;
-		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.name); // TODO: this is a hack
-		else r=new Identifier(name);
+		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.id); // TODO: this is a hack
+		else r=new Identifier(id);
 		if(args.preserveSemantic){
 			r.meaning=meaning;
 			r.substitute=substitute;
@@ -419,7 +456,7 @@ class Identifier: Expression{
 	}
 	override bool opEquals(Object o){
 		if(auto r=cast(Identifier)o){
-			return name==r.name && classical==r.classical && meaning==r.meaning;
+			return id==r.id && classical==r.classical && meaning==r.meaning;
 		}
 		return false;
 	}
@@ -429,7 +466,7 @@ class Identifier: Expression{
 			assert(isType(this)||isQNumeric(this));
 			if(classical) return this;
 			if(!meaning) return varTy(name,ctypeTy,true);
-			auto r=new Identifier(name);
+			auto r=new Identifier(id);
 			r.classical=true;
 			r.type=getClassicalTy(type);
 			r.meaning=meaning;
@@ -445,7 +482,7 @@ class Identifier: Expression{
 				import ast.semantic_:typeForDecl;
 				auto prev=typeForDecl(meaning);
 				if(isQuantumTy(prev)){
-					auto r=new Identifier(name);
+					auto r=new Identifier(id);
 					r.classical=false;
 					r.meaning=meaning;
 					r.type=r.typeFromMeaning;
@@ -474,7 +511,7 @@ class Identifier: Expression{
 	override Expression evalImpl(Expression ntype){
 		if(substitute) return getInitializer().evalImpl(ntype);
 		if(ntype==type) return this;
-		auto r=new Identifier(name);
+		auto r=new Identifier(id);
 		r.meaning=meaning;
 		static if(language==silq){
 			r.classical=classical;

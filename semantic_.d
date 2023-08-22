@@ -276,7 +276,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			if(be.e2.sstate!=SemState.error||!sc.lookupHere(nid,false,Lookup.probing))
 				success&=sc.insert(vd);
 			id.meaning=vd;
-			id.name=vd.getName;
+			id.id=vd.getId;
 			id.scope_=sc;
 			return vd;
 		}
@@ -354,7 +354,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			vd.loc=id.loc;
 			success&=sc.insert(vd);
 			id.meaning=vd;
-			id.name=vd.getName;
+			id.id=vd.getId;
 			id.scope_=sc;
 			return vd;
 		}
@@ -926,7 +926,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		}
 		vd.loc=fe.var.loc;
 		fe.fescope_=fesc;
-		fe.var.name=vd.getName;
+		fe.var.id=vd.getId;
 		fe.loopVar=vd;
 		if(vd.name.name!="_"&&!fesc.insert(vd))
 			fe.sstate=vd.sstate=SemState.error;
@@ -1327,7 +1327,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(next,e);
 			if(id.meaning){
-				if(id.meaning.rename) id.name=id.meaning.rename.name;
+				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
@@ -1994,7 +1994,7 @@ struct ArrayConsumer{
 				id.scope_=tpl[3];
 				return;
 			}
-			if(id.meaning) id.name=id.meaning.name.name;
+			if(id.meaning) id.id=id.meaning.name.id;
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
 			assert(id.sstate!=SemState.completed);
@@ -2065,7 +2065,7 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 	foreach(idx;indicesToReplace)
 		if(auto id=getIdFromIndex(idx))
 			if(id.meaning&&id.meaning.rename)
-				id.name=id.meaning.rename.name;
+				id.id=id.meaning.rename.id;
 }
 }
 
@@ -2332,7 +2332,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 			}
 			if(meaning){
 				id.meaning=meaning;
-				id.name=meaning.getName;
+				id.id=meaning.getId;
 				id.type=id.typeFromMeaning;
 				id.scope_=sc;
 				id.sstate=SemState.completed;
@@ -2528,7 +2528,7 @@ Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
 	assert(isTuple||params.length==1);
 }do{
 	auto args=params.map!((p){
-		auto id=new Identifier(p.name.name);
+		auto id=new Identifier(p.name.id);
 		id.meaning=p;
 		id.loc=p.loc;
 		Expression r=id;
@@ -2919,11 +2919,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			ce=cast(CallExp)checkFunCall(ty);
 			assert(!!ce);
 			if(ce&&ce.sstate!=SemState.error){
-				auto id=new Identifier(constructor.name.name);
+				auto id=new Identifier(constructor.getId);
 				id.loc=fun.loc;
 				id.scope_=sc;
 				id.meaning=constructor;
-				id.name=constructor.getName;
 				id.scope_=sc;
 				id.type=ty;
 				id.sstate=SemState.completed;
@@ -3286,7 +3285,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 					meaning=asc.decl;
 		id.meaning=meaning;
 	}
-	id.name=meaning.getName;
+	id.id=meaning.getId;
 	propErr(meaning,id);
 	id.type=id.typeFromMeaning;
 	if(!id.type&&id.sstate!=SemState.error){
@@ -3346,7 +3345,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			auto meaning=aggrd.body_.ascope_.lookupHere(fe.f,false,Lookup.consuming);
 			if(!meaning) return noMember();
 			fe.f.meaning=meaning;
-			fe.f.name=meaning.getName;
+			fe.f.id=meaning.getId;
 			fe.f.scope_=sc;
 			fe.f.type=fe.f.typeFromMeaning;
 			if(fe.f.type&&aggrd.hasParams){

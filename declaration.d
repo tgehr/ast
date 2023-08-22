@@ -11,6 +11,7 @@ abstract class Declaration: Expression{
 	Scope scope_;
 	this(Identifier name){ this.name=name; }
 	override @property string kind(){ return "declaration"; }
+	final @property Id getId(){ auto r=rename?rename:name; return r?r.id:Id(); }
 	final @property string getName(){ auto r=rename?rename:name; return r?r.name:""; }
 	override string toString(){ return getName; }
 
@@ -279,7 +280,7 @@ class DatDecl: Declaration{
 	}do{
 		if(fd) return fd;
 		auto fparams=params.map!((dparam){
-			auto name=new Identifier(dparam.getName);
+			auto name=new Identifier(dparam.getId);
 			name.loc=dparam.name.loc;
 			auto param=new Parameter(dparam.isConst, name, dparam.dtype);
 			param.loc=dparam.loc;
@@ -287,14 +288,14 @@ class DatDecl: Declaration{
 			param.sstate=dparam.sstate;
 			return param;
 		}).array;
-		auto id=new Identifier(getName);
+		auto id=new Identifier(getId);
 		id.loc=this.loc;
 		id.meaning=this;
 		import ast.semantic_:typeForDecl;
 		id.type=typeForDecl(this);
 		id.sstate=SemState.completed;
 		auto ids=fparams.map!((fparam){
-			auto id=new Identifier(fparam.getName);
+			auto id=new Identifier(fparam.getId);
 			id.loc=fparam.loc;
 			id.meaning=fparam;
 			id.type=fparam.vtype;

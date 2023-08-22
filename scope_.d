@@ -649,12 +649,12 @@ abstract class Scope{
 	}
 
 	final Declaration addVariable(Declaration decl,Expression type,bool isFirstDef=false){
-		auto id=new Identifier(decl.name.name);
+		auto id=new Identifier(decl.name.id);
 		id.loc=decl.name.loc;
 		auto var=new VarDecl(id);
 		var.loc=decl.loc;
 		if(decl.rename){
-			var.rename=new Identifier(decl.rename.name);
+			var.rename=new Identifier(decl.rename.id);
 			var.rename.loc=decl.rename.loc;
 		}
 		if(auto d=symtabLookup(var.name,false)){
@@ -988,7 +988,7 @@ class CapturingScope(T): NestedScope{
 				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
-					auto recapture=new Identifier(capture.getName);
+					auto recapture=new Identifier(capture.getId);
 					recapture.loc=id.loc;
 					import ast.semantic_:lookupMeaning,typeForDecl;
 					lookupMeaning(recapture,kind,origin);
