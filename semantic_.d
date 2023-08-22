@@ -3230,10 +3230,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	if(!meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc);
-		auto isConst=id.meaning&&id.meaning.isConst;
+		auto nonLinear=id.meaning&&!id.meaning.isLinear();
 		if(id.meaning)
 			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
-		auto lookup=isConst||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
+		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
 		meaning=lookupMeaning(id,lookup,sc,true);
 		if(id.sstate==SemState.error) return id;
 		if(!meaning){
