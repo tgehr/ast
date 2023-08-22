@@ -3230,7 +3230,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	if(!meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc);
-		auto nonLinear=id.meaning&&!id.meaning.isLinear();
+		auto nonLinear=id.meaning&&(!id.byRef&&!id.meaning.isLinear()||id.meaning.isConst);
 		if(id.meaning)
 			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
 		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
