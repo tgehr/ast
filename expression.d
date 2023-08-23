@@ -1290,6 +1290,31 @@ class IteExp: Expression{
 	}
 }
 
+class WithExp: Expression{
+	CompoundExp trans;
+	CompoundExp bdy;
+	this(CompoundExp trans, CompoundExp bdy){
+		this.trans=trans;
+		this.bdy=bdy;
+	}
+	override WithExp copyImpl(CopyArgs args){
+		return new WithExp(trans.copy(),bdy.copy());
+	}
+	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()); }
+	override @property string kind(){ return "with"; }
+	override bool isCompound(){ return true; }
+
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree; // TODO
+	override int componentsImpl(scope int delegate(Expression) dg){
+		if(auto r=dg(trans)) return r;
+		return dg(bdy);
+	}
+	// semantic information
+	CompoundExp itrans; // inverse transform
+}
+
+
 class RepeatExp: Expression{
 	Expression num;
 	CompoundExp bdy;
@@ -1745,6 +1770,7 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 	static if(unanalyzed) if(auto idx=cast(IndexExp)s) return f(idx,forward!args);
 	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
+	if(auto with_=cast(WithExp)s) return f(with_,forward!args);
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
 	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
 

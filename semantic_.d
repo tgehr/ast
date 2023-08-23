@@ -825,6 +825,27 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	return ite;
 }
 
+Expression statementSemanticImpl(WithExp with_,Scope sc){
+	// TODO: disallow early returns
+	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
+	sc.merge(false,with_.trans.blscope_);
+	propErr(with_.trans,with_);
+	with_.bdy=compoundExpSemantic(with_.bdy,sc);
+	sc.merge(false,with_.bdy.blscope_);
+	propErr(with_.trans,with_);
+	if(with_.trans.sstate==SemState.completed){
+		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,sc,false)); // TODO: fix (this is incomplete)
+		with_.itrans.loc=with_.trans.loc;
+		with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
+		sc.merge(false,with_.itrans.blscope_);
+		if(with_.itrans.sstate==SemState.error){
+			sc.note("unable to reverse with transformation",with_.itrans.loc);
+		}
+		propErr(with_.itrans,with_);
+	}
+	return with_;
+}
+
 Expression statementSemanticImpl(ReturnExp ret,Scope sc){
 	return returnExpSemantic(ret,sc);
 }

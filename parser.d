@@ -730,6 +730,7 @@ struct Parser{
 			case Tok!"import": return parseImport();
 			case Tok!"return": return parseReturn();
 			case Tok!"if": return parseIte();
+			static if(language==silq) case Tok!"with": return parseWith();
 			case Tok!"repeat": return parseRepeat();
 			case Tok!"for": return parseFor();
 			case Tok!"while": return parseWhile();
@@ -966,6 +967,31 @@ struct Parser{
 			}
 		}
 		return res=New!IteExp(cond,then,othw);
+	}
+	WithExp parseWith(){
+		mixin(SetLoc!WithExp);
+		expect(Tok!"with");
+		CompoundExp trans;
+		if(ttype!=Tok!"{"){
+			auto transExp=parseCondition();
+			trans=New!CompoundExp([transExp]);
+			trans.loc=transExp.loc;
+		}else{
+			trans=parseCompoundExp();
+		}
+		CompoundExp bdy=null;
+		if(ttype==Tok!"do"){
+			nextToken();
+			if(ttype!=Tok!"{"){
+				auto bdyExp = parseExpression();
+				bdy=New!CompoundExp([bdyExp]);
+				bdy.loc=bdyExp.loc;
+			}
+		}else if(ptok.type==Tok!"}"){
+			expect(Tok!"do");
+		}
+		if(!bdy) bdy=parseCompoundExp();
+		return res=New!WithExp(trans,bdy);
 	}
 	RepeatExp parseRepeat(){
 		mixin(SetLoc!RepeatExp);
