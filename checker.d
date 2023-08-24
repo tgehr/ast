@@ -161,6 +161,7 @@ class Checker {
 
 	// Check statement, return true iff it definitely returns
 	bool visStmt(ast_exp.Expression e) {
+		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
 		if(auto et = cast(ast_exp.DefExp) e) return implStmt(et);
 		static foreach(op; assignOps) {
 			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
@@ -387,12 +388,16 @@ class Checker {
 		assert(merged.length == sc.mergedVars.length);
 	}
 
-	bool implStmt(ast_exp.DefExp e) {
-		auto lhs = e.initializer.e1;
-		auto rhs = e.initializer.e2;
+	bool implStmt(ast_exp.BinaryExp!(Tok!":=") e){
+		auto lhs = e.e1;
+		auto rhs = e.e2;
 		visExpr(rhs);
 		visLhs(lhs);
 		return false;
+	}
+
+	bool implStmt(ast_exp.DefExp e) {
+		return implStmt(e.initializer);
 	}
 
 	void visLhs(ast_exp.Expression e) {
