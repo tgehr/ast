@@ -280,12 +280,40 @@ class Checker {
 		if(retFalse) {
 			assert(!ifFalse.nscope.mergedVars);
 		}
+		if(retTrue && !retFalse) {
+			visMerge(ifFalse, e);
+		}
+		if(!retTrue && retFalse) {
+			visMerge(ifTrue, e);
+		}
 		if(!retTrue && !retFalse) {
 			visMerge(ifTrue, ifFalse, e);
 		}
 		ifTrue.checkEmpty();
 		ifFalse.checkEmpty();
 		return retTrue && retFalse;
+	}
+
+	bool implStmt(ast_exp.WithExp e) {
+		Checker trans, bdy, itrans;
+
+		visSplit(trans, e.trans.blscope_, e);
+		auto retTrans = trans.visCompoundStmt(e.trans);
+		assert(!retTrans);
+		visMerge(trans, e);
+
+		visSplit(bdy, e.bdy.blscope_, e);
+		auto retBdy = bdy.visCompoundStmt(e.bdy);
+		assert(!retBdy);
+		visMerge(bdy, e);
+
+		assert(!!e.itrans);
+		visSplit(itrans, e.itrans.blscope_, e);
+		auto retItrans = itrans.visCompoundStmt(e.bdy);
+		assert(!retItrans);
+		visMerge(itrans, e);
+
+		return false;
 	}
 
 	bool implStmt(ast_exp.WhileExp e) {
@@ -588,7 +616,7 @@ class Checker {
 			auto name = decl.mergedInto.getId;
 			auto t = name in mergedVars;
 			assert(t, format("ERROR: Merged variable %s missing in if-true", name));
-			assert(decl.mergedInto is t.outer, format("ERROR: Merged variable %s splitFrom mismatch", name));
+			assert(decl.mergedInto is t.outer, format("ERROR: Merged variable %s mergedInto mismatch", name));
 			t.dFalse = decl;
 		}
 
@@ -599,6 +627,55 @@ class Checker {
 			visExpr(typeForDecl(outer));
 			ifTrue.getVar(t.dTrue, false, "mergedVars-if-true", cause);
 			ifFalse.getVar(t.dFalse, false, "mergedVars-if-false", cause);
+			defineVar(outer, "mergedVars", cause);
+		}
+	}
+
+	void visSplit(ref Checker nested, ast_scope.NestedScope scNested, ast_exp.Expression cause) {
+		assert(scNested is nscope || scNested.parent is nscope);
+		nested = new Checker(scNested, this);
+
+		struct Pair {
+			ast_decl.Declaration outer, nested;
+		}
+		IdMap!Pair splitVars;
+		foreach(decl; scNested.splitVars) {
+			assert(decl.scope_ is scNested);
+			auto outer = decl.splitFrom;
+			assert(outer.scope_ is nscope);
+			splitVars[outer.getId] = Pair(outer, decl);
+		}
+
+		foreach(name, p; splitVars) {
+			auto vNested = p.nested;
+			auto vtype = ast_sem.typeForDecl(p.outer);
+			assert(typeForDecl(vNested) == vtype, format("ERROR: Split variable %s changed type in nested scope", name));
+			getVar(p.outer, false, "splitVars", cause);
+			nested.defineVar(vNested, "splitVars-nested", cause);
+		}
+
+		// Make sure the merged types are evaluated in the outer scope.
+		foreach(decl; scNested.mergedVars) {
+			visExpr(typeForDecl(decl.mergedInto));
+		}
+	}
+
+	void visMerge(Checker nested, ast_exp.Expression cause) {
+		auto scNested = nested.nscope;
+
+		struct Pair {
+			ast_decl.Declaration outer, nested;
+		}
+		IdMap!Pair mergedVars;
+		foreach(decl; scNested.mergedVars) {
+			mergedVars[decl.mergedInto.getId] = Pair(decl.mergedInto, decl);
+		}
+
+		foreach(name, p; mergedVars) {
+			auto outer = p.outer;
+			// TODO types as part of merge result?
+			visExpr(typeForDecl(outer));
+			nested.getVar(p.nested, false, "mergedVars-nested", cause);
 			defineVar(outer, "mergedVars", cause);
 		}
 	}
