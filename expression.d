@@ -36,12 +36,13 @@ abstract class Expression: Node{
 		auto self=cast(T)this;
 		auto r=self.copyImpl(args);
 		assert(!!r);
+		r.loc=loc;
 		if(args.preserveSemantic){
 			r.sstate=sstate;
 			r.type=type;
+			r.constLookup=constLookup;
 		}
 		r.brackets=brackets;
-		r.loc=loc;
 		r.byRef=byRef;
 		return r;
 	}
@@ -425,7 +426,13 @@ class Identifier: Expression{
 					if(auto r=subst[name].getClassical())
 						return r;
 			}
-			return subst[name];
+			auto result=subst[name];
+			if(result.constLookup!=constLookup){
+				Expression.CopyArgs cargs={preserveSemantic: true};
+				result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
+				result.constLookup=constLookup;
+			}
+			return result;
 		}
 		return this;
 	}
