@@ -1,4 +1,5 @@
 module ast.checker;
+static if(imported!"astopt".language==imported!"astopt".silq):
 
 import std.stdio: stderr;
 import std.array: Appender, appender, array;
