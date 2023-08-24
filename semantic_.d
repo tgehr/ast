@@ -813,11 +813,14 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	propErr(ite.othw,ite);
 	NestedScope[] scs;
 	if(!quantumControl){
-		if(definitelyReturns(ite.then)) scs=sc.activeNestedScopes=[ite.othw.blscope_];
-		else if(definitelyReturns(ite.othw)) scs=sc.activeNestedScopes=[ite.then.blscope_];
-		else scs=[ite.then.blscope_,ite.othw.blscope_];
-	}else scs=[ite.then.blscope_,ite.othw.blscope_];
-	if(sc.merge(quantumControl,scs)){
+		assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
+		foreach(branch;only(ite.then,ite.othw)){
+			if(!definitelyReturns(branch)) scs~=branch.blscope_;
+			else branch.blscope_.close();
+		}
+		sc.activeNestedScopes=scs;
+	}else scs=sc.activeNestedScopes;
+	if(scs.length && sc.merge(quantumControl,scs)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.sstate=SemState.error;
 	}
