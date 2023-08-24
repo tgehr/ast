@@ -171,16 +171,22 @@ class Checker {
 		return ast_exp.dispatchStm!((auto ref e)=>this.implStmt(e))(e);
 	}
 
-	void visCompoundValue(ast_exp.CompoundExp e) {
+	void visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) {
 		assert(e.blscope_ is nscope);
 		assert(e.s.length > 0);
 		foreach(stmt; e.s[0..$-1]) {
 			bool r = visStmt(stmt);
-			assert(!r, "early return in compound expression");
+			assert(!r, "early return in compound expression ("~causeType~")");
 		}
 		visExpr(e.s[$-1]);
+		if(constLookup) {
+			expectConst(e.s[$-1], causeType);
+		} else {
+			expectMoved(e.s[$-1], causeType);
+		}
+
 		foreach(decl; e.blscope_.forgottenVars) {
-			getVar(decl, false, "forgottenVars", e);
+			getVar(decl, false, "forgottenVars ("~causeType~")", e);
 		}
 	}
 
@@ -690,21 +696,12 @@ class Checker {
 		assert(cast(ast_ty.BoolTy) e.cond.type);
 		visExpr(e.cond);
 
-		bool isLifted = e.constLookup;
-		if(e.constLookup) {
-			expectConst(e.then, "if-true");
-			expectConst(e.othw, "if-false");
-		} else {
-			expectMoved(e.then, "if-true");
-			expectMoved(e.othw, "if-false");
-		}
-
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
 
 		visExpr(e.type);
-		ifTrue.visCompoundValue(e.then);
-		ifFalse.visCompoundValue(e.othw);
+		ifTrue.visCompoundValue(e.then, "if-true", e.constLookup);
+		ifFalse.visCompoundValue(e.othw, "if-false", e.constLookup);
 
 		assert(ifTrue.nscope.mergedVars.length == 0);
 		ifTrue.checkEmpty();
