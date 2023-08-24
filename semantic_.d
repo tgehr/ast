@@ -1663,8 +1663,11 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 	be.isSwap=true;
 	foreach(idx;chain(idx1[],idx2[])) idx.byRef=true;
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
+	be.e1=expressionSemantic(be.e1,econtext);
+	propErr(be.e1,be);
+	propErr(be.e1,be.e2);
 	be.e2=expressionSemantic(be.e2,econtext);
-	be.sstate=SemState.completed;
+	if(be.sstate!=SemState.error) be.sstate=SemState.completed;
 	return be;
 }
 
