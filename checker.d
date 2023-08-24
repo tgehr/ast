@@ -842,15 +842,15 @@ class Checker {
 
 	static foreach(op;binops ~ cmpops ~ boolops)
 	void implExpr(ast_exp.BinaryExp!(Tok!op) e) {
-		expectConst(e.e1, "BinaryExp LHS");
-		expectConst(e.e2, "BinaryExp RHS");
+		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
+		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
 
 	static foreach(op;unops)
 	void implExpr(ast_exp.UnaryExp!(Tok!op) e) {
-		expectConst(e.e, "UnaryExp argument");
+		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
 		visExpr(e.e);
 	}
 
