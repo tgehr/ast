@@ -3236,12 +3236,15 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
 		return id;
 	}
+	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
 	auto meaning=id.meaning;
 	bool implicitDup=false;
 	Expression dupIfNeeded(Identifier result){
 		static if(language==silq){
-			if(implicitDup&&!result.calledDirectly){
+			if(implicitDup){
+				result.constLookup=true;
+				if(result.calledDirectly||result.indexedDirectly) return result;
 				if(result.sstate!=SemState.error) result.sstate=SemState.completed;
 				return expressionSemantic(dupExp(result,result.loc,context.sc),context);
 			}
@@ -4205,26 +4208,23 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	scope(success){
 		static if(language==silq){
 			if(!context.constResult) sc.resetConst(constSave);
-			expr.constLookup=context.constResult;
-			if(expr&&expr.sstate!=SemState.error){
-				if(context.constResult&&!expr.isLifted(sc)&&!expr.type.isClassical()){
-					sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
-					expr.sstate=SemState.error;
-				}else{
-					bool consumesIdentifier(){
-						auto id=cast(Identifier)expr;
-						if(!id||!id.meaning) return false;
-						return id.meaning.isLinear();
-					}
-					if(!context.constResult&&context.inType&&consumesIdentifier){
+			if(expr.sstate!=SemState.error){
+				assert(!!expr.type);
+				if(auto id=cast(Identifier)expr){
+					auto consumesIdentifier=!id.constLookup&&id.meaning;
+					if(context.inType&&consumesIdentifier){
 						sc.error("cannot consume variables within types",expr.loc);
 						expr.sstate=SemState.error;
-					}else{
-						assert(!!expr.type);
-						expr.sstate=SemState.completed;
+					}
+				}else{
+					expr.constLookup=context.constResult;
+					if(expr.constLookup&&!expr.isLifted(sc)&&!expr.type.isClassical()){
+						sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+						expr.sstate=SemState.error;
 					}
 				}
-			}
+				if(expr.sstate!=SemState.error) expr.sstate=SemState.completed;
+			}else expr.constLookup=context.constResult;
 			if(expr.type&&unrealizable(expr.type)){
 				sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
 				expr.sstate=SemState.error;
