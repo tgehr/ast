@@ -933,6 +933,8 @@ void checkFunction(ast_decl.FunctionDef fd) {
 		sc.defineVar(decl, "param", decl.name);
 	}
 	sc.visExpr(fd.ret);
-	bool r = sc.visStmt(fd.body_);
-	assert(r, format("ERROR: Function doesn't definitely return: << %s >>", fd));
+	if(fd.body_) {
+		bool r = sc.visStmt(fd.body_);
+		assert(r, format("ERROR: Function doesn't definitely return: << %s >>", fd));
+	}
 }
