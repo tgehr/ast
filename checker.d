@@ -212,19 +212,18 @@ class Checker {
 		}
 
 		bool r = sc.visCompoundStmt(e);
-		if(r) {
-			assert(!sc.nscope.mergedVars, format("ERROR: CompoundExp definitely returns but has mergedVars on %s: << %s >>", e.loc, e));
-		}
 
-		foreach(decl; sc.nscope.mergedVars) {
-			assert(decl.scope_ is sc.nscope);
-			auto outer = decl.mergedInto;
-			assert(outer.scope_ is nscope);
-			assert(outer.mergedFrom == [decl]);
-			sc.getVar(decl, false, "mergedVars", e);
-			defineVar(outer, "mergedVars", e);
+		if(!r) {
+			foreach(decl; sc.nscope.mergedVars) {
+				assert(decl.scope_ is sc.nscope);
+				auto outer = decl.mergedInto;
+				assert(outer.scope_ is nscope);
+				assert(outer.mergedFrom == [decl]);
+				sc.getVar(decl, false, "mergedVars", e);
+				defineVar(outer, "mergedVars", e);
+			}
+			sc.checkEmpty();
 		}
-		sc.checkEmpty();
 
 		return r;
 	}
@@ -232,8 +231,7 @@ class Checker {
 	bool visCompoundStmt(ast_exp.CompoundExp e) {
 		bool r = false;
 		foreach(i, sube; e.s) {
-			r = visStmt(sube);
-			if(r) break;
+			r |= visStmt(sube);
 		}
 		if(e.blscope_) {
 			foreach(decl; e.blscope_.forgottenVars) {
@@ -262,13 +260,14 @@ class Checker {
 		foreach(decl; e.forgottenVars) {
 			getVar(decl, false, "forgottenVars", e);
 		}
+		checkEmpty();
 		return true;
 	}
 
 	bool implStmt(ast_exp.AssertExp e) {
 		expectConst(e.e, "assert condition");
 		visExpr(e.e);
-		return false;
+		return ast_sem.isFalse(e.e);
 	}
 
 	bool implStmt(ast_exp.IteExp e) {
@@ -327,14 +326,14 @@ class Checker {
 		expectConst(e.cond, "while condition");
 		visExpr(e.cond);
 		visLoop(e.bdy, null);
-		return false;
+		return ast_sem.isTrue(e.cond);
 	}
 
 	bool implStmt(ast_exp.RepeatExp e) {
 		expectConst(e.num, "repeat count");
 		visExpr(e.num);
-		visLoop(e.bdy, null);
-		return false;
+		auto retBdy = visLoop(e.bdy, null);
+		return retBdy && ast_sem.isPositive(e.num);
 	}
 
 	bool implStmt(ast_exp.ForExp e) {
@@ -350,7 +349,7 @@ class Checker {
 		return false;
 	}
 
-	void visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar) {
+	bool visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar) { // (result: loop body definitely returns)
 		auto sc = bdy.blscope_;
 		assert(sc.parent is nscope);
 
@@ -379,7 +378,6 @@ class Checker {
 		}
 
 		bool r = sub.visCompoundStmt(bdy);
-		assert(!r, "TODO loop body definitely returns");
 
 		foreach(inner1; sc.mergedVars) {
 			auto id = inner1.getId;
@@ -392,6 +390,7 @@ class Checker {
 			defineVar(outer1, "mergedVars", bdy);
 		}
 		assert(merged.length == sc.mergedVars.length);
+		return r;
 	}
 
 	bool implStmt(ast_exp.BinaryExp!(Tok!":=") e){

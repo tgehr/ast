@@ -4530,32 +4530,33 @@ Expression typeForDecl(Declaration decl){
 	return unit; // TODO
 }
 
+bool isZero(Expression e){
+	if(auto tae=cast(TypeAnnotationExp)e)
+		return isZero(tae.e);
+	if(auto le=cast(LiteralExp)e)
+		if(le.lit.type==Tok!"0")
+			if(le.lit.str=="0")
+				return true;
+	return false;
+}
+alias isFalse=isZero;
+bool isTrue(Expression e){
+	if(auto le=cast(LiteralExp)e)
+		if(le.lit.type==Tok!"0")
+			return le.lit.str!="0";
+	return false;
+}
+bool isPositive(Expression e){
+	if(isZero(e)) return false;
+	if(auto le=cast(LiteralExp)e)
+		if(le.lit.type==Tok!"0")
+			return le.lit.str[0]!='-';
+	return false;
+}
+
 bool definitelyReturns(Expression e){
 	if(auto ret=cast(ReturnExp)e)
 		return true;
-	bool isZero(Expression e){
-		if(auto tae=cast(TypeAnnotationExp)e)
-			return isZero(tae.e);
-		if(auto le=cast(LiteralExp)e)
-			if(le.lit.type==Tok!"0")
-				if(le.lit.str=="0")
-					return true;
-		return false;
-	}
-	alias isFalse=isZero;
-	bool isTrue(Expression e){
-		if(auto le=cast(LiteralExp)e)
-			if(le.lit.type==Tok!"0")
-				return le.lit.str!="0";
-		return false;
-	}
-	bool isPositive(Expression e){
-		if(isZero(e)) return false;
-		if(auto le=cast(LiteralExp)e)
-			if(le.lit.type==Tok!"0")
-				return le.lit.str[0]!='-';
-		return false;
-		}
 	if(auto ae=cast(AssertExp)e)
 		return isFalse(ae.e);
 	if(auto oe=cast(ObserveExp)e)
