@@ -544,7 +544,7 @@ class Checker {
 	void getFunc(ast_decl.FunctionDef fd, bool isBorrow, ast_exp.Expression causeExpr) {
 		foreach(decl; fd.capturedDecls) {
 			auto ty = typeForDecl(decl);
-			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty);
+			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty) || imported!"astopt".allowUnsafeCaptureConst && decl.isConst();
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}
