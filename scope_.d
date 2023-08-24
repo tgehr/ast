@@ -578,7 +578,7 @@ abstract class Scope{
 				if(sym.name.ptr !in sc.symtab){
 					removeSym();
 					static if(language==silq){
-						if(sym.isLinear()&&!scopes[0].canForgetAppend(sym)){
+						if(!scopes[0].canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
 						}

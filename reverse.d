@@ -830,7 +830,7 @@ ComputationClass classifyStatement(Expression e){
 		}
 		auto classifyBody(CompoundExp e){
 			static if(language==silq)
-				if(e.blscope_&&e.blscope_.forgottenVars.length) return unsupported;
+				if(e.blscope_&&e.blscope_.forgottenVars.any!(d=>d.isLinear())) return unsupported;
 			bool anyQuantum=false;
 			bool anyMixed=false;
 			bool anyUnsupported=false;
@@ -931,7 +931,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		auto res=new CompoundExp(reverseStatements(ce.s,sc,unchecked));
 		res.loc=ce.loc;
 		static if(language==silq){
-			if(ce.blscope_&&ce.blscope_.forgottenVars.length){
+			if(ce.blscope_&&ce.blscope_.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("reversal of implicit forget not supported yet",ce.loc);
 				res.sstate=SemState.error;
 			}
