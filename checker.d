@@ -176,13 +176,16 @@ class Checker {
 		assert(e.s.length > 0);
 		foreach(stmt; e.s[0..$-1]) {
 			bool r = visStmt(stmt);
-			assert(!r, "early return in compound expression ("~causeType~")");
+			assert(!cast(ast_exp.ReturnExp)stmt, "early return in compound expression ("~causeType~")"); // TODO: check is incomplete
 		}
-		visExpr(e.s[$-1]);
-		if(constLookup) {
-			expectConst(e.s[$-1], causeType);
-		} else {
-			expectMoved(e.s[$-1], causeType);
+		assert(!cast(ast_exp.ReturnExp)e.s[$-1], "early return in compound expression ("~causeType~")"); // TODO: check is incomplete
+		if(!ast_sem.definitelyReturns(e.s[$-1])){
+			visExpr(e.s[$-1]);
+			if(constLookup) {
+				expectConst(e.s[$-1], causeType);
+			} else {
+				expectMoved(e.s[$-1], causeType);
+			}
 		}
 
 		foreach(decl; e.blscope_.forgottenVars) {

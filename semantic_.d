@@ -3047,11 +3047,10 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		if(inType) return expressionSemantic(branch,context);
 		if(auto ae=cast(AssertExp)branch){
 			branch=statementSemantic(branch,sc);
-			if(auto lit=cast(LiteralExp)ae.e)
-				if(lit.lit.type==Tok!"0" && lit.lit.str=="0"){
-					branch.type=null;
-					++numBottom;
-				}
+			if(isZero(ae.e)){
+				branch.type=null;
+				++numBottom;
+			}
 		}else branch=expressionSemantic(branch,context);
 		return branch;
 	}
