@@ -1780,7 +1780,7 @@ alias Exp=Expression;
 
 
 private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
-	assert(0,text("unknown declaration: ",typeid(s)," ",s));
+	assert(0,text("unknown declaration: ",s?typeid(s):null," ",s));
 }
 auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,auto ref T args){
 	import core.lifetime:forward;
@@ -1798,7 +1798,7 @@ auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,aut
 
 
 private noreturn unknownStmError(T...)(Expression s,auto ref T args){
-	assert(0,text("unknown statement: ",typeid(s)," ",s));
+	assert(0,text("unknown statement: ",s?typeid(s):null," ",s));
 }
 auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T...)(Expression s,auto ref T args){
 	import core.lifetime:forward;
@@ -1836,7 +1836,7 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 
 
 private noreturn unknownExpError(T...)(Expression e,auto ref T args){
-	assert(0,text("unknown expression: ",typeid(e)," ",e));
+	assert(0,text("unknown expression: ",e?typeid(e):null," ",e));
 }
 auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T...)(Expression e,auto ref T args){
 	import core.lifetime:forward;
