@@ -282,30 +282,22 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}
 		if(auto id=cast(Identifier)be.e1){
 			auto vd=makeVar(id);
-			auto de=new SingleDefExp(vd,be);
-			de.loc=be.loc;
-			propErr(vd,de);
-			return de;
+			propErr(vd,be);
+			return be;
 		}else if(auto tpl=cast(TupleExp)be.e1){
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
 				if(auto id=cast(Identifier)exp) vds~=makeVar(id);
 				else goto LbadDefLhs;
 			}
-			auto de=new MultiDefExp(vds,be);
-			de.loc=be.loc;
-			foreach(vd;vds) if(vd) propErr(vd,de);
-			return de;
+			foreach(vd;vds) if(vd) propErr(vd,be);
+			return be;
 		}else if(auto ce=cast(CallExp)be.e1){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				goto LbadDefLhs;
 			bool allConst=iota(ft.nargs).all!(i=>ft.isConstForReverse[i]);
-			if(allConst){
-				auto d=new MultiDefExp([],be);
-				d.loc=be.loc;
-				return d;
-			}
+			if(allConst) return be;
 			bool allMoved=iota(ft.nargs).all!(i=>!ft.isConstForReverse[i]);
 			if(auto tpl=cast(TupleExp)ce.arg){
 				if(allMoved) goto LbadDefLhs;
@@ -316,25 +308,17 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 					if(auto id=cast(Identifier)exp) vds~=makeVar(id);
 					else goto LbadDefLhs;
 				}
-				auto de=new MultiDefExp(vds,be);
-				de.loc=be.loc;
-				propErr(be,de);
-				foreach(vd;vds) if(vd) propErr(vd,de);
-				return de;
+				foreach(vd;vds) if(vd) propErr(vd,be);
+				return be;
 			}
 			if(!allMoved) goto LbadDefLhs;
 			if(auto id=cast(Identifier)ce.arg){
 				auto vd=makeVar(id);
-				auto de=new SingleDefExp(vd,be);
-				de.loc=be.loc;
-				propErr(be,de);
-				propErr(vd,de);
-				return de;
+				propErr(vd,be);
+				return be;
 			}else goto LbadDefLhs;
 		}else if(cast(IndexExp)be.e1){
-			auto de=new SingleDefExp(null,be);
-			de.loc=be.loc;
-			return de;
+			return be;
 		}else LbadDefLhs:{
 			if(be.sstate!=SemState.error){
 				sc.error("invalid definition left-hand side",be.e1.loc);
@@ -404,9 +388,6 @@ Expression toplevelSemanticImpl(DatDecl dd,Scope sc){
 	return datDeclSemantic(dd,sc);
 }
 Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
-	return defineOrAssignSemantic(expr,sc);
-}
-Expression toplevelSemanticImpl(DefExp expr,Scope sc){
 	return defineOrAssignSemantic(expr,sc);
 }
 Expression toplevelSemanticImpl(CommaExp ce,Scope sc){
@@ -1307,7 +1288,7 @@ Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 	if(!isPresemantic){
-		id.meaning=context.sc.lookupHere(id,true,Lookup.probing); // TODO: create variable and insert it here
+		// TODO: create variable and insert it here?
 		if(context.type){
 			id.type=context.type;
 		}else id.sstate=SemState.error;
@@ -1837,10 +1818,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}else badUnpackLhs=true;
 		}
 	}
-	auto de=cast(DefExp)makeDeclaration(be,success,sc);
+	auto de=cast(DefineExp)makeDeclaration(be,success,sc);
 	static if(language==silq) if(badUnpackLhs) assert(!de||de.sstate==SemState.error);
 	if(!de) be.sstate=SemState.error;
-	assert(success && de && de.initializer is be || !de||de.sstate==SemState.error);
+	assert(success && de is be || !de||de.sstate==SemState.error);
 	auto tt=be.e2.type?be.e2.type.isTupleTy:null;
 	if(be.e2.sstate==SemState.completed){
 		auto tpl=cast(TupleExp)be.e1;
@@ -1853,7 +1834,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			de.setType(be.e2.type);
 			de.setInitializer();
 			if(de.sstate!=SemState.error){
-				foreach(i,vd;de.decls){
+				int i=0;
+				foreach(vd;&de.varDecls){
+					scope(success) i++;
 					if(vd){
 						auto nvd=varDeclSemantic(vd,sc);
 						assert(nvd is vd);
@@ -1887,7 +1870,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		foreach(id;be.e2.type.freeIdentifiers){
 			assert(!!id.meaning);
 			auto blocker=r;
-			if(auto sde=cast(SingleDefExp)blocker) if(sde.decl) blocker=sde.decl;
+			//if(auto sde=cast(SingleDefExp)blocker) if(sde.decl) blocker=sde.decl;
 			typeConstBlock(id.meaning,blocker,sc);
 		}
 	}
@@ -2443,7 +2426,7 @@ Expression assignSemantic(Expression e,Scope sc)in{
 }
 
 bool isDefineOrAssign(Expression e){
-	return isAssignment(e)||cast(DefineExp)e||cast(DefExp)e;
+	return isAssignment(e)||cast(DefineExp)e;
 }
 
 Expression defineOrAssignSemantic(Expression e,Scope sc)in{
@@ -2451,7 +2434,6 @@ Expression defineOrAssignSemantic(Expression e,Scope sc)in{
 }do{
 	if(isAssignment(e)) return assignSemantic(e,sc);
 	if(auto be=cast(DefineExp)e) return defineSemantic(be,sc);
-	if(auto de=cast(DefExp)e) return defineOrAssignSemantic(de.initializer,sc); // (for copied functions)
 	assert(0);
 }
 

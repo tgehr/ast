@@ -163,7 +163,6 @@ class Checker {
 	// Check statement, return true iff it definitely returns
 	bool visStmt(ast_exp.Expression e) {
 		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
-		if(auto et = cast(ast_exp.DefExp) e) return implStmt(et);
 		static foreach(op; assignOps) {
 			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
 				return implStmt(et);
@@ -403,10 +402,6 @@ class Checker {
 		visExpr(rhs);
 		visLhs(lhs);
 		return false;
-	}
-
-	bool implStmt(ast_exp.DefExp e) {
-		return implStmt(e.initializer);
 	}
 
 	void visLhs(ast_exp.Expression e) {

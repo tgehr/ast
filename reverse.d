@@ -814,10 +814,6 @@ ComputationClass classifyStatement(Expression e){
 					return ComputationClass.quantum;
 			return classifyExpression(de.e2);
 		}
-		if(auto de=cast(DefExp)e){
-			assert(!!de.initializer);
-			return classifyStatement(de.initializer);
-		}
 		if(auto ae=cast(AssignExp)e) return unsupported;
 		if(isOpAssignExp(e)){
 			auto be=cast(ABinaryExp)e;
@@ -892,10 +888,7 @@ Expression[] mergeCompound(Expression[] s){
 Expression[] reverseStatements(Expression[] statements,Scope sc,bool unchecked){
 	statements=mergeCompound(statements);
 	Expression[] classicalStatements=statements.filter!(s=>classifyStatement(s)==ComputationClass.classical).array;
-	foreach(ref e;classicalStatements){
-		if(auto de=cast(DefExp)e) e=de.initializer.copy();
-		else e=e.copy();
-	}
+	foreach(ref e;classicalStatements) e=e.copy();
 	Expression[] quantumStatements=statements.retro.filter!(s=>classifyStatement(s)!=ComputationClass.classical).array;
 	foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked);
 	return classicalStatements~quantumStatements;
@@ -966,10 +959,6 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 			nrhs.type=de.e2.type;
 		}
 		return lowerDefine!flags(de.e2,nrhs,de.loc,sc,unchecked);
-	}
-	if(auto de=cast(DefExp)e){
-		assert(!!de.initializer);
-		return reverseStatement(de.initializer,sc,unchecked);
 	}
 	if(auto ae=cast(AssignExp)e){
 		sc.error("reversal of functions containing assignments not supported yet",ae.loc);

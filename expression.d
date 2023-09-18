@@ -1016,6 +1016,148 @@ class BinaryExp(TokenType op): ABinaryExp{
 	//override string toString(){return e1.toString() ~ " "~ e2.toString~TokChars!op;} // RPN
 	static if(op==Tok!":="){
 		override @property string kind(){ return "variable declaration"; }
+
+		void setType(Expression type){
+			if(auto ce=cast(CallExp)e1){
+				auto ft=cast(ProductTy)ce.e.type;
+				if(!ft||ft.isSquare!=ce.isSquare)
+					return;
+				if(auto id=cast(Identifier)ce.arg){
+					if(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i])){
+						auto decl=cast(VarDecl)id.meaning;
+						if(decl) decl.vtype=ft.dom;
+					}
+					return;
+				}
+				if(auto tpl=cast(TupleExp)ce.arg){
+					if(!ft.isTuple||ft.nargs==tpl.length){
+						auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[ft.isTuple?i:0]);
+						auto tt=ft.dom.isTupleTy();
+						auto argTy(size_t i){
+							if(tt) return tt[i];
+							return null;
+						}
+						foreach(i;movedIndices){
+							auto id=cast(Identifier)tpl.e[i];
+							if(!id) continue;
+							auto decl=cast(VarDecl)id.meaning;
+							if(!decl) continue;
+							decl.vtype=argTy(i);
+						}
+					}
+					return;
+				}
+			}
+			if(!type) return;
+			if(auto id=cast(Identifier)e1){
+				if(auto decl=cast(VarDecl)id.meaning){
+					decl.vtype=type;
+					if(!decl.vtype) decl.sstate=SemState.error;
+				}
+				return;
+			}
+			if(auto tpl1=cast(TupleExp)e1){
+				if(auto tt=type.isTupleTy()){
+					if(tt.length==tpl1.e.length){
+						foreach(i,e;tpl1.e){
+							if(auto id=cast(Identifier)e){
+								if(auto decl=cast(VarDecl)id.meaning)
+									decl.vtype=tt[i];
+							}
+						}
+					}
+					return;
+				}
+				if(auto at=cast(ArrayTy)type){
+					foreach(i,e;tpl1.e){
+						if(auto id=cast(Identifier)e){
+							if(auto decl=cast(VarDecl)id.meaning)
+								decl.vtype=at.next;
+						}
+					}
+					return;
+				}
+			}
+		}
+		void setInitializer(){
+			if(auto id=cast(Identifier)e1){
+				auto decl=cast(VarDecl)id.meaning;
+				if(!decl) return;
+				assert(!decl.initializer);
+				decl.initializer=e2;
+				return;
+			}
+			if(auto tpl1=cast(TupleExp)e1){
+				if(auto tpl2=cast(TupleExp)e2){
+					if(tpl1.length!=tpl2.length) return;
+					foreach(i;0..tpl1.length){
+						auto id=cast(Identifier)tpl1.e[i];
+						if(!id) continue;
+						auto decl=cast(VarDecl)id.meaning;
+						if(!decl) continue;
+						assert(!decl.initializer);
+						decl.initializer=tpl2.e[i];
+					}
+					return;
+				}
+			}
+		}
+		void setError(){
+			if(auto id=cast(Identifier)e1){
+				auto decl=cast(VarDecl)id.meaning;
+				if(decl) decl.sstate=SemState.error;
+			}else if(auto tpl1=cast(TupleExp)e1){
+				foreach(e;tpl1.e){
+					auto id=cast(Identifier)e;
+					if(!id) continue;
+					auto decl=cast(VarDecl)id.meaning;
+					if(!decl) continue;
+					decl.sstate=SemState.error;
+				}
+			}
+			sstate=SemState.error;
+		}
+		
+		int varDecls(scope int delegate(VarDecl) dg){
+			if(auto id=cast(Identifier)e1){
+				auto decl=cast(VarDecl)id.meaning;
+				return dg(decl);
+			}
+			if(auto tpl1=cast(TupleExp)e1){
+				foreach(e;tpl1.e){
+					auto id=cast(Identifier)e;
+					if(!id) continue;
+					auto decl=cast(VarDecl)id.meaning;
+					if(auto r=dg(decl)) return r;
+				}
+				return 0;
+			}
+			if(auto ce=cast(CallExp)e1){
+				auto ft=cast(ProductTy)ce.e.type;
+				if(!ft||ft.isSquare!=ce.isSquare)
+					return 0;
+				if(auto id=cast(Identifier)ce.arg){
+					if(iota(ft.nargs).all!(i=>!ft.isConstForReverse[i])){
+						auto decl=cast(VarDecl)id.meaning;
+						return dg(decl);
+					}
+					return 0;
+				}
+				if(auto tpl=cast(TupleExp)ce.arg){
+					if(!ft.isTuple||ft.nargs==tpl.length){
+						auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[ft.isTuple?i:0]);
+						foreach(i;movedIndices){
+							auto id=cast(Identifier)tpl.e[i];
+							if(!id) continue;
+							auto decl=cast(VarDecl)id.meaning;
+							if(auto r=dg(decl)) return r;
+						}
+					}
+					return 0;
+				}
+			}
+			return 0;
+		}
 	}
 	override BinaryExp!op substituteImpl(Expression[string] subst){
 		auto ne1=e1.substitute(subst);
@@ -1796,7 +1938,6 @@ auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,aut
 	if(auto dd=cast(DatDecl)d) return f(dd,forward!args);
 
 	if(auto de=cast(DefineExp)d) return f(de,forward!args);
-	if(auto de=cast(DefExp)d) return f(de,forward!args);
 	if(auto ce=cast(CommaExp)d) return f(ce,forward!args);
 
 	if(auto imp=cast(ImportExp)d) return f(imp,forward!args);
