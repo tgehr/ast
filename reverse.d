@@ -36,6 +36,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
 	if(auto ce=cast(CallExp)olhs){
+		static if(language==silq)
 		if(isPrimitive(cast(CallExp)unwrap(ce.e)))
 			return false;
 		auto f=ce.e, ft=cast(ProductTy)f.type;
@@ -57,6 +58,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	return validDefEntry(olhs);
 }
 
+static if(language==silq)
 ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
 	auto r=ReverseCallRewriter(ft_,loc);
 	with(r){
@@ -71,6 +73,7 @@ ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
 }
 
 struct ReverseCallRewriter{
+static if(language==silq):
 	ProductTy ft;
 	Location loc;
 	bool constTuple,movedTuple,returnTuple;

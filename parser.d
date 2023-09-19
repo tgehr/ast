@@ -968,7 +968,7 @@ struct Parser{
 		}
 		return res=New!IteExp(cond,then,othw);
 	}
-	WithExp parseWith(){
+	static if(language==silq) WithExp parseWith(){
 		mixin(SetLoc!WithExp);
 		expect(Tok!"with");
 		CompoundExp trans;

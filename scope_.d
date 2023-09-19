@@ -131,16 +131,18 @@ abstract class Scope{
 	static if(language==silq){
 		static struct DeclProp{
 			private Identifier constBlock;
-			static struct ComponentReplacement{
-				IndexExp write;
-				string name;
-				IndexExp read;
-			}
-			ComponentReplacement[] componentReplacements;
-			void nameIndex(IndexExp index,string name){
-				auto r=ComponentReplacement(index,name,IndexExp.init);
-				if(index.sstate==SemState.error) swap(r.write,r.read);
-				componentReplacements~=r;
+			static if(language==silq){
+				static struct ComponentReplacement{
+					IndexExp write;
+					string name;
+					IndexExp read;
+				}
+				ComponentReplacement[] componentReplacements;
+				void nameIndex(IndexExp index,string name){
+					auto r=ComponentReplacement(index,name,IndexExp.init);
+					if(index.sstate==SemState.error) swap(r.write,r.read);
+					componentReplacements~=r;
+				}
 			}
 			static DeclProp default_(){
 				return DeclProp.init;
@@ -331,7 +333,9 @@ abstract class Scope{
 	}
 
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
-		static if(language==silq){
+		static if(language==silq) enum performConsume=true;
+		else auto performConsume=id.byRef;
+		if(performConsume){
 			if(!meaning) return meaning;
 			if(kind==Lookup.consuming){
 				bool doConsume=true;
@@ -357,6 +361,7 @@ abstract class Scope{
 						meaning=nmeaning;
 				}
 			}
+			static if(language==silq)
 			if(kind==Lookup.constant&&meaning.isLinear()){
 				if(!isConstHere(meaning))
 					blockConst(meaning,id);
@@ -392,7 +397,14 @@ abstract class Scope{
 		return postprocessLookup(ident,meaning,kind);
 	}
 	final Declaration lookupHereImpl(Identifier ident,bool rnsym){
-		return symtabLookup(ident,rnsym);
+		auto r=symtabLookup(ident,rnsym);
+		if(auto fd=cast(FunctionDef)r){
+			import ast.semantic_:isInDataScope;
+			if(auto asc=isInDataScope(fd.scope_))
+				if(fd.name.name==asc.decl.name.name)
+					r=asc.decl;
+		}
+		return r;
 	}
 
 	bool isNestedIn(Scope rhs){ return rhs is this; }
@@ -1041,6 +1053,7 @@ class CapturingScope(T): NestedScope{
 		auto vd=cast(VarDecl)meaning;
 		bool isConstVar=meaning.isConst||(vd&&vd.typeConstBlocker)||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstVar;
+		static if(language==silq)
 		if(type.hasQuantumComponent()){
 			if(origin.componentReplacements(meaning).length)
 				return null; // not captured, will be replaced (TODO: ok?)

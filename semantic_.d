@@ -152,6 +152,8 @@ Expression presemantic(Declaration expr,Scope sc){
 				assert(!!fd.body_.blscope_);
 				auto thisVar=addVar("this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
 				fd.isConstructor=true;
+				if(fd.sstate!=SemState.error)
+					dsc.decl.constructor=fd;
 				if(fd.rret){
 					sc.error("constructor cannot have return type annotation",fd.loc);
 					fd.sstate=SemState.error;
@@ -809,6 +811,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	return ite;
 }
 
+static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc){
 	// TODO: disallow early returns
 	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
@@ -932,7 +935,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 				fe.sstate=SemState.error;
 				converged=true;
 			}
-		}else sc.merge(false,fesc,forgetScope);
+		}else sc.merge(false,fesc,state.forgetScope);
 		state.endIteration(sc);
 		converged|=bdy.sstate==SemState.error||state.converged;
 	}
@@ -1233,6 +1236,7 @@ Expression defineLhsSemanticImpl(FunctionDef fd,DefineLhsContext context){
 Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(re,context); // TODO: get rid of this case
 }
+static if(language==silq)
 Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 	auto result=callSemantic!isPresemantic(ce,context);
 	static if(!isPresemantic){ // TODO: move into callSemantic!(false,DefineLhsContext)?
@@ -1268,6 +1272,11 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 	}
 	static if(!isPresemantic) if(!ok) result.sstate=SemState.error;
 	return result;
+}
+
+static if(language==psi)
+Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ce,context);
 }
 
 static if(language==psi)
@@ -1484,6 +1493,7 @@ static if(language==silq)
 Expression defineLhsSemanticImpl(UnaryExp!(Tok!"const") ce,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(ce,context);
 }
+static if(language==silq)
 Expression defineLhsSemanticImpl(UnaryExp!(Tok!"moved") ce,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(ce,context);
 }
@@ -2821,7 +2831,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				auto nft=ft;
 				if(auto id=cast(Identifier)fun){
 					if(auto decl=cast(DatDecl)id.meaning){
-						if(auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.constant)){
+						if(auto constructor=decl.constructor){
 							if(auto cty=cast(FunTy)typeForDecl(constructor)){
 								assert(isTypeTy(ft.cod));
 								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.annotation,true);
@@ -2894,7 +2904,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}else if(auto at=isRhs?isDataTyId(fun):null){
 		auto decl=at.decl;
 		assert(isType(fun));
-		auto constructor=cast(FunctionDef)decl.body_.ascope_.lookup(decl.name,false,false,Lookup.constant);
+		auto constructor=decl.constructor;
 		auto ty=cast(FunTy)typeForDecl(constructor);
 		if(ty&&decl.hasParams){
 			auto nce=cast(CallExp)fun;
@@ -3272,10 +3282,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				}
 			}
 		}
-		if(auto fd=cast(FunctionDef)meaning)
-			if(auto asc=isInDataScope(fd.scope_))
-				if(fd.name.name==asc.decl.name.name)
-					meaning=asc.decl;
 		id.meaning=meaning;
 	}
 	id.id=meaning.getId;
@@ -3523,6 +3529,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		id.loc=idx.loc;
 		return expressionSemantic(id,context);
 	}
+	static if(language==silq)
 	if(!idx.byRef&&!context.constResult){ // implicitly duplicate index
 		return expressionSemantic(dupExp(idx,idx.loc,context.sc),context);
 	}

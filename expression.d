@@ -957,11 +957,12 @@ class CallExp: Expression{
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.eval(), narg=arg.eval();
 		// TODO: partially evaluate arbitrary functions
+		import ast.semantic_:isPreludeSymbol,PreludeSymbol;
+		static if(__traits(hasMember,PreludeSymbol,"dup"))
 		if(ntype.isClassical()){
 			if(auto ce2=cast(CallExp)ne){
 				if(auto id=cast(Identifier)ce2.e){
 					if(id.name=="dup"){
-						import ast.semantic_:isPreludeSymbol,PreludeSymbol;
 						if(isPreludeSymbol(id.meaning)==PreludeSymbol.dup)
 							return narg; // TODO: ok?
 					}
@@ -1955,7 +1956,9 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 	static if(unanalyzed) if(auto idx=cast(IndexExp)s) return f(idx,forward!args);
 	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
-	if(auto with_=cast(WithExp)s) return f(with_,forward!args);
+	static if(language==silq){
+		if(auto with_=cast(WithExp)s) return f(with_,forward!args);
+	}
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
 	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
 

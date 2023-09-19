@@ -179,6 +179,7 @@ class FunctionDef: Declaration{
 	}
 
 	@property Scope realScope(){
+		if(!scope_) return null;
 		if(isConstructor) return scope_.getDatDecl().scope_;
 		return scope_;
 	}
@@ -263,6 +264,7 @@ class DatDecl: Declaration{
 	}
 
 	// semantic information
+	FunctionDef constructor;
 	DataScope dscope_;
 	VarDecl context;
 	Identifier[][Declaration] captures;
