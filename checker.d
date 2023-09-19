@@ -411,6 +411,7 @@ class Checker {
 	}
 
 	void implLhs(ast_exp.Identifier e) {
+		assert(!e.constLookup);
 		auto var = e.meaning;
 		assert(cast(ast_decl.VarDecl) var, "LHS of assignment not VarDecl");
 		defineVar(var, "LHS", e);

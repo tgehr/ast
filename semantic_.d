@@ -1616,6 +1616,7 @@ Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsC
 		if(r.sstate!=SemState.error){
 			assert(!!r.type);
 			r.sstate=SemState.completed;
+			r.constLookup=context.constResult;
 		}
 	}
 	if(context.constResult) return r=expressionSemantic(lhs,context.expSem);
@@ -2245,6 +2246,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 					}
 					case Stage.consumeLhs:
 						if(rename !in consumed){
+							if(!indexed) id.constLookup=false;
 							sc.consume(id.meaning);
 							consumed[id.name]=[];
 						}
@@ -2382,6 +2384,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 		auto id=cast(Identifier)be.e1;
 		if(id&&id.meaning&&id.meaning.name){
 			void consume(){
+				id.constLookup=false;
 				sc.consume(id.meaning);
 				static if(language==silq)
 					sc.pushConsumed();
