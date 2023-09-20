@@ -1108,7 +1108,7 @@ Expression[] parseFile(Source source, ErrorHandler handler){
 }
 
 
-import std.stdio, file=std.file;
+import util.io;
 string readCode(File f){
 	// TODO: use memory-mapped file with 4 padding zero bytes
 	auto app=mallocAppender!(char[])();

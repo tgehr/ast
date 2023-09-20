@@ -336,7 +336,8 @@ class DatDecl: Declaration{
 }
 
 string getActualPath(string path){
-	import std.path, file=std.file, options;
+	import util.path, options;
+	import util.io:file;
 	auto ext = path.extension;
 	if(ext=="") path = path.setExtension(astopt.defaultExtension);
 	if(file.exists(path)) return path;
@@ -359,7 +360,7 @@ class ImportExp: Declaration{
 	}
 	static string getPath(Expression e){
 		static string doIt(Expression e){
-			import std.path;
+			import util.path;
 			if(auto i=cast(Identifier)e) return i.name;
 			if(auto f=cast(BinaryExp!(Tok!"."))e) return buildPath(doIt(f.e1),doIt(f.e2));
 			assert(0);

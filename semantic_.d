@@ -205,7 +205,7 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 		exprs=exprssc[0],sc=exprssc[1];
 		if(!sc){
 			if(loc.line) err.error("circular imports not supported",loc);
-			else stderr.writeln("error: circular imports not supported");
+			else err.message("error: circular imports not supported");
 			return 1;
 		}
 		return 0;
@@ -2946,8 +2946,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					case "__show":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
 						auto lit=cast(LiteralExp)ce.arg;
-						if(lit&&lit.lit.type==Tok!"``") stderr.writeln(lit.lit.str);
-						else stderr.writeln(ce.arg);
+						if(lit&&lit.lit.type==Tok!"``") sc.message(lit.lit.str);
+						else sc.message(text(ce.arg));
 						ce.type=unit;
 						break;
 					case "__query":

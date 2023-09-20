@@ -2,10 +2,10 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.error;
 
-import std.stdio;
 import std.string, std.range, std.array, std.uni;
 
 import ast.lexer, util, options;
+import util.io;
 
 
 abstract class ErrorHandler{
@@ -19,7 +19,7 @@ abstract class ErrorHandler{
 	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
 	void note(lazy string note, Location loc)in{assert(loc.rep);}do{};
 
-	void message(string msg){ stderr.write(msg); }
+	void message(string msg){ stderr.writeln(msg); }
 
 	bool showsEffect(){ return true; }
 

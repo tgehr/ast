@@ -4,13 +4,13 @@ module ast.lexer;
 import astopt;
 
 import std.string, utf = std.utf, std.uni;
-import std.stdio, std.conv;
+import std.conv;
 import std.algorithm;
 import std.traits: EnumMembers;
 import util.tuple;
 import std.utf;
 
-import core.memory;
+//import core.memory;
 
 import util : lowerf, escape, mallocAppender, toEngNum;
 

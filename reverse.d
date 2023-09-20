@@ -3,9 +3,10 @@
 module ast.reverse;
 import astopt;
 
-import std.stdio,std.conv,std.format,std.algorithm,std.range,std.exception;
+import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 import util.tuple:Q=Tuple,q=tuple;
+import util.io;
 
 Expression constantExp(size_t l){
 	Token tok;

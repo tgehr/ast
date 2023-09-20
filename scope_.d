@@ -3,7 +3,7 @@
 module ast.scope_;
 import astopt;
 
-import std.format, std.conv, std.range, std.algorithm, std.stdio;
+import std.format, std.conv, std.range, std.algorithm;
 import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap;
@@ -411,6 +411,7 @@ abstract class Scope{
 
 	void error(lazy string err, Location loc){handler.error(err,loc);}
 	void note(lazy string err, Location loc){handler.note(err,loc);}
+	void message(lazy string msg){handler.message(msg);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
 		bool errors=false;

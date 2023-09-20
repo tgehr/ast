@@ -1,11 +1,12 @@
 module ast.checker;
 static if(imported!"astopt".language==imported!"astopt".silq):
 
-import std.stdio: stderr;
 import std.array: Appender, appender, array;
 import std.format: format;
 import std.algorithm: map, all;
 import std.range: repeat;
+
+import util.io: stderr;
 
 import ast_sem = ast.semantic_;
 import ast_exp = ast.expression;
