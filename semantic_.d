@@ -3836,8 +3836,18 @@ Expression nSubType(Expression t1, Expression t2){
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
-	auto r=arithmeticType!false(t1,t2);
-	return r==ℤt(true)?ℕt(true):r==ℤt(false)?ℕt(false):r; // TODO: more general range information?
+	auto isModular1=isInt(t1)||isUint(t1), isNumeric1=isNumeric(t1), isNumber1=isModular1||isNumeric1;
+	auto isModular2=isInt(t2)||isUint(t2), isNumeric2=isNumeric(t2), isNumber2=isModular2||isNumeric2;
+	if(!isNumber1||!isNumber2) return null;
+	auto isIntegral1=isModular1||isSubtype(t1,ℤt(t1.isClassical()));
+	auto isIntegral2=isModular2||isSubtype(t2,ℤt(t2.isClassical()));
+	if(!isIntegral1||!isIntegral2) return joinTypes(isModular1?ℤt(t1.isClassical()):t1,isModular2?ℤt(t2.isClassical()):t2);
+	auto isSigned1=isInt(t1)||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
+	auto isSigned2=isInt(t2)||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
+	auto isClassical=t1.isClassical()&&t2.isClassical();
+	if(!isSigned1&&!isSigned2&&isModular1&&!isModular2||isSubtype(t2,Bool(true)))
+		return isClassical?t1:t1.getQuantum();
+	return isClassical?t2:t2.getQuantum();
 }
 Expression powerType(Expression t1, Expression t2){
 	bool classical=t1.isClassical()&&t2.isClassical();
