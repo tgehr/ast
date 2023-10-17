@@ -25,7 +25,6 @@ abstract class Declaration: Expression{
 
 	// semantic information
 	Identifier rename=null;
-	int semanticDepth=0;
 	Declaration splitFrom=null;
 	Declaration[] splitInto=[];
 	Declaration[] mergedFrom=[];
@@ -263,6 +262,7 @@ class DatDecl: Declaration{
 	}
 
 	// semantic information
+	int semanticDepth=0; // TODO: get rid of this
 	FunctionDef constructor;
 	DataScope dscope_;
 	VarDecl context;

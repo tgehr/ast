@@ -780,12 +780,12 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 		enum restriction_=Annotation.none;
 	}
 	// initialize scopes, to allow captures to be inserted
-	ite.then.blscope_=new BlockScope(sc,restriction_);
+	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_);
 	if(!ite.othw){
 		ite.othw=New!CompoundExp((Expression[]).init);
 		ite.othw.loc=ite.loc;
 	}
-	ite.othw.blscope_=new BlockScope(sc,restriction_);
+	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
 	ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,restriction_);
 	ite.othw=controlledCompoundExpSemantic(ite.othw,sc,ite.cond,restriction_);
 	propErr(ite.cond,ite);
@@ -1595,14 +1595,18 @@ Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
 
 Expression defineLhsSemanticImplCurrentlyUnsupported(Expression e,DefineLhsContext context){
 	auto sc=context.sc;
-	sc.error("currently not supported as definition left-hand side",e.loc);
-	e.sstate=SemState.error;
+	if(e.sstate!=SemState.error){
+		sc.error("currently not supported as definition left-hand side",e.loc);
+		e.sstate=SemState.error;
+	}
 	return e;
 }
 Expression defineLhsSemanticImplUnsupported(Expression e,DefineLhsContext context){
 	auto sc=context.sc;
-	sc.error("not supported as definition left-hand side",e.loc);
-	e.sstate=SemState.error;
+	if(e.sstate!=SemState.error){
+		sc.error("not supported as definition left-hand side",e.loc);
+		e.sstate=SemState.error;
+	}
 	return e;
 }
 
@@ -3047,8 +3051,8 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		return branch;
 	}
 	// initialize scopes, to allow captures to be inserted
-	ite.then.blscope_=new BlockScope(sc,restriction_);
-	if(ite.othw) ite.othw.blscope_=new BlockScope(sc,restriction_);
+	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_);
+	if(ite.othw&&!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
 	ite.then.s[0]=branchSemantic(ite.then.s[0],ite.then.blscope_);
 	static if(language==silq) ite.then.blscope_.pushConsumed();
 	propErr(ite.then.s[0],ite.then);
@@ -3218,21 +3222,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	auto sc=context.sc;
 	id.scope_=sc;
 	if(id.sstate==SemState.error) return id;
-	if(id.sstate==SemState.started){
-		auto fd=cast(FunctionDef)id.meaning;
-		if(fd){
-			if(setFtype(fd,true)){
-				id.type=fd.ftype;
-				id.sstate=SemState.completed;
-				return id;
-			}
-		}
-		sc.error("cyclic dependency",id.loc);
-		id.sstate=SemState.error;
-		if(fd&&!fd.rret)
-			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
-		return id;
-	}
+	assert(id.sstate!=SemState.started);
 	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
 	auto meaning=id.meaning;
@@ -3286,6 +3276,9 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	id.type=id.typeFromMeaning;
 	if(!id.type&&id.sstate!=SemState.error){
 		sc.error("invalid forward reference",id.loc);
+		auto fd=cast(FunctionDef)meaning;
+		if(fd&&!fd.rret)
+			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
 		id.sstate=SemState.error;
 	}
 	if(!isType(id)){
@@ -4280,7 +4273,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
 	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
 	auto fsc=fd.fscope_;
-	++fd.semanticDepth;
 	assert(!!fsc,text(fd));
 	assert(fsc.allowsLinear());
 	auto bdy=fd.body_?compoundExpSemantic(fd.body_,fsc):null;
@@ -4297,12 +4289,10 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				typeConstBlock(id.meaning,fd,sc);
 			}
 		}
-		if(--fd.semanticDepth==0){
-			if(bdy){
-				if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
-			}else{
-				fsc.forceClose();
-			}
+		if(bdy){
+			if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
+		}else{
+			fsc.forceClose();
 		}
 	}
 	fd.body_=bdy;
@@ -4509,7 +4499,7 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 
 Expression typeForDecl(Declaration decl){
 	if(auto dat=cast(DatDecl)decl){
-		if(!dat.dtype&&dat.scope_) dat=cast(DatDecl)presemantic(dat,dat.scope_);
+		if(!dat.dtype&&dat.scope_&&dat.sstate!=SemState.started) dat=cast(DatDecl)presemantic(dat,dat.scope_);
 		assert(cast(AggregateTy)dat.dtype);
 		static if(language==silq){
 			assert(dat.isQuantum);
@@ -4526,7 +4516,7 @@ Expression typeForDecl(Declaration decl){
 	}
 	if(auto fd=cast(FunctionDef)decl){
 		if(!fd.ftype) setFtype(fd,true);
-		if(!fd.ftype&&fd.scope_) fd=functionDefSemantic(fd,fd.scope_);
+		if(!fd.ftype&&fd.scope_&&fd.sstate!=SemState.started) fd=functionDefSemantic(fd,fd.scope_);
 		assert(!!fd);
 		return fd.ftype;
 	}
