@@ -4483,14 +4483,19 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 	auto context=expSemContext(sc,ConstResult.yes,InType.yes);
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
-	if(!isType(e)&&!(allowQNumeric&&isQNumeric(e))){
-		auto id=cast(Identifier)expr;
-		if(id&&id.meaning){
-			auto decl=id.meaning;
-			sc.error(format("%s %s is not a type",decl.kind,decl.name),id.loc);
-			sc.note("declared here",decl.loc);
+	if(!isType(e)){
+		if(!(allowQNumeric&&isQNumeric(e))){
+			sc.error(format("quantum '%s' cannot be used as a type",e),expr.loc);
+			sc.note(format("did you mean to write '%s'?",e.getClassical()),expr.loc);
 		}else{
-			sc.error("not a type",expr.loc);
+			auto id=cast(Identifier)expr;
+			if(id&&id.meaning){
+				auto decl=id.meaning;
+				sc.error(format("%s '%s' is not a type",decl.kind,decl.name),id.loc);
+				sc.note("declared here",decl.loc);
+			}else{
+				sc.error("not a type",expr.loc);
+			}
 		}
 		expr.sstate=SemState.error;
 		return null;
