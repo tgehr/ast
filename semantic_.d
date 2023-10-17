@@ -80,7 +80,8 @@ VarDecl addVar(string name,Expression ty,Location loc,Scope sc){
 	auto var=new VarDecl(id);
 	var.loc=loc;
 	var.vtype=ty;
-	var=varDeclSemantic(var,sc);
+	if(!sc) var.sstate=SemState.completed;
+	else var=varDeclSemantic(var,sc);
 	assert(!!var && var.sstate==SemState.completed);
 	return var;
 }
@@ -95,7 +96,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		dat.dtype=new AggregateTy(dat,!dat.isQuantum);
 		if(dat.hasParams) declareParameters(dat,true,dat.params,dsc);
 		if(!dat.body_.ascope_) dat.body_.ascope_=new AggregateScope(dat.dscope_);
-		if(cast(NestedScope)sc) dat.context = addVar("`outer",contextTy(true),dat.loc,dsc);
+		if(cast(NestedScope)sc) dat.context = addVar("`outer",contextTy(true),dat.loc,null);
 		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_);
 		foreach(ref exp;dat.body_.s) if(auto decl=cast(Declaration)exp) exp=presemantic(decl,dat.body_.ascope_);
 	}
@@ -175,22 +176,18 @@ Expression presemantic(Declaration expr,Scope sc){
 				}
 				if(dsc.decl.context){
 					fd.context=dsc.decl.context; // TODO: ok?
-					fd.contextVal=dsc.decl.context; // TODO: ok?
 				}
 				fd.thisVar=thisVar;
 			}else{
-				fd.contextVal=addVar("this",unit,fd.loc,fsc); // the 'this' value
 				assert(!!fd.body_.blscope_);
 				assert(fsc.allowMerge);
 				fsc.allowMerge=false; // TODO: this is hacky
 				fd.context=addVar("this",ctxty,fd.loc,fd.body_.blscope_);
 				fsc.allowMerge=true;
-				assert(fd.context.getName!=fd.contextVal.getName);
 			}
 			assert(dsc.decl.dtype);
 		}else if(auto nsc=cast(NestedScope)sc){
-			fd.contextVal=addVar("`outer",contextTy(true),fd.loc,fsc); // TODO: replace contextTy by suitable record type; make name 'outer' available
-			fd.context=fd.contextVal;
+			fd.context=addVar("`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
 		}
 	}
 	return expr;
@@ -799,7 +796,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 		assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
 		foreach(branch;only(ite.then,ite.othw)){
 			if(!definitelyReturns(branch)) scs~=branch.blscope_;
-			else branch.blscope_.close();
+			else branch.blscope_.closeUnreachable();
 		}
 		sc.activeNestedScopes=scs;
 	}else scs=sc.activeNestedScopes;
@@ -4300,10 +4297,12 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				typeConstBlock(id.meaning,fd,sc);
 			}
 		}
-		if(bdy){
-			if(--fd.semanticDepth==0&&(fsc.merge(false,bdy.blscope_)||fsc.close())) fd.sstate=SemState.error;
-		}else{
-			fsc.forceClose();
+		if(--fd.semanticDepth==0){
+			if(bdy){
+				if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
+			}else{
+				fsc.forceClose();
+			}
 		}
 	}
 	fd.body_=bdy;

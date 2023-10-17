@@ -299,8 +299,8 @@ class Checker {
 		if(!retTrue && !retFalse) {
 			visMerge(ifTrue, ifFalse, e);
 		}
-		ifTrue.checkEmpty();
-		ifFalse.checkEmpty();
+		if(!retTrue) ifTrue.checkEmpty();
+		if(!retFalse) ifFalse.checkEmpty();
 		return retTrue && retFalse;
 	}
 

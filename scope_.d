@@ -428,7 +428,7 @@ abstract class Scope{
 							if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
 							if(show){
 								if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-								else error(format("%s '%s' is not consumed",d.kind,d.getName),d.loc);
+								else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 							}
 						}
 						d.sstate=SemState.error;
@@ -445,6 +445,22 @@ abstract class Scope{
 
 	final bool close(){
 		return Scope.close(this);
+	}
+
+	final bool closeUnreachable(){
+		static if(language==silq){
+			toPush=[];
+		}
+		activeNestedScopes=[];
+		allowMerge=false;
+		foreach(n,d;symtab.dup){
+			if(d.isLinear()||d.scope_ is this){
+				if(auto p=cast(Parameter)d) if(p.isConst) continue;
+				consume(d);
+				pushConsumed();
+			}
+		}
+		return false;
 	}
 
 	static if(language==silq){

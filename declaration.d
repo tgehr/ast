@@ -155,7 +155,6 @@ class FunctionDef: Declaration{
 	// semantic information
 	FunctionScope fscope_;
 	VarDecl context;
-	VarDecl contextVal;
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
 	Declaration[] capturedDecls;
