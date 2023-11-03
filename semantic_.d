@@ -4483,7 +4483,7 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 	auto context=expSemContext(sc,ConstResult.yes,InType.yes);
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
-	if(!isType(e)){
+	if(!isType(e)&&!(allowQNumeric&&isQNumeric(e))){
 		if(!(allowQNumeric&&isQNumeric(e))){
 			sc.error(format("quantum '%s' cannot be used as a type",e),expr.loc);
 			sc.note(format("did you mean to write '%s'?",e.getClassical()),expr.loc);
