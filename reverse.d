@@ -81,7 +81,17 @@ static if(language==silq):
 	Expression constType,movedType,returnType;
 	@property constIndices()return scope{ return iota(ft.nargs).filter!(i=>ft.isConstForReverse[i]); }
 	@property movedIndices()return scope{ return iota(ft.nargs).filter!(i=>!ft.isConstForReverse[i]); }
-	@property bool constLast(){ return ft.nargs&&!ft.isConstForReverse[0]&&ft.isConstForReverse[$-1]; }
+	@property bool constLast(){
+		static bool constLastImpl(FunTy ft){
+			return ft.nargs&&!ft.isConstForReverse[0]&&ft.isConstForReverse[$-1];
+		}
+		if(ft.isSquare){
+			if(auto ft2=cast(FunTy)ft.cod){
+				return constLastImpl(ft2);
+			}else return false;
+		}
+		return constLastImpl(ft);
+	}
 	@property bool innerNeeded(){
 		return !(equal(ft.isConst,ft.isConstForReverse)&&equal(constIndices,only(0))&&equal(movedIndices,only(1))&&ft.annotation==Annotation.mfree);
 	}
@@ -511,7 +521,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 					}else if(simplify&&r.returnType==unit){
 						newarg=constMovedArgs[0];
 					}else{
-						newarg=new TupleExp([constMovedArgs[0],orhs]);
+						newarg=new TupleExp(r.constLast?[orhs,constMovedArgs[0]]:[constMovedArgs[0],orhs]);
 						newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
 					}
 				}else{
