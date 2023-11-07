@@ -399,11 +399,13 @@ class Identifier: Expression{
 			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
 				r.checkReverse=checkReverse;
+				r.outerWanted=outerWanted;
 				r.classical=classical;
 			}
 		}else{
 			static if(language==silq){
 				r.checkReverse=checkReverse;
+				r.outerWanted=outerWanted;
 				r.classical=classical;
 			}
 		}
@@ -548,6 +550,7 @@ class Identifier: Expression{
 	bool indexedDirectly=false;
 	static if(language==silq){
 		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
+		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
 	}
 	else enum classical=true;

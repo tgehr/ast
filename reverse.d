@@ -473,7 +473,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 			auto f=ce.e;
 			auto r=reverseCallRewriter(ft,f.loc);
-			bool simplify=r.innerNeeded;
 			if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
 				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 				return error();
@@ -495,35 +494,24 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 						return res=new CompoundExp([def,argUnpack]);
 					}else{
 						newlhs=ce.arg;
-						newarg=orhs;
+						auto constArg=new TupleExp([]);
+						constArg.loc=orhs.loc;
+						newarg=new TupleExp([constArg,orhs]);
+						newarg.loc=orhs.loc;
 					}
 				}else{
 					newlhs=new TupleExp([]);
 					newlhs.loc=ce.arg.loc;
-					if(r.returnType==unit){
-						auto tpl=new TupleExp([]);
-						tpl.loc=orhs.loc;
-						newstm=new DefineExp(tpl,orhs);
-						newstm.loc=orhs.loc;
-						newarg=ce.arg;
-					}else{
-						newarg=new TupleExp([ce.arg,orhs]);
-						newarg.loc=ce.arg.loc.to(orhs.loc);
-					}
+					newarg=new TupleExp([ce.arg,orhs]);
+					newarg.loc=ce.arg.loc.to(orhs.loc);
 				}
 			}else if(auto tpl=cast(TupleExp)ce.arg){
 				assert(ft.isTuple);
 				if(ft.nargs==tpl.length){
 					auto constMovedArgs=r.reorderArguments(tpl); // note: this changes order of assertion failures. ok?
 					newlhs=constMovedArgs[1];
-					if(simplify&&r.constIndices.empty){
-						newarg=constMovedArgs[1];
-					}else if(simplify&&r.returnType==unit){
-						newarg=constMovedArgs[0];
-					}else{
-						newarg=new TupleExp(r.constLast?[orhs,constMovedArgs[0]]:[constMovedArgs[0],orhs]);
-						newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
-					}
+					newarg=new TupleExp([constMovedArgs[0],orhs]);
+					newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
 				}else{
 					sc.error(format("wrong number of arguments to reversed function call (%s instead of %s)",tpl.length,ft.nargs),ce.loc);
 					return error();
@@ -545,10 +533,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 						break;
 					case "H", "X", "Y", "Z":
 						reversed=ce.e;
+						auto tpl=cast(TupleExp)newarg;
+						newarg=tpl.e[1]; // TODO: don't generate tuple in the first plcae?
 						break;
 					case "P":
 						reversed=ce.e;
 						// note: this ignores side-effects of rhs, if any
+						auto tpl=cast(TupleExp)newarg;
+						newarg=tpl.e[0]; // TODO: don't generate tuple in the first plcae?
 						auto negated=new UMinusExp(newarg);
 						negated.loc=newarg.loc;
 						newarg=negated;
@@ -568,12 +560,16 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 						return error();
 				}
 			}
-			if(!reversed&&!newrhs){
+			if(!reversed){
 				auto checked=!unchecked;
-				auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked);
-				if(rev.sstate!=SemState.completed) return error();
-				reversed=new CallExp(rev,ce.e,false,false);
-				reversed.loc=ce.e.loc;
+				enum simplify=false, outerWanted=false;
+				auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
+				reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
+				if(ce.e.sstate==SemState.error) return error();
+				if(!reversed){
+					reversed=new CallExp(rev,ce.e,false,false);
+					reversed.loc=ce.e.loc;
+				}
 			}
 			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
 			newrhs.loc=newarg.loc;

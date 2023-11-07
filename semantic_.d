@@ -2470,11 +2470,12 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 
 static if(language==silq){
 
-Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool checked)in{
+Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool checked,bool outerWanted)in{
 	assert(annotation>=Annotation.mfree);
 }do{
 	auto r=getPreludeSymbol(annotation==Annotation.qfree?"__reverse_qfree":"reverse",loc,isc);
 	if(!checked) r.checkReverse=false; // TODO: is there a better solution than this for frontend reverse?
+	if(!outerWanted) r.outerWanted=false; // TODO: is there a better solution than this?
 	return r;
 }
 
@@ -2541,8 +2542,8 @@ Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
 	return narg;
 }
 
-Expression makeReverseCall(Expression ce1,Annotation annotation,bool check,Scope sc,Location loc){
-	auto ce2=new CallExp(getReverse(loc,sc,annotation,check),ce1,false,false);
+Expression makeReverseCall(Expression ce1,Annotation annotation,bool check,Scope sc,Location loc,bool outerWanted){
+	auto ce2=new CallExp(getReverse(loc,sc,annotation,check,outerWanted),ce1,false,false);
 	ce2.loc=loc;
 	return ce2;
 }
@@ -2565,15 +2566,12 @@ Expression makeLambda(Parameter[] params,bool isTuple,bool isSquare,Annotation a
 	return le;
 }
 
-Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
-	auto sc=context.sc;
-	auto calledId=cast(Identifier)ce.e;
-	assert(calledId&&isReverse(calledId));
-	bool check=calledId.checkReverse;
-	ce.arg=expressionSemantic(ce.arg,/+context.nest((rft.isConst.length?rft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
-	auto f=ce.arg;
+Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClassical,Scope sc,bool simplify){
+	bool errors=false;
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
+	bool check=reverse.checkReverse;
+	bool outerWanted=reverse.outerWanted;
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
@@ -2581,17 +2579,17 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		auto types=iota(ft.nargs).map!((i){
 			auto type=ft.argTy(i);
 			if(type==typeTy){
-				bool check(Expression ty){
+				bool checkType(Expression ty){
 					if(ty.isQuantum) return true;
 					return !ty.hasFreeVar(ft.names[i]);
 				}
 				bool ok=true;
 				foreach(j;0..ft2.nargs){
 					if(ft2.isConstForReverse[j]) continue;
-					ok&=check(ft2.argTy(j));
+					ok&=checkType(ft2.argTy(j));
 					if(!ok) break;
 				}
-				if(ok) ok&=check(ft2.cod);
+				if(ok) ok&=checkType(ft2.cod);
 				if(!ok) type=qtypeTy;
 			}
 			return type;
@@ -2600,40 +2598,43 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		auto narg=lookupParams(params,ft.isTuple,loc);
 		auto ce1=new CallExp(f.copy,narg,true,false);
 		ce1.loc=loc;
-		auto ce2=makeReverseCall(ce1,Annotation.mfree,check,sc,loc);
+		auto ce2=makeReverseCall(ce1,Annotation.mfree,check,sc,loc,outerWanted);
 		auto body_=makeLambdaBody(ce2,loc);
 		auto le=makeLambda(params,ft.isTuple,ft.isSquare,ft.annotation,body_,loc);
-		return expressionSemantic(le,context);
+		return le;
 	}
 	if(check && ft.annotation<Annotation.mfree){
 		sc.error("reversed function must be 'mfree'",f.loc);
-		ce.sstate=SemState.error;
+		f.sstate=SemState.error;
+		errors=true;
 	}
 	if(check && !ft.isClassical_){
 		sc.error("reversed function must be classical",f.loc);
-		ce.sstate=SemState.error;
+		f.sstate=SemState.error;
+		errors=true;
 	}
 	if(ft.cod.hasAnyFreeVar(ft.names)){
 		sc.error("arguments of reversed function call cannot appear in return value",f.loc);
-		ce.sstate=SemState.error;
+		f.sstate=SemState.error;
+		errors=true;
 	}
-	if(ce.sstate!=SemState.error){
+	if(!errors){
 		auto loc=f.loc;
 		auto r=reverseCallRewriter(ft,loc);
 		if(!r.innerNeeded){
-			if(!calledId.checkReverse){
+			if(!check){
 				if(equal(ft.isConst,only(true,false))){
 					auto τ=ft.argTy(0),χ=ft.argTy(1),φ=ft.cod;
 					auto arg=new TupleExp([τ,χ,φ]);
-					arg.loc=ce.e.loc;
+					arg.loc=reverse.loc;
 					arg.type=tupleTy([τ.type,χ.type,φ.type]);
 					arg.sstate=SemState.completed;
-					auto nce=new CallExp(ce.e,arg,true,false);
-					nce.loc=ce.e.loc;
+					auto nce=new CallExp(reverse,arg,true,false);
+					nce.loc=reverse.loc;
 					auto rtype=funTy([true,false],tupleTy([τ,φ]),χ,ft.isSquare,true,ft.annotation,ft.isClassical);
-					nce.type=funTy([true],ce.arg.type,rtype,false,false,Annotation.qfree,ft.isClassical);
+					nce.type=funTy([true],f.type,rtype,false,false,Annotation.qfree,ft.isClassical);
 					nce.sstate=SemState.completed;
-					auto res=new CallExp(nce,ce.arg,ce.isSquare,ce.isClassical);
+					auto res=new CallExp(nce,f,isSquare,isClassical);
 					res.type=rtype;
 					res.sstate=SemState.completed;
 					return res;
@@ -2643,21 +2644,37 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 		}
 		if(check&&r.movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
-			ce.sstate=SemState.error;
+			errors=true;
 		}
 		if(check&&r.returnType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in return value", f.loc);
-			ce.sstate=SemState.error;
+			errors=true;
 		}
-		if(ce.sstate==SemState.error)
-			return ce;
+		if(errors) return null;
 		auto le=r.wrapInner(f);
-		auto rev=makeReverseCall(le,ft.annotation,check,sc,loc);
-		if(!r.outerNeeded) return expressionSemantic(rev,context);
-		auto le2=r.wrapOuter(rev,true);
-		return expressionSemantic(le2,context);
+		auto rev=makeReverseCall(le,ft.annotation,check,sc,loc,outerWanted);
+		if(!r.outerNeeded||!reverse.outerWanted) return rev;
+		auto le2=r.wrapOuter(rev,simplify);
+		return le2;
 	}
 	return null;
+}
+
+Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
+	auto reverse=cast(Identifier)ce.e;
+	assert(reverse&&isReverse(reverse));
+	ce.arg=expressionSemantic(ce.arg,/+context.nest((rft.isConst.length?rft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
+	enum simplify=true;
+	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,simplify);
+	if(ce.arg.sstate==SemState.error)
+		return null;
+	if(!r) return null;
+	r=expressionSemantic(r,context);
+	if(r.sstate==SemState.error){
+		ce.sstate=SemState.error;
+		return ce;
+	}
+	return r;
 }
 
 }
