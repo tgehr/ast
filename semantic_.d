@@ -301,6 +301,11 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				if(allMoved) goto LbadDefLhs;
 				assert(!tpl.length||ft.isTuple&&ft);
+				if(tpl.length!=ft.nargs){
+					assert(ce.sstate==SemState.error);
+					success=false;
+					return null;
+				}
 				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[i]);
 				VarDecl[] vds;
 				foreach(exp;movedIndices.map!(i=>tpl.e[i])){
@@ -1240,7 +1245,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 		auto sc=context.sc;
 		assert(util.among(ce.e.sstate,SemState.error,SemState.completed));
 		bool ok=true;
-		if(ce.e.sstate!=SemState.error){
+		if(ce.sstate!=SemState.error){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(ft){
 				if(ft.annotation<Annotation.mfree){
@@ -1257,8 +1262,10 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 				}else{
 					ce.type=ft.cod;
 					if(context.type&&!isSubtype(context.type,ce.type)){
-						//sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
-						//ok=false;
+						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
+							sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
+							ok=false;
+						}
 						auto nresult=new TypeAnnotationExp(result,context.type,TypeAnnotationType.coercion);
 						nresult.loc=result.loc;
 						result=defineLhsSemanticImpl(nresult,context);
@@ -2614,7 +2621,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		errors=true;
 	}
 	if(ft.cod.hasAnyFreeVar(ft.names)){
-		sc.error("arguments of reversed function call cannot appear in return value",f.loc);
+		sc.error("arguments of reversed function call cannot appear in result type",f.loc);
 		f.sstate=SemState.error;
 		errors=true;
 	}
@@ -2844,6 +2851,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		return false;
 	}
 	Expression checkFunCall(FunTy ft){
+		void checkArg(Expression arg,Expression paramTy){
+			if(arg.type&&!isSubtype(arg.type,paramTy)){
+				sc.error(format("cannot pass argument of type '%s' to parameter of type '%s'",arg.type,paramTy),arg.loc);
+				arg.sstate=SemState.error;
+				ce.sstate=SemState.error;
+			}
+		}
 		bool tryCall(){
 			if(!ce.isSquare && ft.isSquare){
 				auto nft=ft;
@@ -2861,7 +2875,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					if(matchArg(codft)) return true;
 					propErr(ce.arg,ce);
 					if(ce.arg.sstate==SemState.error) return true;
-					static if(isRhs){
+					if(isRhs||codft.isConstForReverse.all){
 						Expression garg;
 						auto tt=nft.tryMatch(ce.arg,garg);
 						if(!tt) return false;
@@ -2869,12 +2883,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						nce.loc=ce.loc;
 						auto nnce=new CallExp(nce,ce.arg,false,false);
 						nnce.loc=ce.loc;
-						nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
+						static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
+						else nnce=cast(CallExp)callSemantic(nnce,context.expSem.nestConsumed);
 						assert(!!nnce);
 						ce=nnce;
 						return true;
 					}else{
-						// TODO: need to analyze arguments!
+						// TODO: analyze arguments?
 						return true;
 					}
 				}
@@ -2886,6 +2901,17 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.type=ft.tryApply(ce.arg,ce.isSquare);
 				return !!ce.type;
 			}else{
+				if(ce.sstate!=SemState.error){
+					if(ft.isTuple){
+						if(auto tpl=cast(TupleExp)ce.arg){
+							assert(ft.nargs==tpl.length);
+							foreach(i,arg;tpl.e) checkArg(arg,ft.argTy(i));
+						}
+					}
+					if(ft.isConstForReverse.all){
+						checkArg(ce.arg,ft.dom);
+					}else assert(ft.isTuple||!ft.isConstForReverse.any);
+				}
 				if(ft.cod.hasAnyFreeVar(ft.names)){
 					sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
 					ce.sstate=SemState.error;
