@@ -803,6 +803,10 @@ ComputationClass classifyStatement(Expression e){
 			foreach(c;chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement) r=join(r,c);
 			return r;
 		}
+		if(auto we=cast(WithExp)e){
+			//return join(classifyExpression(we.trans,we.bdy));
+			return ComputationClass.quantum; // ok?
+		}
 		if(auto ret=cast(ReturnExp)e){
 			if(ret.e.type.isClassical()) return classical;
 			if(!ret.e.type.hasClassicalComponent()) return quantum;
@@ -948,6 +952,14 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		assert(!!othw==!!ite.othw);
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
+		return res;
+	}
+	if(auto we=cast(WithExp)e){
+		auto trans=we.trans.copy();
+		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked);
+		assert(!!bdy);
+		auto res=new WithExp(trans,bdy);
+		res.loc=we.loc;
 		return res;
 	}
 	if(auto ret=cast(ReturnExp)e){
