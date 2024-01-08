@@ -2704,7 +2704,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		return ce;
 	auto sc=context.sc, constResult=context.constResult, inType=context.inType;
 	scope(success){
-		if(ce&&ce.sstate!=SemState.error){
+		if(ce&&ce.sstate!=SemState.error&&sc){ // (sc can be null when called from combineTypes)
 			if(auto ft=cast(FunTy)ce.e.type){
 				if(inType){
 					static if(language==silq){
@@ -2719,7 +2719,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}
 					}
 				}
-				if(ft.annotation<sc.restriction()){
+				if(sc&&ft.annotation<sc.restriction()){
 					if(ft.annotation==Annotation.none){
 						sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(sc.restriction())), ce.loc);
 					}else{
