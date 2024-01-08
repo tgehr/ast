@@ -457,7 +457,9 @@ abstract class Scope{
 			if(d.isLinear()||d.scope_ is this){
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d);
-				pushConsumed();
+				static if(language==silq){
+					pushConsumed();
+				}
 			}
 		}
 		return false;
