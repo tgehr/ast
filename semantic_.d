@@ -2239,7 +2239,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		Dependency[string] dependencies;
 		int curDependency;
 	}
-	void[0][string] consumed;
+	Declaration[string] consumed;
 	void[0][string] defined;
 	void updateVars(Expression lhs,Expression rhs,bool expandTuples,Stage stage,bool indexed){
 		if(auto id=cast(Identifier)lhs){
@@ -2265,8 +2265,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 					case Stage.consumeLhs:
 						if(rename !in consumed){
 							if(!indexed) id.constLookup=false;
-							sc.consume(id.meaning);
-							consumed[id.name]=[];
+							consumed[id.name]=sc.consume(id.meaning);
 						}
 						break;
 					case Stage.defineVars:
@@ -2277,6 +2276,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 							auto name=id.meaning.name.name;
 							auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
 							defined[rename]=[];
+							ae.replacements~=AssignExp.Replacement(consumed[rename],var);
 						}
 						break;
 				}
@@ -2317,15 +2317,16 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	return ae;
 }
 
-bool isOpAssignExp(Expression e){
-	return cast(OrAssignExp)e||cast(AndAssignExp)e||cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(MulAssignExp)e||cast(DivAssignExp)e||cast(IDivAssignExp)e||cast(ModAssignExp)e||cast(PowAssignExp)e||cast(CatAssignExp)e||cast(BitOrAssignExp)e||cast(BitXorAssignExp)e||cast(BitAndAssignExp)e;
+AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssignExp)e; }
+
+AAssignExp isInvertibleOpAssignExp(Expression e){
+	auto r=isOpAssignExp(e);
+	if(r&&(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e))
+		return r;
+	return null;
 }
 
-bool isInvertibleOpAssignExp(Expression e){
-	return cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e;
-}
-
-ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
+AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }do{
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
@@ -2360,7 +2361,7 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 		return be;
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,isInvertibleOpAssignExp(be)))
+			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be)))
 				be.sstate=SemState.error;
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);
@@ -2409,7 +2410,8 @@ ABinaryExp opAssignExpSemantic(ABinaryExp be,Scope sc)in{
 			}
 			void define(){
 				auto name=id.meaning.name.name;
-				addVar(name,ce.type,be.loc,sc);
+				auto var=addVar(name,ce.type,be.loc,sc);
+				be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			}
 			static if(language==silq){
 				bool ok=false;
@@ -2442,7 +2444,7 @@ Expression assignSemantic(Expression e,Scope sc)in{
 	assert(isAssignment(e));
 }do{
 	if(auto ae=cast(AssignExp)e) return assignExpSemantic(ae,sc);
-	if(isOpAssignExp(e)) return opAssignExpSemantic(cast(ABinaryExp)e,sc);
+	if(auto be=isOpAssignExp(e)) return opAssignExpSemantic(be,sc);
 	assert(0);
 }
 

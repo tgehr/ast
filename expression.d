@@ -998,7 +998,21 @@ abstract class ABinaryExp: Expression{
 	}
 }
 
-class BinaryExp(TokenType op): ABinaryExp{
+abstract class AAssignExp: ABinaryExp{
+	this(Expression left,Expression right){super(left,right);}
+
+	// semantic information
+	static struct Replacement{
+		Declaration previous;
+		Declaration new_;
+	}
+	Replacement[] replacements;
+}
+
+private bool isAssignToken(TokenType op){ return TokenTypeToString(op).endsWith("←"); }
+template BinaryExpParent(TokenType op)if(isAssignToken(op)){ alias BinaryExpParent = AAssignExp; }
+template BinaryExpParent(TokenType op)if(!isAssignToken(op)){ alias BinaryExpParent = ABinaryExp; }
+class BinaryExp(TokenType op): BinaryExpParent!op{
 	static if(op==Tok!"→"){
 		Annotation annotation;
 		bool isLifted;
