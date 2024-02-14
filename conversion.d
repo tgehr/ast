@@ -65,11 +65,13 @@ class NumericConversion: Conversion{
 }
 
 class NumericCoercion: Conversion{
-	this(Expression from,Expression to)in{
+	bool needsCheck;
+	this(Expression from,Expression to,bool needsCheck)in{
 		auto wf=whichNumeric(from);
 		auto wt=whichNumeric(to);
 		assert(wf&&wt&&wt<wf);
 	}do{
+		this.needsCheck=needsCheck;
 		super(from,to);
 	}
 }
@@ -113,9 +115,11 @@ class VectorToArrayConversion: Conversion{
 }
 
 class ArrayToVectorConversion: Conversion{
-	this(ArrayTy from,VectorTy to)in{
+	bool checkLength;
+	this(ArrayTy from,VectorTy to,bool checkLength)in{
 		assert(isNoOpConversion(from.next,to.next));
 	}do{
+		this.checkLength=checkLength;
 		super(from,to);
 	}
 }
@@ -196,37 +200,45 @@ class IntToℤConversion: Conversion{
 }
 
 class IntToVectorConversion: Conversion{
+	bool checkLength;
 	this(CallExp from,VectorTy to,bool checkLength)in{
 		assert(isInt(from));
 		assert(isNoOpConversion(Bool(from.isClassical()),to.next));
 	}do{
+		this.checkLength=checkLength;
 		super(from,to);
 	}
 }
 
 class UintToVectorConversion: Conversion{
+	bool checkLength;
 	this(CallExp from,VectorTy to,bool checkLength)in{
 		assert(isUint(from));
 		assert(isNoOpConversion(Bool(from.isClassical()),to.next));
 	}do{
+		this.checkLength=checkLength;
 		super(from,to);
 	}
 }
 
 class VectorToIntConversion: Conversion{
+	bool checkLength;
 	this(VectorTy from,CallExp to,bool checkLength)in{
 		assert(isNoOpConversion(Bool(to.isClassical()),from.next));
 		assert(isInt(to));
 	}do{
+		this.checkLength=checkLength;
 		super(from,to);
 	}
 }
 
 class VectorToUintConversion: Conversion{
+	bool checkLength;
 	this(VectorTy from,CallExp to,bool checkLength)in{
 		assert(isNoOpConversion(Bool(to.isClassical()),from.next));
 		assert(isUint(to));
 	}do{
+		this.checkLength=checkLength;
 		super(from,to);
 	}
 }
