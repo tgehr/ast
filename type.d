@@ -1166,7 +1166,7 @@ class ProductTy: Type{
 	final ProductTy setAnnotation(Annotation annotation){
 		return productTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
 	}
-	private ProductTy setTuple(bool tuple)in{
+	ProductTy setTuple(bool tuple)in{
 		assert(!tuple||dom.isTupleTy());
 	}do{
 		if(tuple==isTuple) return this;
