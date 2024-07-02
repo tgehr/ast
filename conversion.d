@@ -3,6 +3,8 @@
 module ast.conversion;
 import ast.expression,ast.type;
 import ast.declaration:Variance;
+import ast.lexer:Tok;
+import util;
 
 import std.conv, std.range, std.algorithm;
 
@@ -265,3 +267,116 @@ class TypeSubypeConversion: Conversion{
 		super(from,to);
 	}
 }
+
+
+bool typeExplicitConversion(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(isSubtype(from,to)) return true;
+	if(annotationType==annotationType.punning){
+		auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
+		if(ft1&&ft2&&ft1.setAnnotation(Annotation.none)==ft2.setAnnotation(Annotation.none))
+			return true;
+		return false;
+	}
+	if(annotationType>=annotationType.conversion){
+		if(isSubtype(from,ℤt(true))&&(isUint(to)||isInt(to)))
+			return true;
+		if(isUint(from)&&isSubtype(ℕt(from.isClassical()),to))
+			return true;
+		if(isInt(from)&&isSubtype(ℤt(from.isClassical()),to))
+			return true;
+		if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
+			return true;
+		auto ce1=cast(CallExp)from;
+		if(ce1&&(isInt(ce1)||isUint(ce1))&&(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)))
+			return true;
+		auto ce2=cast(CallExp)to;
+		if(ce2&&(isInt(ce2)||isUint(ce2))&&(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))))
+			return true;
+	}
+	auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
+	if(tpl1&&tpl2&&tpl1.length==tpl2.length&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],tpl2[i],annotationType)))
+		return true;
+	auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
+	if(arr1&&arr2&&typeExplicitConversion(arr1.next,arr2.next,annotationType))
+		return true;
+	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
+	if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+		return true;
+	if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
+		return true;
+	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()
+	   &&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType))
+	) return true;
+	if(vec1&&tpl2&&vec1.num.eval()==LiteralExp.makeInteger(tpl2.length)
+	   &&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType))
+	) return true;
+	if(annotationType==TypeAnnotationType.coercion){
+		if((arr1||vec1)&&to==unit) return true;
+		if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+			return true;
+		if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
+			return true;
+		if(vec1&&tpl2&&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType)))
+			return true;
+		if(tpl1&&vec2&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType)))
+			return true;
+		if(from.isClassical()&&isSubtype(to.getClassical(),from)&&from.isNumeric) return true;
+	}
+	return false;
+}
+bool annotateLiteral(Expression expr, Expression type){
+	auto lit=cast(LiteralExp)expr, negLit=cast(UMinusExp)expr?cast(LiteralExp)(cast(UMinusExp)expr).e:null;
+	if(!lit&&!negLit) return false;
+	bool check(){
+		if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
+			return true;
+		if(isSubtype(expr.type,ℤt(false))&&isInt(type))
+			return true;
+		if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
+			return true;
+		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
+			return true;
+		if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"){
+			auto val=ℤ(lit.lit.str);
+			if(val==0||val==1) return true;
+		}
+		return false;
+	}
+	if(!check()) return false;
+	auto ltype=type.getClassical();
+	if(negLit){
+		import ast.semantic_:minusType;
+		assert(minusType(ltype)==ltype);
+		negLit.type=ltype;
+	}
+	expr.type=ltype;
+	return true;
+}
+bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
+	if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
+	if(annotateLiteral(expr,type)) return true;
+	if(typeExplicitConversion(expr.type,type,annotationType)) return true;
+	if(auto tpl1=cast(TupleExp)expr){
+		scope(success) expr.type=tupleTy(tpl1.e.map!(e=>e.type).array);
+		if(auto tpl2=type.isTupleTy()){
+			return tpl1.e.length==tpl2.length&&iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],tpl2[i],annotationType));
+		}
+		if(auto arr=cast(ArrayTy)type){
+			return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],arr.next,annotationType));
+		}
+		if(auto vec2=cast(VectorTy)type){
+			bool ok=annotationType==TypeAnnotationType.coercion;
+			if(!ok){
+				auto len=LiteralExp.makeInteger(tpl1.e.length);
+				len.loc=expr.loc;
+				auto eq=new EqExp(len,vec2.num);
+				eq.loc=expr.loc;
+				ok=eq.eval()==LiteralExp.makeBoolean(1);
+			}
+			if(ok){
+				return iota(tpl1.e.length).all!(i=>explicitConversion(tpl1.e[i],vec2.next,annotationType));
+			}
+		}
+	}
+	return false;
+ }
