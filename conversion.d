@@ -8,6 +8,10 @@ import util;
 
 import std.conv, std.range, std.algorithm;
 
+
+alias Ret(bool witness:true)=Conversion;
+alias Ret(bool witness:false)=bool;
+
 abstract class Conversion{
 	Expression from,to; // types
 	override string toString(){ return text(typeid(this),from,",",to); }
@@ -45,6 +49,32 @@ class NoOpConversion: Conversion{
 	override NoOpConversion isNoOp(){ return this; }
 }
 
+class TransitiveConversion: Conversion{
+	Conversion a,b;
+	this(Conversion a,Conversion b)in{
+		assert(a&&b&&a.to==b.from);
+	}do{
+		super(a.from,b.to);
+	}
+}
+
+Conversion trans(Conversion a,Conversion b)in{
+	assert(a&&b&&a.to==b.from);
+}do{
+	if(!a||!b) return null;
+	if(a.from==a.to) return b;
+	if(b.from==b.to) return a;
+	return new TransitiveConversion(a,b);
+}
+
+pragma(inline,true)
+private Ret!witness refl(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(isNoOpConversion(from,o)){
+		static if(witness) return new NoOpConversion(from,to);
+		else return true;
+	}else return typeof(return).init;
+}
+
 class QuantumPromotion: Conversion{
 	this(Expression from,Expression to)in{
 		assert(from.isClassical());
@@ -76,6 +106,17 @@ class NumericCoercion: Conversion{
 		this.needsCheck=needsCheck;
 		super(from,to);
 	}
+}
+
+pragma(inline,true)
+Ret!witness numericToNumeric(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	auto wf=whichNumeric(from);
+	auto wt=whichNumeric(to);
+	if(wf&&wt){
+		if(wf<=wt) return new NumericConversion(from,to);
+		if(annotationType==TypeAnnotationType.coercion) return new NumericCoercion(from,to,true);
+	}
+	return typeof(return).init;
 }
 
 class TupleConversion: Conversion{ // constant-length vectors or tuples
@@ -136,6 +177,49 @@ class ArrayConversion: Conversion{
 	}
 }
 
+Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
+	if(tpl1&&tpl2&&tpl1.length==tpl2.length){
+		auto rec=iota(tpl1.length).map!(i=>typeExplicitConversion!witness(tpl1[i],tpl2[i],annotationType));
+		static if(witness){
+			auto elements=rec.array;
+			if(!elements.all!(x=>!!x)) return null;
+			return new TupleConversion(from,to,elements);
+		}else return rec.all;
+	}
+	auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
+	if(arr1&&arr2){
+		auto next=typeExplicitConversion!witness(arr1.next,arr2.next,annotationType);
+		if(!next) return typeof(return).init;
+		static if(witness) return new ArrayConversion(arr1,arr2,next);
+		else return true;
+	}
+	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
+	if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+		return true;
+	if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
+		return true;
+	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()
+	   &&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType))
+	) return true;
+	if(vec1&&tpl2&&vec1.num.eval()==LiteralExp.makeInteger(tpl2.length)
+	   &&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType))
+	) return true;
+	if(annotationType==TypeAnnotationType.coercion){
+		if((arr1||vec1)&&to==unit) return true;
+		if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
+			return true;
+		if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
+			return true;
+		if(vec1&&tpl2&&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType)))
+			return true;
+		if(tpl1&&vec2&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType)))
+			return true;
+		if(from.isClassical()&&isSubtype(to.getClassical(),from)&&from.isNumeric) return true;
+	}
+	return typeof(return).init;
+}
+
 class IsTupleConversion: Conversion{
 	this(ProductTy from,ProductTy to)in{
 		assert(from.isTuple!=to.isTuple);
@@ -166,6 +250,21 @@ class AnnotationPun: Conversion{
 		super(from,to);
 	}
 }
+
+pragma(inline,true)
+Ret!witness annotationPun(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType)in{
+	assert(annotationType==TypeAnnotationType.punning);
+}do{
+	auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
+	if(ft1&&ft2){
+		auto nft1=ft1.setAnnotation(ft2.annotation);
+		static if(witness){
+			return trans(new AnnotationPun(ft1,nft1),typeExplicitConversion!true(nft1,ft2,annotationType));
+		}else return nft1==ft2;
+	}
+	return typeof(return).init;
+}
+
 class ℤtoIntConversion: Conversion{
 	this(ℤTy from,CallExp to)in{
 		assert(from.isClassical);
@@ -181,6 +280,22 @@ class ℤtoUintConversion: Conversion{
 	}do{
 		super(from,to);
 	}
+}
+
+pragma(inline,true)
+Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
+	if(isSubtype(from,ℤt(true))){
+		if(isUint(to)){
+			static if(witness) return trans(new NumericConversion(from,ℤt(true)),new ℤtoUintConversion(ℤt(true),cast(CallExp)to));
+			else return true;
+		}
+		if(isInt(to)){
+			static if(witness) return trans(new NumericConversion(from,ℤt(true)),new ℤtoIntConversion(ℤt(true),cast(CallExp)to));
+			else return true;
+		}
+	}
+	return typeof(return).init;
 }
 
 class UintToℕConversion: Conversion{
@@ -199,6 +314,23 @@ class IntToℤConversion: Conversion{
 	}do{
 		super(from,to);
 	}
+}
+
+pragma(inline, true)
+Ret!witness fixedToNumeric(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
+	if(!from.isClassical()) return typeof(return).init;
+	if(isUint(from)&&isSubtype(ℕt(true),to)){
+		static if(witness) return trans(new UintToℕConversion(cast(CallExp)from,ℕt(true)),new NumericConversion(ℕt(true),to));
+		else return true;
+	}
+	if(isInt(from)&&isSubtype(ℤt(true),to)){
+		static if(witness) return trans(new IntToℤConversion(cast(CallExp)from,ℤt(true)),new NumericConversion(ℤt(true),to));
+		else return true;
+	}
+	/+if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
+		return true;+/
+	return typeof(return).init;
 }
 
 class IntToVectorConversion: Conversion{
@@ -223,6 +355,25 @@ class UintToVectorConversion: Conversion{
 	}
 }
 
+pragma(inline,true)
+Ret!witness fixedToVector(bool witness)(Expression from,Expression to,TypeAnnotationType type){
+	if(type<TypeAnnotationType.conversion) return typeof(return).init;
+	auto ce1=cast(CallExp)from;
+	if(ce1&&(isInt(ce1)||isUint(ce1))){
+		if(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)){
+			static if(witness){
+				auto vec=vectorTy(Bool(ce1.isClassical()),ce1.arg);
+				Conversion direct=null;
+				enum checkLength=false;
+				if(isInt(ce1)) direct=new IntToVectorConversion(ce1,vec,checkLength);
+				if(isUint(ce1)) direct=new UintToVectorConversion(ce1,vec,checkLength);
+				return trans(direct,typeExplicitConversion!true(vec,to,type));
+			}else return true;
+		}
+	}
+	return typeof(return).init;
+}
+
 class VectorToIntConversion: Conversion{
 	bool checkLength;
 	this(VectorTy from,CallExp to,bool checkLength)in{
@@ -243,6 +394,25 @@ class VectorToUintConversion: Conversion{
 		this.checkLength=checkLength;
 		super(from,to);
 	}
+}
+
+pragma(inline,true)
+Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
+	auto ce2=cast(CallExp)to;
+	if(ce2&&(isInt(ce2)||isUint(ce2))){
+		if(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))){
+			static if(witness){
+				auto vec=vectorTy(Bool(ce2.isClassical()),ce2.arg);
+				Conversion direct=null;
+				enum checkLength=false;
+				if(isInt(ce2)) direct=new VectorToIntConversion(vec,ce2,checkLength);
+				if(isUint(ce2)) direct=new VectorToUintConversion(vec,ce2,checkLength);
+				return trans(typeExplicitConversion!true(from,vec,annotationType),direct);
+			}else return true;
+		}
+	}
+	return typeof(return).init;
 }
 
 class ParameterizedSubtypeConversion: Conversion{
@@ -268,60 +438,20 @@ class TypeSubypeConversion: Conversion{
 	}
 }
 
-
-bool typeExplicitConversion(Expression from,Expression to,TypeAnnotationType annotationType){
-	if(isSubtype(from,to)) return true;
-	if(annotationType==annotationType.punning){
-		auto ft1=cast(ProductTy)from, ft2=cast(ProductTy)to;
-		if(ft1&&ft2&&ft1.setAnnotation(Annotation.none)==ft2.setAnnotation(Annotation.none))
-			return true;
-		return false;
-	}
+Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
+	static if(witness){
+		if(auto r=numericToNumeric!true(from,to,annotationType)) return r;
+		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
+	}else if(isSubtype(from,to)) return true;
+	if(annotationType==TypeAnnotationType.punning)
+		return annotationPun!witness(from,to,annotationType);
 	if(annotationType>=annotationType.conversion){
-		if(isSubtype(from,ℤt(true))&&(isUint(to)||isInt(to)))
-			return true;
-		if(isUint(from)&&isSubtype(ℕt(from.isClassical()),to))
-			return true;
-		if(isInt(from)&&isSubtype(ℤt(from.isClassical()),to))
-			return true;
-		if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
-			return true;
-		auto ce1=cast(CallExp)from;
-		if(ce1&&(isInt(ce1)||isUint(ce1))&&(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)))
-			return true;
-		auto ce2=cast(CallExp)to;
-		if(ce2&&(isInt(ce2)||isUint(ce2))&&(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))))
-			return true;
+		if(auto r=ℤtoFixed!witness(from,to,annotationType)) return r;
+		if(auto r=fixedToNumeric!witness(from,to,annotationType)) return r;
+		if(auto r=fixedToVector!witness(from,to,annotationType)) return r;
+		if(auto r=vectorToFixed!witness(from,to,annotationType)) return r;
 	}
-	auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
-	if(tpl1&&tpl2&&tpl1.length==tpl2.length&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],tpl2[i],annotationType)))
-		return true;
-	auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
-	if(arr1&&arr2&&typeExplicitConversion(arr1.next,arr2.next,annotationType))
-		return true;
-	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-	if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
-		return true;
-	if(vec1&&arr2&&typeExplicitConversion(vec1.next,arr2.next,annotationType))
-		return true;
-	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()
-	   &&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType))
-	) return true;
-	if(vec1&&tpl2&&vec1.num.eval()==LiteralExp.makeInteger(tpl2.length)
-	   &&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType))
-	) return true;
-	if(annotationType==TypeAnnotationType.coercion){
-		if((arr1||vec1)&&to==unit) return true;
-		if(vec1&&vec2&&typeExplicitConversion(vec1.next,vec2.next,annotationType))
-			return true;
-		if(arr1&&vec2&&typeExplicitConversion(arr1.next,vec2.next,annotationType))
-			return true;
-		if(vec1&&tpl2&&iota(tpl2.length).all!(i=>typeExplicitConversion(vec1.next,tpl2[i],annotationType)))
-			return true;
-		if(tpl1&&vec2&&iota(tpl1.length).all!(i=>typeExplicitConversion(tpl1[i],vec2.next,annotationType)))
-			return true;
-		if(from.isClassical()&&isSubtype(to.getClassical(),from)&&from.isNumeric) return true;
-	}
+	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
 	return false;
 }
 bool annotateLiteral(Expression expr, Expression type){
@@ -352,8 +482,8 @@ bool annotateLiteral(Expression expr, Expression type){
 	expr.type=ltype;
 	return true;
 }
-bool explicitConversion(Expression expr,Expression type,TypeAnnotationType annotationType){
-	if(annotationType==annotationType.punning) return typeExplicitConversion(expr.type,type,annotationType);
+Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression type,TypeAnnotationType annotationType){
+	if(annotationType==TypeAnnotationType.punning) return typeExplicitConversion!witness(expr.type,type,annotationType);
 	if(annotateLiteral(expr,type)) return true;
 	if(typeExplicitConversion(expr.type,type,annotationType)) return true;
 	if(auto tpl1=cast(TupleExp)expr){

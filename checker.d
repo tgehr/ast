@@ -914,6 +914,13 @@ class Checker {
 		assert(0, format("ERROR: Expected moved %s on %s: << %s >>", why, e.loc, e));
 	}
 
+	void expectConvertible(ast_exp.Expression e, ast_exp.Expression ty, ast_ty.TypeAnnotationType annotationType) {
+		import ast.conversion;
+		//if(explicitConversion!true(e, ty, annotationType)) return; // TODO
+		if(explicitConversion(e, ty, annotationType)) return;
+		assert(0, format("ERROR: Expected %s of type << %s >> to be convertible to type << %s >>", e.loc, e.type, ty));
+	}
+
 	Checker parent;
 	ast_scope.NestedScope nscope;
 	IdMap!(ast_decl.Declaration) vars;
