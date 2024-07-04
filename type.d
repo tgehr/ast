@@ -851,9 +851,15 @@ class ProductTy: Type{
 		assert(isType(cod),text(cod));
 	}do{
 		this.isConst=isConst; // TODO: don't track this in PSI
-		this.names=names; this.dom=dom; this.cod=cod;
-		assert(!cod.hasFreeVar(""));
+		this.names=names; this.dom=dom;
 		this.isSquare=isSquare; this.isTuple=isTuple;
+		Expression[string] subst;
+		foreach(i;0..names.length)
+			if(names[i]!="")
+				subst[names[i]]=varTy(names[i],argTy(i));
+		assert(!cod.hasFreeVar(""));
+		cod=cod.substitute(subst); // TODO: only do this if necessary?
+		this.cod=cod;
 		this.annotation=annotation;
 		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
 		super();
@@ -979,7 +985,7 @@ class ProductTy: Type{
 		while(hasFreeVar(nn)||block.hasFreeVar(nn)) nn~="'";
 		return nn;
 	}
-	private string[] freshNames(Expression block){
+	string[] freshNames(Expression block){
 		auto nnames=names.dup;
 		foreach(i,ref nn;nnames){
 			if(nn=="") nn="x";
@@ -987,7 +993,7 @@ class ProductTy: Type{
 		}
 		return nnames;
 	}
-	private ProductTy relabelAll(string[] nnames)out(r){
+	ProductTy relabelAll(string[] nnames)out(r){
 		assert(nnames.length==names.length);
 		foreach(n;nnames) assert(!hasFreeVar(n));
 	}do{

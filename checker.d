@@ -562,6 +562,7 @@ class Checker {
 	void implExpr(ast_exp.TypeAnnotationExp e) {
 		visExpr(e.type);
 		visExpr(e.e);
+		expectConvertible(e.e, e.type, e.annotationType);
 	}
 
 	void implExpr(ast_exp.FieldExp e) {
@@ -802,6 +803,7 @@ class Checker {
 					expectConst(arg, "argument");
 				}
 				visExpr(arg);
+				expectConvertible(arg, pTy, ast_exp.TypeAnnotationType.annotation);
 			}
 			return;
 		}
@@ -916,9 +918,8 @@ class Checker {
 
 	void expectConvertible(ast_exp.Expression e, ast_exp.Expression ty, ast_ty.TypeAnnotationType annotationType) {
 		import ast.conversion;
-		//if(explicitConversion!true(e, ty, annotationType)) return; // TODO
-		if(explicitConversion(e, ty, annotationType)) return;
-		assert(0, format("ERROR: Expected %s of type << %s >> to be convertible to type << %s >>", e.loc, e.type, ty));
+		if(typeExplicitConversion!true(e.type, ty, annotationType)) return; // check witness generation
+		assert(0, format("ERROR: Expected %s of type %s to be convertible to type %s", e, e.type, ty));
 	}
 
 	Checker parent;
