@@ -4710,6 +4710,16 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 				args[1]=expressionSemantic(args[1],context.nestConst);
 				return makeStrLit(text(args[1].type));
 			}
+		case "conversion":
+			if(args.length!=3){
+				sc.error("expected two expressions as arguments to 'conversion' query", ce.loc);
+				ce.sstate=SemState.error;
+				break;
+			}else{
+				args[1]=typeSemantic(args[1], sc, true);
+				args[2]=typeSemantic(args[2], sc, true);
+				return makeStrLit(text(typeExplicitConversion!true(args[1], args[2], TypeAnnotationType.coercion)));
+			}
 		default:
 			sc.error(format("unknown query '%s'",literal.lit.str),literal.loc);
 			ce.sstate=SemState.error;

@@ -55,9 +55,12 @@ class NoOpConversion: Conversion{
 
 class TransitiveConversion: Conversion{
 	Conversion a,b;
+	override string toString(){ return text(typeid(this),"{",a,"; ",b,"}"); }
 	this(Conversion a,Conversion b)in{
 		assert(a&&b&&a.to==b.from);
 	}do{
+		this.a=a;
+		this.b=b;
 		super(a.from,b.to);
 	}
 }
@@ -139,6 +142,7 @@ Ret!witness numericToNumeric(bool witness)(Expression from,Expression to,TypeAnn
 
 class TupleConversion: Conversion{ // constant-length vectors or tuples
 	Conversion[] elements;
+	override string toString(){ return text(typeid(this),"[",elements.map!(e=>e.toString()).join(","),"]"); }
 	this(Expression from,Expression to,Conversion[] elements)in{
 		auto tpfrom=from.isTupleTy();
 		auto tpto=to.isTupleTy();
@@ -157,6 +161,7 @@ class TupleConversion: Conversion{ // constant-length vectors or tuples
 class VectorConversion: Conversion{
 	Conversion next;
 	bool checkLength;
+	override string toString(){ return text(typeid(this),"(",next,")"); }
 	this(VectorTy from,VectorTy to,Conversion next,bool checkLength)in{
 		assert(isNoOpConversion(from.next,next.from));
 		assert(isNoOpConversion(next.to,to.next));
@@ -187,10 +192,12 @@ class ArrayToVectorConversion: Conversion{
 
 class ArrayConversion: Conversion{
 	Conversion next;
+	override string toString(){ return text(typeid(this),"(",next,")"); }
 	this(ArrayTy from,ArrayTy to,Conversion next)in{
 		assert(isNoOpConversion(from.next,next.from));
 		assert(isNoOpConversion(next.to,to.next));
 	}do{
+		this.next=next;
 		super(from,to);
 	}
 }
