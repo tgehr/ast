@@ -34,10 +34,6 @@ bool isNoOpConversion(Expression from,Expression to)in{
 		to=to.eval();
 		if(from!=to) return false;
 	}
-	if(auto pt1=cast(ProductTy)from)
-		if(auto pt2=cast(ProductTy)to)
-			if(pt1.isTuple!=pt2.isTuple)
-				return false;
 	return true;
 }
 
@@ -319,15 +315,6 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 	return typeof(return).init;
 }
 
-class IsTupleConversion: Conversion{
-	this(ProductTy from,ProductTy to)in{
-		assert(from.isTuple!=to.isTuple);
-		assert(isNoOpConversion(from,to.setTuple(from.isTuple)));
-	}do{
-		super(from,to);
-	}
-}
-
 class FunctionConversion: Conversion{
 	string[] names;
 	Conversion dom,cod;
@@ -357,13 +344,13 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 		if(!ft1.isTuple){
 			auto nft1=ft1.setTuple(true);
 			assert(!!nft1);
-			static if(witness) return trans(new IsTupleConversion(ft1,nft1),typeExplicitConversion!witness(nft1,ft2,annotationType));
+			static if(witness) return typeExplicitConversion!witness(nft1,ft2,annotationType);
 			else return typeExplicitConversion!witness(nft1,ft2);
 		}
 		if(!ft2.isTuple){
 			auto nft2=ft2.setTuple(true);
 			assert(!!nft2);
-			static if(witness) return trans(typeExplicitConversion!witness(ft1,nft2,annotationType),new IsTupleConversion(nft2,ft2));
+			static if(witness) return typeExplicitConversion!witness(ft1,nft2,annotationType);
 			else return typeExplicitConversion!witness(ft1,nft2);
 		}
 	}
