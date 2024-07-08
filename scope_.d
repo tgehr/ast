@@ -830,6 +830,7 @@ abstract class Scope{
 			return getSplit(decl);
 		}
 		foreach(ref outer;loopScope.consumedOuter){
+			if(outer.sstate==SemState.error) continue;
 			assert(outer.scope_ is this);
 			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
 			auto nonZeroIters=outer.splitInto[1];
