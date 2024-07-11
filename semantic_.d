@@ -4451,7 +4451,7 @@ Expression typeForDecl(Declaration decl){
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?
 		assert(dat.isTuple||dat.params.length==1);
 		auto pt=dat.isTuple?tupleTy(dat.params.map!(p=>p.vtype).array):dat.params[0].vtype;
-		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,ttype,true,dat.isTuple,deterministic,true);
+		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,ttype,true,dat.isTuple,pure_,true);
 	}
 	if(auto vd=cast(VarDecl)decl){
 		return vd.vtype;

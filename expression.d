@@ -184,6 +184,7 @@ abstract class Expression: Node{
 	}else static if(language==psi){
 		final bool isPure(){ return getAnnotation()>=Annotation.pure_; }
 	}
+	final bool isDeterministic(){ return getAnnotation()>=deterministic; }
 
 	// semantic information
 	bool constLookup=true;
@@ -334,7 +335,7 @@ class LiteralExp: Expression{
 		}
 	}
 
-	override Annotation getAnnotation(){ return deterministic; }
+	override Annotation getAnnotation(){ return pure_; }
 	override Expression evalImpl(Expression ntype){
 		if(ntype == type) return this;
 		return new LiteralExp(lit);
@@ -515,7 +516,7 @@ class Identifier: Expression{
 		return typeFromMeaning(meaning);
 	}
 
-	override Annotation getAnnotation(){ return deterministic; }
+	override Annotation getAnnotation(){ return pure_; }
 
 	override Expression evalImpl(Expression ntype){
 		if(substitute) return getInitializer().evalImpl(ntype);
@@ -1241,6 +1242,8 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 						if(se1.e2==ne2) return se1.e1.evalImpl(ntype);
 					}
 				}
+				auto isDeterministic=this.isDeterministic();
+				if(isDeterministic)
 				static foreach(sub2;[Tok!"-",Tok!"sub"]){
 					if(auto se2=cast(BinaryExp!sub2)ne2){
 						if(se2.e2==ne1) return se2.e1.evalImpl(ntype);
@@ -1256,7 +1259,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					nb1.loc=nb1.e1.loc.to(nb1.e2.loc);
 					return nb1.evalImpl(ntype);
 				}
-				if(ne1==ne2){
+				if(isDeterministic&&ne1==ne2){
 					auto two=LiteralExp.makeInteger(2);
 					two.loc=ne1.loc;
 					return make(new BinaryExp!(Tok!"·")(two,ne2));
@@ -1279,23 +1282,25 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return ne1.evalImpl(ntype);
 				}
-				if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
-					if(ae1.e1==ne2) return ae1.e2.evalImpl(ntype);
-					if(ae1.e2==ne2) return ae1.e1.evalImpl(ntype);
-				}
-				static foreach(sub;[Tok!"-",Tok!"sub"]){
-					if(auto se1=cast(BinaryExp!sub)ne1){
-						if(se1.e1==ne2) return make(new UnaryExp!(Tok!"-")(se1.e2));
-						// TODO: if(se1.e2==-ne2)
+				if(this.isDeterministic()){
+					if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
+						if(ae1.e1==ne2) return ae1.e2.evalImpl(ntype);
+						if(ae1.e2==ne2) return ae1.e1.evalImpl(ntype);
 					}
-					if(auto se2=cast(BinaryExp!sub)ne2){
-						if(se2.e1==ne1) return se2.e2.evalImpl(ntype);
-						// TODO: if(se2.e2==-ne1
+					static foreach(sub;[Tok!"-",Tok!"sub"]){
+						if(auto se1=cast(BinaryExp!sub)ne1){
+							if(se1.e1==ne2) return make(new UnaryExp!(Tok!"-")(se1.e2));
+							// TODO: if(se1.e2==-ne2)
+						}
+						if(auto se2=cast(BinaryExp!sub)ne2){
+							if(se2.e1==ne1) return se2.e2.evalImpl(ntype);
+							// TODO: if(se2.e2==-ne1
+						}
 					}
-				}
-				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
-					if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2));
-					if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1));
+					if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
+						if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2));
+						if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1));
+					}
 				}
 				static foreach(sub2;[Tok!"-",Tok!"sub"]){
 					if(auto se2=cast(BinaryExp!sub2)ne2){
@@ -1369,8 +1374,10 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 			}
 			static if(op==Tok!"="||op==Tok!"≠"){
-				if(ne1==ne2) return make(LiteralExp.makeBoolean(op==Tok!"="));
-				if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
+				if(ne1.isDeterministic()){
+					if(ne1==ne2) return make(LiteralExp.makeBoolean(op==Tok!"="));
+					if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
+				}
 				if(util.among(ne1.type,ℕt(true),ℤt(true))&&util.among(ne2.type,ℕt(true),ℤt(true))){
 					if(!cast(LiteralExp)ne2){
 						import ast.semantic_: subtractionType;
@@ -1704,7 +1711,7 @@ class TupleExp: Expression{
 		return tpl&&e==tpl.e;
 	}
 	override Annotation getAnnotation(){
-		return reduce!min(deterministic, e.map!(x=>x.getAnnotation()));
+		return reduce!min(pure_, e.map!(x=>x.getAnnotation()));
 	}
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.map!(e=>e.eval()).array;
@@ -1738,7 +1745,7 @@ class LambdaExp: Expression{
 		return 0;
 	}
 	override Expression evalImpl(Expression ntype){ return this; } // TODO: partially evaluate lambdas?
-	override Annotation getAnnotation(){ return deterministic; }
+	override Annotation getAnnotation(){ return pure_; }
 }
 
 class ArrayExp: Expression{
@@ -1778,7 +1785,7 @@ class ArrayExp: Expression{
 		if(!ae||e.length!=ae.e.length) return false;
 		return all!(i=>e[i].unify(ae.e[i],subst,meet))(iota(e.length));
 	}
-	override Annotation getAnnotation(){ return reduce!min(deterministic,e.map!(x=>x.getAnnotation())); }
+	override Annotation getAnnotation(){ return reduce!min(pure_,e.map!(x=>x.getAnnotation())); }
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.map!(e=>e.eval()).array;
 		if(ne == e && ntype==type) return this;

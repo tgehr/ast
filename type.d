@@ -9,13 +9,15 @@ static if(language==silq){
 		mfree,
 		qfree,
 	}
-	enum deterministic=Annotation.qfree;
+	enum deterministic=Annotation.mfree;
+	enum pure_=Annotation.qfree;
 }else static if(language==psi){
 	enum Annotation{
 		none,
 		pure_,
 	}
 	enum deterministic=Annotation.pure_;
+	enum pure_=Annotation.pure_;
 }
 
 import std.array, std.algorithm, std.conv;
@@ -110,7 +112,7 @@ abstract class Type: Expression{
 	override @property string kind(){ return "type"; }
 	override string toString(){ return "T"; }
 	abstract override bool opEquals(Object r);
-	override Annotation getAnnotation(){ return deterministic; }
+	override Annotation getAnnotation(){ return pure_; }
 }
 
 class ErrorTy: Type{
@@ -1258,7 +1260,7 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation 
 FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClassical)in{
 	assert(dom&&cod);
 }do{
-	return funTy(dom,cod,isSquare,isTuple,deterministic,isClassical);
+	return funTy(dom,cod,isSquare,isTuple,pure_,isClassical);
 }
 
 Identifier varTy(string name,Expression type,bool classical=false)in{

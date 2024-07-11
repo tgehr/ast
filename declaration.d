@@ -319,7 +319,7 @@ class DatDecl: Declaration{
 		bdy.type=unit;
 		fd=new FunctionDef(null, fparams, isTuple, null, bdy);
 		fd.isSquare=true;
-		fd.annotation=deterministic;
+		fd.annotation=pure_;
 		fd.ftype=cast(ProductTy)id.type;
 		assert(fd.ftype);
 		assert(!captures.length,"nested dat decl not supported");
