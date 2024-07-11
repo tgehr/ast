@@ -1127,9 +1127,8 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 			// bake prelude into binary as a fallback
 			if(path==preludePath()){
 				static if(language==silq){
-					assert(path=="prelude.slq" || path=="prelude-nocheck.slq");
-					if(path=="prelude.slq") code = import("prelude.slq") ~ "\0\0\0\0";
-					else code=import("prelude-nocheck.slq") ~ "\0\0\0\0";
+					assert(path=="prelude.slq");
+					code = import("prelude.slq") ~ "\0\0\0\0";
 				}else static if(language==psi){
 					assert(path=="prelude.psi" || path=="prelude-nocheck.psi");
 					if(path=="prelude.psi") code = import("prelude.psi") ~ "\0\0\0\0";
