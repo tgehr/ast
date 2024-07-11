@@ -850,7 +850,7 @@ class ProductTy: Type{
 			assert(names.length==1);
 			assert(isConst.length==1);
 		}
-		assert(isType(cod),text(cod));
+		assert(isType(cod)||isQNumeric(cod),text(cod));
 	}do{
 		this.isConst=isConst; // TODO: don't track this in PSI
 		this.names=names; this.dom=dom;
