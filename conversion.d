@@ -542,6 +542,7 @@ Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnota
 	return typeof(return).init;
 }
 
+/+
 class ParameterizedSubtypeConversion: Conversion{
 	struct ParameterConversion{
 		Variance variance;
@@ -555,15 +556,7 @@ class ParameterizedSubtypeConversion: Conversion{
 		super(from,to);
 	}
 }
-
-class TypeSubypeConversion: Conversion{
-	this(Expression from,Expression to)in{
-		assert(isTypeTy(from)&&isTypeTy(to));
-		assert(isSubtype(from,to));
-	}do{
-		super(from,to);
-	}
-}
++/
 
 Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
 	static if(witness){
