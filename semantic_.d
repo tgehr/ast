@@ -3098,7 +3098,9 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 			if(branch.type&&branch.type.hasClassicalComponent()){
 				if(auto qtype=branch.type.getQuantum()){
 					if(isType(qtype)){
-						branch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
+						auto nbranch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
+						nbranch.loc=branch.loc;
+						branch=nbranch;
 						branch=expressionSemantic(branch,context);
 					}
 				}
