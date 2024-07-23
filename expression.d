@@ -1488,7 +1488,27 @@ class IteExp: Expression{
 		auto ite=cast(IteExp)rhs;
 		if(!ite) return false;
 		return cond.unify(ite.cond,subst,meet)&&then.unify(ite.then,subst,meet)
-			&&!othw&&!ite.othw||othw&&ite.othw&&othw.unify(ite.othw,subst,meet);
+			&&(!othw&&!ite.othw||othw&&ite.othw&&othw.unify(ite.othw,subst,meet));
+	}
+	override bool opEquals(Object o){
+		auto ite=cast(IteExp)o;
+		if(!ite) return false;
+		return cond==ite.cond&&then==ite.then
+			&&(!othw&&!ite.othw||othw&&ite.othw&&othw==ite.othw);
+	}
+	override Expression getClassical(){
+		static if(language==silq){
+			assert(isType(this)&&cond.type&&cond.type.isClassical());
+			if(auto r=super.getClassical()) return r;
+			assert(then&&then.s.length==1);
+			auto nthen=new CompoundExp([then.s[0].getClassical()]);
+			assert(othw&&othw.s.length==1);
+			auto nothw=new CompoundExp([othw.s[0].getClassical()]);
+			auto r=new IteExp(cond,nthen,nothw);
+			r.type=getClassicalTy(type);
+			r.sstate=sstate;
+			return r;
+		}else return this;
 	}
 	override Annotation getAnnotation(){
 		return min(cond.getAnnotation(), then.getAnnotation(), othw.getAnnotation());
@@ -1497,7 +1517,10 @@ class IteExp: Expression{
 		auto ncond=cond.eval(),nthen=cast(CompoundExp)then.eval(),nothw=cast(CompoundExp)othw.eval();
 		assert(nthen&&nothw); // TODO: check statically
 		if(ncond==cond&&nthen==then&&nothw==othw&&ntype==type) return this;
-		return new IteExp(ncond,nthen,nothw);
+		auto r=new IteExp(ncond,nthen,nothw);
+		r.type=type;
+		r.sstate=sstate;
+		return r;
 	}
 }
 
@@ -1648,7 +1671,16 @@ class CompoundExp: Expression{
 
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
-		return false;
+		auto ce=cast(CompoundExp)rhs;
+		if(!ce) return false;
+		if(s.length!=ce.s.length) return false;
+		return iota(s.length).all!(i=>s[i].unify(ce.s[i],subst,meet));
+	}
+	override bool opEquals(Object o){
+		auto ce=cast(CompoundExp)o;
+		if(!ce) return false;
+		if(s.length!=ce.s.length) return false;
+		return iota(s.length).all!(i=>s[i]==ce.s[i]);
 	}
 	override Annotation getAnnotation(){ return reduce!min(Annotation.max, s.map!(x=>x.getAnnotation())); }
 	override CompoundExp evalImpl(Expression ntype){

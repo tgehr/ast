@@ -3136,6 +3136,10 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		sc.note("consumed in one branch of if expression", ite.loc);
 		ite.sstate=SemState.error;
 	}
+	if(inType){
+		if(ite.then) ite.then.blscope_=null;
+		if(ite.othw) ite.othw.blscope_=null;
+	}
 	return ite;
 }
 

@@ -697,6 +697,12 @@ class Checker {
 		assert(cast(ast_ty.BoolTy) e.cond.type);
 		visExpr(e.cond);
 
+		if(e.then.blscope_ is null && e.othw.blscope_ is null) {
+			visExpr(e.then.s[0]);
+			visExpr(e.othw.s[0]);
+			return;
+		}
+
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
 
