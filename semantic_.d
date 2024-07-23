@@ -3158,7 +3158,7 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
-	auto sc=context.sc;
+	auto sc=context.sc, inType=context.inType;
 	FunctionDef nfd=le.fd;
 	if(!le.fd.scope_){
 		le.fd.scope_=context.sc;
@@ -3172,6 +3172,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 		le.type=typeForDecl(le.fd);
 		le.sstate=SemState.completed;
 	}
+	if(inType) le.fd.scope_=null;
 	return le;
 }
 
