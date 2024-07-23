@@ -3113,24 +3113,24 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
-	if(ite.sstate==SemState.error)
-		return ite;
-	if(!ite.then.s[0].type) ite.then.s[0].type = ite.othw.s[0].type;
-	if(!ite.othw.s[0].type) ite.othw.s[0].type = ite.then.s[0].type;
-	auto t1=ite.then.s[0].type;
-	auto t2=ite.othw.s[0].type;
-	ite.type=joinTypes(t1,t2);
-	if(!t1 && !t2 && numBottom==2){
-		ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
-	}
-	if(t1 && t2 && !ite.type){
-		sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
-		ite.sstate=SemState.error;
-	}
-	if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
-		// TODO: automatically promote to quantum if possible
-		sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
-		ite.sstate=SemState.error;
+	if(ite.sstate!=SemState.error){
+		if(!ite.then.s[0].type) ite.then.s[0].type = ite.othw.s[0].type;
+		if(!ite.othw.s[0].type) ite.othw.s[0].type = ite.then.s[0].type;
+		auto t1=ite.then.s[0].type;
+		auto t2=ite.othw.s[0].type;
+		ite.type=joinTypes(t1,t2);
+		if(!t1 && !t2 && numBottom==2){
+			ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
+		}
+		if(t1 && t2 && !ite.type){
+			sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
+			ite.sstate=SemState.error;
+		}
+		if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
+			// TODO: automatically promote to quantum if possible
+			sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
+			ite.sstate=SemState.error;
+		}
 	}
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("consumed in one branch of if expression", ite.loc);
@@ -3140,6 +3140,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		if(ite.then) ite.then.blscope_=null;
 		if(ite.othw) ite.othw.blscope_=null;
 	}
+	if(ite.sstate!=SemState.error) ite.sstate=SemState.completed;
 	return ite;
 }
 
