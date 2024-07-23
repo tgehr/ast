@@ -3094,6 +3094,16 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 				++numBottom;
 			}
 		}else branch=expressionSemantic(branch,context);
+		if(quantumControl){
+			if(branch.type&&branch.type.hasClassicalComponent()){
+				if(auto qtype=branch.type.getQuantum()){
+					if(isType(qtype)){
+						branch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
+						branch=expressionSemantic(branch,context);
+					}
+				}
+			}
+		}
 		return branch;
 	}
 	// initialize scopes, to allow captures to be inserted
@@ -3127,7 +3137,6 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 			ite.sstate=SemState.error;
 		}
 		if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
-			// TODO: automatically promote to quantum if possible
 			sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
 			ite.sstate=SemState.error;
 		}
