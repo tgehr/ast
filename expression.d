@@ -1436,7 +1436,12 @@ class FieldExp: Expression{
 	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
 		auto fe=cast(FieldExp)rhs;
 		if(!fe||f!=fe.f) return false;
-		return e.unify(rhs,subst,meet);
+		return e.unify(fe.e,subst,meet);
+	}
+	override bool opEquals(Object o){
+		auto fe=cast(FieldExp)o;
+		if(!fe||f!=fe.f) return false;
+		return e==fe.e;
 	}
 
 	override Annotation getAnnotation(){
