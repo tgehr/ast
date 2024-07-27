@@ -477,7 +477,7 @@ class Checker {
 			visLhs(e.e1);
 			strictScope = true;
 		}
-		if(e.lowering) visLowering(e, e.lowering);
+		assert(!e.lowering); // TODO
 		return false;
 	}
 
@@ -849,25 +849,34 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
+		if(e.lowering) {
+			visLowering(e, e.lowering);
+			return;
+		}
 		visExpr(e.e1);
 		visExpr(e.e2);
-		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	static foreach(op;binops ~ cmpops ~ boolops)
 	void implExpr(ast_exp.BinaryExp!(Tok!op) e) {
 		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
+		if(e.lowering) {
+			visLowering(e, e.lowering);
+			return;
+		}
 		visExpr(e.e1);
 		visExpr(e.e2);
-		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	static foreach(op;unops)
 	void implExpr(ast_exp.UnaryExp!(Tok!op) e) {
 		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
+		if(e.lowering) {
+			visLowering(e, e.lowering);
+			return;
+		}
 		visExpr(e.e);
-		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	void implExpr(ast_exp.Expression e) {
