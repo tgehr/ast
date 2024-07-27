@@ -7,6 +7,7 @@ import std.array,std.algorithm,std.range,std.exception;
 import std.format, std.conv, util.tuple:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,ast.reverse,util;
+import ast.lowerings;
 
 string freshName(){ // TODO: improve mechanism for generating temporaries
 	static int counter=0;
@@ -210,11 +211,12 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 	}
 	modules[path]=tuple(Expression[].init,TopScope.init);
 	scope(success) modules[path]=tuple(exprs,sc);
-	Expression[] prelude;
-	import ast.parser;
-	if(!prsc && path != preludePath())
+	import ast.parser, ast.declaration;
+	if(!prsc && path != preludePath()){
+		Expression[] prelude;
 		if(auto r=importModule(preludePath,err,prelude,prsc))
 			return r;
+	}
 	if(auto r=parseFile(getActualPath(path),err,exprs,loc))
 		return r;
 	sc=new TopScope(err);
@@ -3885,13 +3887,16 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 		context.sc.error(format("incompatible type %s for %s",e1.type,name),e.loc);
 		e.sstate=SemState.error;
 	}
+	if(e.sstate!=SemState.error) e.sstate=SemState.completed;
 	return e;
 }
 
 Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
+	static if(operatorLowering) scope(success) if(ume.sstate==SemState.completed) addLowering(ume,context);
 	return handleUnary!minusType("minus",ume,ume.e,context);
 }
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
+	static if(operatorLowering) scope(success) if(une.sstate==SemState.completed) addLowering(une,context);
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
 	static if(language==silq){
@@ -3916,6 +3921,7 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	return handleUnary!notType("not",une,une.e,context);
 }
 Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
+	static if(operatorLowering) scope(success) if(ubne.sstate==SemState.completed) addLowering(ubne,context);
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
 

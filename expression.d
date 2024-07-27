@@ -571,10 +571,16 @@ class PlaceholderExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 }
 
-
-class UnaryExp(TokenType op): Expression{
+abstract class AUnaryExp: Expression{
 	Expression e;
 	this(Expression next){e = next;}
+
+	// for compilation:
+	static if(operatorLowering) Expression lowering=null;
+}
+
+class UnaryExp(TokenType op): AUnaryExp{
+	this(Expression next){ super(next); }
 	override UnaryExp!op copyImpl(CopyArgs args){
 		return new UnaryExp!op(e.copy(args));
 	}
@@ -997,6 +1003,9 @@ abstract class ABinaryExp: Expression{
 	override Annotation getAnnotation(){
 		return min(e1.getAnnotation(), e2.getAnnotation());
 	}
+
+	// for compilation
+	static if(operatorLowering) Expression lowering=null;
 }
 
 abstract class AAssignExp: ABinaryExp{

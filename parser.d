@@ -1133,7 +1133,7 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 			}else static if(language==psi){
 				if(path=="prelude.psi") code=import("prelude.psi") ~ "\0\0\0\0";
 				else if(path=="prelude-nocheck.psi") code=import("prelude-nocheck.psi") ~ "\0\0\0\0";
-				else noSuchFle();
+				else noSuchFile();
 			}else static assert(0);
 		}else error = path ~ ": error reading file";
 		if(error){

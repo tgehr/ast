@@ -161,6 +161,12 @@ class Checker {
 		})(e);
 	}
 
+	void visLowering(ast_exp.Expression from, ast_exp.Expression to){
+		visExpr(to);
+		// imported!"util.io".writeln("lowered: ", from, " -> ", to);
+		assert(from.type == to.type);
+	}
+
 	// Check statement, return true iff it definitely returns
 	bool visStmt(ast_exp.Expression e) {
 		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
@@ -402,6 +408,7 @@ class Checker {
 		auto rhs = e.e2;
 		visExpr(rhs);
 		visLhs(lhs);
+		assert(!e.lowering);
 		return false;
 	}
 
@@ -470,6 +477,7 @@ class Checker {
 			visLhs(e.e1);
 			strictScope = true;
 		}
+		if(e.lowering) visLowering(e, e.lowering);
 		return false;
 	}
 
@@ -843,6 +851,7 @@ class Checker {
 		}
 		visExpr(e.e1);
 		visExpr(e.e2);
+		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	static foreach(op;binops ~ cmpops ~ boolops)
@@ -851,12 +860,14 @@ class Checker {
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
 		visExpr(e.e1);
 		visExpr(e.e2);
+		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	static foreach(op;unops)
 	void implExpr(ast_exp.UnaryExp!(Tok!op) e) {
 		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
 		visExpr(e.e);
+		if(e.lowering) visLowering(e, e.lowering);
 	}
 
 	void implExpr(ast_exp.Expression e) {
