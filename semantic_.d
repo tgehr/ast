@@ -3895,11 +3895,11 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 }
 
 Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
-	static if(operatorLowering) scope(success) if(ume.sstate==SemState.completed) addLowering(ume,context);
+	static if(language==silq) scope(success) if(ume.sstate==SemState.completed) addLowering(ume,context);
 	return handleUnary!minusType("minus",ume,ume.e,context);
 }
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
-	static if(operatorLowering) scope(success) if(une.sstate==SemState.completed) addLowering(une,context);
+	static if(language==silq) scope(success) if(une.sstate==SemState.completed) addLowering(une,context);
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
 	static if(language==silq){
@@ -3924,7 +3924,7 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	return handleUnary!notType("not",une,une.e,context);
 }
 Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
-	static if(operatorLowering) scope(success) if(ubne.sstate==SemState.completed) addLowering(ubne,context);
+	static if(language==silq) scope(success) if(ubne.sstate==SemState.completed) addLowering(ubne,context);
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
 

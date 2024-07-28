@@ -6,7 +6,7 @@ import astopt;
 import ast.lexer,ast.scope_,ast.error;
 import ast.type,ast.expression,ast.semantic_;
 
-static if(operatorLowering):
+static if(language==silq):
 
 TopScope opsc=null;
 Scope getOperatorScope(Location loc,ErrorHandler err){

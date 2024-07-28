@@ -606,9 +606,9 @@ bool annotateLiteral(Expression expr, Expression type){
 		assert(minusType(ltype)==ltype);
 		negLit.type=ltype;
 		expr.type=ltype;
-		// TODO: this is a bit hacky
+		// TODO: this is a bit hacky (need to fix up operator lowering)
 		import astopt;
-		static if(operatorLowering){
+		static if(language==silq){
 			auto neg=cast(UMinusExp)expr;
 			assert(!!neg);
 			if(auto ce=cast(CallExp)neg.lowering){

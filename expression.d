@@ -576,7 +576,7 @@ abstract class AUnaryExp: Expression{
 	this(Expression next){e = next;}
 
 	// for compilation:
-	static if(operatorLowering) Expression lowering=null;
+	static if(language==silq) Expression lowering=null;
 }
 
 class UnaryExp(TokenType op): AUnaryExp{
@@ -1005,7 +1005,7 @@ abstract class ABinaryExp: Expression{
 	}
 
 	// for compilation
-	static if(operatorLowering) Expression lowering=null;
+	static if(language==silq) Expression lowering=null;
 }
 
 abstract class AAssignExp: ABinaryExp{
