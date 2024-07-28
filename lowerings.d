@@ -2,7 +2,7 @@ module ast.lowerings;
 
 import std.algorithm, std.conv,std.exception;
 
-import astopt:operatorsPath,operatorLowering;
+import astopt;
 import ast.lexer,ast.scope_,ast.error;
 import ast.type,ast.expression,ast.semantic_;
 
