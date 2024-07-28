@@ -606,24 +606,6 @@ bool annotateLiteral(Expression expr, Expression type){
 		assert(minusType(ltype)==ltype);
 		negLit.type=ltype;
 		expr.type=ltype;
-		// TODO: this is a bit hacky (need to fix up operator lowering)
-		import astopt;
-		static if(language==silq){
-			auto neg=cast(UMinusExp)expr;
-			assert(!!neg);
-			if(auto ce=cast(CallExp)neg.lowering){
-				if(auto id=cast(Identifier)ce.e){
-					import ast.semantic_;
-					auto scope_=id.scope_;
-					auto constResult=negLit.constLookup?ConstResult.yes:ConstResult.no;
-					auto inType=InType.no; // TODO: ok?
-					auto context=ExpSemContext(scope_,constResult,inType);
-					neg.lowering=null;
-					import ast.lowerings;
-					addLowering(neg,context);
-				}
-			}
-		}
 	}
 	expr.type=ltype;
 	return true;

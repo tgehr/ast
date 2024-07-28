@@ -2887,7 +2887,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						Expression garg;
 						auto tt=nft.tryMatch(ce.arg,garg);
 						if(!tt) return false;
-						auto nce=new CallExp(ce.e,garg.copy(),true,false);
+						Expression.CopyArgs cargs={ preserveMeanings: true };
+						auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
 						nce.loc=ce.loc;
 						auto nnce=new CallExp(nce,ce.arg,false,false);
 						nnce.loc=ce.loc;
@@ -3895,11 +3896,9 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 }
 
 Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
-	static if(language==silq) scope(success) if(ume.sstate==SemState.completed) addLowering(ume,context);
 	return handleUnary!minusType("minus",ume,ume.e,context);
 }
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
-	static if(language==silq) scope(success) if(une.sstate==SemState.completed) addLowering(une,context);
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
 	static if(language==silq){
@@ -3924,7 +3923,6 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	return handleUnary!notType("not",une,une.e,context);
 }
 Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
-	static if(language==silq) scope(success) if(ubne.sstate==SemState.completed) addLowering(ubne,context);
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
 

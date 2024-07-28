@@ -30,6 +30,7 @@ abstract class Expression: Node{
 
 	struct CopyArgs{
 		bool preserveSemantic=false;
+		bool preserveMeanings=false;
 	}
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
@@ -404,6 +405,9 @@ class Identifier: Expression{
 				r.classical=classical;
 			}
 		}else{
+			if(args.preserveMeanings){
+				r.meaning=meaning;
+			}
 			static if(language==silq){
 				r.checkReverse=checkReverse;
 				r.outerWanted=outerWanted;
@@ -574,9 +578,6 @@ class PlaceholderExp: Expression{
 abstract class AUnaryExp: Expression{
 	Expression e;
 	this(Expression next){e = next;}
-
-	// for compilation:
-	static if(language==silq) Expression lowering=null;
 }
 
 class UnaryExp(TokenType op): AUnaryExp{
@@ -1003,9 +1004,6 @@ abstract class ABinaryExp: Expression{
 	override Annotation getAnnotation(){
 		return min(e1.getAnnotation(), e2.getAnnotation());
 	}
-
-	// for compilation
-	static if(language==silq) Expression lowering=null;
 }
 
 abstract class AAssignExp: ABinaryExp{

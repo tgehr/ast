@@ -84,9 +84,6 @@ Expression makeFunctionCall(string name,Expression[] args,Location loc,ExpSemCon
 	return expressionSemantic(ce,context);
 }
 
-pragma(inline,true)
-void addLowering(T)(T e,ExpSemContext context){ e.lowering=getLowering(e,context); }
-
 Expression getLowering(UMinusExp ume,ExpSemContext context){ return makeFunctionCall("__uminus",[ume.e],ume.loc,context); }
 Expression getLowering(UNotExp une,ExpSemContext context){ return makeFunctionCall("__not",[une.e],une.loc,context); }
 Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFunctionCall("__bitnot",[ubne.e],ubne.loc,context); }

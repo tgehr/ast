@@ -9,6 +9,7 @@ import std.range: repeat;
 import util.io: stderr;
 
 import ast_sem = ast.semantic_;
+import ast_low = ast.lowerings;
 import ast_exp = ast.expression;
 import ast_ty = ast.type;
 import ast_decl = ast.declaration;
@@ -161,10 +162,13 @@ class Checker {
 		})(e);
 	}
 
-	void visLowering(ast_exp.Expression from, ast_exp.Expression to){
+	ast_exp.Expression visLoweringExpr(E)(E from) {
+		auto to = ast_low.getLowering(from, ast_sem.ExpSemContext(nscope, ast_sem.ConstResult.no, ast_sem.InType.no));
+		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
 		// imported!"util.io".writeln("lowered: ", from, " -> ", to);
 		assert(from.type == to.type);
+		return to;
 	}
 
 	// Check statement, return true iff it definitely returns
@@ -408,7 +412,6 @@ class Checker {
 		auto rhs = e.e2;
 		visExpr(rhs);
 		visLhs(lhs);
-		assert(!e.lowering);
 		return false;
 	}
 
@@ -477,7 +480,6 @@ class Checker {
 			visLhs(e.e1);
 			strictScope = true;
 		}
-		assert(!e.lowering); // TODO
 		return false;
 	}
 
@@ -849,10 +851,6 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
-		if(e.lowering) {
-			visLowering(e, e.lowering);
-			return;
-		}
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
@@ -861,10 +859,6 @@ class Checker {
 	void implExpr(ast_exp.BinaryExp!(Tok!op) e) {
 		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
-		if(e.lowering) {
-			visLowering(e, e.lowering);
-			return;
-		}
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
@@ -872,10 +866,7 @@ class Checker {
 	static foreach(op;unops)
 	void implExpr(ast_exp.UnaryExp!(Tok!op) e) {
 		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
-		if(e.lowering) {
-			visLowering(e, e.lowering);
-			return;
-		}
+		if(visLoweringExpr(e)) return;
 		visExpr(e.e);
 	}
 
