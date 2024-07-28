@@ -178,9 +178,11 @@ Expression presemantic(Declaration expr,Scope sc){
 				}
 				if(dsc.decl.context){
 					fd.context=dsc.decl.context; // TODO: ok?
+					static if(language==psi) fd.contextVal=fd.context;
 				}
 				fd.thisVar=thisVar;
 			}else{
+				static if(language==psi) fd.contextVal=addVar("this",unit,fd.loc,fsc);
 				assert(!!fd.body_.blscope_);
 				assert(fsc.allowMerge);
 				fsc.allowMerge=false; // TODO: this is hacky
@@ -190,6 +192,7 @@ Expression presemantic(Declaration expr,Scope sc){
 			assert(dsc.decl.dtype);
 		}else if(auto nsc=cast(NestedScope)sc){
 			fd.context=addVar("`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
+			static if(language==psi) fd.contextVal=fd.context;
 		}
 	}
 	return expr;

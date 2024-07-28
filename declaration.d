@@ -154,6 +154,7 @@ class FunctionDef: Declaration{
 	// semantic information
 	FunctionScope fscope_;
 	VarDecl context;
+	static if(language==psi) VarDecl contextVal;
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
 	Declaration[] capturedDecls;
