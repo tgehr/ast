@@ -1861,7 +1861,6 @@ class ReturnExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return dg(e); }
 
 	// semantic information:
-	Scope scope_;
 	Declaration[] forgottenVars;
 }
 

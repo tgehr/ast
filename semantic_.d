@@ -4336,7 +4336,6 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 
 ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(ret.sstate==SemState.completed) return ret;
-	ret.scope_=sc;
 	auto fd=sc.getFunction();
 	if(!fd){
 		sc.error("return statement must be within function",ret.loc);
