@@ -851,6 +851,7 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
+		//if(visLoweringExpr(e)) return; // TODO
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
@@ -859,6 +860,8 @@ class Checker {
 	void implExpr(ast_exp.BinaryExp!(Tok!op) e) {
 		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
+		import std.algorithm : canFind;
+		static if(["+","-","sub"].canFind(op)) if(visLoweringExpr(e)) return;
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}

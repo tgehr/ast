@@ -60,7 +60,7 @@ abstract class Expression: Node{
 		auto r=evalImpl(ntype);
 		if(!r.type) r.type=ntype;
 		else if(r is this) return r;
-		else assert(r.type==ntype,text(this," ",typeid(this)," ",r," ",r.type," ",ntype));
+		else assert(isSubtype(r.type,ntype),text(this," ",typeid(this)," ",r," ",r.type," ",ntype));
 		if(!r.loc.line) r.loc=loc;
 		r.sstate=SemState.completed;
 		return r;

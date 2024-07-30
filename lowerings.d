@@ -57,12 +57,21 @@ string getSuffix(Expression type){
 	}
 }
 
-string getSuffix(R)(R types){
+string getSuffix(R)(string name,R types){ // TODO: replace with some sort of language-level overloading support
 	if(types.length==1) return getSuffix(types[0]);
 	if(types.length==2){
-		auto s0=getSuffix(types[0]);
-		auto s1=getSuffix(types[1]);
-		return s0==s1?s0:s0~s1;
+		switch(name){
+			default:
+				auto t0=types[0],t1=types[1];
+				if(isNumeric(t0)&&isNumeric(t1)){
+					return getSuffix(whichNumeric(t0)>whichNumeric(t1)?t0:t1);
+				}
+				auto s0=getSuffix(t0);
+				auto s1=getSuffix(t1);
+				if(s0.among("s","u")&&s1=="ℕ") s1="ℤ";
+				if(s1.among("s","u")&&s0=="ℕ") s0="ℤ";
+				return s0==s1?s0:s0~s1;
+		}
 	}
 	enforce(0,text("unsupported lowering arity: ",types));
 	assert(0);
@@ -75,7 +84,7 @@ Expression makeFunctionCall(string name,Expression[] args,Location loc,ExpSemCon
 		arg=new TupleExp(args);
 		arg.loc=loc;
 	}else arg=args[0];
-	auto fullName=name~"_"~getSuffix(args.map!(x=>x.type));
+	auto fullName=name~"_"~getSuffix(name,args.map!(x=>x.type));
 	auto fun=getOperatorSymbol(fullName,loc,sc);
 	enforce(!!fun,text("function prototype for lowering not found: ",fullName));
 	bool isSquare=false,isClassical=false;
@@ -87,3 +96,7 @@ Expression makeFunctionCall(string name,Expression[] args,Location loc,ExpSemCon
 Expression getLowering(UMinusExp ume,ExpSemContext context){ return makeFunctionCall("__uminus",[ume.e],ume.loc,context); }
 Expression getLowering(UNotExp une,ExpSemContext context){ return makeFunctionCall("__not",[une.e],une.loc,context); }
 Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFunctionCall("__bitnot",[ubne.e],ubne.loc,context); }
+
+Expression getLowering(AddExp ae,ExpSemContext context){ return makeFunctionCall("__add",[ae.e1,ae.e2],ae.loc,context); }
+Expression getLowering(SubExp se,ExpSemContext context){ return makeFunctionCall("__sub",[se.e1,se.e2],se.loc,context); }
+Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCall("__nsub",[nse.e1,nse.e2],nse.loc,context); }
