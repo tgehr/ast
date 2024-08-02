@@ -3747,10 +3747,10 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 }
 
 Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
-	if(isInt(t1) && isSubtype(t2,ℤt(t1.isClassical()))) return t1; // TODO: automatic promotion to quantum
-	if(isInt(t2) && isSubtype(t1,ℤt(t2.isClassical()))) return t2;
-	if(isUint(t1) && isSubtype(t2,ℤt(t1.isClassical()))) return t1;
-	if(isUint(t2) && isSubtype(t1,ℤt(t2.isClassical()))) return t2;
+	if(isInt(t1) && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+	if(isInt(t2) && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
+	if(isUint(t1) && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+	if(isUint(t2) && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
 	if(preludeNumericTypeName(t1) != null||preludeNumericTypeName(t2) != null)
 		return joinTypes(t1,t2);
 	if(!isNumeric(t1)||!isNumeric(t2)) return null;
