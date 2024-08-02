@@ -3776,6 +3776,7 @@ Expression iDivType(Expression t1, Expression t2){
 	if(isInt(r)||isUint(r)) return r;
 	if(cast(ℂTy)t1||cast(ℂTy)t2) return null;
 	bool classical=t1.isClassical()&&t2.isClassical();
+	if(cast(BoolTy)t1&&cast(BoolTy)t2) return Bool(classical);
 	return (cast(BoolTy)t1||cast(ℕTy)t1)&&(cast(BoolTy)t2||cast(ℕTy)t2)?ℕt(classical):ℤt(classical);
 }
 Expression nSubType(Expression t1, Expression t2){
@@ -3926,7 +3927,7 @@ Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
 
-private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context){
+private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context,bool checkLiteral=false){
 	auto sc=context.sc;
 	e1=expressionSemantic(e1,context.nestConst);
 	e2=expressionSemantic(e2,context.nestConst);
@@ -3945,27 +3946,52 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
 		}
+		void checkLiteralFixed(ref Expression fixed,ref Expression literal){
+			if((isInt(fixed.type)||isUint(fixed.type))&&isNumeric(literal.type)&&!cast(BoolTy)literal.type){
+				if(isLiteral(literal)){ // TODO: also allow general value range propagation (e.g. see *Pretty*.slq/manualPhaseEstimation.slq/dlog.slq
+					auto nl=new TypeAnnotationExp(literal,fixed.type,TypeAnnotationType.annotation);
+					nl.loc=literal.loc;
+					literal=expressionSemantic(nl,context.nestConst);
+					propErr(literal,e);
+				}else{
+					sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+					if(explicitConversion(literal,fixed.type,TypeAnnotationType.conversion)){
+						Expression nl=new TypeAnnotationExp(literal,fixed.type,TypeAnnotationType.conversion);
+						nl.loc=literal.loc;
+						nl.brackets++;
+						swap(literal,nl);
+						sc.note(format("explicit conversion possible, use %s",e),e.loc);
+						swap(nl,literal);
+					}
+					e.sstate=SemState.error;
+				}
+			}
+		}
+		if(checkLiteral){
+			if(!((name=="integer division"||name=="natural subtraction")&&cast(ℕTy)e2.type)) checkLiteralFixed(e1,e2);
+			checkLiteralFixed(e2,e1);
+		}
 	}
 	return e;
 }
 
 Expression expressionSemanticImpl(AddExp ae,ExpSemContext context){
-	return handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,context);
+	return handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,context,true);
 }
 Expression expressionSemanticImpl(SubExp se,ExpSemContext context){
-	return handleBinary!subtractionType("subtraction",se,se.e1,se.e2,context);
+	return handleBinary!subtractionType("subtraction",se,se.e1,se.e2,context,true);
 }
 Expression expressionSemanticImpl(NSubExp nse,ExpSemContext context){
-	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context);
+	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context,true);
 }
 Expression expressionSemanticImpl(MulExp me,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context);
+	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context,true);
 }
 Expression expressionSemanticImpl(DivExp de,ExpSemContext context){
-	return handleBinary!divisionType("division",de,de.e1,de.e2,context);
+	return handleBinary!divisionType("division",de,de.e1,de.e2,context,true);
 }
 Expression expressionSemanticImpl(IDivExp ide,ExpSemContext context){
-	return handleBinary!iDivType("integer division",ide,ide.e1,ide.e2,context);
+	return handleBinary!iDivType("integer division",ide,ide.e1,ide.e2,context,true);
 }
 Expression expressionSemanticImpl(ModExp me,ExpSemContext context){
 	return handleBinary!moduloType("modulo",me,me.e1,me.e2,context);

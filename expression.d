@@ -626,7 +626,7 @@ class UnaryExp(TokenType op): AUnaryExp{
 		auto ne=e.eval();
 		static if(op==Tok!"-"){
 			if(auto le=cast(LiteralExp)ne){
-				if(le.lit.type==Tok!"0"){
+				if(le.lit.type==Tok!"0"&&le.type.isNumeric){
 					return LiteralExp.makeInteger(-ℤ(le.lit.str)); // TODO: replace literal exp internal representation
 				}
 			}
@@ -1143,7 +1143,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			}
 			sstate=SemState.error;
 		}
-		
+
 		int varDecls(scope int delegate(VarDecl) dg){
 			if(auto id=cast(Identifier)e1){
 				auto decl=cast(VarDecl)id.meaning;

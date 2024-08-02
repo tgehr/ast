@@ -581,6 +581,10 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
 	return typeof(return).init;
 }
+bool isLiteral(Expression expr){
+	auto lit=cast(LiteralExp)expr, negLit=cast(UMinusExp)expr?cast(LiteralExp)(cast(UMinusExp)expr).e:null;
+	return lit||negLit;
+}
 bool annotateLiteral(Expression expr, Expression type){
 	auto lit=cast(LiteralExp)expr, negLit=cast(UMinusExp)expr?cast(LiteralExp)(cast(UMinusExp)expr).e:null;
 	if(!lit&&!negLit) return false;
@@ -605,7 +609,6 @@ bool annotateLiteral(Expression expr, Expression type){
 		import ast.semantic_:minusType;
 		assert(minusType(ltype)==ltype);
 		negLit.type=ltype;
-		expr.type=ltype;
 	}
 	expr.type=ltype;
 	return true;
