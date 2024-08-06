@@ -5,6 +5,7 @@ import std.algorithm, std.conv,std.exception;
 import astopt;
 import ast.lexer,ast.scope_,ast.error;
 import ast.type,ast.expression,ast.semantic_;
+import ast.declaration;
 
 static if(language==silq):
 
@@ -21,6 +22,15 @@ Scope getOperatorScope(Location loc,ErrorHandler err){
 	int nerr=err.nerrors;
 	exprs=semantic(exprs,opsc);
 	return opsc;
+}
+
+bool isInOperators(Declaration decl){
+	static if(operatorLowering) {
+		if(!opsc) return false;
+		return decl.scope_.isNestedIn(opsc);
+	} else {
+		return false;
+	}
 }
 
 Identifier getOperatorSymbol(string name,Location loc,Scope isc){
