@@ -346,34 +346,64 @@ class LiteralExp: Expression{
 }
 
 struct Id {
-	string str = null;
+	static __gshared Id[string] interned;
+	size_t raw = 0;
+
+	@property
+	size_t length() const pure @trusted nothrow {
+		pragma(inline, true);
+		if(!raw) return 0;
+		return *cast(immutable(size_t)*)(raw - size_t.sizeof);
+	}
+
+	@property
+	immutable(char)* ptr() const pure @trusted nothrow {
+		pragma(inline, true);
+		return cast(immutable(char)*)raw;
+	}
+
+	@property
+	string str() const pure @trusted nothrow {
+		pragma(inline, true);
+		if(!raw) return null;
+		size_t len = *cast(immutable(size_t)*)(raw - size_t.sizeof);
+		return (cast(immutable(char)*)raw)[0..len];
+	}
+
+	static Id intern(string s) @trusted {
+		// TODO make thread-safe?
+		import core.stdc.stdlib: malloc;
+		import core.stdc.string: memcpy;
+		size_t len = s.length;
+		if(len == 0) return Id();
+		if(auto p = s in interned) {
+			assert((*p).str == s);
+			return *p;
+		}
+		auto mem = malloc(size_t.sizeof + len);
+		assert(mem);
+		*cast(size_t*)mem = len;
+		auto p = cast(char*)mem + size_t.sizeof;
+		memcpy(p, s.ptr, len);
+		auto id = Id(cast(size_t)p);
+		s = (cast(immutable(char)*)p)[0..len];
+		interned[s] = id;
+		return id;
+	}
 
 	bool opCast(T: bool)() const pure @safe nothrow {
-		return !!str;
-	}
-
-	static Id intern(string s) @safe {
-		static string[string] uniq;
-		return fromInternedString(uniq.require(s, s));
-	}
-
-	static Id fromInternedString(string s) @safe nothrow {
-		Id r;
-		if(s.length > 0) r.str = s;
-		return r;
+		return !!raw;
 	}
 
 	bool opEquals(Id other) const pure @safe nothrow {
-		// return str == other.str;
-		return str.ptr is other.str.ptr;
+		return raw == other.raw;
 	}
 
 	ulong toHash() const pure @safe nothrow {
-		// return hashOf(str);
-		return str ? hashOf(&str[0]) : 0;
+		return hashOf(raw);
 	}
 
-	string toString() const @safe pure {
+	string toString() const pure @safe nothrow {
 		return str;
 	}
 }
@@ -381,8 +411,8 @@ struct Id {
 class Identifier: Expression{
 	Id id;
 	@property string name(){return id.str;}
-	@property auto ptr(){return name.ptr;}
-	@property auto length(){return name.length;}
+	@property auto ptr(){return id.ptr;}
+	@property auto length(){return id.length;}
 	this(Id id){
 		this.id=id;
 	}
