@@ -256,6 +256,10 @@ struct Location{
 		if(rep.ptr>end.rep.ptr+end.rep.length) return cast()this;
 		return Location(rep.ptr[0..end.rep.ptr-rep.ptr+end.rep.length],line);
 	}
+	string toString(){
+		if(!rep) return "<??>";
+		return format("%s:%s <%s>", source.name, line, rep);
+	}
 }
 import std.array;
 int getColumn(Location loc, int tabsize){
