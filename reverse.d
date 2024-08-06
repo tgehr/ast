@@ -38,7 +38,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
 	if(auto ce=cast(CallExp)olhs){
 		static if(language==silq)
-		if(isPrimitive(cast(CallExp)unwrap(ce.e)))
+		if(isBuiltInCall(cast(CallExp)unwrap(ce.e)))
 			return false;
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
@@ -447,12 +447,77 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(!tpl) return res=new CompoundExp([arhs,def]);
 		return def;
 	}
+	if(auto conv=cast(TypeAnnotationExp)olhs) {
+		return lowerDefine!flags(conv.e, orhs, loc, sc, unchecked);
+	}
+	static if(language==silq)
+	if(string prim=isPrimitiveCall(olhs)) {
+		auto primCallE=cast(CallExp)olhs;
+		Expression fun=primCallE.e;
+		Expression[] args=(cast(TupleExp)primCallE.arg).e;
+		Expression newlhs, newrhs;
+		switch(prim) {
+			case null:
+				break;
+			case "dup":
+				//dup(args[0]) := orhs
+				//forget(orhs=args[0]);
+				assert(args.length==1);
+				return new ForgetExp(orhs, args[0]);
+			case "H", "X", "Y", "Z":
+				//gate(args[0]) := orhs
+				//args[0] := gate(orhs)
+				assert(args.length==1);
+				newlhs=args[0];
+				newrhs=new CallExp(fun, new TupleExp([orhs]), false, false);
+				newrhs.loc=olhs.loc;
+				break;
+			case "P":
+				//P(args[0]) := orhs
+				//orhs; P(-args[0])
+				assert(args.length==1);
+				auto negated=new UMinusExp(args[0]);
+				negated.loc=olhs.loc;
+				auto reversed=new CallExp(fun, new TupleExp([negated]), false, false);
+				reversed.loc=olhs.loc;
+				//return new CompoundExp([orhs, reversed]);
+				return reversed;
+			case "rZ":
+				//rZ(args[0], args[1]) := orhs
+				//orhs; rZ(-args[0], args[1])
+				assert(args.length==2);
+				auto negated=new UMinusExp(args[0]);
+				negated.loc=olhs.loc;
+				auto reversed=new CallExp(fun, new TupleExp([negated, args[1]]), false, false);
+				reversed.loc=olhs.loc;
+				//return new CompoundExp([orhs, reversed]);
+				return reversed;
+			case "rX","rY":
+				//rX(args[0], args[1]) := orhs
+				//args[1] := rX(-args[0], orhs)
+				assert(args.length==2);
+				newlhs=args[1];
+				auto negated=new UMinusExp(args[0]);
+				negated.loc=olhs.loc;
+				newrhs=new CallExp(fun, new TupleExp([negated, orhs]), false, false);
+				newrhs.loc=olhs.loc;
+				break; // DMD bug: does not detect if this is missing
+			default:
+				sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+				return error();
+		}
+		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
+	}
 	static if(language==silq)
 	if(auto ce=cast(CallExp)olhs){
 		if(!ce.e.type){
 			ce.e=expressionSemantic(ce.e,expSemContext(sc,ConstResult.yes,InType.no));
 		}
-		if(auto ft=cast(FunTy)ce.e.type){
+			auto ft=cast(FunTy)ce.e.type;
+			if(!ft) {
+				sc.error("call to non-function not supported as definition left-hand side", ce.e.loc);
+				return error();
+			}
 			bool needWrapper=false;
 			if(ft.isSquare&&!ce.isSquare){
 				if(auto ft2=cast(FunTy)ft.cod){
@@ -481,13 +546,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				sc.error("reversed function cannot have classical components in return value", f.loc);
 				return error();
 			}
-			Expression newstm=null;
-			Expression newlhs,newarg;
+			Expression newlhs;
+			Expression newarg;
 			if(ft.isConstForReverse.all!(x=>x==ft.isConstForReverse[0])){
 				if(!ft.isConstForReverse.any){
 					if(cast(TupleExp)ce.arg){
 						auto tmp=new Identifier(freshName);
-						newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical);
+						newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical_);
 						newlhs.loc=loc;
 						auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked);
 						auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked);
@@ -520,61 +585,18 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
 				return error();
 			}
-			Expression reversed=null,newrhs=null;
-			static if(language==silq) {
-				auto op = isPrimitive(cast(CallExp)unwrap(ce.e));
-				switch(op) {
-					case null:
-						break;
-					case "dup":
-						auto tpl=cast(TupleExp)newarg;
-						enforce(tpl&&tpl.length==2);
-						newrhs=new ForgetExp(tpl.e[1],tpl.e[0]);
-						break;
-					case "H", "X", "Y", "Z":
-						reversed=ce.e;
-						auto tpl=cast(TupleExp)newarg;
-						newarg=tpl.e[1]; // TODO: don't generate tuple in the first plcae?
-						break;
-					case "P":
-						reversed=ce.e;
-						// note: this ignores side-effects of rhs, if any
-						auto tpl=cast(TupleExp)newarg;
-						newarg=tpl.e[0]; // TODO: don't generate tuple in the first plcae?
-						auto negated=new UMinusExp(newarg);
-						negated.loc=newarg.loc;
-						newarg=negated;
-						break;
-					case "rX","rY","rZ":
-						reversed=ce.e;
-						auto tpl=cast(TupleExp)newarg;
-						enforce(tpl&&tpl.length==2);
-						auto negated=new UMinusExp(tpl.e[0]);
-						negated.loc=tpl.e[0].loc;
-						auto newtpl=new TupleExp([negated,tpl.e[1]]);
-						newtpl.loc=newarg.loc;
-						newarg=newtpl;
-						break; // DMD bug: does not detect if this is missing
-					default:
-						sc.error(format("cannot reverse primitive '%s'",op),ce.e.loc);
-						return error();
-				}
-			}
-			if(!reversed){
 				auto checked=!unchecked;
 				enum simplify=false, outerWanted=false;
 				auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
-				reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
+				auto reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
 				if(ce.e.sstate==SemState.error) return error();
 				if(!reversed){
 					reversed=new CallExp(rev,ce.e,false,false);
 					reversed.loc=ce.e.loc;
 				}
-			}
-			if(!newrhs) newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
+			auto newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
 			newrhs.loc=newarg.loc;
 			return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
-		}
 	}
 	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
