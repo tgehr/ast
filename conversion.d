@@ -316,9 +316,9 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 }
 
 class FunctionConversion: Conversion{
-	string[] names;
+	Id[] names;
 	Conversion dom,cod;
-	this(ProductTy from,ProductTy to,string[] names,Conversion dom,Conversion cod)in{
+	this(ProductTy from,ProductTy to,Id[] names,Conversion dom,Conversion cod)in{
 		assert(isNoOpConversion(to.dom,dom.from)&&isNoOpConversion(dom.to,from.dom));
 		assert(from.names==names&&to.names==names);
 		assert(isNoOpConversion(cod.from,from.cod)&&isNoOpConversion(to.cod,cod.to),text(to.cod," ",cod.to));
@@ -356,7 +356,7 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	}
 	if(!equal(ft1.isConstForSubtyping,ft2.isConstForSubtyping)) return typeof(return).init;
 	if(ft1.names.length!=ft2.names.length) return typeof(return).init;
-	string[] names;
+	Id[] names;
 	if(ft1.names!=ft2.names){
 		names=ft1.freshNames(ft2);
 	}else names=ft1.names;

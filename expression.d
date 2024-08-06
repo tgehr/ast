@@ -67,10 +67,10 @@ abstract class Expression: Node{
 	}
 	abstract Expression evalImpl(Expression ntype);
 
-	final Expression substitute(string name,Expression exp){
+	final Expression substitute(Id name,Expression exp){
 		return substitute([name:exp]);
 	}
-	final Expression substitute(Expression[string] subst){
+	final Expression substitute(Expression[Id] subst){
 		auto r=substituteImpl(subst);
 		if(type&&!r.type){
 			if(type == this) r.type=r;
@@ -78,12 +78,12 @@ abstract class Expression: Node{
 		}
 		return r;
 	}
-	abstract Expression substituteImpl(Expression[string] subst); // TODO: name might be free in the _types_ of subexpressions
+	abstract Expression substituteImpl(Expression[Id] subst); // TODO: name might be free in the _types_ of subexpressions
 
-	final bool unify(Expression rhs,ref Expression[string] subst, bool meet){
+	final bool unify(Expression rhs,ref Expression[Id] subst, bool meet){
 		return unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet);
 	}
-	abstract bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet);
+	abstract bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet);
 
 	abstract int freeVarsImpl(scope int delegate(Identifier) dg);
 	static struct FreeVars{
@@ -117,7 +117,7 @@ abstract class Expression: Node{
 	}
 	final bool hasAnyFreeVar(R)(R r){
 		foreach(var;freeVars){
-			if(r.canFind(var.name))
+			if(r.canFind(var.id))
 				return true;
 		}
 		return false;
@@ -194,8 +194,8 @@ abstract class Expression: Node{
 
 mixin template VariableFree(){
 	override int freeVarsImpl(scope int delegate(Identifier)){ return 0; }
-	override Expression substituteImpl(Expression[string] subst){ return this; }
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override Expression substituteImpl(Expression[Id] subst){ return this; }
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null;
 	}
 }
@@ -234,7 +234,7 @@ class TypeAnnotationExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(type?type:t);
 	}
-	override TypeAnnotationExp substituteImpl(Expression[string] subst){
+	override TypeAnnotationExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		auto nt=t.substitute(subst);
 		if(ne==e&&nt==t) return this;
@@ -242,7 +242,7 @@ class TypeAnnotationExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		return e.unify(rhs,subst,meet);
 	}
 	override Annotation getAnnotation(){
@@ -406,6 +406,11 @@ struct Id {
 	string toString() const pure @safe nothrow {
 		return str;
 	}
+
+	Id apos() @safe {
+		assert(!!raw);
+		return Id.intern(str ~ "'");
+	}
 }
 
 class Identifier: Expression{
@@ -456,14 +461,14 @@ class Identifier: Expression{
 		return dg(this);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
-	override Expression substituteImpl(Expression[string] subst){
-		if(name in subst){
+	override Expression substituteImpl(Expression[Id] subst){
+		if(id in subst){
 			static if(language==silq){
 				if(classical)
-					if(auto r=subst[name].getClassical())
+					if(auto r=subst[id].getClassical())
 						return r;
 			}
-			auto result=subst[name];
+			auto result=subst[id];
 			if(result.constLookup!=constLookup){
 				Expression.CopyArgs cargs={preserveSemantic: true};
 				result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
@@ -473,29 +478,29 @@ class Identifier: Expression{
 		}
 		return this;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		if(this==rhs){
-			if(name !in subst) return true;
-			if(subst[name]&&subst[name]!=this) return false;
-			subst[name]=this;
+			if(id !in subst) return true;
+			if(subst[id]&&subst[id]!=this) return false;
+			subst[id]=this;
 			return true;
 		}
-		if(name !in subst) return false;
-		if(subst[name]==this) return false;
+		if(id !in subst) return false;
+		if(subst[id]==this) return false;
 		static if(language==silq){
 			if(isType(this)&&isType(rhs))
 				if(rhs.isClassical<classical) return false;
 		}
-		if(subst[name]){
-			if(!subst[name].unify(rhs,subst,meet))
+		if(subst[id]){
+			if(!subst[id].unify(rhs,subst,meet))
 				return false;
-			if(isType(subst[name])&&isType(rhs))
-				if(auto cmb=combineTypes(subst[name],rhs,meet)) // TODO: good?
-					subst[name]=cmb;
+			if(isType(subst[id])&&isType(rhs))
+				if(auto cmb=combineTypes(subst[id],rhs,meet)) // TODO: good?
+					subst[id]=cmb;
 			return true;
 		}
-		if(rhs.hasFreeVar(name)) return false; // TODO: fixpoint types
-		subst[name]=rhs;
+		if(rhs.hasFreeVar(id)) return false; // TODO: fixpoint types
+		subst[id]=rhs;
 		return true;
 	}
 	override bool opEquals(Object o){
@@ -509,7 +514,7 @@ class Identifier: Expression{
 		static if(language==silq){
 			assert(isType(this)||isQNumeric(this));
 			if(classical) return this;
-			if(!meaning) return varTy(name,ctypeTy,true);
+			if(!meaning) return varTy(id,ctypeTy,true);
 			auto r=new Identifier(id);
 			r.classical=true;
 			r.type=getClassicalTy(type);
@@ -633,14 +638,14 @@ class UnaryExp(TokenType op): AUnaryExp{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override UnaryExp substituteImpl(Expression[string] subst){
+	override UnaryExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		if(ne==e) return this;
 		auto r=new UnaryExp(ne);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto ue=cast(typeof(this))rhs;
 		if(!ue) return false;
 		return e.unify(ue.e,subst,meet);
@@ -679,14 +684,14 @@ class PostfixExp(TokenType op): Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override PostfixExp substituteImpl(Expression[string] subst){
+	override PostfixExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		if(ne==e) return this;
 		auto r=new PostfixExp(ne);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto pe=cast(PostfixExp)rhs;
 		if(!pe) return false;
 		return e.unify(pe.e,subst,meet);
@@ -736,7 +741,7 @@ class IndexExp: Expression{ //e[a...]
 		if(auto r=dg(a)) return r;
 		return 0;
 	}
-	override IndexExp substituteImpl(Expression[string] subst){
+	override IndexExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		auto na=a.substitute(subst);
 		if(ne==e&&na==a) return this;
@@ -744,7 +749,7 @@ class IndexExp: Expression{ //e[a...]
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto idx=cast(IndexExp)rhs;
 		if(!idx) return false;
 		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
@@ -811,7 +816,7 @@ class SliceExp: Expression{
 		if(auto x=dg(r)) return x;
 		return 0;
 	}
-	override SliceExp substituteImpl(Expression[string] subst){
+	override SliceExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		auto nl=l.substitute(subst);
 		auto nr=r.substitute(subst);
@@ -820,7 +825,7 @@ class SliceExp: Expression{
 		res.loc=loc;
 		return res;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto sl=cast(SliceExp)rhs;
 		return e.unify(sl.e,subst,meet)&&l.unify(sl.l,subst,meet)&&r.unify(sl.r,subst,meet);
 	}
@@ -866,7 +871,7 @@ class CallExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(arg);
 	}
-	override CallExp substituteImpl(Expression[string] subst){
+	override CallExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		auto narg=arg.substitute(subst);
 		if(ne==e&&narg==arg) return this;
@@ -878,7 +883,7 @@ class CallExp: Expression{
 		}
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto ce=cast(CallExp)rhs;
 		if(!ce) return false;
 		return e.unify(ce.e,subst,meet)&&arg.unify(ce.arg,subst,meet);
@@ -1215,7 +1220,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			return 0;
 		}
 	}
-	override BinaryExp!op substituteImpl(Expression[string] subst){
+	override BinaryExp!op substituteImpl(Expression[Id] subst){
 		auto ne1=e1.substitute(subst);
 		auto ne2=e2.substitute(subst);
 		if(ne1==e1&&ne2==e2) return this;
@@ -1227,7 +1232,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto be=cast(typeof(this))rhs;
 		if(!be) return false;
 		return e1.unify(be.e1,subst,meet)&&e2.unify(be.e2,subst,meet);
@@ -1463,14 +1468,14 @@ class FieldExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override FieldExp substituteImpl(Expression[string] subst){
+	override FieldExp substituteImpl(Expression[Id] subst){
 		auto ne=e.substitute(subst);
 		if(ne==e) return this;
 		auto r=new FieldExp(ne,f);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto fe=cast(FieldExp)rhs;
 		if(!fe||f!=fe.f) return false;
 		return e.unify(fe.e,subst,meet);
@@ -1516,7 +1521,7 @@ class IteExp: Expression{
 		if(othw) if(auto r=othw.subexpressionsImpl(dg)) return r;
 		return 0;
 	}
-	override IteExp substituteImpl(Expression[string] subst){
+	override IteExp substituteImpl(Expression[Id] subst){
 		auto ncond=cond.substitute(subst);
 		auto nthen=cast(CompoundExp)then.substitute(subst);
 		auto nothw=othw?cast(CompoundExp)othw.substitute(subst):null;
@@ -1526,7 +1531,7 @@ class IteExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto ite=cast(IteExp)rhs;
 		if(!ite) return false;
 		return cond.unify(ite.cond,subst,meet)&&then.unify(ite.then,subst,meet)
@@ -1703,7 +1708,7 @@ class CompoundExp: Expression{
 		foreach(x;s) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override Expression substituteImpl(Expression[string] subst){
+	override Expression substituteImpl(Expression[Id] subst){
 		auto ns=s.dup;
 		foreach(ref x;ns) x=x.substitute(subst);
 		if(ns==s) return this;
@@ -1712,7 +1717,7 @@ class CompoundExp: Expression{
 		return r;
 
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto ce=cast(CompoundExp)rhs;
 		if(!ce) return false;
 		if(s.length!=ce.s.length) return false;
@@ -1767,7 +1772,7 @@ class TupleExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override TupleExp substituteImpl(Expression[string] subst){
+	override TupleExp substituteImpl(Expression[Id] subst){
 		auto ne=e.dup;
 		foreach(ref x;ne) x=x.substitute(subst);
 		if(ne==e) return this;
@@ -1775,7 +1780,7 @@ class TupleExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto te=cast(TupleExp)rhs;
 		if(!te||e.length!=te.e.length) return false;
 		return all!(i=>e[i].unify(te.e[i],subst,meet))(iota(e.length));
@@ -1846,7 +1851,7 @@ class ArrayExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override ArrayExp substituteImpl(Expression[string] subst){
+	override ArrayExp substituteImpl(Expression[Id] subst){
 		auto ne=e.dup;
 		foreach(ref x;ne) x=x.substitute(subst);
 		if(ne==e) return this;
@@ -1854,7 +1859,7 @@ class ArrayExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto ae=cast(ArrayExp)rhs;
 		if(!ae||e.length!=ae.e.length) return false;
 		return all!(i=>e[i].unify(ae.e[i],subst,meet))(iota(e.length));

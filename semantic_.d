@@ -9,9 +9,9 @@ import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,ast.reverse,util;
 import ast.lowerings;
 
-string freshName(){ // TODO: improve mechanism for generating temporaries
+Id freshName(){ // TODO: improve mechanism for generating temporaries
 	static int counter=0;
-	return text("__tmp",counter++);
+	return Id.intern(text("__tmp",counter++));
 }
 
 Expression moveExp(Expression e){
@@ -1110,7 +1110,7 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 		if(control.type&&!control.type.isClassical()){
 			if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
 			if(control.isQfree()) ce.blscope_.addControlDependency(control.getDependency(ce.blscope_));
-			else ce.blscope_.addControlDependency(Dependency(true,SetX!string.init));
+			else ce.blscope_.addControlDependency(Dependency(true,SetX!Id.init));
 		}
 	}
 	return compoundExpSemantic(ce,sc,restriction_);
@@ -1154,11 +1154,11 @@ Dependency getDependency(Expression e,Scope sc)in{
 		if(id.type&&!id.type.isClassical){
 			if(!sc.dependencyTracked(id)) // for variables captured in closure
 				return Dependency(true);
-			result.dependencies.insert(id.name);
+			result.dependencies.insert(id.id);
 			if(!id.constLookup){
 				/+auto vd=cast(VarDecl)id.meaning;
 				if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
-				result.replace(id.name,sc.getDependency(id),sc.controlDependency);
+				result.replace(id.id,sc.getDependency(id),sc.controlDependency);
 			}
 		}
 	}
@@ -1196,7 +1196,7 @@ struct DefineLhsContext{
 	@property constResult(){ return expSem.constResult; }
 	@property inType(){ return expSem.inType; }
 	static if(language==silq)
-	string nameIndex(IndexExp index){
+	Id nameIndex(IndexExp index){
 		auto name=freshName();
 		sc.nameIndex(index,name);
 		return name;
@@ -1801,25 +1801,25 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			void addDependencies(Expression[] lhs,Expression[] rhs)in{
 				assert(lhs.length==rhs.length);
 			}do{
-				Q!(string,Dependency)[] dependencies;
+				Q!(Id,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
 						auto renamed=sc.getRenamed(id);
 						if(rhs[i].isQfree()){
-							dependencies~=q(renamed.name,rhs[i].getDependency(sc));
+							dependencies~=q(renamed.id,rhs[i].getDependency(sc));
 						}else{
-							dependencies~=q(renamed.name,Dependency(true));
+							dependencies~=q(renamed.id,Dependency(true));
 						}
 					}else badUnpackLhs=true;
 				}
 				sc.addDependencies(dependencies);
 			}
 			void addDependencyMulti(Expression[] lhs,Dependency dependency){
-				Q!(string,Dependency)[] dependencies;
+				Q!(Id,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
 						auto renamed=sc.getRenamed(id);
-						dependencies~=q(renamed.name,dependency);
+						dependencies~=q(renamed.id,dependency);
 					}else badUnpackLhs=true;
 				}
 				sc.addDependencies(dependencies);
@@ -2027,11 +2027,11 @@ struct ArrayConsumer{
 		doIt(e);
 	}
 	void redefineArrays(Location loc,Scope sc){
-		SetX!string added;
+		SetX!Id added;
 		foreach(id;ids){
-			if(id&&id.meaning&&id.type&&id.name !in added){
+			if(id&&id.meaning&&id.type&&id.id !in added){
 				auto var=addVar(id.meaning.name.name,id.type,loc,sc);
-				added.insert(id.name);
+				added.insert(id.id);
 			}
 		}
 	}
@@ -2399,7 +2399,7 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			if(!id){
 				sc.error(format("cannot update-assign to quantum expression %s",be.e1),be.e1.loc);
 				be.sstate=SemState.error;
-			}else if((!isInvertibleOpAssignExp(be)||be.e2.hasFreeIdentifier(id.name))&&id.meaning&&!sc.canForget(id.meaning)){
+			}else if((!isInvertibleOpAssignExp(be)||be.e2.hasFreeIdentifier(id.id))&&id.meaning&&!sc.canForget(id.meaning)){
 				sc.error("quantum update must be invertible",be.loc);
 				be.sstate=SemState.error;
 			}
@@ -2530,7 +2530,7 @@ Expression[] makeIdentifiers(S)(S names,Location loc){
 	}).array;
 }
 
-Expression[] makeIndexLookups(I)(string name,I indices,Location loc){
+Expression[] makeIndexLookups(I)(Id name,I indices,Location loc){
 	return indices.map!((i){
 		auto id=new Identifier(name);
 		id.loc=loc;
@@ -2590,7 +2590,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
 		auto loc=f.loc;
-		auto names=iota(ft.names.length).map!(i=>"`arg_"~(ft.names[i]!=""?ft.names[i]:text(i)));
+		auto names=iota(ft.names.length).map!(i=>"`arg_"~(ft.names[i]?ft.names[i].str:text(i)));
 		auto types=iota(ft.nargs).map!((i){
 			auto type=ft.argTy(i);
 			if(type==typeTy){
@@ -4149,7 +4149,7 @@ Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
 	propErr(fa.cod,fa);
 	if(fa.sstate==SemState.error) return fa;
 	auto const_=fa.params.map!(p=>p.isConst).array;
-	auto names=fa.params.map!(p=>p.getName).array;
+	auto names=fa.params.map!(p=>p.getId).array;
 	auto types=fa.params.map!(p=>p.vtype).array;
 	assert(fa.isTuple||types.length==1);
 	auto dom=fa.isTuple?tupleTy(types):types[0];
@@ -4232,7 +4232,7 @@ bool setFtype(FunctionDef fd,bool force){
 		fd.seal();
 	}
 	bool[] pc;
-	string[] pn;
+	Id[] pn;
 	Expression[] pty;
 	foreach(p;fd.params){
 		if(!p.vtype){
@@ -4240,7 +4240,7 @@ bool setFtype(FunctionDef fd,bool force){
 			return false;
 		}
 		pc~=p.isConst;
-		pn~=p.getName;
+		pn~=p.getId;
 		pty~=p.vtype;
 	}
 	assert(fd.isTuple||pty.length==1);
@@ -4382,7 +4382,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 	}
 	static if(language==silq){
-		auto bottom=Dependency(false,SetX!string.init); // variable is a workaround for DMD regression
+		auto bottom=Dependency(false,SetX!Id.init); // variable is a workaround for DMD regression
 		if(ret.e.type&&ret.e.type.isClassical()&&sc.controlDependency!=bottom){
 			sc.error("cannot return quantum-controlled classical value",ret.e.loc); // TODO: automatically promote to quantum?
 			ret.sstate=SemState.error;
@@ -4500,7 +4500,7 @@ Expression typeForDecl(Declaration decl){
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?
 		assert(dat.isTuple||dat.params.length==1);
 		auto pt=dat.isTuple?tupleTy(dat.params.map!(p=>p.vtype).array):dat.params[0].vtype;
-		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getName).array,pt,ttype,true,dat.isTuple,pure_,true);
+		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getId).array,pt,ttype,true,dat.isTuple,pure_,true);
 	}
 	if(auto vd=cast(VarDecl)decl){
 		return vd.vtype;

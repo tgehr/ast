@@ -250,14 +250,14 @@ class DatDecl: Declaration{
 	override bool isCompound(){ return true; }
 	override bool isLinear(){ return false; }
 
-	final Expression[string] getSubst(Expression arg){
-		Expression[string] subst;
+	final Expression[Id] getSubst(Expression arg){
+		Expression[Id] subst;
 		if(isTuple){
 			foreach(i,p;params)
-				subst[p.getName]=new IndexExp(arg,new LiteralExp(Token(Tok!"0",to!string(i)))).eval();
+				subst[p.getId]=new IndexExp(arg,new LiteralExp(Token(Tok!"0",to!string(i)))).eval();
 		}else{
 			assert(params.length==1);
-			subst[params[0].getName]=arg;
+			subst[params[0].getId]=arg;
 		}
 		return subst;
 	}

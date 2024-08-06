@@ -127,7 +127,7 @@ static if(language==silq):
 			constArgs=[id];
 		}
 		if(movedTuple){
-			auto unpackNames=movedIndices.map!((i)=>"`arg_"~(ft.names[i]!=""?ft.names[i]:text(i)));
+			auto unpackNames=movedIndices.map!((i)=>Id.intern("`arg_"~(ft.names[i]?ft.names[i].str:text(i))));
 			auto unpackLhs=new TupleExp(makeIdentifiers(unpackNames,loc));
 			unpackLhs.loc=loc;
 			auto unpackRhs=new Identifier(names[1]);
@@ -179,7 +179,7 @@ static if(language==silq):
 		auto loc=this.loc;
 		if(simplify&&(constTuple||returnTuple)){
 			auto isConst=(bool[]).init;
-			auto names=(string[]).init;
+			auto names=(Id[]).init;
 			auto types=(Expression[]).init;
 			void add(bool isConst_)(){
 				static if(isConst_){
@@ -195,7 +195,7 @@ static if(language==silq):
 						static if(isConst_){
 							foreach(i,j;enumerate(indices)){
 								isConst~=isConst_;
-								names~="`arg_"~(ft.names[j]!=""?ft.names[j]:text(j));
+								names~=Id.intern("`arg_"~(ft.names[j]?ft.names[j].str:text(j)));
 								types~=tpl[i];
 							}
 						}else{
@@ -211,7 +211,7 @@ static if(language==silq):
 				isConst~=isConst_;
 				static if(isConst_){
 					auto j=constIndices.front;
-					names~="`arg_"~(ft.names[j]!=""?ft.names[j]:text(j));
+					names~=Id.intern("`arg_"~(ft.names[j]?ft.names[j].str:text(j)));
 				}else names~=freshName();
 				types~=type;
 			}
@@ -617,19 +617,19 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		sc.error("reversing early returns not supported yet",fd.loc);
 		enforce(0,text("errors while reversing function"));
 	}
-	string cpname=null,rpname;
+	Id cpname,rpname;
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
 		if(validDefLhs!flags(id,sc)){
 			retDefReplaced=true;
-			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).name;
+			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
 		}
 	}
 	if(!retDefReplaced) rpname=freshName();
 	Expression dom, cod;
 	bool isTuple;
 	bool[] isConst;
-	string[] pnames;
+	Id[] pnames;
 	Expression constUnpack=null;
 	if(simplify&&r.constIndices.empty){
 		dom=r.returnType;
@@ -642,7 +642,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		cod=r.movedType;
 		isTuple=r.constTuple;
 		isConst=r.constIndices.map!(_=>true).array;
-		pnames=r.constIndices.map!(i=>fd.params[i].name.name).array;
+		pnames=r.constIndices.map!(i=>fd.params[i].name.id).array;
 	}else{
 		dom=tupleTy(r.constLast?[r.returnType,r.constType]:[r.constType,r.returnType]);
 		cod=r.movedType;
@@ -668,7 +668,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 			assert(cids.length==1);
 			auto id=cast(Identifier)cids[0];
 			assert(!!id);
-			cpname=id.name;
+			cpname=id.id;
 		}
 		pnames=r.constLast?[rpname,cpname]:[cpname,rpname];
 	}
@@ -710,7 +710,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		else if(simplify&&r.returnType==unit){
 			needCall=false;
 		}else{
-			assert(cpname!is null);
+			assert(cpname);
 			argExp=new Identifier(cpname);
 		}
 		Expression call=null;
