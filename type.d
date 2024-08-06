@@ -462,12 +462,12 @@ class TupleTy: Type,ITupleTy{
 				return r;
 		return 0;
 	}
-	override Type substituteImpl(Expression[string] subst){
+	override Type substituteImpl(Expression[Id] subst){
 		auto ntypes=types.dup;
 		foreach(ref t;ntypes) t=t.substitute(subst);
 		return tupleTy(ntypes);
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto tt=rhs.isTupleTy();
 		if(!tt||types.length!=tt.length) return false;
 		return all!(i=>types[i].unify(tt[i],subst,meet))(iota(types.length));
@@ -568,10 +568,10 @@ class ArrayTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override ArrayTy substituteImpl(Expression[string] subst){
+	override ArrayTy substituteImpl(Expression[Id] subst){
 		return arrayTy(next.substitute(subst));
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		if(auto vt=cast(VectorTy)rhs)
 			return next.unifyImpl(vt.next,subst,meet);
 		if(auto tt=cast(TupleTy)rhs)
@@ -677,10 +677,10 @@ class VectorTy: Type, ITupleTy{
 		if(auto r=next.freeVarsImpl(dg)) return r;
 		return num.freeVarsImpl(dg);
 	}
-	override VectorTy substituteImpl(Expression[string] subst){
+	override VectorTy substituteImpl(Expression[Id] subst){
 		return vectorTy(next.substitute(subst),num.substitute(subst));
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
 			return tt.types.all!(ty=>next.unifyImpl(ty,subst,meet)) && num.unifyImpl(LiteralExp.makeInteger(tt.length),subst,meet);
 		if(auto vt=cast(VectorTy)rhs)
@@ -831,7 +831,7 @@ class RawProductTy: Expression{
 
 class ProductTy: Type{
 	bool[] isConst;
-	string[] names;
+	Id[] names;
 	Expression dom, cod;
 	bool isSquare,isTuple;
 	Annotation annotation;
@@ -839,7 +839,7 @@ class ProductTy: Type{
 		private ProductTy classicalTy;
 		bool isClassical_;
 	}else enum isClassical_=true;
-	private this(bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical_)in{
+	private this(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical_)in{
 		// TODO: assert that all names are distinct
 		if(isTuple){
 			auto tdom=dom.isTupleTy;
@@ -855,11 +855,11 @@ class ProductTy: Type{
 		this.isConst=isConst; // TODO: don't track this in PSI
 		this.names=names; this.dom=dom;
 		this.isSquare=isSquare; this.isTuple=isTuple;
-		Expression[string] subst;
+		Expression[Id] subst;
 		foreach(i;0..names.length)
-			if(names[i]!="")
+			if(names[i])
 				subst[names[i]]=varTy(names[i],argTy(i));
-		assert(!cod.hasFreeVar(""));
+		assert(!cod.hasFreeVar(Id()));
 		cod=cod.substitute(subst); // TODO: only do this if necessary?
 		this.cod=cod;
 		this.annotation=annotation;
@@ -928,12 +928,12 @@ class ProductTy: Type{
 			if(isTuple){
 				args=zip(isConst,names,iota(tdom.length).map!((i)=>tdom[i])).map!((x){
 					auto paramKind=getParamKind(x[0]);
-					return paramKind~x[1]~":"~x[2].toString();
+					return paramKind~x[1].str~":"~x[2].toString();
 				}).join(",");
 				if(nargs==1) args~=",";
 			}else{
 				auto paramKind=getParamKind(isConst[0]);
-				args=paramKind~names[0]~":"~dom.toString();
+				args=paramKind~names[0].str~":"~dom.toString();
 			}
 			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
@@ -951,19 +951,19 @@ class ProductTy: Type{
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=dom.freeVarsImpl(dg)) return r;
-		return cod.freeVarsImpl(v=>names.canFind(v.name)?0:dg(v));
+		return cod.freeVarsImpl(v=>names.canFind(v.id)?0:dg(v));
 	}
-	private ProductTy relabel(string oname,string nname)in{
+	private ProductTy relabel(Id oname,Id nname)in{
 		assert(names.canFind(oname));
 		assert(!hasFreeVar(nname));
 		assert(!names.canFind(nname));
 	}out(r){
-		if(oname!=""&&oname!=nname){
+		if(oname&&oname!=nname){
 			assert(r.names.canFind(nname));
 			assert(!r.names.canFind(oname));
 		}
 	}do{
-		if(oname==""||oname==nname) return this;
+		if(!oname||oname==nname) return this;
 		import std.algorithm;
 		auto i=names.countUntil(oname);
 		assert(i!=-1);
@@ -972,41 +972,42 @@ class ProductTy: Type{
 		auto nvar=varTy(nname,argTy(i));
 		return productTy(isConst,nnames,dom,cod.substitute(oname,nvar),isSquare,isTuple,annotation,isClassical_);
 	}
-	private ProductTy relabelAway(string oname)in{
+	private ProductTy relabelAway(Id oname)in{
 		assert(names.canFind(oname));
 	}out(r){
-		if(oname!="") assert(!r.names.canFind(oname));
+		if(!!oname) assert(!r.names.canFind(oname));
 	}do{
-		if(oname=="") return this;
+		if(!oname) return this;
 		auto nname=oname;
-		while(names.canFind(nname)||hasFreeVar(nname)) nname~="'";
+		while(names.canFind(nname)||hasFreeVar(nname)) nname=nname.apos;
 		return relabel(oname,nname);
 	}
-	private string freshName(string base,Expression block){
+	private Id freshName(Id base,Expression block){
 		auto nn=base;
-		while(hasFreeVar(nn)||block.hasFreeVar(nn)) nn~="'";
+		if(!nn) nn=Id.intern("x");
+		while(hasFreeVar(nn)||block.hasFreeVar(nn)) nn=nn.apos;
 		return nn;
 	}
-	string[] freshNames(Expression block){
+	Id[] freshNames(Expression block){
 		auto nnames=names.dup;
 		foreach(i,ref nn;nnames){
-			if(nn=="") nn="x";
-			while(hasFreeVar(nn)||block.hasFreeVar(nn)||nnames[0..i].canFind(nn)) nn~="'";
+			if(!nn) nn=Id.intern("x");
+			while(hasFreeVar(nn)||block.hasFreeVar(nn)||nnames[0..i].canFind(nn)) nn=nn.apos;
 		}
 		return nnames;
 	}
-	ProductTy relabelAll(string[] nnames)out(r){
+	ProductTy relabelAll(Id[] nnames)out(r){
 		assert(nnames.length==names.length);
 		foreach(n;nnames) assert(!hasFreeVar(n));
 	}do{
 		if(nnames==names) return this;
-		Expression[string] subst;
+		Expression[Id] subst;
 		foreach(i;0..names.length) subst[names[i]]=varTy(nnames[i],argTy(i));
 		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,annotation,isClassical_);
 	}
-	override ProductTy substituteImpl(Expression[string] subst){
+	override ProductTy substituteImpl(Expression[Id] subst){
 		foreach(n;names){
-			if(n=="") continue;
+			if(!n) continue;
 			bool ok=true;
 			foreach(k,v;subst) if(v.hasFreeVar(n)) ok=false;
 			if(ok) continue;
@@ -1020,7 +1021,7 @@ class ProductTy: Type{
 		auto ncod=cod.substitute(nsubst);
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[string] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto r=cast(ProductTy)rhs; // TODO: get rid of duplication (same code in opEquals)
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
@@ -1034,8 +1035,8 @@ class ProductTy: Type{
 			return false;
 		if(r.names.any!(name=>hasFreeVar(name)))
 			return false;
-		r=r.relabelAll(iota(names.length).map!(i=>names[i]!=""?names[i]:r.names[i]).array);
-		Expression[string] nsubst;
+		r=r.relabelAll(iota(names.length).map!(i=>names[i]?names[i]:r.names[i]).array);
+		Expression[Id] nsubst;
 		foreach(k,v;subst) if(!names.canFind(k)) nsubst[k]=v;
 		auto res=dom.unify(r.dom,nsubst,!meet)&&cod.unify(r.cod,nsubst,meet);
 		foreach(k,v;nsubst) subst[k]=v;
@@ -1052,7 +1053,7 @@ class ProductTy: Type{
 			atys=iota(tpl.length).map!(i=>tpl[i]).array;
 			if(atys.length!=cod.nargs) return null;
 		}else atys=[arg.type];
-		Expression[string] subst;
+		Expression[Id] subst;
 		foreach(i,n;names) subst[n]=null;
 		foreach(i,aty;atys){
 			if(i>=cod.nargs) continue;
@@ -1078,7 +1079,7 @@ class ProductTy: Type{
 	Expression tryApply(Expression arg,bool isSquare){
 		if(isSquare != this.isSquare) return null;
 		if(!isSubtype(arg.type,dom)) return null;
-		Expression[string] subst;
+		Expression[Id] subst;
 		if(isTuple){
 			auto targTy=arg.type.isTupleTy();
 			assert(!!tdom);
@@ -1122,7 +1123,7 @@ class ProductTy: Type{
 			return false;
 		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
 			return false;
-		auto name=freshName("x",r);
+		auto name=freshName(Id(),r);
 		auto vars=varTy(name,r.dom);
 		auto lCod=tryApply(vars,isSquare);
 		auto rCod=r.tryApply(vars,isSquare);
@@ -1161,7 +1162,7 @@ class ProductTy: Type{
 			if(!ncod) return null;
 			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}else{
-			auto name=names[0]==r.names[0]?names[0]:freshName("x",r);
+			auto name=names[0]==r.names[0]?names[0]:freshName(Id(),r);
 			auto var=varTy(name,ndom);
 			auto lCod=tryApply(var,isSquare);
 			auto rCod=r.tryApply(var,isSquare);
@@ -1178,22 +1179,22 @@ class ProductTy: Type{
 		assert(!tuple||dom.isTupleTy());
 	}do{
 		if(tuple==isTuple) return this;
-		string[] nnames;
+		Id[] nnames;
 		bool[] nIsConst;
 		if(tuple){
 			auto tpl=dom.isTupleTy();
 			assert(!!tpl);
 			assert(!isTuple&&names.length==1);
-			nnames=iota(tpl.length).map!(i=>names[0]~lowNum(i)).array;
+			nnames=iota(tpl.length).map!(i=>Id.intern(names[0].str~lowNum(i))).array;
 			assert(isConst.length==1);
 			nIsConst=isConst[0].repeat(tpl.length).array;
 		}else{
 			if(!isConst.empty&&!isConst.all!(x=>x==isConst.front))
 				return null;
-			nnames=["t"];
+			nnames=[Id.intern("t")];
 			nIsConst=[isConst.empty?false:isConst.front];
 		}
-		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn~="'";
+		foreach(i,ref nn;nnames) while(hasFreeVar(nn)) nn=nn.apos;
 		Expression narg;
 		if(tuple){
 			auto tpl=dom.isTupleTy();
@@ -1226,14 +1227,14 @@ class ProductTy: Type{
 	}
 }
 
-ProductTy productTy(bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
+ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
 	assert(dom&&cod);
 	if(isTuple){
 		auto tdom=dom.isTupleTy();
 		assert(tdom&&names.length==tdom.length&&isConst.length==tdom.length);
 	}else assert(names.length==1&&isConst.length==1);
 }do{
-	return memoize!((bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)=>new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical))(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical);
+	return memoize!((bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)=>new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical))(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical);
 }
 
 alias FunTy=ProductTy;
@@ -1246,7 +1247,7 @@ FunTy funTy(bool[] isConst,Expression dom,Expression cod,bool isSquare,bool isTu
 }do{
 	auto nargs=1+[].length;
 	if(isTuple) if(auto tpl=dom.isTupleTy()) nargs=tpl.length;
-	return productTy(isConst,iota(nargs).map!(_=>"").array,dom,cod,isSquare,isTuple,annotation,isClassical);
+	return productTy(isConst,iota(nargs).map!(_=>Id()).array,dom,cod,isSquare,isTuple,annotation,isClassical);
 }
 
 FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
@@ -1263,10 +1264,10 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClas
 	return funTy(dom,cod,isSquare,isTuple,pure_,isClassical);
 }
 
-Identifier varTy(string name,Expression type,bool classical=false)in{
-	assert(name!=""&&type);
+Identifier varTy(Id name,Expression type,bool classical=false)in{
+	assert(name&&type);
 }do{
-	return memoize!((string name,Expression type,bool classical){
+	return memoize!((Id name,Expression type,bool classical){
 		auto r=new Identifier(name);
 		static if(language==silq) r.classical=classical;
 		r.type=type;
@@ -1284,7 +1285,7 @@ struct FreeIdentifiers{
 				foreach(id;pt.dom.freeIdentifiers)
 					if(auto r=dg(id)) return r;
 				foreach(id;pt.cod.freeIdentifiers){
-					if(pt.names.canFind(id.name)) continue;
+					if(pt.names.canFind(id.id)) continue;
 					if(auto r=dg(id)) return r;
 				}
 			}
@@ -1300,8 +1301,8 @@ struct FreeIdentifiers{
 auto freeIdentifiers(Expression self){
 	return FreeIdentifiers(self);
 }
-bool hasFreeIdentifier(Expression self,string name){
-	foreach(id;self.freeIdentifiers) if(id.name==name) return true;
+bool hasFreeIdentifier(Expression self,Id name){
+	foreach(id;self.freeIdentifiers) if(id.id==name) return true;
 	return false;
 }
 
@@ -1544,6 +1545,6 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 
 Expression typeOfStringTy(bool classical){ return classical?ctypeTy:typeTy; }
 
-Expression typeOfProductTy(bool[] isConst,string[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
+Expression typeOfProductTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
 	return isClassical?ctypeTy:typeTy;
 }
