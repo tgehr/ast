@@ -513,90 +513,90 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(!ce.e.type){
 			ce.e=expressionSemantic(ce.e,expSemContext(sc,ConstResult.yes,InType.no));
 		}
-			auto ft=cast(FunTy)ce.e.type;
-			if(!ft) {
-				sc.error("call to non-function not supported as definition left-hand side", ce.e.loc);
+		auto ft=cast(FunTy)ce.e.type;
+		if(!ft) {
+			sc.error("call to non-function not supported as definition left-hand side", ce.e.loc);
+			return error();
+		}
+		bool needWrapper=false;
+		if(ft.isSquare&&!ce.isSquare){
+			if(auto ft2=cast(FunTy)ft.cod){
+				ft=ft2;
+				needWrapper=true;
+			}else{
+				sc.error("implicit function call not supported as definition left-hand side",ce.loc); // TODO?
 				return error();
 			}
-			bool needWrapper=false;
-			if(ft.isSquare&&!ce.isSquare){
-				if(auto ft2=cast(FunTy)ft.cod){
-					ft=ft2;
-					needWrapper=true;
+		}
+		if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
+			sc.error("reversed function must be 'mfree'",ce.e.loc);
+			return error;
+		}
+		if(!unchecked&&!needWrapper&&!ft.isClassical){
+			sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
+			return error();
+		}
+		auto f=ce.e;
+		auto r=reverseCallRewriter(ft,f.loc);
+		if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
+			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+			return error();
+		}
+		if(!unchecked&&!needWrapper&&r.returnType.hasClassicalComponent()){
+			sc.error("reversed function cannot have classical components in return value", f.loc);
+			return error();
+		}
+		Expression newlhs;
+		Expression newarg;
+		if(ft.isConstForReverse.all!(x=>x==ft.isConstForReverse[0])){
+			if(!ft.isConstForReverse.any){
+				if(cast(TupleExp)ce.arg){
+					auto tmp=new Identifier(freshName);
+					newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical_);
+					newlhs.loc=loc;
+					auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked);
+					auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked);
+					return res=new CompoundExp([def,argUnpack]);
 				}else{
-					sc.error("implicit function call not supported as definition left-hand side",ce.loc); // TODO?
-					return error();
-				}
-			}
-			if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
-				sc.error("reversed function must be 'mfree'",ce.e.loc);
-				return error;
-			}
-			if(!unchecked&&!needWrapper&&!ft.isClassical){
-				sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
-				return error();
-			}
-			auto f=ce.e;
-			auto r=reverseCallRewriter(ft,f.loc);
-			if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
-				sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
-				return error();
-			}
-			if(!unchecked&&!needWrapper&&r.returnType.hasClassicalComponent()){
-				sc.error("reversed function cannot have classical components in return value", f.loc);
-				return error();
-			}
-			Expression newlhs;
-			Expression newarg;
-			if(ft.isConstForReverse.all!(x=>x==ft.isConstForReverse[0])){
-				if(!ft.isConstForReverse.any){
-					if(cast(TupleExp)ce.arg){
-						auto tmp=new Identifier(freshName);
-						newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical_);
-						newlhs.loc=loc;
-						auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked);
-						auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked);
-						return res=new CompoundExp([def,argUnpack]);
-					}else{
-						newlhs=ce.arg;
-						auto constArg=new TupleExp([]);
-						constArg.loc=orhs.loc;
-						newarg=new TupleExp([constArg,orhs]);
-						newarg.loc=orhs.loc;
-					}
-				}else{
-					newlhs=new TupleExp([]);
-					newlhs.loc=ce.arg.loc;
-					newarg=new TupleExp([ce.arg,orhs]);
-					newarg.loc=ce.arg.loc.to(orhs.loc);
-				}
-			}else if(auto tpl=cast(TupleExp)ce.arg){
-				assert(ft.isTuple);
-				if(ft.nargs==tpl.length){
-					auto constMovedArgs=r.reorderArguments(tpl); // note: this changes order of assertion failures. ok?
-					newlhs=constMovedArgs[1];
-					newarg=new TupleExp([constMovedArgs[0],orhs]);
-					newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
-				}else{
-					sc.error(format("wrong number of arguments to reversed function call (%s instead of %s)",tpl.length,ft.nargs),ce.loc);
-					return error();
+					newlhs=ce.arg;
+					auto constArg=new TupleExp([]);
+					constArg.loc=orhs.loc;
+					newarg=new TupleExp([constArg,orhs]);
+					newarg.loc=orhs.loc;
 				}
 			}else{
-				sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
+				newlhs=new TupleExp([]);
+				newlhs.loc=ce.arg.loc;
+				newarg=new TupleExp([ce.arg,orhs]);
+				newarg.loc=ce.arg.loc.to(orhs.loc);
+			}
+		}else if(auto tpl=cast(TupleExp)ce.arg){
+			assert(ft.isTuple);
+			if(ft.nargs==tpl.length){
+				auto constMovedArgs=r.reorderArguments(tpl); // note: this changes order of assertion failures. ok?
+				newlhs=constMovedArgs[1];
+				newarg=new TupleExp([constMovedArgs[0],orhs]);
+				newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
+			}else{
+				sc.error(format("wrong number of arguments to reversed function call (%s instead of %s)",tpl.length,ft.nargs),ce.loc);
 				return error();
 			}
-				auto checked=!unchecked;
-				enum simplify=false, outerWanted=false;
-				auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
-				auto reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
-				if(ce.e.sstate==SemState.error) return error();
-				if(!reversed){
-					reversed=new CallExp(rev,ce.e,false,false);
-					reversed.loc=ce.e.loc;
-				}
-			auto newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
-			newrhs.loc=newarg.loc;
-			return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
+		}else{
+			sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
+			return error();
+		}
+		auto checked=!unchecked;
+		enum simplify=false, outerWanted=false;
+		auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
+		auto reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
+		if(ce.e.sstate==SemState.error) return error();
+		if(!reversed){
+			reversed=new CallExp(rev,ce.e,false,false);
+			reversed.loc=ce.e.loc;
+		}
+		auto newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
+		newrhs.loc=newarg.loc;
+		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
 	}
 	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
