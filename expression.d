@@ -430,7 +430,6 @@ class Identifier: Expression{
 		else r=new Identifier(id);
 		if(args.preserveSemantic){
 			r.meaning=meaning;
-			r.substitute=substitute;
 			r.scope_=scope_;
 			r.calledDirectly=calledDirectly;
 			r.indexedDirectly=indexedDirectly;
@@ -558,7 +557,7 @@ class Identifier: Expression{
 	override Annotation getAnnotation(){ return pure_; }
 
 	override Expression evalImpl(Expression ntype){
-		if(substitute) return getInitializer().evalImpl(ntype);
+		if(auto init=getInitializer()) return init.evalImpl(ntype);
 		if(ntype==type) return this;
 		auto r=new Identifier(id);
 		r.meaning=meaning;
@@ -568,23 +567,31 @@ class Identifier: Expression{
 		return r;
 	}
 	override bool isConstant(){
-		if(substitute){
-			if(auto init=getInitializer())
-				return init.isConstant();
+		if(auto init=getInitializer())
+			return init.isConstant();
+		if(auto fd=cast(FunctionDef)meaning){
+			if(!fd.isNested){
+				assert(!fd.capturedDecls);
+				return true;
+			}
 		}
 		return super.isConstant();
 	}
-	Expression getInitializer()in{
-		assert(substitute);
-	}do{
+	Expression getInitializer(){
+		if(classical) return null;
 		auto vd=cast(VarDecl)meaning;
-		assert(!!vd);
-		return vd.initializer;
+		if(!vd) return null;
+		if(vd.sstate==SemState.error) return null;
+		assert(vd.sstate==SemState.completed);
+		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype)&&vd.initializer){
+			return vd.initializer;
+		} else {
+			return null;
+		}
 	}
 	// semantic information:
 	Declaration meaning;
 	bool lazyCapture=false;
-	bool substitute=false;
 	Scope scope_;
 	bool calledDirectly=false;
 	bool indexedDirectly=false;
@@ -1000,23 +1007,43 @@ class CallExp: Expression{
 		return min(fty.annotation,arg.getAnnotation());
 	}
 
-	override Expression evalImpl(Expression ntype){
-		auto ne=e.eval(), narg=arg.eval();
-		// TODO: partially evaluate arbitrary functions
+	final private Expression isDup(){
 		import ast.semantic_:isPreludeSymbol,PreludeSymbol;
-		static if(__traits(hasMember,PreludeSymbol,"dup"))
-		if(ntype.isClassical()){
-			if(auto ce2=cast(CallExp)ne){
-				if(auto id=cast(Identifier)ce2.e){
-					if(id.name=="dup"){
-						if(isPreludeSymbol(id.meaning)==PreludeSymbol.dup)
-							return narg; // TODO: ok?
-					}
-				}
+		static if(__traits(hasMember,PreludeSymbol,"dup")) {
+			if(isSquare || isClassical_) return null;
+			auto ce2=cast(CallExp)e;
+			if(!ce2) return null;
+			if(!ce2.isSquare || ce2.isClassical_) return null;
+			auto id=cast(Identifier)ce2.e;
+			if(!id) return null;
+			if(id.name!="dup") return null;
+			if(isPreludeSymbol(id.meaning)!=PreludeSymbol.dup) return null;
+			return arg;
+		} else {
+			return null;
+		}
+	}
+
+	override bool isConstant(){
+		import ast.semantic_:isPreludeSymbol,PreludeSymbol;
+		if(type.isClassical()) {
+			if(auto e = isDup()) {
+				return e.isConstant();
 			}
 		}
-		if(ne == e && narg == arg && ntype == type) return this;
-		return new CallExp(ne,narg,isSquare,isClassical_);
+		return super.isConstant();
+	}
+
+	override Expression evalImpl(Expression ntype){
+		auto ne=e.eval(), narg=arg.eval();
+		CallExp r;
+		if(ne == e && narg == arg && ntype == type) r=this;
+		else r=new CallExp(ne,narg,isSquare,isClassical_);
+		// TODO: partially evaluate arbitrary functions
+		if(ntype.isClassical()){
+			if(auto sub=r.isDup()) return sub; // TODO: ok?
+		}
+		return r;
 	}
 }
 

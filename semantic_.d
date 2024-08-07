@@ -3364,14 +3364,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 		}
 	}
-	auto vd=cast(VarDecl)meaning;
-	if(vd){
-		if(cast(TopScope)vd.scope_||isTypeTy(vd.vtype)&&vd.initializer){
-			if(!vd.initializer||vd.initializer.sstate!=SemState.completed)
-				id.sstate=SemState.error;
-			id.substitute=true;
-		}
-	}
 	return dupIfNeeded(id);
 }
 
