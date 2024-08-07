@@ -516,8 +516,8 @@ class Checker {
 				return;
 		}
 
-		if(e.substitute) {
-			visExpr(e.getInitializer());
+		if(auto init=e.getInitializer()) {
+			visExpr(init);
 			return;
 		}
 
