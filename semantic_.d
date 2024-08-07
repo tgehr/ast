@@ -585,6 +585,15 @@ string isPrimitive(Expression e){
 	return opLit.lit.str;
 }
 
+// TODO `class PrimitiveExp: Expression { string prim; Expression[] args; Annotation annotation; }`
+static if(language==silq)
+string isPrimitiveCall(Expression e){
+	auto ce=cast(CallExp)e;
+	if(!ce) return null;
+	if(ce.isSquare || ce.isClassical_) return null;
+	return isPrimitive(ce.e);
+}
+
 bool isInPrelude(){
 	auto exprssc=modules[preludePath()];
 	return exprssc[1] is null;
