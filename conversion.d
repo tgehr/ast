@@ -101,7 +101,7 @@ class NumericConversion: Conversion{
 	this(Expression from,Expression to)in{
 		auto wf=whichNumeric(from);
 		auto wt=whichNumeric(to);
-		assert(wf&&wt&&wf<=wt);
+		assert(wf&&wt&&wf<wt);
 	}do{
 		super(from,to);
 	}
@@ -125,7 +125,10 @@ Ret!witness numericToNumeric(bool witness)(Expression from,Expression to,TypeAnn
 	auto wt=whichNumeric(to);
 	if(wf&&wt){
 		if(wf<=wt){
-			static if(witness) return new NumericConversion(from,to);
+			static if(witness) {
+				if(wf==wt) return new NoOpConversion(from,to);
+				return new NumericConversion(from,to);
+			}
 			else return true;
 		}
 		if(annotationType==TypeAnnotationType.coercion&&from.isClassical()&&isSubtype(to.getClassical(),from)){
@@ -392,18 +395,12 @@ Ret!witness annotationPun(bool witness)(Expression from,Expression to,TypeAnnota
 	return typeof(return).init;
 }
 
-class ℤtoIntConversion: Conversion{
-	this(ℤTy from,CallExp to)in{
+class ℤtoFixedConversion: Conversion{
+	this(ℤTy from,Expression to)in{
 		assert(from.isClassical);
-		assert(isInt(to));
-	}do{
-		super(from,to);
-	}
-}
-class ℤtoUintConversion: Conversion{
-	this(ℤTy from,CallExp to)in{
-		assert(from.isClassical);
-		assert(isUint(to));
+		auto toInt=isFixedIntTy(to);
+		assert(toInt);
+		assert(toInt.isClassical);
 	}do{
 		super(from,to);
 	}
@@ -413,12 +410,8 @@ pragma(inline,true)
 Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
 	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
 	if(isSubtype(from,ℤt(true))){
-		if(isUint(to)){
-			static if(witness) return trans(new NumericConversion(from,ℤt(true)),new ℤtoUintConversion(ℤt(true),cast(CallExp)to));
-			else return true;
-		}
-		if(isInt(to)){
-			static if(witness) return trans(new NumericConversion(from,ℤt(true)),new ℤtoIntConversion(ℤt(true),cast(CallExp)to));
+		if(isFixedIntTy(to)){
+			static if(witness) return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),new ℤtoFixedConversion(ℤt(true),to));
 			else return true;
 		}
 	}
@@ -426,7 +419,7 @@ Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotatio
 }
 
 class UintToℕConversion: Conversion{
-	this(CallExp from,ℕTy to)in{
+	this(Expression from,ℕTy to)in{
 		assert(isUint(from));
 		assert(to.isClassical());
 	}do{
@@ -435,7 +428,7 @@ class UintToℕConversion: Conversion{
 }
 
 class IntToℤConversion: Conversion{
-	this(CallExp from,ℤTy to)in{
+	this(Expression from,ℤTy to)in{
 		assert(isInt(from));
 		assert(to.isClassical());
 	}do{
@@ -447,34 +440,25 @@ pragma(inline, true)
 Ret!witness fixedToNumeric(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
 	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
 	if(!from.isClassical()) return typeof(return).init;
-	if(isUint(from)&&isSubtype(ℕt(true),to)){
-		static if(witness) return trans(new UintToℕConversion(cast(CallExp)from,ℕt(true)),new NumericConversion(ℕt(true),to));
-		else return true;
-	}
-	if(isInt(from)&&isSubtype(ℤt(true),to)){
-		static if(witness) return trans(new IntToℤConversion(cast(CallExp)from,ℤt(true)),new NumericConversion(ℤt(true),to));
-		else return true;
+	if(auto fromInt=isFixedIntTy(from)){
+		if(!fromInt.isSigned && isSubtype(ℕt(true),to)){
+			static if(witness) return trans(new UintToℕConversion(from,ℕt(true)),numericToNumeric!witness(ℕt(true),to,TypeAnnotationType.annotation));
+			else return true;
+		}
+		if(fromInt.isSigned && isSubtype(ℤt(true),to)){
+			static if(witness) return trans(new IntToℤConversion(from,ℤt(true)),numericToNumeric!witness(ℤt(true),to,TypeAnnotationType.annotation));
+			else return true;
+		}
 	}
 	/+if((isRat(from)||isFloat(from))&&isSubtype(ℚt(from.isClassical()),to))
 		return true;+/
 	return typeof(return).init;
 }
 
-class IntToVectorConversion: Conversion{
+class FixedToVectorConversion: Conversion{
 	bool checkLength;
-	this(CallExp from,VectorTy to,bool checkLength)in{
-		assert(isInt(from));
-		assert(isNoOpConversion(Bool(from.isClassical()),to.next));
-	}do{
-		this.checkLength=checkLength;
-		super(from,to);
-	}
-}
-
-class UintToVectorConversion: Conversion{
-	bool checkLength;
-	this(CallExp from,VectorTy to,bool checkLength)in{
-		assert(isUint(from));
+	this(Expression from,VectorTy to,bool checkLength)in{
+		assert(isFixedIntTy(from));
 		assert(isNoOpConversion(Bool(from.isClassical()),to.next));
 	}do{
 		this.checkLength=checkLength;
@@ -485,15 +469,13 @@ class UintToVectorConversion: Conversion{
 pragma(inline,true)
 Ret!witness fixedToVector(bool witness)(Expression from,Expression to,TypeAnnotationType type){
 	if(type<TypeAnnotationType.conversion) return typeof(return).init;
-	auto ce1=cast(CallExp)from;
-	if(ce1&&(isInt(ce1)||isUint(ce1))){
-		if(isSubtype(vectorTy(Bool(ce1.isClassical()),ce1.arg),to)||isSubtype(arrayTy(Bool(ce1.isClassical())),to)){
+	if(auto fromInt=isFixedIntTy(from)){
+		if(isSubtype(vectorTy(Bool(fromInt.isClassical),fromInt.bits),to)||isSubtype(arrayTy(Bool(fromInt.isClassical)),to)){
 			static if(witness){
-				auto vec=vectorTy(Bool(ce1.isClassical()),ce1.arg);
+				auto vec=vectorTy(Bool(fromInt.isClassical),fromInt.bits);
 				Conversion direct=null;
 				enum checkLength=false;
-				if(isInt(ce1)) direct=new IntToVectorConversion(ce1,vec,checkLength);
-				if(isUint(ce1)) direct=new UintToVectorConversion(ce1,vec,checkLength);
+				direct=new FixedToVectorConversion(from,vec,checkLength);
 				return trans(direct,typeExplicitConversion!true(vec,to,type));
 			}else return true;
 		}
@@ -501,22 +483,11 @@ Ret!witness fixedToVector(bool witness)(Expression from,Expression to,TypeAnnota
 	return typeof(return).init;
 }
 
-class VectorToIntConversion: Conversion{
+class VectorToFixedConversion: Conversion{
 	bool checkLength;
-	this(VectorTy from,CallExp to,bool checkLength)in{
+	this(VectorTy from,Expression to,bool checkLength)in{
 		assert(isNoOpConversion(Bool(to.isClassical()),from.next));
-		assert(isInt(to));
-	}do{
-		this.checkLength=checkLength;
-		super(from,to);
-	}
-}
-
-class VectorToUintConversion: Conversion{
-	bool checkLength;
-	this(VectorTy from,CallExp to,bool checkLength)in{
-		assert(isNoOpConversion(Bool(to.isClassical()),from.next));
-		assert(isUint(to));
+		assert(isFixedIntTy(to));
 	}do{
 		this.checkLength=checkLength;
 		super(from,to);
@@ -526,15 +497,13 @@ class VectorToUintConversion: Conversion{
 pragma(inline,true)
 Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
 	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
-	auto ce2=cast(CallExp)to;
-	if(ce2&&(isInt(ce2)||isUint(ce2))){
-		if(isSubtype(from,vectorTy(Bool(ce2.isClassical()),ce2.arg))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(ce2.isClassical())))){
+	if(auto toInt=isFixedIntTy(to)){
+		if(isSubtype(from,vectorTy(Bool(toInt.isClassical),toInt.bits))||annotationType==TypeAnnotationType.coercion&&isSubtype(from,arrayTy(Bool(toInt.isClassical)))){
 			static if(witness){
-				auto vec=vectorTy(Bool(ce2.isClassical()),ce2.arg);
+				auto vec=vectorTy(Bool(toInt.isClassical),toInt.bits);
 				Conversion direct=null;
 				enum checkLength=false;
-				if(isInt(ce2)) direct=new VectorToIntConversion(vec,ce2,checkLength);
-				if(isUint(ce2)) direct=new VectorToUintConversion(vec,ce2,checkLength);
+				direct=new VectorToFixedConversion(vec,to,checkLength);
 				return trans(typeExplicitConversion!true(from,vec,annotationType),direct);
 			}else return true;
 		}
@@ -589,7 +558,7 @@ bool annotateLiteral(Expression expr, Expression type){
 	auto lit=cast(LiteralExp)expr, negLit=cast(UMinusExp)expr?cast(LiteralExp)(cast(UMinusExp)expr).e:null;
 	if(!lit&&!negLit) return false;
 	bool check(){
-		if(isSubtype(expr.type,ℕt(false))&&(isUint(type)||isInt(type)))
+		if(isSubtype(expr.type,ℕt(false))&&isFixedIntTy(type))
 			return true;
 		if(isSubtype(expr.type,ℤt(false))&&isInt(type))
 			return true;

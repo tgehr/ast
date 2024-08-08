@@ -949,7 +949,7 @@ class CallExp: Expression{
 	override Expression getQuantum(){
 		static if(language==silq){
 			assert(isType(this));
-			if(isInt(this)||isUint(this)){ // TODO: generalize
+			if(isFixedIntTy(this)){ // TODO: generalize
 				auto r=new CallExp(e,arg,isSquare,false);
 				r.type=qtypeTy;
 				r.sstate=sstate;

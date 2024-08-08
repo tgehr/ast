@@ -740,8 +740,8 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.CallExp e) {
-		if(ast_ty.isInt(e) || ast_ty.isUint(e)) {
-			expectConst(e, "int-bits");
+		if(ast_ty.isFixedIntTy(e)) {
+			expectConst(e.arg, "int-bits");
 			visExpr(e.arg);
 			return;
 		}
