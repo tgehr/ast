@@ -54,8 +54,7 @@ string getSuffix(Expression type){
 	if(cast(TupleTy)type) return "t";
 	if(cast(VectorTy)type) return "v";
 	if(cast(ArrayTy)type) return "a";
-	if(isInt(type)) return "s";
-	if(isUint(type)) return "u";
+	if(auto intTy=isFixedIntTy(type)) return intTy.isSigned ? "s" : "u";
 	final switch(whichNumeric(type))with(NumericType){
 		case none: enforce(0, text("unsupported lowering type: ",type)); assert(0);
 		case Bool: return "𝔹";

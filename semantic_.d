@@ -623,10 +623,12 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	return res;
 }
 
+static if(language==psi)
 Expression getDistribution(Location loc,Scope sc){
 	return getPreludeSymbol("Distribution",loc,sc);
 }
 
+static if(language==psi)
 Expression distributionTy(Expression base,Scope sc){
 	return typeSemantic(new CallExp(getDistribution(base.loc,sc),base,true,true),sc);
 }
@@ -1923,7 +1925,7 @@ Identifier getIdFromDefLhs(Expression e){
 }
 
 bool isBasicIndexType(Expression ty){
-	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isInt(ty)||isUint(ty);
+	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isFixedIntTy(ty);
 }
 
 bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
@@ -3538,8 +3540,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
 	}else if(auto vt=cast(VectorTy)idx.e.type){
 		idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
-	}else if(isInt(idx.e.type)||isUint(idx.e.type)){
-		idx.type=check(Bool(idx.e.type.isClassical()), idx.a, idx.a.type, idx.a.loc);
+	}else if(auto idxInt=isFixedIntTy(idx.e.type)){
+		idx.type=check(Bool(idxInt.isClassical), idx.a, idx.a.type, idx.a.loc);
 	}else if(auto tt=cast(TupleTy)idx.e.type){
 		Expression checkTpl(Expression index){
 			if(auto lit=cast(LiteralExp)index){
@@ -3748,11 +3750,13 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 }
 
 Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
-	if(isInt(t1) && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
-	if(isInt(t2) && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
-	if(isUint(t1) && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
-	if(isUint(t2) && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
-	if(preludeNumericTypeName(t1) != null||preludeNumericTypeName(t2) != null)
+	auto int1 = isFixedIntTy(t1);
+	auto int2 = isFixedIntTy(t2);
+	if(int1 && int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+	if(int2 && int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
+	if(int1 && !int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+	if(int2 && !int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
+	if(int1 || int2)
 		return joinTypes(t1,t2);
 	if(!isNumeric(t1)||!isNumeric(t2)) return null;
 	auto r=joinTypes(t1,t2);
@@ -3768,13 +3772,13 @@ Expression subtractionType(Expression t1, Expression t2){
 }
 Expression divisionType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
-	if(isInt(r)||isUint(r)) return null; // TODO: add a special operator for float and rat?
+	if(isFixedIntTy(r)) return null; // TODO: add a special operator for float and rat?
 	return util.among(r,Bool(true),ℕt(true),ℤt(true))?ℚt(true):
 		util.among(r,Bool(false),ℕt(false),ℤt(false))?ℚt(false):r;
 }
 Expression iDivType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
-	if(isInt(r)||isUint(r)) return r;
+	if(isFixedIntTy(r)) return r;
 	if(cast(ℂTy)t1||cast(ℂTy)t2) return null;
 	bool classical=t1.isClassical()&&t2.isClassical();
 	if(cast(BoolTy)t1&&cast(BoolTy)t2) return Bool(classical);
@@ -3788,8 +3792,8 @@ Expression nSubType(Expression t1, Expression t2){
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
-	auto isModular1=isInt(t1)||isUint(t1), isNumeric1=isNumeric(t1), isNumber1=isModular1||isNumeric1;
-	auto isModular2=isInt(t2)||isUint(t2), isNumeric2=isNumeric(t2), isNumber2=isModular2||isNumeric2;
+	auto isModular1=isFixedIntTy(t1), isNumeric1=isNumeric(t1), isNumber1=isModular1||isNumeric1;
+	auto isModular2=isFixedIntTy(t2), isNumeric2=isNumeric(t2), isNumber2=isModular2||isNumeric2;
 	if(!isNumber1||!isNumber2) return null;
 	auto isIntegral1=isModular1||isSubtype(t1,ℤt(t1.isClassical()));
 	auto isIntegral2=isModular2||isSubtype(t2,ℤt(t2.isClassical()));
@@ -3812,15 +3816,13 @@ Expression powerType(Expression t1, Expression t2){
 	return ℝ(classical); // TODO: good?
 }
 Expression minusType(Expression t){
-	if(preludeNumericTypeName(t) != null)
-		return t;
+	if(isFixedIntTy(t)) return t;
 	if(!isNumeric(t)) return null;
 	if(cast(BoolTy)t||cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
 }
 Expression bitNotType(Expression t){
-	if(preludeNumericTypeName(t) != null)
-		return t;
+	if(isFixedIntTy(t)) return t;
 	if(!isNumeric(t)) return null;
 	if(cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
@@ -3834,7 +3836,7 @@ Expression logicType(Expression t1,Expression t2){
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
 Expression cmpType(Expression t1,Expression t2){
-	if(preludeNumericTypeName(t1) != null||preludeNumericTypeName(t2) != null){
+	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
 		if(!(joinTypes(t1,t2)||isNumeric(t1)||isNumeric(t2)))
 			return null;
 	}else{
@@ -3948,7 +3950,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			e.sstate=SemState.error;
 		}
 		void checkLiteralFixed(ref Expression fixed,ref Expression literal){
-			if((isInt(fixed.type)||isUint(fixed.type))&&isNumeric(literal.type)&&!cast(BoolTy)literal.type){
+			if(isFixedIntTy(fixed.type)&&isNumeric(literal.type)&&!cast(BoolTy)literal.type){
 				if(isLiteral(literal)){ // TODO: also allow general value range propagation (e.g. see *Pretty*.slq/manualPhaseEstimation.slq/dlog.slq
 					auto nl=new TypeAnnotationExp(literal,fixed.type,TypeAnnotationType.annotation);
 					nl.loc=literal.loc;

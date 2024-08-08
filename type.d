@@ -58,21 +58,65 @@ Expression getNumeric(int which,bool classical){
 	}
 }
 
+struct FixedIntTy {
+	Expression bits;
+	bool isSigned, isClassical;
+
+	bool opCast(T: bool)() const pure @safe nothrow {
+		return !!bits;
+	}
+}
+
+FixedIntTy isFixedIntTy(Expression e){
+	import ast.semantic_: modules;
+	if(preludePath() !in modules) return FixedIntTy();
+	auto exprssc=modules[preludePath()];
+	auto sc=exprssc[1];
+
+	auto ce=cast(CallExp)e;
+	if(!ce || !ce.isSquare) return FixedIntTy();
+	auto bits=ce.arg;
+	bool isClassical=ce.isClassical_;
+
+	auto id=cast(Identifier)ce.e;
+	if(!id||!id.meaning||id.meaning.scope_ !is sc) return FixedIntTy();
+
+	bool isSigned;
+	switch(id.name){
+		case "int":
+			isSigned=true;
+			break;
+		case "uint":
+			isSigned=false;
+			break;
+		default:
+			return FixedIntTy();
+	}
+	return FixedIntTy(bits, isSigned, isClassical);
+}
+
+bool isInt(Expression e){
+	if(auto ty=isFixedIntTy(e)) return ty.isSigned;
+	else return false;
+}
+bool isUint(Expression e){
+	if(auto ty=isFixedIntTy(e)) return !ty.isSigned;
+	else return false;
+}
+
 string preludeNumericTypeName(Expression e){
 	import ast.semantic_: modules;
 	if(preludePath() !in modules) return null;
 	auto exprssc=modules[preludePath()];
 	auto sc=exprssc[1];
 	auto ce=cast(CallExp)e;
-	if(!ce) return null;
+	if(!ce || !ce.isSquare) return null;
 	auto id=cast(Identifier)ce.e;
 	if(!id) return null;
 	if(!id.meaning||id.meaning.scope_ !is sc) return null;
 	return id.name;
 }
 
-bool isInt(Expression e){ return preludeNumericTypeName(e)=="int"; }
-bool isUint(Expression e){ return preludeNumericTypeName(e)=="uint"; }
 bool isFloat(Expression e){ return preludeNumericTypeName(e)=="float"; }
 bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
