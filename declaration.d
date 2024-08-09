@@ -139,6 +139,7 @@ class FunctionDef: Declaration{
 		auto r=new FunctionDef(name?name.copy(args):null,params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
 		r.isSquare=isSquare;
 		r.annotation=annotation;
+		r.attributes=attributes.array;
 		return r;
 	}
 	override string toString(){
@@ -172,6 +173,7 @@ class FunctionDef: Declaration{
 	bool hasReturn;
 	bool isConstructor;
 	string[] retNames;
+	string[] attributes;
 
 	void seal(){
 		sealedLinearCaptures=true;
@@ -192,6 +194,10 @@ class FunctionDef: Declaration{
 	@property size_t numReturns(){
 		if(!ftype) return 0;
 		return ftype.cod.numComponents;
+	}
+
+	bool hasAttribute(string attr) {
+		return attributes.any!(a => a == attr);
 	}
 
 	FunctionDef reversed=null;

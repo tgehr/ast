@@ -801,6 +801,11 @@ struct Parser{
 		expect(isSquare?Tok!"]":Tok!")");
 		auto annotation=Annotation.none;
 		bool isLifted=false;
+		auto attributes=appender!(string[]);
+		while(ttype==Tok!"@"){
+			attributes.put(tok.name);
+			nextToken();
+		}
 		static if(language==silq){
 			if(ttype==Tok!"lifted"||ttype==Tok!"qfree"){
 				isLifted=ttype==Tok!"lifted";
@@ -830,6 +835,7 @@ struct Parser{
 			Expression e;
 			if(ttype==Tok!"("||ttype==Tok!"["){
 				if(annotation==Annotation.none) annotation=pure_;
+				attributes.put("artificial");
 				e=parseLambdaExp!semicolon();
 			}else{
 				nextToken();
@@ -847,6 +853,7 @@ struct Parser{
 		res=New!FunctionDef(name,cast(Parameter[])params[0],params[1]||params[0].length!=1,ret,body_);
 		res.isSquare=isSquare;
 		res.annotation=annotation;
+		res.attributes=attributes[];
 		return res;
 	}
 	DatParameter parseDatParameter(bool constDefault){
