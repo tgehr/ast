@@ -9,32 +9,9 @@ import ast.declaration;
 
 static if(language==silq):
 
-TopScope opsc=null;
-Scope getOperatorScope(Location loc,ErrorHandler err){
-	if(opsc) return opsc;
-	import ast.parser,ast.declaration:getActualPath;
-	Expression[] exprs;
-	if(auto r=parseFile(getActualPath(operatorsPath),err,exprs,loc))
-		return null;
-	opsc=new TopScope(err);
-	enforce(!!prsc);
-	opsc.import_(prsc);
-	int nerr=err.nerrors;
-	exprs=semantic(exprs,opsc);
-	return opsc;
-}
-
-bool isInOperators(Declaration decl){
-	static if(operatorLowering) {
-		if(!opsc) return false;
-		return decl.scope_.isNestedIn(opsc);
-	} else {
-		return false;
-	}
-}
-
 Identifier getOperatorSymbol(string name,Location loc,Scope isc){
-	auto sc=getOperatorScope(loc,isc.handler);
+	import ast.modules: getOperatorScope;
+	auto sc=getOperatorScope(isc.handler, loc);
 	if(!sc) return null;
 	auto res=new Identifier(name);
 	res.loc=loc;

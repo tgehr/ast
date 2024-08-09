@@ -1103,7 +1103,7 @@ Expression parseExpression(Source source, ErrorHandler handler){
 	return Parser(lex(source),handler).parseExpression();
 }
 
-Expression[] parseFile(Source source, ErrorHandler handler){
+Expression[] parseSource(Source source, ErrorHandler handler){
 	auto p=Parser(lex(source),handler);
 	auto s=appender!(Expression[])();
 	while(p.ttype!=Tok!"EOF"){
@@ -1112,45 +1112,4 @@ Expression[] parseFile(Source source, ErrorHandler handler){
 		s.put(e);
 	}
 	return s.data;
-}
-
-
-import util.io;
-string readCode(File f){
-	// TODO: use memory-mapped file with 4 padding zero bytes
-	auto app=mallocAppender!(char[])();
-	foreach(r;f.byChunk(1024)){app.put(cast(char[])r);}
-	app.put("\0\0\0\0"); // insert 4 padding zero bytes
-	return cast(string)app.data;
-}
-string readCode(string path){ return readCode(File(path)); }
-
-int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Location.init){
-	string code;
-	try code=readCode(path);
-	catch(Exception){
-		string error;
-		if(!file.exists(path)){
-			// bake prelude into binary as a fallback
-			void noSuchFile(){ error = path ~ ": no such file"; }
-			static if(language==silq){
-				if(path==preludePath) code=import(preludePath) ~ "\0\0\0\0";
-				else if(path==operatorsPath) code=import(operatorsPath) ~ "\0\0\0\0";
-				else noSuchFile();
-			}else static if(language==psi){
-				if(path=="prelude.psi") code=import("prelude.psi") ~ "\0\0\0\0";
-				else if(path=="prelude-nocheck.psi") code=import("prelude-nocheck.psi") ~ "\0\0\0\0";
-				else noSuchFile();
-			}else static assert(0);
-		}else error = path ~ ": error reading file";
-		if(error){
-			if(loc.line) err.error(error,loc);
-			else stderr.writeln("error: "~error);
-			return 1;
-		}
-	}
-	auto src=new Source(path, code);
-	auto nerr=err.nerrors;
-	r=.parseFile(src,err);
-	return nerr!=err.nerrors;
 }
