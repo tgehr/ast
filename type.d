@@ -40,6 +40,7 @@ enum NumericType{
 }
 
 NumericType whichNumeric(Expression t){ // TODO: more general solution
+	if(t) t=t.eval();
 	import std.traits: EnumMembers;
 	static foreach(type;[EnumMembers!NumericType].filter!(x=>x!=NumericType.none))
 		if(mixin(text("cast(",to!string(type).endsWith("t")?to!string(type)[0..$-1]:to!string(type),"Ty)t"))) return type;
@@ -1500,7 +1501,7 @@ bool isQuantumTy(Expression e){
 bool isQuantum(Expression e){ return e&&isQuantumTy(e.type); }
 
 Expression getClassicalTy(Expression e)in{ // typeof(!x) for x:e
-	assert(isType(e));
+	assert(isType(e)||isQNumeric(e));
 }do{
 	return ctypeTy;
 }

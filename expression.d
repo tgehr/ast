@@ -493,7 +493,7 @@ class Identifier: Expression{
 		if(subst[id]){
 			if(!subst[id].unify(rhs,subst,meet))
 				return false;
-			if(isType(subst[id])&&isType(rhs))
+			if((isType(subst[id])||isQNumeric(subst[id]))&&(isType(rhs)||isQNumeric(rhs)))
 				if(auto cmb=combineTypes(subst[id],rhs,meet)) // TODO: good?
 					subst[id]=cmb;
 			return true;
@@ -504,13 +504,17 @@ class Identifier: Expression{
 	}
 	override bool opEquals(Object o){
 		if(auto r=cast(Identifier)o){
-			return id==r.id && classical==r.classical && meaning==r.meaning;
+			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning)
+				return true;
+			if(auto init=getInitializer())
+				if(init==r)
+					return true;
 		}
 		return false;
 	}
-
 	override Expression getClassical(){
 		static if(language==silq){
+			if(auto r=super.getClassical()) return r;
 			assert(isType(this)||isQNumeric(this));
 			if(classical) return this;
 			if(!meaning) return varTy(id,ctypeTy,true);
@@ -547,7 +551,7 @@ class Identifier: Expression{
 		if(!meaning) return null;
 		import ast.semantic_:typeForDecl;
 		auto r=typeForDecl(meaning);
-		if(isTypeTy(r)&&classical) return ctypeTy;
+		if((isType(r)||isQNumeric(r))&&classical) return getClassicalTy(r);
 		return r;
 	}
 	final Expression typeFromMeaning(){
