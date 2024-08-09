@@ -131,7 +131,7 @@ Scope getOperatorScope(ErrorHandler err, Location loc){
 	if(operatorScope) return operatorScope;
 	operatorScope = new TopScope(err);
 	operatorScope.import_(getPreludeScope(err, loc));
-	auto src = new Source(".operators", readBuiltin!([operatorsPath()])(0));
+	auto src = new Source(".operators", readBuiltin!([operatorsPath])(0));
 	int nerr = err.nerrors;
 	auto exprs = parseSource(src, err);
 	exprs = semantic(exprs,operatorScope);
