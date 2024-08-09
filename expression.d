@@ -578,13 +578,12 @@ class Identifier: Expression{
 		return super.isConstant();
 	}
 	Expression getInitializer(){
-		if(classical) return null;
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
-		if(vd.sstate==SemState.error) return null;
+		if(vd.sstate==SemState.error||!vd.initializer) return null;
 		assert(vd.sstate==SemState.completed);
-		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype)&&vd.initializer){
-			return vd.initializer;
+		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype) || isQNumeric(vd.vtype)){
+			return classical?vd.initializer.getClassical():vd.initializer;
 		} else {
 			return null;
 		}
