@@ -8,6 +8,7 @@ import std.format, std.conv, util.tuple:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,ast.reverse,util;
 import ast.lowerings;
+import ast.modules: importModule, getPreludeScope, isInPrelude;
 
 Id freshName(){ // TODO: improve mechanism for generating temporaries
 	static int counter=0;
@@ -196,48 +197,6 @@ Expression presemantic(Declaration expr,Scope sc){
 		}
 	}
 	return expr;
-}
-
-import util.tuple: tuple,Tuple;
-static Tuple!(Expression[],TopScope)[string] modules;
-TopScope prsc=null;
-int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc=Location.init){
-	if(path in modules){
-		auto exprssc=modules[path];
-		exprs=exprssc[0],sc=exprssc[1];
-		if(!sc){
-			if(loc.line) err.error("circular imports not supported",loc);
-			else err.message("error: circular imports not supported");
-			return 1;
-		}
-		return 0;
-	}
-	modules[path]=tuple(Expression[].init,TopScope.init);
-	scope(success) modules[path]=tuple(exprs,sc);
-	import ast.parser, ast.declaration;
-	if(!prsc && path != preludePath()){
-		Expression[] prelude;
-		if(auto r=importModule(preludePath,err,prelude,prsc))
-			return r;
-	}
-	if(auto r=parseFile(getActualPath(path),err,exprs,loc))
-		return r;
-	sc=new TopScope(err);
-	if(prsc) sc.import_(prsc);
-	int nerr=err.nerrors;
-	exprs=semantic(exprs,sc);
-	if(nerr!=err.nerrors){
-		if(loc.line) sc.error("errors in imported file",loc);
-		return 1;
-	}
-	return 0;
-}
-
-bool isInPrelude(Declaration decl){
-	auto ppath=preludePath();
-	if(ppath !in modules) return false;
-	auto psc=modules[ppath];
-	return decl.scope_.isNestedIn(psc[1]);
 }
 
 Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
@@ -547,10 +506,7 @@ PreludeSymbol isPreludeSymbol(Identifier id){
 	return isPreludeSymbol(id.meaning);
 }
 PreludeSymbol isPreludeSymbol(Declaration decl){
-	if(preludePath() !in modules) return PreludeSymbol.none;
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-	if(!decl||decl.scope_ !is sc) return PreludeSymbol.none;
+	if(!isInPrelude(decl)) return PreludeSymbol.none;
 	if(!decl.name) return PreludeSymbol.none;
 	switch(decl.name.name){
 		default: return PreludeSymbol.none;
@@ -594,25 +550,11 @@ string isPrimitiveCall(Expression e){
 	return isPrimitive(ce.e);
 }
 
-bool isInPrelude(){
-	auto exprssc=modules[preludePath()];
-	return exprssc[1] is null;
-}
-
 Identifier getPreludeSymbol(string name,Location loc,Scope isc){
-	import ast.semantic_: modules;
-	if(preludePath() !in modules) return null;
-	auto exprssc=modules[preludePath()];
-	Scope sc=exprssc[1];
-	if(!sc){
-		sc=isc; // in prelude
-		while(auto nsc=cast(NestedScope)sc)
-			sc=nsc.parent;
-	}
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
-	res.meaning=sc.lookup(res,false,false,Lookup.constant);
+	res.meaning=getPreludeScope(isc.handler, loc).lookup(res,false,false,Lookup.constant);
 	if(!res.meaning){
 		res.sstate=SemState.error;
 	}else{
@@ -1998,7 +1940,7 @@ bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,I
 
 static if(language==silq){
 struct ArrayConsumer{
-	Tuple!(Expression,Declaration,SemState,Scope)[string] consumed;
+	Q!(Expression,Declaration,SemState,Scope)[string] consumed;
 	Identifier[] ids;
 	void consumeArray(IndexExp e,ExpSemContext context){
 		Identifier id=null;
@@ -2033,7 +1975,7 @@ struct ArrayConsumer{
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
 			ids~=id;
-			consumed[id.name]=tuple(id.type,id.meaning,e.e.sstate,id.scope_);
+			consumed[id.name]=q(id.type,id.meaning,e.e.sstate,id.scope_);
 		}
 		doIt(e);
 	}
@@ -2512,10 +2454,7 @@ bool isReverse(Identifier id){
 }
 
 bool isReverse(Declaration decl){
-	if(preludePath() !in modules) return false;
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-	if(!decl||decl.scope_ !is sc) return false;
+	if(!isInPrelude(decl)) return false;
 	if(!decl.name) return false;
 	return decl.getName=="reverse";
 }

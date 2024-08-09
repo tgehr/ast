@@ -23,6 +23,7 @@ static if(language==silq){
 import std.array, std.algorithm, std.conv;
 import std.functional, std.range;
 import ast.expression, ast.declaration, util;
+import ast.modules: isInPrelude;
 
 bool isSameType(Expression lhs,Expression rhs){
 	return lhs.eval() == rhs.eval(); // TODO: evaluation context?
@@ -68,18 +69,13 @@ struct FixedIntTy {
 }
 
 FixedIntTy isFixedIntTy(Expression e){
-	import ast.semantic_: modules;
-	if(preludePath() !in modules) return FixedIntTy();
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
-
 	auto ce=cast(CallExp)e;
 	if(!ce || !ce.isSquare) return FixedIntTy();
 	auto bits=ce.arg;
 	bool isClassical=ce.isClassical_;
 
 	auto id=cast(Identifier)ce.e;
-	if(!id||!id.meaning||id.meaning.scope_ !is sc) return FixedIntTy();
+	if(!id||!id.meaning||!isInPrelude(id.meaning)) return FixedIntTy();
 
 	bool isSigned;
 	switch(id.name){
@@ -105,15 +101,10 @@ bool isUint(Expression e){
 }
 
 string preludeNumericTypeName(Expression e){
-	import ast.semantic_: modules;
-	if(preludePath() !in modules) return null;
-	auto exprssc=modules[preludePath()];
-	auto sc=exprssc[1];
 	auto ce=cast(CallExp)e;
 	if(!ce || !ce.isSquare) return null;
 	auto id=cast(Identifier)ce.e;
-	if(!id) return null;
-	if(!id.meaning||id.meaning.scope_ !is sc) return null;
+	if(!id||!id.meaning||!isInPrelude(id.meaning)) return null;
 	return id.name;
 }
 
