@@ -600,7 +600,7 @@ class Identifier: Expression{
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
 	}
-	else enum classical=true;
+	else enum classical=false;
 }
 
 class PlaceholderExp: Expression{
