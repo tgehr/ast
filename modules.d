@@ -26,10 +26,11 @@ string readCode(File f){
 }
 string readCode(string path){ return readCode(File(path)); }
 
-string readBuiltin(string path)(){
+string readBuiltin(string[] paths)(int index){
 	import std.file: thisExePath;
 	import std.path: dirName;
 	string binPath = dirName(thisExePath());
+	string path = paths[index];
 	foreach(tryPath; [
 		binPath ~ "/library/" ~ path,
 		binPath ~ "/../share/silq/library/" ~ path,
@@ -37,15 +38,21 @@ string readBuiltin(string path)(){
 		try return readCode(tryPath);
 		catch(Exception) {}
 	}
-	// 4 padding bytes required by lexer
-	return import(path) ~ "\0\0\0\0";
+	switch(index){
+		static foreach(i,p;paths){
+			case i:
+			// 4 padding bytes required by lexer
+			return import(p) ~ "\0\0\0\0";
+		}
+		default: assert(0);
+	}
 }
 
 Scope getPreludeScope(ErrorHandler err, Location loc){
 	import ast.semantic_: semantic;
 	if(preludeScope) return preludeScope;
 	preludeScope = new TopScope(err);
-	preludeSrc = new Source(".prelude", readBuiltin!(preludePath())());
+	preludeSrc = new Source(".prelude", readBuiltin!preludePaths(preludeIndex));
 	int nerr = err.nerrors;
 	auto exprs = parseSource(preludeSrc, err);
 	exprs = semantic(exprs, preludeScope);
@@ -124,7 +131,7 @@ Scope getOperatorScope(ErrorHandler err, Location loc){
 	if(operatorScope) return operatorScope;
 	operatorScope = new TopScope(err);
 	operatorScope.import_(getPreludeScope(err, loc));
-	auto src = new Source(".operators", readBuiltin!(operatorsPath())());
+	auto src = new Source(".operators", readBuiltin!([operatorsPath()])(0));
 	int nerr = err.nerrors;
 	auto exprs = parseSource(src, err);
 	exprs = semantic(exprs,operatorScope);
