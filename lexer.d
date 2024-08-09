@@ -27,6 +27,7 @@ bool isAlphaEx(dchar c){
 private immutable {
 string[2][] complexTokens =
 	[["i",     "Identifier"                ],
+	 ["@",     "Attribute"                 ],
 	 ["``",    "StringLiteral"             ],
 	 ["``c",   "StringLiteralC"            ],
 	 ["``w",   "StringLiteralW"            ],
@@ -298,6 +299,8 @@ struct Token{
 		switch(type){
 			case Tok!"i":
 				return name;
+			case Tok!"@":
+				return "@"~name;
 			case Tok!"``":
 				return '"'~escape(str)~'"';
 			case Tok!"``c":
@@ -837,6 +840,29 @@ private:
 					if(*p=='c')      res[0].type = Tok!"``c", p++;
 					else if(*p=='w') res[0].type = Tok!"``w", p++;
 					else if(*p=='d') res[0].type = Tok!"``d", p++;
+					break;
+				case '@':
+					s=p;
+					readattrib: for(;;){
+						switch(*p){
+							case '_':
+							case 'a': .. case 'z':
+							case 'A': .. case 'Z':
+							case '0': .. case '9':
+								p++;
+								break;
+							case 0x80: .. case 0xFF:
+								len=0;
+								try if(isAlphaEx(utf.decode(p[0..4],len))) p+=len;
+									else break readattrib;
+								catch(Exception){break readattrib;} // will be caught in the next iteration
+								break;
+							default: break readattrib;
+						}
+					}
+					res[0].type=Tok!"@";
+					// skip leading `@`
+					res[0].name = s[0..p-s];
 					break;
 				// identifiers and keywords
 				case '_':
