@@ -368,7 +368,13 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	// TODO: support non-subtyping conversions in dom and cod?
 	auto dom=typeExplicitConversion!witness(ft2.dom,ft1.dom,TypeAnnotationType.annotation);
 	if(!dom) return typeof(return).init;
-	auto cod=typeExplicitConversion!witness(ft1.cod,ft2.cod,TypeAnnotationType.annotation);
+	Expression[Id] subst;
+	foreach(i;0..names.length)
+		if(names[i])
+			subst[names[i]]=varTy(names[i],ft2.argTy(i));
+	assert(!ft1.cod.hasFreeVar(Id()));
+	auto nft1Cod=ft1.cod.substitute(subst);
+	auto cod=typeExplicitConversion!witness(nft1Cod,ft2.cod,TypeAnnotationType.annotation);
 	if(!cod) return typeof(return).init;
 	return new FunctionConversion(ft1,ft2,names,dom,cod);
 }
