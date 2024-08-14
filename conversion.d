@@ -324,7 +324,16 @@ class FunctionConversion: Conversion{
 	this(ProductTy from,ProductTy to,Id[] names,Conversion dom,Conversion cod)in{
 		assert(isNoOpConversion(to.dom,dom.from)&&isNoOpConversion(dom.to,from.dom));
 		assert(from.names==names&&to.names==names);
-		assert(isNoOpConversion(cod.from,from.cod)&&isNoOpConversion(to.cod,cod.to),text(to.cod," ",cod.to));
+		Expression[Id] subst;
+		foreach(i;0..names.length){
+			if(!names[i]) continue;
+			auto tae=new TypeAnnotationExp(varTy(names[i],to.argTy(i)),to.argTy(i),TypeAnnotationType.coercion);
+			tae.brackets++;
+			tae.type=to.argTy(i);
+			tae.sstate=SemState.completed;
+			subst[names[i]]=tae;
+		}
+		assert(isNoOpConversion(cod.from,from.cod.substitute(subst))&&isNoOpConversion(to.cod,cod.to),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
 		assert(equal(from.isConstForSubtyping,to.isConstForSubtyping)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
 		assert(from.annotation>=to.annotation);
@@ -369,12 +378,18 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	auto dom=typeExplicitConversion!witness(ft2.dom,ft1.dom,TypeAnnotationType.annotation);
 	if(!dom) return typeof(return).init;
 	Expression[Id] subst;
-	foreach(i;0..names.length)
-		if(names[i])
-			subst[names[i]]=varTy(names[i],ft2.argTy(i));
+	foreach(i;0..names.length){
+		if(!names[i]) continue;
+		auto tae=new TypeAnnotationExp(varTy(names[i],ft2.argTy(i)),ft2.argTy(i),TypeAnnotationType.coercion);
+		tae.brackets++;
+		tae.type=ft2.argTy(i);
+		tae.sstate=SemState.completed;
+		subst[names[i]]=tae;
+	}
 	assert(!ft1.cod.hasFreeVar(Id()));
 	auto nft1Cod=ft1.cod.substitute(subst);
-	auto cod=typeExplicitConversion!witness(nft1Cod,ft2.cod,TypeAnnotationType.annotation);
+	assert(!ft2.cod.hasFreeVar(Id()));
+	auto cod=typeExplicitConversion!witness(nft1Cod,ft2.cod,annotationType);
 	if(!cod) return typeof(return).init;
 	return new FunctionConversion(ft1,ft2,names,dom,cod);
 }

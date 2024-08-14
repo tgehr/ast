@@ -245,6 +245,11 @@ class TypeAnnotationExp: Expression{
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		return e.unify(rhs,subst,meet);
 	}
+	override bool opEquals(Object o){
+		auto tae=cast(TypeAnnotationExp)o;
+		if(!tae) return false;
+		return e==tae.e&&t==tae.t&&annotationType==tae.annotationType;
+	}
 	override Annotation getAnnotation(){
 		return e.getAnnotation();
 	}
