@@ -54,6 +54,7 @@ abstract class Expression: Node{
 	override @property string kind(){return "expression";}
 	bool isCompound(){ return false; }
 	bool isConstant(){ return false; }
+	bool isTotal(){ return false; }
 
 	final Expression eval(){
 		auto ntype=!type?null:type is this?this:type.eval();
@@ -226,6 +227,9 @@ class TypeAnnotationExp: Expression{
 	override bool isConstant(){
 		return e.isConstant();
 	}
+	override bool isTotal(){
+		return annotationType<TypeAnnotationType.coercion && e.isTotal() && type.isTotal();
+	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
 		return (type?type:t).freeVarsImpl(dg);
@@ -328,6 +332,7 @@ class LiteralExp: Expression{
 		return _brk(lit.toString());
 	}
 	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 
 	override bool opEquals(Object o){
 		auto r=cast(LiteralExp)o;
@@ -586,6 +591,11 @@ class Identifier: Expression{
 		}
 		return super.isConstant();
 	}
+	override bool isTotal(){
+		if(auto init=getInitializer())
+			return init.isTotal();
+		return true;
+	}
 	Expression getInitializer(){
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
@@ -646,6 +656,7 @@ class UnaryExp(TokenType op): AUnaryExp{
 		//override UnaryExp!(Tok!"&") isAddressExp(){return this;}
 	}
 	override bool isConstant(){ return e.isConstant(); }
+	override bool isTotal(){ return e.isTotal(); }
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
@@ -1108,6 +1119,24 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	}
 	override string toString(){
 		return _brk(e1.toString() ~ " "~TokChars!op~" "~e2.toString());
+	}
+	override bool isTotal(){
+		static if(op==Tok!"sub"||op==Tok!"sub←"){
+			return false;
+		}else{
+			static if(op==Tok!"/"||op==Tok!"div"||op==Tok!"%"||op==Tok!"/←"||op==Tok!"div←"||op==Tok!"%←"){
+				auto rhsLiteral=cast(LiteralExp)e2;
+				if(!rhsLiteral||rhsLiteral.isZero())
+					return false;
+			}else static if(op!=Tok!":="&&op!=Tok!"←"&&op!=Tok!"="&&op!=Tok!"≠"&&op!=Tok!"<"&&op!=Tok!"≤"&&op!=Tok!">"&&op!=Tok!"≥"){
+				if(whichNumeric(type)>=NumericType.ℝ){
+					// floats can overflow and we disallow inf/nan
+					// TODO: ℝ,ℂ not necessarily implemented using floats
+					return false;
+				}
+			}
+			return e1.isTotal()&&e2.isTotal();
+		}
 	}
 	//override string toString(){return e1.toString() ~ " "~ e2.toString~TokChars!op;} // RPN
 	static if(op==Tok!":="){
@@ -1872,6 +1901,7 @@ class ArrayExp: Expression{
 	}
 	override string toString(){ return _brk("["~e.map!(to!string).join(",")~"]");}
 	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
+	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 
 	override bool opEquals(Object o){
 		auto r=cast(ArrayExp)o;

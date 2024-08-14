@@ -174,6 +174,8 @@ class BoolTy: Type{
 		static if(language==silq) return classical?"!𝔹":"𝔹";
 		else return "𝔹";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(BoolTy)o;
 		return r && classical==r.classical;
@@ -213,6 +215,8 @@ class ℕTy: Type{
 		static if(language==silq) return classical?"!ℕ":"ℕ";
 		else return "ℕ";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(ℕTy)o;
 		return r&&classical==r.classical;
@@ -249,6 +253,8 @@ class ℤTy: Type{
 		static if(language==silq) return classical?"!ℤ":"ℤ";
 		else return "ℤ";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(ℤTy)o;
 		return r&&classical==r.classical;
@@ -285,6 +291,8 @@ class ℚTy: Type{
 		static if(language==silq) return classical?"!ℚ":"ℚ";
 		else return "ℚ";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(ℚTy)o;
 		return r&&classical==r.classical;
@@ -321,6 +329,8 @@ class ℝTy: Type{
 		static if(language==silq) return classical?"!ℝ":"ℝ";
 		else return "ℝ";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(ℝTy)o;
 		return r&&classical==r.classical;
@@ -357,6 +367,8 @@ class ℂTy: Type{
 		static if(language==silq) return classical?"!ℂ":"ℂ";
 		else return "ℂ";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto r=cast(ℂTy)o;
 		return r&&classical==r.classical;
@@ -411,6 +423,8 @@ class AggregateTy: Type{
 	override string toString(){
 		return decl&&decl.name?decl.name.name:"<anonymous aggregate>";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override AggregateTy getClassical(){
 		static if(language==silq) return classicalTy;
 		else return this;
@@ -436,6 +450,8 @@ class ContextTy: Type{
 	override ContextTy copyImpl(CopyArgs args){
 		return this;
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		auto ctx=cast(ContextTy)o;
 		return ctx&&ctx.classical==classical;
@@ -492,6 +508,8 @@ class TupleTy: Type,ITupleTy{
 		}
 		return types.map!(a=>a.isTupleTy()&&a!is unit?"("~a.toString()~")":addp(a)).join(" × ");
 	}
+	override bool isConstant(){ return types.all!(ty=>ty.isConstant()); }
+	override bool isTotal(){ return types.all!(ty=>ty.isTotal()); }
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(t;types)
 			if(auto r=t.freeVarsImpl(dg))
@@ -601,6 +619,8 @@ class ArrayTy: Type{
 		bool p=cast(FunTy)next||next.isTupleTy()&&next!is unit;
 		return p?"("~next.toString()~")[]":next.toString()~"[]";
 	}
+	override bool isConstant(){ return next.isConstant(); }
+	override bool isTotal(){ return next.isTotal(); }
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
@@ -709,6 +729,8 @@ class VectorTy: Type, ITupleTy{
 		bool q=!cast(Identifier)num&&!cast(LiteralExp)num; // TODO: improve
 		return (p?"("~next.toString()~")^":next.toString()~"^")~(q?"("~num.toString()~")":num.toString());
 	}
+	override bool isConstant(){ return next.isConstant() && num.isConstant(); }
+	override bool isTotal(){ return next.isTotal() && num.isTotal(); }
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=next.freeVarsImpl(dg)) return r;
 		return num.freeVarsImpl(dg);
@@ -816,6 +838,8 @@ class StringTy: Type{
 		static if(language==silq) return classical?"!string":"string";
 		else return "string";
 	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
 		return !!cast(StringTy)o;
 	}
@@ -977,6 +1001,8 @@ class ProductTy: Type{
 		}
 		return r;
 	}
+	override bool isConstant(){ return dom.isConstant() && cod.isConstant(); }
+	override bool isTotal(){ return dom.isTotal() && cod.isTotal(); }
 	@property size_t nargs(){
 		if(isTuple) return tdom.length;
 		return 1;
