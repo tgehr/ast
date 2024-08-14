@@ -323,17 +323,8 @@ class FunctionConversion: Conversion{
 	Conversion dom,cod;
 	this(ProductTy from,ProductTy to,Id[] names,Conversion dom,Conversion cod)in{
 		assert(isNoOpConversion(to.dom,dom.from)&&isNoOpConversion(dom.to,from.dom));
-		assert(from.names==names&&to.names==names);
-		Expression[Id] subst;
-		foreach(i;0..names.length){
-			if(!names[i]) continue;
-			auto tae=new TypeAnnotationExp(varTy(names[i],to.argTy(i)),to.argTy(i),TypeAnnotationType.coercion);
-			tae.brackets++;
-			tae.type=to.argTy(i);
-			tae.sstate=SemState.completed;
-			subst[names[i]]=tae;
-		}
-		assert(isNoOpConversion(cod.from,from.cod.substitute(subst))&&isNoOpConversion(to.cod,cod.to),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
+		auto subst=functionConversionSubstitution(names,from,to);
+		assert(isNoOpConversion(cod.from,from.cod.substitute(subst[0]))&&isNoOpConversion(to.cod.substitute(subst[1]),cod.to),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
 		assert(equal(from.isConstForSubtyping,to.isConstForSubtyping)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
 		assert(from.annotation>=to.annotation);
@@ -344,6 +335,23 @@ class FunctionConversion: Conversion{
 		this.dom=dom;
 		this.cod=cod;
 	}
+}
+
+Expression[Id][2] functionConversionSubstitution(Id[] names,ProductTy from,ProductTy to)in{
+	assert(from.names==names&&to.names==names);
+}do{
+	Expression[Id][2] subst;
+	foreach(k;0..2){
+		foreach(i;0..names.length){
+			if(!names[i]) continue;
+			auto tae=new TypeAnnotationExp(varTy(names[i],(k?from:to).argTy(i)),from.argTy(i),TypeAnnotationType.coercion);
+			tae.brackets++;
+			tae.type=from.argTy(i);
+			tae.sstate=SemState.completed;
+			subst[k][names[i]]=tae;
+		}
+	}
+	return subst;
 }
 
 pragma(inline,true)
@@ -377,19 +385,12 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	// TODO: support non-subtyping conversions in dom and cod?
 	auto dom=typeExplicitConversion!witness(ft2.dom,ft1.dom,TypeAnnotationType.annotation);
 	if(!dom) return typeof(return).init;
-	Expression[Id] subst;
-	foreach(i;0..names.length){
-		if(!names[i]) continue;
-		auto tae=new TypeAnnotationExp(varTy(names[i],ft2.argTy(i)),ft2.argTy(i),TypeAnnotationType.coercion);
-		tae.brackets++;
-		tae.type=ft2.argTy(i);
-		tae.sstate=SemState.completed;
-		subst[names[i]]=tae;
-	}
+	auto subst=functionConversionSubstitution(names,ft1,ft2);
 	assert(!ft1.cod.hasFreeVar(Id()));
-	auto nft1Cod=ft1.cod.substitute(subst);
+	auto nft1Cod=ft1.cod.substitute(subst[0]);
 	assert(!ft2.cod.hasFreeVar(Id()));
-	auto cod=typeExplicitConversion!witness(nft1Cod,ft2.cod,annotationType);
+	auto nft2Cod=ft2.cod.substitute(subst[1]);
+	auto cod=typeExplicitConversion!witness(nft1Cod,nft2Cod,TypeAnnotationType.coercion);
 	if(!cod) return typeof(return).init;
 	return new FunctionConversion(ft1,ft2,names,dom,cod);
 }
@@ -662,4 +663,4 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 		}
 	}
 	return typeof(return).init;
- }
+}
