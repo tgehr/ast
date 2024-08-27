@@ -3883,7 +3883,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			e.sstate=SemState.error;
 		}else return vectorTy(e1,e2);
 	}else{
-		e.type = determineType(e1.type.eval(),e2.type.eval());
+		e.type = determineType(e1.type?e1.type.eval():null,e2.type?e2.type.eval():null);
 		if(!e.type){
 			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
