@@ -3483,16 +3483,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		idx.type=check(Bool(idxInt.isClassical), idx.a, idx.a.type, idx.a.loc);
 	}else if(auto tt=cast(TupleTy)idx.e.type){
 		Expression checkTpl(Expression index){
-			if(auto lit=cast(LiteralExp)index){
-				if(lit.lit.type==Tok!"0"){
-					auto c=ℤ(lit.lit.str);
-					if(c<0||c>=tt.types.length){
-						sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
-						idx.sstate=SemState.error;
-						return null;
-					}else{
-						return tt.types[cast(size_t)c.toLong()];
-					}
+			if(auto lit=index.asIntegerConstant()){
+				auto c=lit.get();
+				if(c<0||c>=tt.types.length){
+					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+					idx.sstate=SemState.error;
+					return null;
+				}else{
+					return tt.types[cast(size_t)c.toLong()];
 				}
 			}
 			if(auto tpl=cast(TupleExp)index){
