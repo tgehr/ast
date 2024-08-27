@@ -170,6 +170,7 @@ class Checker {
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
 		assert(to.type && from.type.eval() == to.type.eval());
+		// imported!"util.io".writeln("lowered ", from, " → ", to);
 		return to;
 	}
 
@@ -869,8 +870,8 @@ class Checker {
 		import std.algorithm : canFind;
 		static if(["+","-","sub"].canFind(op)) if(visLoweringExpr(e)) return;
 		static if(cmpops.canFind(op)) {
-			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumeric(e.e1))
-			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumeric(e.e2)))
+			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumeric(e.e1.type))
+			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumeric(e.e2.type)))
 				if(visLoweringExpr(e)) return;
 		}
 		visExpr(e.e1);
