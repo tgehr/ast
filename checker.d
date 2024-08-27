@@ -170,7 +170,7 @@ class Checker {
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
 		// imported!"util.io".writeln("lowered: ", from, " -> ", to);
-		assert(from.type == to.type);
+		assert(from.type.eval() == to.type.eval());
 		return to;
 	}
 
