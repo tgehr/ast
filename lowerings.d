@@ -34,12 +34,12 @@ string getSuffix(Expression type){
 	if(auto intTy=isFixedIntTy(type)) return intTy.isSigned ? "s" : "u";
 	final switch(whichNumeric(type))with(NumericType){
 		case none: enforce(0, text("unsupported lowering type: ",type)); assert(0);
-		case Bool: return "𝔹";
-		case ℕt: return "ℕ";
-		case ℤt: return "ℤ";
-		case ℚt: return "ℚ";
-		case ℝ: return "ℝ";
-		case ℂ: return "ℂ";
+		case Bool: return type.isClassical()?"B":"b";
+		case ℕt: return type.isClassical()?"N":"n";
+		case ℤt: return type.isClassical()?"Z":"z";
+		case ℚt: return type.isClassical()?"Q":"q";
+		case ℝ: return type.isClassical()?"R":"r";
+		case ℂ: return type.isClassical()?"C":"c";
 	}
 }
 
@@ -49,13 +49,13 @@ string getSuffix(R)(string name,R types){ // TODO: replace with some sort of lan
 		switch(name){
 			default:
 				auto t0=types[0],t1=types[1];
-				if(isNumeric(t0)&&isNumeric(t1)){
+				if(isNumeric(t0)&&isNumeric(t1)&&!(cast(BoolTy)t0&&cast(BoolTy)t1)){
 					return getSuffix(whichNumeric(t0)>whichNumeric(t1)?t0:t1);
 				}
 				auto s0=getSuffix(t0);
 				auto s1=getSuffix(t1);
-				if(s0.among("s","u")&&s1=="ℕ") s1="ℤ";
-				if(s1.among("s","u")&&s0=="ℕ") s0="ℤ";
+				if(s0.among("s","u")&&s1=="N") s1="Z";
+				if(s1.among("s","u")&&s0=="N") s0="Z";
 				return s0==s1?s0:s0~s1;
 		}
 	}
