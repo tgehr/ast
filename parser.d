@@ -518,6 +518,9 @@ struct Parser{
 					return res=New!RawProductTy(cast(Parameter[])params[0],cod,isSquare,isTuple,annotation);
 				}
 				return parseProduct();
+			case Tok!"∏",Tok!"cprod":
+				nextToken();
+				return res=New!RawVariadicTy(parseExpression(nbp,false));
 			case Tok!"-":
 				nextToken();
 				return res=New!(UnaryExp!(Tok!"-"))(parseExpression(nbp,false));

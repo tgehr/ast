@@ -1326,6 +1326,152 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClas
 	return funTy(dom,cod,isSquare,isTuple,pure_,isClassical);
 }
 
+class RawVariadicTy: Expression{
+	Expression next;
+	this(Expression next){ this.next=next; }
+	override RawVariadicTy copyImpl(CopyArgs args){
+		return new RawVariadicTy(next.copy(args));
+	}
+	override string toString(){
+		auto ns=next.toString();
+		import std.uni:isAlpha;
+		return _brk((ns[0].isAlpha?"∏ ":"∏")~ns);
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+}
+
+Expression typeOfVariadicTy(Expression next)in{
+	assert(next&&next.type);
+	if(auto tpl=cast(TupleTy)next.type)
+		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
+	else{
+		auto et=elementType(next.type);
+		assert(isType(et)||isQNumeric(et));
+	}
+}do{
+	if(auto tpl=cast(TupleTy)next.type){
+		Expression r=utypeTy;
+		foreach(t;tpl.types)
+			r=joinTypes(r,t);
+		return r;
+	}
+	auto enext=elementType(next.type);
+	return enext;
+}
+
+class VariadicTy: Type{
+	Expression next;
+	bool isClassical_;
+	private this(Expression next,bool isClassical_)in{
+		assert(next&&next.type);
+		if(auto tpl=cast(TupleTy)next.type)
+			assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
+		else{
+			auto et=elementType(next.type);
+			assert(isType(et)||isQNumeric(et));
+		}
+	}do{
+		this.next=next;
+		this.type=typeOfVariadicTy(next);
+		this.isClassical_=isClassical_;
+		if(isClassical_) this.type=getClassicalTy(this.type);
+		super();
+	}
+	override VariadicTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		auto ns="("~next.toString()~")";
+		import std.uni:isAlpha;
+		return (isClassical_?"!":"")~(ns[0].isAlpha?"∏ ":"∏")~ns;
+	}
+	override bool isConstant(){ return next.isConstant(); }
+	override bool isTotal(){ return next.isTotal(); }
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		return next.freeVarsImpl(dg);
+	}
+	override VariadicTy substituteImpl(Expression[Id] subst){
+		return variadicTy(next.substitute(subst),isClassical_);
+	}
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+		if(auto vt=cast(VariadicTy)rhs)
+			return next.unifyImpl(vt.next,subst,meet);
+		// if(auto vt=cast(VectorTy)rhs) return next.unifyImpl(vector(vt.next.num,vt.next.type),subst,meet); // TODO
+		// if(auto at=cast(ArrayTy)rhs) // TODO
+		if(auto tt=rhs.isTupleTy()){
+			auto types=iota(tt.length).map!(i=>tt[i]).array;
+			auto tpl=new TupleExp(types);
+			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+			tpl.sstate=SemState.completed;
+			return next.unifyImpl(tpl,subst,meet);
+		}
+		return false;
+	}
+	override Expression evalImpl(Expression ntype){
+		assert(isTypeTy(ntype));
+		auto ne=next.eval();
+		bool hasElements=false;
+		Expression[] elements;
+		if(auto arr=cast(ArrayExp)ne){
+			hasElements=true;
+			elements=arr.e;
+		}
+		if(auto tpl=cast(TupleExp)ne){
+			hasElements=true;
+			elements=tpl.e;
+		}
+		if(hasElements){
+			auto tt=tupleTy(elements);
+			if(isClassical_) return tt.getClassical;
+			return tt;
+		}
+		return variadicTy(next.eval(),isClassical_);
+	}
+	override bool opEquals(Object o){
+		if(auto r=cast(VariadicTy)o)
+			return next==r.next&&isClassical_==r.isClassical;
+		return false;
+	}
+	override bool isSubtypeImpl(Expression r){
+		if(auto vt=cast(VariadicTy)r)
+			return next==vt.next && isClassical(this)>=isClassical(vt); // TODO: improve
+		// if(auto vt=cast(VectorTy)rhs) ... // TODO
+		// if(auto at=cast(ArrayTy)rhs) ... // TODO
+		if(auto tt=r.isTupleTy()){
+			auto tpl=new TupleExp(iota(tt.length).map!(i=>tt[i]).array);
+			tpl.type=typeOfVariadicTy(tpl);
+			tpl.sstate=SemState.completed;
+			return next==tpl; // TODO: improve
+		}
+		return false;
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		return this==r?this:null; // TODO
+	}
+	override Expression getClassical(){
+		return variadicTy(next,true);
+	}
+	override Expression getQuantum(){
+		return null; // TODO
+	}
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return dg(next);
+	}
+}
+
+VariadicTy variadicTy(Expression next,bool isClassical)in{
+	assert(next&&next.type);
+	if(auto tpl=cast(TupleTy)next.type)
+		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
+	else assert(isType(elementType(next.type))||isQNumeric(elementType(next.type)));
+}do{
+	return memoize!((Expression next,bool isClassical)=>new VariadicTy(next,isClassical))(next,isClassical);
+}
+
 Identifier varTy(Id name,Expression type,bool classical=false)in{
 	assert(name&&type);
 }do{

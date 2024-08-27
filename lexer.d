@@ -21,7 +21,7 @@ template TokChars(TokenType type){mixin(TokCharsImpl());}
 
 bool isAlphaEx(dchar c){
 	import std.algorithm : canFind;
-	return isAlpha(c)||canFind("𝟙₀₁₂₃₄₅₆₇₈₉₋₊⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺"d,c);
+	return isAlpha(c)||canFind("𝟙∏₀₁₂₃₄₅₆₇₈₉₋₊⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺"d,c);
 }
 
 private immutable {
@@ -168,7 +168,7 @@ string[2][] specialTokens =
 
 string[2][] compoundTokens = [];
 
-string[] keywords = ["dat","def","true","false","if","then","else","observe","assert","return","repeat","for","while","in","cobserve","import","Π","Pi","as","coerce","pun","forget"]~(language==psi?["pure"]:[])~(language==silq?["λ","lambda","quantum","const","moved","lifted","qfree","mfree","classical","do","with"]:[]);
+string[] keywords = ["dat","def","true","false","if","then","else","observe","assert","return","repeat","for","while","in","cobserve","import","Π","Pi","as","coerce","pun","forget"]~(language==psi?["pure"]:[])~(language==silq?["λ","lambda","∏","cprod","quantum","const","moved","lifted","qfree","mfree","classical","do","with"]:[]);
 
 
 string[2][] tokens = specialTokens ~ complexTokens ~ simpleTokens ~ unicodeTokens ~ compoundTokens ~ keywordTokens();
@@ -177,7 +177,10 @@ string[2][] tokens = specialTokens ~ complexTokens ~ simpleTokens ~ unicodeToken
 private{
 auto keywordTokens(){
 	immutable(string[2])[] r;
-	foreach(i,kw;keywords) r~=[kw,kw~"_"];
+	foreach(i,kw;keywords){
+		if(kw=="∏") r~=[kw,"ucprod_"];
+		else r~=[kw,kw~"_"];
+	}
 	return r;
 }
 

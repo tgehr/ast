@@ -2207,6 +2207,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
 		if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);
+		if(auto va=cast(RawVariadicTy)e) return f(va,forward!args);
 	}
 
 	return default_(e,forward!args);

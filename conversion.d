@@ -550,6 +550,7 @@ class ParameterizedSubtypeConversion: Conversion{
 +/
 
 Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
+	to=to.eval();
 	static if(witness){
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
 		if(isTypeTy(from)&&isTypeTy(to)&&isSubtype(from,to)) return new TypeConversion(from,to);
@@ -605,6 +606,7 @@ bool annotateLiteral(Expression expr, Expression type){
 	return true;
 }
 Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression type,TypeAnnotationType annotationType){
+	type=type.eval();
 	if(annotationType==TypeAnnotationType.punning) return typeExplicitConversion!witness(expr.type,type,annotationType);
 	if(annotateLiteral(expr,type)){
 		static if(witness) return refl(type);

@@ -149,6 +149,9 @@ class Checker {
 			if(auto te = cast(ast_ty.ProductTy) e) {
 				return this.implTy(te);
 			}
+			if(auto te = cast(ast_ty.VariadicTy) e) {
+				return this.implTy(te);
+			}
 			if(cast(ast_ty.TypeTy) e || cast(ast_ty.QTypeTy) e || cast(ast_ty.CTypeTy) e || cast(ast_ty.UTypeTy) e) {
 				return;
 			}
@@ -506,6 +509,10 @@ class Checker {
 
 	void implTy(ast_ty.ProductTy e) {
 		visExpr(e.dom);
+	}
+
+	void implTy(ast_ty.VariadicTy e) {
+		visExpr(e.next);
 	}
 
 	void implExpr(ast_exp.Identifier e) {

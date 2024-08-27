@@ -3883,7 +3883,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			e.sstate=SemState.error;
 		}else return vectorTy(e1,e2);
 	}else{
-		e.type = determineType(e1.type,e2.type);
+		e.type = determineType(e1.type.eval(),e2.type.eval());
 		if(!e.type){
 			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
@@ -4008,7 +4008,7 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	if(ce.sstate==SemState.error)
 		return ce;
 	assert(!ce.type);
-	ce.type=concatType(ce.e1.type,ce.e2.type);
+	ce.type=concatType(ce.e1.type.eval(),ce.e2.type.eval());
 	if(!ce.type){
 		sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 		ce.sstate=SemState.error;
@@ -4096,6 +4096,35 @@ Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
 	assert(fa.isTuple||types.length==1);
 	auto dom=fa.isTuple?tupleTy(types):types[0];
 	return productTy(const_,names,dom,cod,fa.isSquare,fa.isTuple,fa.annotation,false);
+}
+
+Expression expressionSemanticImpl(RawVariadicTy va,ExpSemContext context){
+	auto sc=context.sc;
+	va.type=typeTy; // TODO: ok?
+	auto next=expressionSemantic(va.next,expSemContext(context.sc,ConstResult.yes,InType.yes));
+	if(auto tpl=cast(TupleTy)next.type){
+		if(!tpl.types.all!(t=>isType(t)||isQNumeric(t))){
+			sc.error("argument to variadic type must be a tuple of types",va.loc);
+			sc.note(format("type of argument is '%s'",next.type),va.next.loc);
+			sc.note(format("a '%s' is not a type",tpl.types.filter!(t=>!(isType(t)||isQNumeric(t)))),va.loc);
+			va.sstate=SemState.error;
+			return va;
+		}
+	}else if(auto et=elementType(next.type)){
+		if(!(isType(et)||isQNumeric(et))){
+			sc.error("argument to variadic type must have element type that is a type",va.loc);
+			sc.note(format("type of argument is '%s'",next.type),va.next.loc);
+			sc.note(format("a '%s' is not a type",et),va.loc);
+			va.sstate=SemState.error;
+			return va;
+		}
+	}else{
+		sc.error("argument to variadic type must be a tuple, vector, or array",va.loc);
+		sc.note(format("type of argument is '%s'",next.type),va.next.loc);
+		va.sstate=SemState.error;
+		return va;
+	}
+	return variadicTy(next,false);
 }
 
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
