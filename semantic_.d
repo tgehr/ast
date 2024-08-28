@@ -1233,7 +1233,17 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 			}
 		}
 	}
-	static if(!isPresemantic) if(!ok) result.sstate=SemState.error;
+	static if(!isPresemantic) if(!ok){
+		result.sstate=SemState.error;
+		foreach(e;result.subexpressions()){
+			if(auto id=cast(Identifier)e){
+				if(!id.constLookup){
+					if(id.meaning&&id.meaning.sstate!=SemState.completed)
+						id.meaning.sstate=SemState.error;
+				}
+			}
+		}
+	}
 	return result;
 }
 
