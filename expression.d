@@ -702,7 +702,9 @@ class UnaryExp(TokenType op): AUnaryExp{
 		auto ne=e.eval();
 		static if(op==Tok!"-"){
 			if(auto v=ne.asIntegerConstant()){
-				return LiteralExp.makeInteger(-v.get());
+				auto r=LiteralExp.makeInteger(-v.get());
+				r.type=type==e.type?ne.type:type.eval();
+				return r;
 			}
 		}
 		if(ne == e && ntype == type) return this;
