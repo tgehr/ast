@@ -2381,6 +2381,12 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				auto name=id.meaning.name.name;
 				auto var=addVar(name,ce.type,be.loc,sc);
 				be.replacements~=AAssignExp.Replacement(id.meaning,var);
+				auto from=typeForDecl(id.meaning),to=typeForDecl(var);
+				if(isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
+					sc.error(format("operator assign from type '%s' to type '%s' is disallowed",from,to),be.loc);
+					sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
+					be.sstate=SemState.error;
+				}
 			}
 			static if(language==silq){
 				bool ok=false;
@@ -3726,7 +3732,12 @@ Expression divisionType(Expression t1, Expression t2){
 		util.among(r,Bool(false),ℕt(false),ℤt(false))?ℚt(false):r;
 }
 Expression iDivType(Expression t1, Expression t2){
-	auto r=arithmeticType!false(t1,t2);
+	auto r=arithmeticType!true(t1,t2);
+	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
+	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
+	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
+	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
+	if(isFixed2&&isSigned1&&!isSigned2) return null;
 	if(isFixedIntTy(r)) return r;
 	if(cast(ℂTy)t1||cast(ℂTy)t2) return null;
 	bool classical=t1.isClassical()&&t2.isClassical();
@@ -3741,18 +3752,13 @@ Expression nSubType(Expression t1, Expression t2){
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
-	auto isModular1=isFixedIntTy(t1), isNumeric1=isNumeric(t1), isNumber1=isModular1||isNumeric1;
-	auto isModular2=isFixedIntTy(t2), isNumeric2=isNumeric(t2), isNumber2=isModular2||isNumeric2;
-	if(!isNumber1||!isNumber2) return null;
-	auto isIntegral1=isModular1||isSubtype(t1,ℤt(t1.isClassical()));
-	auto isIntegral2=isModular2||isSubtype(t2,ℤt(t2.isClassical()));
-	if(!isIntegral1||!isIntegral2) return joinTypes(isModular1?ℤt(t1.isClassical()):t1,isModular2?ℤt(t2.isClassical()):t2);
-	auto isSigned1=isInt(t1)||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
-	auto isSigned2=isInt(t2)||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
-	auto isClassical=t1.isClassical()&&t2.isClassical();
-	if(!isSigned1&&!isSigned2&&isModular1&&!isModular2||isSubtype(t2,Bool(true)))
-		return isClassical?t1:t1.getQuantum();
-	return isClassical?t2:t2.getQuantum();
+	auto r=arithmeticType!true(t1,t2);
+	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
+	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
+	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
+	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
+	if(isFixed1&&!isSigned1&&isSigned2) return null;
+	return r;
 }
 Expression powerType(Expression t1, Expression t2){
 	bool classical=t1.isClassical()&&t2.isClassical();
@@ -3879,7 +3885,7 @@ Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
 	return handleUnary!bitNotType("bitwise not",ubne,ubne.e,context);
 }
 
-private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context,bool checkLiteral=false){
+private Expression handleBinary(alias determineType)(string name,Expression e,ref Expression e1,ref Expression e2,ExpSemContext context){
 	auto sc=context.sc;
 	e1=expressionSemantic(e1,context.nestConst);
 	e2=expressionSemantic(e2,context.nestConst);
@@ -3898,52 +3904,27 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
 		}
-		void checkLiteralFixed(ref Expression fixed,ref Expression literal){
-			if(isFixedIntTy(fixed.type)&&isNumeric(literal.type)&&!cast(BoolTy)literal.type){
-				if(isLiteral(literal)){ // TODO: also allow general value range propagation (e.g. see *Pretty*.slq/manualPhaseEstimation.slq/dlog.slq
-					auto nl=new TypeAnnotationExp(literal,fixed.type,TypeAnnotationType.annotation);
-					nl.loc=literal.loc;
-					literal=expressionSemantic(nl,context.nestConst);
-					propErr(literal,e);
-				}else{
-					sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
-					if(explicitConversion(literal,fixed.type,TypeAnnotationType.conversion)){
-						Expression nl=new TypeAnnotationExp(literal,fixed.type,TypeAnnotationType.conversion);
-						nl.loc=literal.loc;
-						nl.brackets++;
-						swap(literal,nl);
-						sc.note(format("explicit conversion possible, use %s",e),e.loc);
-						swap(nl,literal);
-					}
-					e.sstate=SemState.error;
-				}
-			}
-		}
-		if(checkLiteral){
-			if(!((name=="integer division"||name=="natural subtraction")&&cast(ℕTy)e2.type)) checkLiteralFixed(e1,e2);
-			checkLiteralFixed(e2,e1);
-		}
 	}
 	return e;
 }
 
 Expression expressionSemanticImpl(AddExp ae,ExpSemContext context){
-	return handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,context,true);
+	return handleBinary!(arithmeticType!false)("addition",ae,ae.e1,ae.e2,context);
 }
 Expression expressionSemanticImpl(SubExp se,ExpSemContext context){
-	return handleBinary!subtractionType("subtraction",se,se.e1,se.e2,context,true);
+	return handleBinary!subtractionType("subtraction",se,se.e1,se.e2,context);
 }
 Expression expressionSemanticImpl(NSubExp nse,ExpSemContext context){
-	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context,true);
+	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context);
 }
 Expression expressionSemanticImpl(MulExp me,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context,true);
+	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context);
 }
 Expression expressionSemanticImpl(DivExp de,ExpSemContext context){
-	return handleBinary!divisionType("division",de,de.e1,de.e2,context,true);
+	return handleBinary!divisionType("division",de,de.e1,de.e2,context);
 }
 Expression expressionSemanticImpl(IDivExp ide,ExpSemContext context){
-	return handleBinary!iDivType("integer division",ide,ide.e1,ide.e2,context,true);
+	return handleBinary!iDivType("integer division",ide,ide.e1,ide.e2,context);
 }
 Expression expressionSemanticImpl(ModExp me,ExpSemContext context){
 	return handleBinary!moduloType("modulo",me,me.e1,me.e2,context);
