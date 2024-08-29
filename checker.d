@@ -858,7 +858,7 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
-		//if(visLoweringExpr(e)) return; // TODO
+		if(visLoweringExpr(e)) return;
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}

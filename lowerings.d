@@ -51,6 +51,7 @@ enum OperatorBehavior{
 	mul,
 	div,
 	pow,
+	cat,
 }
 
 string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: replace with some sort of language-level overloading support
@@ -65,6 +66,12 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				break;
 			case pow:
 				break;
+			case cat:
+				if(cast(VectorTy)t0&&cast(VectorTy)t1) return "v";
+				if(t0.isTupleTy()&&t1.isTupleTy()) return "t";
+				if(cast(ArrayTy)t0||cast(ArrayTy)t1) return "a";
+				if(cast(VectorTy)t0||cast(VectorTy)t1) return "v";
+				return "t";
 		}
 		auto s0=getSuffix(t0);
 		auto s1=getSuffix(t1);
@@ -77,6 +84,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				break;
 			case pow:
 				if(s0=="B"&&!s1.among("b","B","N")) s0="N";
+				break;
+			case cat:
 				break;
 		}
 		return s0==s1?s0:s0~s1;
@@ -93,9 +102,20 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression[] a
 		arg.loc=loc;
 	}else arg=args[0];
 	auto fullName=name~"_"~getSuffix(behavior,name,args.map!(x=>x.type));
-	auto fun=getOperatorSymbol(fullName,loc,sc);
+	Expression fun=getOperatorSymbol(fullName,loc,sc);
 	enforce(!!fun,text("function prototype for lowering not found: ",fullName));
 	bool isSquare=false,isClassical=false;
+	if(behavior==OB.cat&&fullName=="__cat_t"){ // TODO: implicitly fill multiple square argument lists
+		assert(args.length==2&&args[0].type&&args[1].type);
+		auto tt0=args[0].type.isTupleTy(),tt1=args[1].type.isTupleTy();
+		assert(tt0&&tt1);
+		auto n0=LiteralExp.makeInteger(tt0.length),n1=LiteralExp.makeInteger(tt1.length);
+		n0.loc=loc, n1.loc=loc;
+		auto sqarg=new TupleExp([n0,n1]);
+		sqarg.loc=loc;
+		fun=new CallExp(fun,sqarg,true,isClassical);
+		fun.loc=loc;
+	}
 	auto ce=new CallExp(fun,arg,isSquare,isClassical);
 	ce.loc=loc;
 	return expressionSemantic(ce,context);
@@ -115,6 +135,8 @@ Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall
 Expression getLowering(IDivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__idiv",[de.e1,de.e2],de.loc,context); }
 Expression getLowering(ModExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__mod",[de.e1,de.e2],de.loc,context); }
 Expression getLowering(PowExp pe,ExpSemContext context){ return makeFunctionCall(OB.pow,"__pow",[pe.e1,pe.e2],pe.loc,context); }
+
+Expression getLowering(CatExp ce,ExpSemContext context){ return makeFunctionCall(OB.cat,"__cat",[ce.e1,ce.e2],ce.loc,context); }
 
 Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",[lt.e1,lt.e2],lt.loc,context); }
 Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",[le.e1,le.e2],le.loc,context); }

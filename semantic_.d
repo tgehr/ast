@@ -3969,7 +3969,6 @@ Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
 
 Expression concatType(Expression t1,Expression t2){
 	auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
-	// TODO: concatenation of tuples
 	if(vt1&&vt2){
 		if(auto netype=joinTypes(vt1.next,vt2.next)){
 			auto add=new AddExp(vt1.num,vt2.num);
@@ -3982,9 +3981,29 @@ Expression concatType(Expression t1,Expression t2){
 		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
 			return ntype;
 	}else{
-		auto ntype=joinTypes(t1,t2);
-		if(cast(ArrayTy)ntype)
-			return ntype;
+		auto tt1=t1.isTupleTy(),tt2=t2.isTupleTy();
+		if(tt1&&tt2){
+			return tupleTy(chain(iota(tt1.length).map!(i=>tt1[i]),
+			                     iota(tt2.length).map!(i=>tt2[i])).array);
+		}
+		if(vt1&&tt2){
+			if(auto at=cast(ArrayTy)joinTypes(arrayTy(vt1.next),t2)){
+				auto add=new AddExp(vt1.num,LiteralExp.makeInteger(tt2.length));
+				add.type=ℕt(true);
+				add.sstate=SemState.completed;
+				return vectorTy(at.next,add);
+			}
+		}
+		if(tt1&&vt2){
+			if(auto at=cast(ArrayTy)joinTypes(t1,arrayTy(vt2.next))){
+				auto add=new AddExp(LiteralExp.makeInteger(tt1.length),vt2.num);
+				add.type=ℕt(true);
+				add.sstate=SemState.completed;
+				return vectorTy(at.next,add);
+			}
+		}
+		if(auto at=cast(ArrayTy)joinTypes(t1,t2))
+			return at;
 	}
 	return null;
 }

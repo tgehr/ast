@@ -1450,6 +1450,14 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 						return make(LiteralExp.makeInteger(pow(ℤ(le1.lit.str),ℤ(le2.lit.str)))); // TODO: replace literal exp internal representation
 					}
 				}
+			}else static if(op==Tok!"~"){
+				auto ok1=false,ok2=false;
+				Expression[] es1=[],es2=[];
+				if(auto tpl1=cast(TupleExp)e1){ ok1=true; es1=tpl1.e; }
+				if(auto arr1=cast(ArrayExp)e1){ ok1=true; es1=arr1.e; }
+				if(auto tpl2=cast(TupleExp)e2){ ok2=true; es2=tpl2.e; }
+				if(auto arr2=cast(ArrayExp)e2){ ok2=true; es2=arr2.e; }
+				if(ok1&&ok2) return make(new TupleExp(es1~es2));
 			}
 			static if(op==Tok!"+"||op==Tok!"-"||op==Tok!"sub"){
 				if(auto me1=cast(BinaryExp!(Tok!"·"))ne1){
