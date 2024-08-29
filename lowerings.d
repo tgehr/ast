@@ -107,6 +107,7 @@ Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCa
 Expression getLowering(MulExp me,ExpSemContext context){ return makeFunctionCall(OB.mul,"__mul",[me.e1,me.e2],me.loc,context); }
 Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__div",[de.e1,de.e2],de.loc,context); }
 Expression getLowering(IDivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__idiv",[de.e1,de.e2],de.loc,context); }
+Expression getLowering(ModExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__mod",[de.e1,de.e2],de.loc,context); }
 
 Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",[lt.e1,lt.e2],lt.loc,context); }
 Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",[le.e1,le.e2],le.loc,context); }
