@@ -2061,6 +2061,7 @@ class ForgetExp: Expression{
 	mixin VariableFree; // TODO
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(var)) return r;
+		if(!val) return 0;
 		return dg(val);
 	}
 }
