@@ -4186,9 +4186,22 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype) return true;
-	if(!fd.ret) return false;
+	if(!fd.ret){
+		// TODO: only consider statements
+		if(fd.body_) foreach(e;fd.body_.subexpressions()){
+			assert(!!e);
+			if(e.sstate!=SemState.started)
+				continue;
+			if(auto ret=cast(ReturnExp)e){
+				determineType(ret.e,ExpSemContext.init,(ty){ fd.ret=ty; },true);
+				break;
+			}
+		}
+		if(!fd.ret) return false;
+		if(fd.ftype) return true;
+	}
 	if(fd.isNested){
-		if(!force) return false;
+		if(!force&&!fd.sealedLinearCaptures) return false;
 		fd.seal();
 	}
 	bool[] pc;
@@ -4293,19 +4306,19 @@ DatDecl datDeclSemantic(DatDecl dat,Scope sc){
 	return dat;
 }
 
-void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future){
+void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future,bool force){
 	if(e.type) return future(e.type);
 	void handleFunctionDef(FunctionDef fd)in{
 		assert(fd&&fd.scope_);
 	}do{
-		setFtype(fd,true);
+		setFtype(fd,force);
 		if(auto ty=fd.ftype)
 			return future(ty);
 		fd.ftypeCallbacks~=future;
 	}
 	if(auto le=cast(LambdaExp)e){
 		assert(!!le.fd);
-		if(!le.fd.scope_){
+		if(!le.fd.scope_&&context.sc){
 			le.fd.scope_=context.sc;
 			le.fd=cast(FunctionDef)presemantic(le.fd,context.sc);
 			assert(!!le.fd);
@@ -4316,12 +4329,14 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 		if(auto fd=cast(FunctionDef)id.meaning)
 			if(fd.scope_)
 				return handleFunctionDef(fd);
+	if(!context.sc) return;
 	e=expressionSemantic(e,context);
 	return future(e.type);
 }
 
 ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(ret.sstate==SemState.completed) return ret;
+	ret.sstate=SemState.started;
 	auto fd=sc.getFunction();
 	if(!fd){
 		sc.error("return statement must be within function",ret.loc);
@@ -4329,11 +4344,11 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		return ret;
 	}
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
-	if(!fd.rret && !fd.ret){
+	if(!fd.ret){
 		determineType(ret.e,context,(ty){
 			fd.ret=ty;
 			setFtype(fd,true);
-		});
+		},false);
 	}
 	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
