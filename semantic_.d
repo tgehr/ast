@@ -4430,9 +4430,10 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 	auto e=expressionSemantic(expr,context.nestConst);
 	if(!e||e.sstate==SemState.error) return null;
 	if(!isType(e)&&!(allowQNumeric&&isQNumeric(e))){
-		if(!(allowQNumeric&&isQNumeric(e))){
+		if(!allowQNumeric&&isQNumeric(e)){
 			sc.error(format("quantum '%s' cannot be used as a type",e),expr.loc);
-			sc.note(format("did you mean to write '%s'?",e.getClassical()),expr.loc);
+			if(auto ce=e.getClassical())
+				sc.note(format("did you mean to write '%s'?",ce),expr.loc);
 		}else{
 			auto id=cast(Identifier)expr;
 			if(id&&id.meaning){
@@ -4440,7 +4441,14 @@ Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{ass
 				sc.error(format("%s '%s' is not a type",decl.kind,decl.name),id.loc);
 				sc.note("declared here",decl.loc);
 			}else{
-				sc.error("not a type",expr.loc);
+				sc.error(format("expression of type '%s' cannot be used as a type",expr.type),expr.loc);
+				if(auto tpl=cast(TupleExp)expr){
+					if(tpl.e.all!(e=>(isType(e)||isQNumeric(e)))){
+						auto ne=tpl.e.map!(e=>isQNumeric(e)?e.getClassical():e).array;
+						if(ne.all!(e=>!!e))
+							sc.note(format("did you mean to write '%s'?",tupleTy(ne)),expr.loc);
+					}
+				}
 			}
 		}
 		expr.sstate=SemState.error;
