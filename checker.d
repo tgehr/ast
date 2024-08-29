@@ -170,7 +170,7 @@ class Checker {
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
 		assert(to.type && from.type.eval() == to.type.eval());
-		imported!"util.io".writeln("lowered ", from, " → ", to);
+		// imported!"util.io".writeln("lowered ", from, " → ", to);
 		return to;
 	}
 
@@ -868,7 +868,7 @@ class Checker {
 		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
 		import std.algorithm : canFind;
-		static if(["+","-","sub","·","/"].canFind(op)) if(visLoweringExpr(e)) return;
+		static if(["+","-","sub","·","/","div"].canFind(op)) if(visLoweringExpr(e)) return;
 		static if(cmpops.canFind(op)) {
 			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumeric(e.e1.type))
 			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumeric(e.e2.type)))
