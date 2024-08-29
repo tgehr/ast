@@ -1366,6 +1366,11 @@ Expression typeOfVariadicTy(Expression next)in{
 class VariadicTy: Type{
 	Expression next;
 	bool isClassical_;
+	override ITupleTy isTupleTy(){
+		auto r=eval();
+		if(cast(VariadicTy)r) return null;
+		return r.isTupleTy();
+	}
 	private this(Expression next,bool isClassical_)in{
 		assert(next&&next.type);
 		if(auto tpl=cast(TupleTy)next.type)
@@ -1375,7 +1380,11 @@ class VariadicTy: Type{
 			assert(isType(et)||isQNumeric(et));
 		}
 	}do{
-		this.next=next;
+		if(auto ae=cast(ArrayExp)next){
+			this.next=new TupleExp(ae.e);
+			this.next.type=tupleTy(ae.e.map!(e=>e.type).array);
+			this.next.sstate=SemState.completed;
+		}else this.next=next;
 		this.type=typeOfVariadicTy(next);
 		this.isClassical_=isClassical_;
 		if(isClassical_) this.type=getClassicalTy(this.type);

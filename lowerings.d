@@ -105,16 +105,20 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression[] a
 	Expression fun=getOperatorSymbol(fullName,loc,sc);
 	enforce(!!fun,text("function prototype for lowering not found: ",fullName));
 	bool isSquare=false,isClassical=false;
-	if(behavior==OB.cat&&fullName=="__cat_t"){ // TODO: implicitly fill multiple square argument lists
-		assert(args.length==2&&args[0].type&&args[1].type);
-		auto tt0=args[0].type.isTupleTy(),tt1=args[1].type.isTupleTy();
-		assert(tt0&&tt1);
-		auto n0=LiteralExp.makeInteger(tt0.length),n1=LiteralExp.makeInteger(tt1.length);
-		n0.loc=loc, n1.loc=loc;
-		auto sqarg=new TupleExp([n0,n1]);
-		sqarg.loc=loc;
-		fun=new CallExp(fun,sqarg,true,isClassical);
-		fun.loc=loc;
+	if(behavior==OB.cat){ // TODO: implicitly fill multiple square argument lists
+		if(fullName=="__cat_t"){
+			assert(args.length==2&&args[0].type&&args[1].type);
+			auto tt0=args[0].type.isTupleTy(),tt1=args[1].type.isTupleTy();
+			assert(tt0&&tt1);
+			auto n0=LiteralExp.makeInteger(tt0.length),n1=LiteralExp.makeInteger(tt1.length);
+			n0.loc=loc, n1.loc=loc;
+			auto sqarg=new TupleExp([n0,n1]);
+			sqarg.loc=loc;
+			fun=new CallExp(fun,sqarg,true,isClassical);
+			fun.loc=loc;
+		}
+		if(args[0].constLookup) args[0]=dupExp(args[0],args[0].loc,context.sc);
+		if(args[1].constLookup) args[1]=dupExp(args[1],args[1].loc,context.sc);
 	}
 	auto ce=new CallExp(fun,arg,isSquare,isClassical);
 	ce.loc=loc;
