@@ -3763,6 +3763,7 @@ Expression powerType(Expression t1, Expression t2){
 	if(!isNumeric(t1)||!isNumeric(t2)) return null;
 	if(cast(BoolTy)t1&&isSubtype(t2,ℕt(classical))) return Bool(classical);
 	if(cast(ℕTy)t1&&isSubtype(t2,ℕt(classical))) return ℕt(classical);
+	if(cast(ℤTy)t1&&isSubtype(t2,ℕt(classical))) return ℤt(classical);
 	if(cast(ℂTy)t1||cast(ℂTy)t2) return ℂ(classical);
 	if(util.among(t1,Bool(true),ℕt(true),ℤt(true),ℚt(true))&&isSubtype(t2,ℤt(false))) return ℚt(t2.isClassical);
 	if(util.among(t1,Bool(false),ℕt(false),ℤt(false),ℚt(false))&&isSubtype(t2,ℤt(false))) return ℚt(false);

@@ -50,6 +50,7 @@ enum OperatorBehavior{
 	comparison,
 	mul,
 	div,
+	pow,
 }
 
 string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: replace with some sort of language-level overloading support
@@ -62,6 +63,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 					return getSuffix(whichNumeric(t0)>whichNumeric(t1)?t0:t1);
 				}
 				break;
+			case pow:
+				break;
 		}
 		auto s0=getSuffix(t0);
 		auto s1=getSuffix(t1);
@@ -71,6 +74,9 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				if(s1.among("s","S","u","U")&&s0=="N") s0="Z";
 				break;
 			case comparison,div:
+				break;
+			case pow:
+				if(s0=="B"&&!s1.among("b","B","N")) s0="N";
 				break;
 		}
 		return s0==s1?s0:s0~s1;
@@ -108,6 +114,7 @@ Expression getLowering(MulExp me,ExpSemContext context){ return makeFunctionCall
 Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__div",[de.e1,de.e2],de.loc,context); }
 Expression getLowering(IDivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__idiv",[de.e1,de.e2],de.loc,context); }
 Expression getLowering(ModExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__mod",[de.e1,de.e2],de.loc,context); }
+Expression getLowering(PowExp pe,ExpSemContext context){ return makeFunctionCall(OB.pow,"__pow",[pe.e1,pe.e2],pe.loc,context); }
 
 Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",[lt.e1,lt.e2],lt.loc,context); }
 Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",[le.e1,le.e2],le.loc,context); }
