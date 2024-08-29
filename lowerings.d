@@ -148,3 +148,29 @@ Expression getLowering(GtExp gt,ExpSemContext context){ return makeFunctionCall(
 Expression getLowering(GeExp ge,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__ge",[ge.e1,ge.e2],ge.loc,context); }
 Expression getLowering(EqExp eq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__eq",[eq.e1,eq.e2],eq.loc,context); }
 Expression getLowering(NeqExp neq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__neq",[neq.e1,neq.e2],neq.loc,context); }
+
+
+private CompoundExp toCompound(Expression e){
+	auto ce=new CompoundExp([e]);
+	ce.loc=e.loc;
+	ce.sstate=e.sstate;
+	return ce;
+}
+Expression getLowering(AndExp ae,ExpSemContext context){
+	auto false_=LiteralExp.makeBoolean(false);
+	false_.loc=ae.loc;
+	false_.sstate=SemState.initial;
+	auto ne2=ae.e2;
+	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context.sc);
+	else ne2=ne2.copy();
+	return expressionSemantic(new IteExp(ae.e1,toCompound(ne2),toCompound(false_)),context);
+}
+Expression getLowering(OrExp oe,ExpSemContext context){
+	auto true_=LiteralExp.makeBoolean(true);
+	true_.loc=oe.loc;
+	true_.sstate=SemState.initial;
+	auto ne2=oe.e2;
+	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context.sc);
+	else ne2=ne2.copy();
+	return expressionSemantic(new IteExp(oe.e1,toCompound(true_),toCompound(ne2)),context);
+}
