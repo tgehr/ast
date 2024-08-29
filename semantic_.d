@@ -3791,6 +3791,23 @@ Expression logicType(Expression t1,Expression t2){
 	if(!cast(BoolTy)t1||!cast(BoolTy)t2) return null;
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
+Expression bitwiseType(Expression t1,Expression t2){
+	auto r=arithmeticType!true(t1,t2);
+	if(!isFixedIntTy(r)&&!isSubtype(r,ℤt(false))) // TODO?
+	   return null;
+	return r;
+}
+
+Expression bitAndType(Expression t1,Expression t2){
+	auto isClassical=t1.isClassical()&&t2.isClassical();
+	if(cast(BoolTy)t1&&isSubtype(t2,ℤt(true))||isSubtype(t1,ℤt(true))&&cast(BoolTy)t2)
+		return Bool(isClassical);
+	auto r=bitwiseType(t1,t2);
+	if(!r) return null;
+	if(isNumeric(r)&&(cast(ℕTy)t1||cast(ℕTy)t2))
+		return ℕt(r.isClassical());
+	return r;
+}
 Expression cmpType(Expression t1,Expression t2){
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
 		if(!(joinTypes(t1,t2)||isNumeric(t1)||isNumeric(t2)))
@@ -3935,13 +3952,13 @@ Expression expressionSemanticImpl(PowExp pe,ExpSemContext context){
 	return handleBinary!powerType("power",pe,pe.e1,pe.e2,context);
 }
 Expression expressionSemanticImpl(BitOrExp boe,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("bitwise or",boe,boe.e1,boe.e2,context);
+	return handleBinary!bitwiseType("bitwise or",boe,boe.e1,boe.e2,context);
 }
 Expression expressionSemanticImpl(BitXorExp bxe,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("bitwise xor",bxe,bxe.e1,bxe.e2,context);
+	return handleBinary!bitwiseType("bitwise xor",bxe,bxe.e1,bxe.e2,context);
 }
 Expression expressionSemanticImpl(BitAndExp bae,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("bitwise and",bae,bae.e1,bae.e2,context);
+	return handleBinary!bitAndType("bitwise and",bae,bae.e1,bae.e2,context);
 }
 
 Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression e2,ExpSemContext context){
