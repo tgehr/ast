@@ -875,6 +875,10 @@ class Checker {
 				if(visLoweringExpr(e)) return;
 		}
 		visExpr(e.e1);
+		if(boolops.canFind(op)){
+			if(ast_sem.definitelyReturns(e.e2))
+				return;
+		}
 		visExpr(e.e2);
 	}
 

@@ -3040,6 +3040,31 @@ Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InTy
 	return e;
 }
 
+Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumControl,ref int numBottom){ // TODO: actually introduce a bottom type?
+	auto sc=context.sc, inType=context.inType;
+	if(inType) return expressionSemantic(branch,context);
+	if(auto ae=cast(AssertExp)branch){
+		branch=statementSemantic(branch,sc);
+		if(isZero(ae.e)){
+			branch.type=null;
+			++numBottom;
+		}
+	}else branch=expressionSemantic(branch,context);
+	if(quantumControl){
+		if(branch.type&&branch.type.hasClassicalComponent()){
+			if(auto qtype=branch.type.getQuantum()){
+				if(isType(qtype)){
+					auto nbranch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
+					nbranch.loc=branch.loc;
+					branch=nbranch;
+					branch=expressionSemantic(branch,context);
+				}
+			}
+		}
+	}
+	return branch;
+}
+
 Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	ite.cond=conditionSemantic!true(ite.cond,sc,inType);
@@ -3056,34 +3081,10 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		enum restriction_=Annotation.none;
 	}
 	int numBottom=0; // TODO: actually introduce a bottom type?
-	Expression branchSemantic(Expression branch,Scope sc){
-		auto context=expSemContext(sc,context.constResult,context.inType);
-		if(inType) return expressionSemantic(branch,context);
-		if(auto ae=cast(AssertExp)branch){
-			branch=statementSemantic(branch,sc);
-			if(isZero(ae.e)){
-				branch.type=null;
-				++numBottom;
-			}
-		}else branch=expressionSemantic(branch,context);
-		if(quantumControl){
-			if(branch.type&&branch.type.hasClassicalComponent()){
-				if(auto qtype=branch.type.getQuantum()){
-					if(isType(qtype)){
-						auto nbranch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
-						nbranch.loc=branch.loc;
-						branch=nbranch;
-						branch=expressionSemantic(branch,context);
-					}
-				}
-			}
-		}
-		return branch;
-	}
 	// initialize scopes, to allow captures to be inserted
 	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_);
 	if(ite.othw&&!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
-	ite.then.s[0]=branchSemantic(ite.then.s[0],ite.then.blscope_);
+	ite.then.s[0]=branchSemantic(ite.then.s[0],ExpSemContext(ite.then.blscope_,context.constResult,inType),quantumControl,numBottom);
 	static if(language==silq) ite.then.blscope_.pushConsumed();
 	propErr(ite.then.s[0],ite.then);
 	if(!ite.othw){
@@ -3091,7 +3092,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		ite.sstate=SemState.error;
 		return ite;
 	}
-	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ite.othw.blscope_);
+	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ExpSemContext(ite.othw.blscope_,context.constResult,inType),quantumControl,numBottom);
 	static if(language==silq) ite.othw.blscope_.pushConsumed();
 	propErr(ite.othw.s[0],ite.othw);
 	propErr(ite.cond,ite);
@@ -3786,6 +3787,7 @@ Expression notType(Expression t){
 	return t;
 }
 Expression logicType(Expression t1,Expression t2){
+	if(!t2) return cast(BoolTy)t1; // (t2 is bootomo)
 	if(!cast(BoolTy)t1||!cast(BoolTy)t2) return null;
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
@@ -3904,6 +3906,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			e.sstate=SemState.error;
 		}
 	}
+	if(e.sstate!=SemState.error) e.sstate=SemState.completed;
 	return e;
 }
 
@@ -3941,11 +3944,48 @@ Expression expressionSemanticImpl(BitAndExp bae,ExpSemContext context){
 	return handleBinary!(arithmeticType!true)("bitwise and",bae,bae.e1,bae.e2,context);
 }
 
+Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression e2,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	e1=expressionSemantic(e1,context.nestConst);
+	static if(language==silq){
+		auto quantumControl=e1.type!=Bool(true);
+		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
+	}else{
+		enum quantumControl=false;
+		enum restriction_=Annotation.none;
+	}
+	int numBottom=0;
+	// initialize scopes, to allow captures to be inserted
+	e.blscope_=new BlockScope(sc,restriction_);
+	e.forgetScope=new BlockScope(sc,restriction_);
+	e2=branchSemantic(e2,ExpSemContext(e.blscope_,ConstResult.yes,inType),quantumControl,numBottom);
+	static if(language==silq) e.blscope_.pushConsumed();
+	propErr(e1,e);
+	propErr(e2,e);
+	if(e.sstate!=SemState.error){
+		e.type = logicType(e1.type?e1.type.eval():null,e2.type?e2.type.eval():null);
+		if(!e.type){
+			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+			e.sstate=SemState.error;
+		}
+	}
+	if(sc.merge(quantumControl,e.blscope_,e.forgetScope)){
+		sc.note(text("consumed in one branch of ",name), e.loc);
+		e.sstate=SemState.error;
+	}
+	if(inType){
+		e.blscope_=null;
+		e.forgetScope=null;
+	}
+	if(e.sstate!=SemState.error) e.sstate=SemState.completed;
+	return e;
+}
+
 Expression expressionSemanticImpl(AndExp ae,ExpSemContext context){
-	return handleBinary!logicType("conjunction",ae,ae.e1,ae.e2,context);
+	return handleLogic("conjunction",ae,ae.e1,ae.e2,context);
 }
 Expression expressionSemanticImpl(OrExp oe,ExpSemContext context){
-	return handleBinary!logicType("disjunction",oe,oe.e1,oe.e2,context);
+	return handleLogic("disjunction",oe,oe.e1,oe.e2,context);
 }
 
 Expression expressionSemanticImpl(LtExp le,ExpSemContext context){
