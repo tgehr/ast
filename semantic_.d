@@ -1032,10 +1032,10 @@ Expression statementSemanticImpl(ForgetExp fe,Scope sc){
 }
 
 Expression statementSemanticImplDefault(Expression e,Scope sc){
-	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no),oe=e;
 	e=expressionSemantic(e,context);
 	if(e.sstate!=SemState.error){
-		sc.error("not supported at this location",e.loc);
+		sc.error("not supported at this location",oe.loc);
 		e.sstate=SemState.error;
 	}
 	return e;
