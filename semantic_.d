@@ -21,6 +21,15 @@ Expression moveExp(Expression e){
 }
 
 static if(language==silq)
+Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
+	auto sym=getPreludeSymbol(isSigned?"int":"uint",loc,isc);
+	auto ce=new CallExp(sym,bits,true,isClassical);
+	ce.loc=loc;
+	ce.type=isClassical?ctypeTy:qtypeTy;
+	ce.sstate=sym.sstate;
+	return ce;
+}
+
 Identifier getDup(Location loc,Scope isc){
 	return getPreludeSymbol("dup",loc,isc);
 }
@@ -3745,18 +3754,34 @@ Expression iDivType(Expression t1, Expression t2){
 }
 Expression nSubType(Expression t1, Expression t2){
 	auto r=arithmeticType!true(t1,t2);
-	if(isUint(r)) return r;
+	if(auto fi=isFixedIntTy(r)){
+		if(!fi.isSigned) return r;
+		auto ce=cast(CallExp)r;
+		assert(!!ce);
+		auto id=cast(Identifier)ce.e;
+		assert(!!id);
+		auto ut=getFixedIntTy(fi.bits,false,fi.isClassical,r.loc,id.scope_); // TODO: do not require scope
+		if(ut.sstate!=SemState.completed) return null;
+		return ut;
+	}
 	if(isSubtype(r,ℕt(false))) return r;
 	if(isSubtype(r,ℤt(false))) return ℕt(r.isClassical());
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
+	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(true)))
+		return t1;
+	if(isSubtype(t1,ℤt(true))&&isSubtype(t2,Bool(false)))
+		return t2;
 	auto r=arithmeticType!true(t1,t2);
+	if(!r) return null;
 	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
 	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
 	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
 	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
 	if(isFixed1&&!isSigned1&&isSigned2) return null;
+	if(isSubtype(t1,ℤt(true))&&isSubtype(t2,ℕt(false)))
+		return t2;
 	return r;
 }
 Expression powerType(Expression t1, Expression t2){
