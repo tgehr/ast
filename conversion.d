@@ -121,6 +121,7 @@ class NumericCoercion: Conversion{
 
 pragma(inline,true)
 Ret!witness numericToNumeric(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(!from.isClassical()&&to.isClassical()) return typeof(return).init;
 	auto wf=whichNumeric(from);
 	auto wt=whichNumeric(to);
 	if(wf&&wt){
