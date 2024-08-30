@@ -3754,7 +3754,7 @@ Expression iDivType(Expression t1, Expression t2){
 }
 Expression nSubType(Expression t1, Expression t2){
 	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(false)))
-		return t1;
+		return Bool(t1.isClassical()&&t2.isClassical());
 	auto r=arithmeticType!true(t1,t2);
 	if(auto fi=isFixedIntTy(r)){
 		if(!fi.isSigned) return r;
@@ -3772,9 +3772,9 @@ Expression nSubType(Expression t1, Expression t2){
 }
 Expression moduloType(Expression t1, Expression t2){
 	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(true)))
-		return t1;
+		return Bool(t1.isClassical()&&t2.isClassical());
 	if(isSubtype(t1,ℤt(true))&&isSubtype(t2,Bool(false)))
-		return t2;
+		return Bool(t1.isClassical()&&t2.isClassical());
 	auto r=arithmeticType!true(t1,t2);
 	if(!r) return null;
 	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
