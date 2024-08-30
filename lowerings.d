@@ -47,6 +47,7 @@ string getSuffix(Expression type){
 
 enum OperatorBehavior{
 	default_,
+	nsub,
 	comparison,
 	mul,
 	div,
@@ -66,6 +67,10 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 					return getSuffix(whichNumeric(t0)>whichNumeric(t1)?t0:t1);
 				}
 				break;
+			case nsub:
+				if(isSubtype(t0,Bool(false))&&isSubtype(t1,ℕt(false)))
+					break;
+				goto case default_;
 			case mod:
 				if(isSubtype(t0,Bool(false))&&isSubtype(t1,ℕt(true)))
 					break;
@@ -86,7 +91,7 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 		auto s0=getSuffix(t0);
 		auto s1=getSuffix(t1);
 		final switch(behavior)with(OperatorBehavior){
-			case default_,mul,andb:
+			case default_,nsub,mul,andb:
 				if(s0.among("s","S","u","U")&&s1=="N") s1="Z";
 				if(s1.among("s","S","u","U")&&s0=="N") s0="Z";
 				break;
@@ -142,7 +147,7 @@ Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFuncti
 
 Expression getLowering(AddExp ae,ExpSemContext context){ return makeFunctionCall(OB.default_,"__add",[ae.e1,ae.e2],ae.loc,context); }
 Expression getLowering(SubExp se,ExpSemContext context){ return makeFunctionCall(OB.default_,"__sub",[se.e1,se.e2],se.loc,context); }
-Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCall(OB.default_,"__nsub",[nse.e1,nse.e2],nse.loc,context); }
+Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCall(OB.nsub,"__nsub",[nse.e1,nse.e2],nse.loc,context); }
 
 Expression getLowering(MulExp me,ExpSemContext context){ return makeFunctionCall(OB.mul,"__mul",[me.e1,me.e2],me.loc,context); }
 Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__div",[de.e1,de.e2],de.loc,context); }

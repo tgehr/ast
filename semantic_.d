@@ -3753,6 +3753,8 @@ Expression iDivType(Expression t1, Expression t2){
 	return (cast(BoolTy)t1||cast(ℕTy)t1)&&(cast(BoolTy)t2||cast(ℕTy)t2)?ℕt(classical):ℤt(classical);
 }
 Expression nSubType(Expression t1, Expression t2){
+	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(false)))
+		return t1;
 	auto r=arithmeticType!true(t1,t2);
 	if(auto fi=isFixedIntTy(r)){
 		if(!fi.isSigned) return r;
