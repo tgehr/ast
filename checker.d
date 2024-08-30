@@ -868,8 +868,8 @@ class Checker {
 	void implExpr(ast_exp.BinaryExp!(Tok!op) e) {
 		expectConst(e.e1, "BinaryExp!\""~op~"\" LHS");
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
+		if(visLoweringExpr(e)) return;
 		import std.algorithm : canFind;
-		static if(["+","-","sub","·","/","div","%","^","&&","||"].canFind(op)) if(visLoweringExpr(e)) return;
 		static if(cmpops.canFind(op)) {
 			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumeric(e.e1.type))
 			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumeric(e.e2.type)))
