@@ -3743,6 +3743,8 @@ Expression iDivType(Expression t1, Expression t2){
 	auto r=arithmeticType!true(t1,t2);
 	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
 	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
+	if(isFixed1&&isNumeric2&&!isSubtype(t2,ℤt(false))) return null; // TODO: int/uint div ℚ/ℝ seems useful
+	if(isFixed2&&isNumeric1&&!isSubtype(t1,ℤt(false))) return null; // TODO?
 	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
 	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
 	if(isFixed2&&isSigned1&&!isSigned2) return null;
