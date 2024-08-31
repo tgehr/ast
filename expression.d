@@ -1098,6 +1098,14 @@ abstract class ABinaryExp: Expression{
 	}
 }
 
+abstract class ALogicExp: ABinaryExp{
+	this(Expression left,Expression right){super(left,right);}
+
+	// semantic information
+	BlockScope blscope_;
+	BlockScope forgetScope;
+}
+
 abstract class AAssignExp: ABinaryExp{
 	this(Expression left,Expression right){super(left,right);}
 
@@ -1109,18 +1117,10 @@ abstract class AAssignExp: ABinaryExp{
 	Replacement[] replacements;
 }
 
-abstract class ALogicExp: ABinaryExp{
-	this(Expression left,Expression right){super(left,right);}
-
-	// semantic information
-	BlockScope blscope_;
-	BlockScope forgetScope;
-}
-
-private bool isAssignToken(TokenType op){ return TokenTypeToString(op).endsWith("←"); }
-template BinaryExpParent(TokenType op)if(isAssignToken(op)){ alias BinaryExpParent = AAssignExp; }
 private bool isLogicToken(TokenType op){ return op==Tok!"&&"||op==Tok!"||"; }
 template BinaryExpParent(TokenType op)if(isLogicToken(op)){ alias BinaryExpParent = ALogicExp; }
+private bool isAssignToken(TokenType op){ return TokenTypeToString(op).endsWith("←"); }
+template BinaryExpParent(TokenType op)if(isAssignToken(op)){ alias BinaryExpParent = AAssignExp; }
 template BinaryExpParent(TokenType op)if(!isAssignToken(op)&&!isLogicToken(op)){ alias BinaryExpParent = ABinaryExp; }
 class BinaryExp(TokenType op): BinaryExpParent!op{
 	static if(op==Tok!"→"){
@@ -1539,6 +1539,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	// semantic information
 	static if(op==Tok!":="){
 		bool isSwap=false;
+	}
+	static if(isAssignToken(op)&&op!=Tok!"←"){
+		Expression operation;
 	}
 }
 

@@ -193,3 +193,40 @@ Expression getLowering(OrExp oe,ExpSemContext context){
 	else ne2=ne2.copy();
 	return expressionSemantic(new IteExp(oe.e1,toCompound(true_),toCompound(ne2)),context);
 }
+
+
+Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:AAssignExp)){
+	static if(op==Tok!"←"){
+		return null; // no lowering
+	}else{
+		Expression toAssign(){
+			auto id1=cast(Identifier)e.e1;
+			if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
+			if(!e.operation) return null;
+			auto ae=new AssignExp(id1,e.operation);
+			ae.replacements=e.replacements;
+			ae.loc=e.loc;
+			ae.type=unit;
+			ae.sstate=SemState.completed;
+			return ae;
+		}
+		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"~←"].canFind(op)){
+			if(e.e1.type.isClassical()) return toAssign();
+			auto id1=cast(Identifier)e.e1;
+			if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
+			static if(op==Tok!"+←") enum name="__add_assign", ob=OB.default_;
+			else static if(op==Tok!"-←") enum name="__sub_assign", ob=OB.default_;
+			else static if(op==Tok!"sub←") enum name="__nsub_assign", ob=OB.nsub;
+			else static if(op==Tok!"⊕←") enum name="__xorb_assign", ob=OB.mul;
+			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
+			else static assert(0);
+			auto fc=makeFunctionCall(ob,name,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));
+			auto de=new DefineExp(id1,fc);
+			assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
+			id1.meaning=e.replacements[0].new_; // TODO: do this already in semantic?
+			de.type=unit;
+			de.sstate=SemState.completed;
+			return de;
+		}else return toAssign();
+	}
+}

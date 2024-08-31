@@ -180,10 +180,23 @@ class Checker {
 		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
 		static foreach(op; assignOps) {
 			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
+				if(auto ns = lowerStmt(et)) return visStmt(ns);
 				return implStmt(et);
 			}
 		}
 		return ast_exp.dispatchStm!((auto ref e)=>this.implStmt(e))(e);
+	}
+
+	ast_exp.Expression lowerStmt(E)(E from) {
+		auto constResult = from.constLookup?ast_sem.ConstResult.yes:ast_sem.ConstResult.no;
+		auto to = ast_low.getLowering(from, nscope);
+		if(!to) {
+			// assert(!!cast(ast_exp.AssignExp)from, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from)); // TODO
+			return null;
+		}
+		// imported!"util.io".writeln("lowered ", from, " → ", to);
+		assert(to.type && from.type.eval() == to.type.eval());
+		return to;
 	}
 
 	void visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) {

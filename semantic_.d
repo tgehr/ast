@@ -2354,15 +2354,17 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	Expression ce=null;
 	import ast.parser;
 	static foreach(op;binaryOps){
-		static if(op.endsWith("←")){
+		static if(op.endsWith("←")&&op!="←"){
 			if(auto ae=cast(BinaryExp!(Tok!op))be){
-				ce=new BinaryExp!(Tok!(op[0..$-"←".length]))(be.e1, be.e2);
+				ce=new BinaryExp!(Tok!(op[0..$-"←".length]))(be.e1.copy(), be.e2);
 				ce.loc=be.loc;
+				ae.operation=ce;
 			}
 		}
 	}
 	assert(!!ce);
-	ce=expressionSemantic(ce,context.nestConsumed);
+	auto nce=expressionSemantic(ce,context.nestConsumed);
+	assert(nce is ce);
 	propErr(ce, be);
 	checkULhs(be.e1);
 	static if(language==silq){
