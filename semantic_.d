@@ -3749,6 +3749,7 @@ Expression iDivType(Expression t1, Expression t2){
 	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
 	if(isFixed2&&isSigned1&&!isSigned2) return null;
 	if(isFixedIntTy(r)) return r;
+	if(isFixed1||isFixed2) return null;
 	if(cast(ℂTy)t1||cast(ℂTy)t2) return null;
 	bool classical=t1.isClassical()&&t2.isClassical();
 	if(cast(BoolTy)t1&&cast(BoolTy)t2) return Bool(classical);
