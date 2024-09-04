@@ -238,9 +238,11 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 		}
 	}
 	if(vec1&&arr2){
-		if(auto next=typeExplicitConversion(vec1.next,arr2.next,annotationType)){
-			static if(witness) return new VectorToArrayConversion(vec1,arr2);
-			else return true;
+		if(auto next=typeExplicitConversion!witness(vec1.next,arr2.next,annotationType)){
+			static if(witness){
+				auto nvec2=vectorTy(arr2.next,vec1.num);
+				return trans(new VectorConversion(vec1,nvec2,next,false),new VectorToArrayConversion(nvec2,arr2));
+			}else return true;
 		}
 	}
 	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()){ // TODO: redundant?
