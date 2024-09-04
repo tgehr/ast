@@ -221,9 +221,13 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
 			else static assert(0);
 			auto fc=makeFunctionCall(ob,name,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));
-			auto de=new DefineExp(id1,fc);
+			auto id2=new Identifier(id1.name);
+			auto de=new DefineExp(id2,fc);
 			assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
-			id1.meaning=e.replacements[0].new_; // TODO: do this already in semantic?
+			id2.meaning=e.replacements[0].new_;
+			id2.type=id2.typeFromMeaning;
+			id2.constLookup=false;
+			id2.sstate=SemState.completed;
 			de.type=unit;
 			de.sstate=SemState.completed;
 			return de;
