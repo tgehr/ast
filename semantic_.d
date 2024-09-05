@@ -4451,8 +4451,15 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		return ret;
 	}
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
+	static if(language==silq) auto bottom=Dependency(false,SetX!Id.init); // variable is a workaround for DMD regression
 	if(!fd.ret){
 		determineType(ret.e,context,(ty){
+			static if(language==silq){
+				if(ty.hasClassicalComponent()&&sc.controlDependency!=bottom){
+					if(auto qty=ty.getQuantum())
+						ty=qty;
+				}
+			}
 			fd.ret=ty;
 			setFtype(fd,true);
 		},false);
@@ -4464,10 +4471,21 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 	}
 	static if(language==silq){
-		auto bottom=Dependency(false,SetX!Id.init); // variable is a workaround for DMD regression
 		if(ret.e.type&&ret.e.type.hasClassicalComponent()&&sc.controlDependency!=bottom){
-			sc.error("cannot return quantum-controlled classical value",ret.e.loc); // TODO: automatically promote to quantum?
-			ret.sstate=SemState.error;
+			bool ok=false;
+			if(auto qtype=ret.e.type.getQuantum()){
+				if(isType(qtype)){
+					auto nrete=new TypeAnnotationExp(ret.e,qtype,TypeAnnotationType.annotation);
+					nrete.loc=ret.e.loc;
+					ret.e=nrete;
+					ret.e=expressionSemantic(ret.e,context);
+					ok=true;
+				}
+			}
+			if(!ok){
+				sc.error("cannot return quantum-controlled classical value",ret.e.loc);
+				ret.sstate=SemState.error;
+			}
 		}
 	}
 	if(ret.sstate==SemState.error)
