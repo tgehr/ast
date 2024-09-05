@@ -925,8 +925,10 @@ struct Parser{
 		mixin(SetLoc!ReturnExp);
 		expect(Tok!"return");
 		Expression exp;
-		if(ttype!=Tok!";") exp=parseExpression();
-		else exp=New!TupleExp(Expression[].init);
+		if(ttype==Tok!";"||ttype==Tok!"}"||ttype==Tok!")"||ttype==Tok!"]"){
+			exp=New!TupleExp(Expression[].init);
+			exp.loc=ptok.loc;
+		}else exp=parseExpression();
 		return res=New!ReturnExp(exp);
 	}
 	Expression parseCondition(){
