@@ -447,7 +447,7 @@ BuiltIn isBuiltIn(Identifier id){
 		}else static assert(0);
 		case "*":
 			return BuiltIn.typeTy;
-		case "𝟙":
+		case "𝟙","unit":
 			return BuiltIn.unit;
 		case "𝔹","B","𝟚":
 			return BuiltIn.B;
@@ -608,14 +608,14 @@ Expression builtIn(Identifier id,Scope sc){
 			case "type","ctype","qtype","qnumeric":
 				goto case;
 		}
-		case "*","𝟙","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+		case "*","𝟙","unit","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
 			id.type=ctypeTy;
 			if(id.name=="*"||id.name=="type") return typeTy;
 			if(id.name=="ctype") return ctypeTy;
 			if(id.name=="qtype") return qtypeTy;
 			static if(language==silq)
 				if(id.name=="qnumeric") return qnumericTy;
-			if(id.name=="𝟙") return unit;
+			if(id.name=="𝟙"||id.name=="unit") return unit;
 			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
 			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
 			if(id.name=="Z"||id.name=="ℤ") return ℤt(false);
