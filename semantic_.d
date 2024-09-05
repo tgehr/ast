@@ -765,14 +765,12 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
 	NestedScope[] scs;
-	if(!quantumControl){
-		assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
-		foreach(branch;only(ite.then,ite.othw)){
-			if(!definitelyReturns(branch)) scs~=branch.blscope_;
-			else branch.blscope_.closeUnreachable();
-		}
-		sc.activeNestedScopes=scs;
-	}else scs=sc.activeNestedScopes;
+	assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
+	foreach(branch;only(ite.then,ite.othw)){
+		if(!definitelyReturns(branch)) scs~=branch.blscope_;
+		else branch.blscope_.closeUnreachable();
+	}
+	sc.activeNestedScopes=scs;
 	if(scs.length && sc.merge(quantumControl,scs)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.sstate=SemState.error;
@@ -4467,7 +4465,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	}
 	static if(language==silq){
 		auto bottom=Dependency(false,SetX!Id.init); // variable is a workaround for DMD regression
-		if(ret.e.type&&ret.e.type.isClassical()&&sc.controlDependency!=bottom){
+		if(ret.e.type&&ret.e.type.hasClassicalComponent()&&sc.controlDependency!=bottom){
 			sc.error("cannot return quantum-controlled classical value",ret.e.loc); // TODO: automatically promote to quantum?
 			ret.sstate=SemState.error;
 		}
