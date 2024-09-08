@@ -20,7 +20,6 @@ Expression moveExp(Expression e){
 	return e;
 }
 
-static if(language==silq)
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	auto sym=getPreludeSymbol(isSigned?"int":"uint",loc,isc);
 	auto ce=new CallExp(sym,bits,true,isClassical);
