@@ -744,8 +744,9 @@ CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc){
 
 Expression statementSemanticImpl(IteExp ite,Scope sc){
 	ite.cond=conditionSemantic!true(ite.cond,sc,InType.no);
+	if(ite.cond.type) ite.cond.type=ite.cond.type.eval();
 	static if(language==silq){
-		auto quantumControl=ite.cond.type!=Bool(true);
+		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
 		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
 	}else{
 		enum quantumControl=false;
@@ -3038,7 +3039,8 @@ auto nestConsumed(ref ExpSemContext context){
 Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InType inType){
 	e=expressionSemantic(e,expSemContext(sc,ConstResult.yes,inType));
 	static if(language==silq) sc.pushConsumed();
-	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)e.type:e.type!=Bool(true))){
+	auto ty=e.sstate==SemState.completed&&e.type?e.type.eval():null;
+	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)ty:ty!=Bool(true))){
 		static if(language==silq){
 			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
 			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);
@@ -3076,13 +3078,14 @@ Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumCo
 Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	ite.cond=conditionSemantic!true(ite.cond,sc,inType);
+	if(ite.cond.type) ite.cond.type=ite.cond.type.eval();
 	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
 		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
 		ite.sstate=SemState.error;
 		return ite;
 	}
 	static if(language==silq){
-		auto quantumControl=ite.cond.type!=Bool(true);
+		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
 		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
 	}else{
 		enum quantumControl=false;
@@ -3812,7 +3815,7 @@ Expression bitNotType(Expression t){
 	return t;
 }
 Expression notType(Expression t){
-	if(!cast(BoolTy)t) return null;
+	if(!t||!cast(BoolTy)t.eval()) return null;
 	return t;
 }
 Expression logicType(Expression t1,Expression t2){
@@ -3994,7 +3997,7 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 	auto sc=context.sc, inType=context.inType;
 	e1=expressionSemantic(e1,context.nestConst);
 	static if(language==silq){
-		auto quantumControl=e1.type!=Bool(true);
+		auto quantumControl=e1.type&&!e1.type.eval().isClassical();
 		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
 	}else{
 		enum quantumControl=false;
