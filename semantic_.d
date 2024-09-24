@@ -782,6 +782,17 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc){
 	// TODO: disallow early returns
+	if(with_.isIndices){
+		foreach(e;with_.trans.s){
+			auto de=cast(DefineExp)e;
+			assert(!!de);
+			auto id=cast(Identifier)de.e1;
+			assert(!!id);
+			auto idx=cast(IndexExp)de.e2;
+			assert(!!idx);
+			idx.byRef=true;
+		}
+	}
 	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
 	sc.merge(false,with_.trans.blscope_);
 	propErr(with_.trans,with_);

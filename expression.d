@@ -1671,6 +1671,7 @@ class IteExp: Expression{
 class WithExp: Expression{
 	CompoundExp trans;
 	CompoundExp bdy;
+	bool isIndices=false;
 	this(CompoundExp trans, CompoundExp bdy){
 		this.trans=trans;
 		this.bdy=bdy;
@@ -1691,7 +1692,6 @@ class WithExp: Expression{
 	// semantic information
 	CompoundExp itrans; // inverse transform
 }
-
 
 class RepeatExp: Expression{
 	Expression num;
