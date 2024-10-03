@@ -1671,13 +1671,12 @@ class IteExp: Expression{
 class WithExp: Expression{
 	CompoundExp trans;
 	CompoundExp bdy;
-	bool isIndices=false;
 	this(CompoundExp trans, CompoundExp bdy){
 		this.trans=trans;
 		this.bdy=bdy;
 	}
 	override WithExp copyImpl(CopyArgs args){
-		return new WithExp(trans.copy(),bdy.copy());
+		return new WithExp(trans.copy(args),bdy.copy(args));
 	}
 	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()); }
 	override @property string kind(){ return "with"; }
@@ -1691,7 +1690,68 @@ class WithExp: Expression{
 	}
 	// semantic information
 	CompoundExp itrans; // inverse transform
+	bool isIndices=false;
+	Declaration aggregate(bool old)in{
+		assert(isIndices);
+		assert(trans&&itrans);
+	}do{
+		Declaration meaning;
+		foreach(e;(old?trans:itrans).s){
+			import ast.semantic_:unwrap,getIdFromIndex;
+			auto de=cast(DefineExp)e;
+			assert(!!de);
+			auto idx=cast(IndexExp)unwrap(old?de.e2:de.e1);
+			assert(idx&&idx.byRef);
+			auto id=getIdFromIndex(idx);
+			assert(id);
+			if(!id.meaning) return null;
+			if(!meaning) meaning=id.meaning;
+			else assert(meaning is id.meaning);
+		}
+		return meaning;
+	}
 }
+
+/+
+class WithIndicesExp: Expression{
+	Identifier aggregate;
+	CompoundExp bdy;
+	static struct NamedComponent{
+		Identifier name;
+		Expression index;
+		NamedComponent copy(CopyArgs args){
+			return NamedComponent(name.copy(args),index.copy(args));
+		}
+	}
+	NamedComponent[] namedComponents; // indices are known to be distinct, but maybe unordered
+	this(Identifier aggregate,NamedComponent[] namedComponents){
+		this.aggregate=aggregate;
+		this.namedComponents=namedComponents;
+	}
+	override WithIndicesExp copyImpl(CopyArgs args){
+		return new WithIndicesExp(aggregate.copy(args),namedComponents.map!(c=>c.copy(args)).array);
+	}
+	override string toString(){
+		return _brk("__with { "~indent(namedComponents.map!(c=>text(c.name," := ",c.index,"\n")).join)~"} do " ~ bdy.toString());
+	}
+	override @property string kind(){ return "with-components"; }
+	override bool isCompound(){ return true; }
+
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree; // TODO
+	override int componentsImpl(scope int delegate(Expression) dg){
+		if(auto r=dg(aggregate)) return r;
+		foreach(c;namedComponents){
+			if(auto r=dg(c.name)) return r;
+			if(auto r=dg(c.index)) return r;
+		}
+		return 0;
+	}
+	// semantic information
+	Declaration oldAggregate;
+	Declaration newAggregate;
+}
++/
 
 class RepeatExp: Expression{
 	Expression num;
@@ -2159,6 +2219,7 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
 	static if(language==silq){
 		if(auto with_=cast(WithExp)s) return f(with_,forward!args);
+		//if(auto with_=cast(WithIndicesExp)s) return f(with_,forward!args);
 	}
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
 	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);

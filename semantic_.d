@@ -786,9 +786,9 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 		foreach(e;with_.trans.s){
 			auto de=cast(DefineExp)e;
 			assert(!!de);
-			auto id=cast(Identifier)de.e1;
+			auto id=cast(Identifier)unwrap(de.e1);
 			assert(!!id);
-			auto idx=cast(IndexExp)de.e2;
+			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(!!idx);
 			idx.byRef=true;
 		}
