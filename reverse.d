@@ -31,11 +31,32 @@ enum LowerDefineFlags{
 	reverseMode=2,
 }
 
+Expression knownLength(Expression e,bool ignoreType){
+	Expression res;
+	scope(exit) if(res) res.loc=e.loc;
+	if(auto arr=cast(ArrayExp)e) return res=constantExp(arr.e.length);
+	if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
+	if(auto tae=cast(TypeAnnotationExp)e){
+		if(auto vec=cast(VectorTy)tae.t)
+			return vec.num;
+		if(auto pow=cast(PowExp)tae.t)
+			return pow.e2;
+		return knownLength(tae.e,ignoreType);
+	}
+	if(!ignoreType&&e.type){
+		if(auto vec=cast(VectorTy)e.type)
+			return vec.num;
+	}
+	return null;
+}
+
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	bool validDefEntry(Expression e){
 		return cast(Identifier)e||cast(IndexExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
+	/+if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
+		                              &&knownLength(cat.e1,true)&&knownLength(cat.e2,true);+/
 	if(auto ce=cast(CallExp)olhs){
 		static if(language==silq)
 		if(isBuiltInCall(cast(CallExp)unwrap(ce.e)))
@@ -326,29 +347,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
 	}
 	if(auto ce=cast(CatExp)olhs){
-		Expression knownLength(Expression e){
-			Expression res;
-			scope(exit) if(res) res.loc=e.loc;
-			if(auto arr=cast(ArrayExp)e) return res=constantExp(arr.e.length);
-			if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
-			if(auto tae=cast(TypeAnnotationExp)e){
-				if(auto vec=cast(VectorTy)tae.t)
-					return vec.num.copy();
-				if(auto pow=cast(PowExp)tae.t)
-					return pow.e2.copy();
-				return knownLength(tae.e);
-			}
-			if(e.type){
-				if(auto vec=cast(VectorTy)e.type)
-					return vec.num.copy();
-			}
-			return null;
-		}
-		auto l1=knownLength(ce.e1),l2=knownLength(ce.e2);
+		auto l1=knownLength(ce.e1,false),l2=knownLength(ce.e2,false);
 		if(!l1&&!l2){
 			sc.error("concatenation of arrays of unknown length not supported as definition left-hand side",ce.loc);
 			return error();
 		}
+		if(l1) l1=l1.copy();
+		if(l2) l2=l2.copy();
 		auto tmp=new Identifier(freshName);
 		tmp.loc=olhs.loc;
 		auto tmpLen(){
