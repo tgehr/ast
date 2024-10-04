@@ -346,7 +346,7 @@ class Checker {
 
 		assert(!!e.itrans);
 		visSplit(itrans, e.itrans.blscope_, e);
-		auto retItrans = itrans.visCompoundStmt(e.bdy);
+		auto retItrans = itrans.visCompoundStmt(e.itrans);
 		assert(!retItrans);
 		visMerge(itrans, e);
 

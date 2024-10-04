@@ -1712,47 +1712,6 @@ class WithExp: Expression{
 	}
 }
 
-/+
-class WithIndicesExp: Expression{
-	Identifier aggregate;
-	CompoundExp bdy;
-	static struct NamedComponent{
-		Identifier name;
-		Expression index;
-		NamedComponent copy(CopyArgs args){
-			return NamedComponent(name.copy(args),index.copy(args));
-		}
-	}
-	NamedComponent[] namedComponents; // indices are known to be distinct, but maybe unordered
-	this(Identifier aggregate,NamedComponent[] namedComponents){
-		this.aggregate=aggregate;
-		this.namedComponents=namedComponents;
-	}
-	override WithIndicesExp copyImpl(CopyArgs args){
-		return new WithIndicesExp(aggregate.copy(args),namedComponents.map!(c=>c.copy(args)).array);
-	}
-	override string toString(){
-		return _brk("__with { "~indent(namedComponents.map!(c=>text(c.name," := ",c.index,"\n")).join)~"} do " ~ bdy.toString());
-	}
-	override @property string kind(){ return "with-components"; }
-	override bool isCompound(){ return true; }
-
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree; // TODO
-	override int componentsImpl(scope int delegate(Expression) dg){
-		if(auto r=dg(aggregate)) return r;
-		foreach(c;namedComponents){
-			if(auto r=dg(c.name)) return r;
-			if(auto r=dg(c.index)) return r;
-		}
-		return 0;
-	}
-	// semantic information
-	Declaration oldAggregate;
-	Declaration newAggregate;
-}
-+/
-
 class RepeatExp: Expression{
 	Expression num;
 	CompoundExp bdy;
@@ -2219,7 +2178,6 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
 	static if(language==silq){
 		if(auto with_=cast(WithExp)s) return f(with_,forward!args);
-		//if(auto with_=cast(WithIndicesExp)s) return f(with_,forward!args);
 	}
 	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
 	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
