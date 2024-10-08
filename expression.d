@@ -1223,6 +1223,19 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					}
 					return;
 				}
+				return;
+			}
+			if(auto ce=cast(CatExp)e1){
+				import ast.semantic_:unwrap;
+				if(auto id1=cast(Identifier)unwrap(ce.e1)){
+					if(auto vd=cast(VarDecl)id1.meaning)
+						vd.vtype=id1.type;
+				}
+				if(auto id2=cast(Identifier)unwrap(ce.e2)){
+					if(auto vd=cast(VarDecl)id2.meaning)
+						vd.vtype=id2.type;
+				}
+				return;
 			}
 		}
 		void setInitializer(){
