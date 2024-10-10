@@ -1254,7 +1254,9 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 						}
 						auto nresult=new TypeAnnotationExp(result,context.type,TypeAnnotationType.coercion);
 						nresult.loc=result.loc;
-						result=defineLhsSemanticImpl(nresult,context);
+						nresult.type=context.type;
+						nresult.sstate=SemState.completed;
+						result=nresult;
 					}
 				}
 			}
@@ -1472,7 +1474,7 @@ Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	auto sc=context.sc;
 	tae.type=typeSemantic(tae.t,context.sc);
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,context.type?context.type:tae.type));
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type));
 	static if(!isPresemantic){
 		return expressionSemantic(tae,context.expSem);
 	}else return tae;
@@ -1567,7 +1569,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 		}
 	}
 	Expression ntype1=null,ntype2=null;
-	if(context.type){
+	if(context.type&&l1.type&&l2.type&&isSubtype(l1.type,ℕt(true))&&isSubtype(l2.type,ℕt(true))){
 		if(auto vt=cast(VectorTy)context.type){
 			if(l1) ntype1=vectorTy(vt.next,l1);
 			if(l2) ntype2=vectorTy(vt.next,l2);
@@ -1582,7 +1584,8 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 	static if(!isPresemantic){
 		ce.type=ce.e1.type&&ce.e2.type?concatType(ce.e1.type.eval(),ce.e2.type.eval()):null;
 		if(!ce.type){
-			sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
+			if(ce.e1.type&&ce.e2.type)
+				sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 			ce.sstate=SemState.error;
 		}else if(!isSubtype(context.type,ce.type)){
 			sc.error(format("incompatible types for split: '%s' vs '%s",ce.type,context.type),ce.loc);
@@ -1591,6 +1594,9 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 	return ce;
 }
 
+Expression defineLhsSemanticImpl(TypeofExp ty,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(ty,context);
+}
 Expression defineLhsSemanticImpl(BinaryExp!(Tok!"×") pr,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(pr,context);
 }
@@ -3720,7 +3726,8 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	tae.type=typeSemantic(tae.t,sc);
 	propErr(tae.e,tae);
 	propErr(tae.t,tae);
-	if(!tae.type) tae.sstate=SemState.error;
+	if(tae.type) tae.t=tae.type;
+	else tae.sstate=SemState.error;
 	if(tae.sstate==SemState.error)
 		return tae;
 	if(auto arr=cast(ArrayExp)tae.e){
@@ -4000,7 +4007,8 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	}else{
 		e.type = determineType(e1.type?e1.type.eval():null,e2.type?e2.type.eval():null);
 		if(!e.type){
-			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+			if(e1.type&&e2.type)
+				sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
 		}
 	}
@@ -4063,7 +4071,8 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 	if(e.sstate!=SemState.error){
 		e.type = logicType(e1.type?e1.type.eval():null,e2.type?e2.type.eval():null);
 		if(!e.type){
-			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+			if(e1.type&&e2.type)
+				sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
 			e.sstate=SemState.error;
 		}
 	}
@@ -4161,6 +4170,19 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 		ce.sstate=SemState.error;
 	}
 	return ce;
+}
+
+Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
+	auto sc=context.sc;
+	Scope.ConstBlockContext constSave;
+	if(!context.constResult) constSave=sc.saveConst();
+	scope(exit) sc.resetConst(constSave);
+	ty.e=expressionSemantic(ty.e,context.nestConst); // TODO: technically const not needed
+	propErr(ty.e,ty);
+	if(ty.sstate==SemState.error)
+		return ty;
+	assert(ty.e.type&&ty.e.type.sstate==SemState.completed);
+	return ty.e.type;
 }
 
 Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr,ExpSemContext context){

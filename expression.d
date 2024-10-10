@@ -650,6 +650,20 @@ class PlaceholderExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 }
 
+class TypeofExp: Expression{
+	Expression e;
+	this(Expression e){ this.e=e; }
+	override TypeofExp copyImpl(CopyArgs args){
+		return new TypeofExp(e.copy(args));
+	}
+	override string toString(){ return _brk("typeof("~e.toString~")"); }
+	override @property string kind(){ return "typeof"; }
+
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){ return dg(e); }
+}
+
 abstract class AUnaryExp: Expression{
 	Expression e;
 	this(Expression next){e = next;}
@@ -1262,18 +1276,8 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			}
 		}
 		void setError(){
-			if(auto id=cast(Identifier)e1){
-				auto decl=cast(VarDecl)id.meaning;
+			foreach(decl;&varDecls)
 				if(decl) decl.sstate=SemState.error;
-			}else if(auto tpl1=cast(TupleExp)e1){
-				foreach(e;tpl1.e){
-					auto id=cast(Identifier)e;
-					if(!id) continue;
-					auto decl=cast(VarDecl)id.meaning;
-					if(!decl) continue;
-					decl.sstate=SemState.error;
-				}
-			}
 			sstate=SemState.error;
 		}
 
@@ -1314,6 +1318,15 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					}
 					return 0;
 				}
+			}
+			if(auto ce=cast(CatExp)e1){
+				import ast.semantic_:unwrap;
+				if(auto id1=cast(Identifier)unwrap(ce.e1))
+					if(auto r=dg(cast(VarDecl)id1.meaning))
+					   return r;
+				if(auto id2=cast(Identifier)unwrap(ce.e2))
+					if(auto r=dg(cast(VarDecl)id2.meaning))
+					   return r;
 			}
 			return 0;
 		}
@@ -2270,6 +2283,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 
 	static if(unanalyzed){
 		// expression types that only occur in unanalyzed expressions
+		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
 		if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);

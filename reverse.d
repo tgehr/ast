@@ -31,7 +31,7 @@ enum LowerDefineFlags{
 	reverseMode=2,
 }
 
-Expression knownLength(Expression e,bool ignoreType){
+Expression knownLength(Expression e,bool ignoreType){ // TODO: version that returns bool
 	Expression res;
 	scope(exit) if(res) res.loc=e.loc;
 	if(auto arr=cast(ArrayExp)e) return res=constantExp(arr.e.length);
@@ -39,13 +39,22 @@ Expression knownLength(Expression e,bool ignoreType){
 	if(auto tae=cast(TypeAnnotationExp)e){
 		if(auto vec=cast(VectorTy)tae.t)
 			return vec.num;
+		if(auto tt=tae.t.isTupleTy())
+			return res=constantExp(tt.length);
 		if(auto pow=cast(PowExp)tae.t)
 			return pow.e2;
+		if(auto ty=cast(TypeofExp)tae.t){
+			if(auto sl=cast(SliceExp)ty.e){
+				return res=new NSubExp(sl.r,sl.l);
+			}
+		}
 		return knownLength(tae.e,ignoreType);
 	}
 	if(!ignoreType&&e.type){
 		if(auto vec=cast(VectorTy)e.type)
 			return vec.num;
+		if(auto tt=e.type.isTupleTy())
+			return res=constantExp(tt.length);
 	}
 	return null;
 }
@@ -354,8 +363,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		if(l1) l1=l1.copy();
 		if(l2) l2=l2.copy();
+		//auto tmp=cast(Identifier)orhs?orhs:new Identifier(freshName);
 		auto tmp=new Identifier(freshName);
-		tmp.loc=olhs.loc;
+		tmp.loc=orhs.loc;
 		auto tmpLen(){
 			auto id=new Identifier("length");
 			id.loc=tmp.loc;
@@ -375,52 +385,96 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			l2=s;
 		}
 		assert(l1&&l2);
-		// TODO: nicer runtime error message for inconsistent array lengths?
-		auto d1=lowerDefine!flags(tmp,orhs,loc,sc,unchecked);
+		auto d1=tmp !is orhs?lowerDefine!flags(tmp,orhs,loc,sc,unchecked):null;
 		auto z=constantExp(0);
 		z.loc=olhs.loc;
-		auto l=tmpLen();
-		l.loc=olhs.loc;
 		auto tmp1=tmp.copy();
 		tmp1.loc=orhs.loc;
 		Expression s1=new SliceExp(tmp1,z,l1);
 		s1.loc=tmp1.loc;
 		auto tmp2=tmp.copy();
 		tmp2.loc=orhs.loc;
-		Expression s2=new SliceExp(tmp1,l1.copy(),l);
+		auto l=tmpLen();
+		l.loc=olhs.loc;
+		Expression s2=new SliceExp(tmp2,l1.copy(),l);
 		s2.loc=tmp2.loc;
-		auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
-		if(tmpl!is ce.e1){
-			tmpl.loc=ce.e1.loc;
-			static if(reverseMode) tmpl.type=ce.e1.type;
+		auto known1=knownLength(ce.e1,true),known2=knownLength(ce.e2,true);
+		auto ue1=unwrap(ce.e1),ue2=unwrap(ce.e2);
+		auto valid1=known1&&cast(Identifier)ue1,valid2=known2&&cast(Identifier)ue2;
+		if((!valid1||!valid2)&&false){
+			Expression[] stmts1=d1?[d1]:[],stmts2=[];
+			auto ne1=ce.e1,ne2=ce.e2;
+			if(!cast(Identifier)ue1){
+				auto tmpe1=new Identifier(freshName);
+				tmpe1.loc=ce.e1.loc;
+				stmts2~=lowerDefine!flags(ne1,tmpe1,loc,sc,unchecked);
+				ne1=tmpe1.copy();
+				ne1.loc=ce.e1.loc;
+			}
+			if(!cast(Identifier)ue2){
+				auto tmpe2=new Identifier(freshName);
+				tmpe2.loc=ce.e2.loc;
+				stmts2~=lowerDefine!flags(ne2,tmpe2,loc,sc,unchecked);
+				ne2=tmpe2.copy();
+				ne2.loc=ce.e2.loc;
+			}
+			if(!valid1){
+				auto ty1=new TypeofExp(s1);
+				ty1.loc=s1.loc;
+				ne1=new TypeAnnotationExp(ne1,ty1,TypeAnnotationType.coercion);
+				ne1.loc=ce.e1.loc;
+			}
+			if(!valid2){
+				auto ty2=new TypeofExp(s2);
+				ty2.loc=s2.loc;
+				ne2=new TypeAnnotationExp(ne2,ty2,TypeAnnotationType.coercion);
+				ne2.loc=ce.e2.loc;
+			}
+			auto nce=new CatExp(ne1,ne2);
+			nce.loc=ce.loc;
+			auto tmp3=tmp.copy();
+			tmp3.loc=orhs.loc;
+			auto d2=lowerDefine!flags(nce,tmp3,loc,sc,unchecked);
+			stmts1~=d2;
+			//scope(exit) imported!"util.io".writeln(olhs," := ",orhs," → ",res);
+			return res=new CompoundExp(stmts1~stmts2);
+		}else{
+			// default lowering
+			//imported!"util.io".writeln("default lowering: ",olhs," := ",orhs,"; ",known1," ",known2);
+			// TODO: nicer runtime error message for inconsistent array lengths?
+			auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
+			if(tmpl!is ce.e1){
+				tmpl.loc=ce.e1.loc;
+				static if(reverseMode) tmpl.type=ce.e1.type;
+			}
+			auto d2=lowerDefine!flags(tmpl.copy(),s1,loc,sc,unchecked);
+			d2.loc=loc;
+			auto tmpr=cast(Identifier)ce.e2?ce.e2:new Identifier(freshName);
+			if(tmpr!is ce.e2){
+				tmpr.loc=ce.e2.loc;
+				static if(reverseMode) tmpr.type=ce.e2.type;
+			}
+			auto d3=lowerDefine!flags(tmpr.copy(),s2,loc,sc,unchecked);
+			d3.loc=loc;
+			auto tmp3=tmp.copy();
+			tmp3.loc=orhs.loc;
+			auto cat=new CatExp(tmpl.copy(),tmpr.copy());
+			cat.loc=ce.loc;
+			auto fe=new ForgetExp(tmp3,cat);
+			fe.loc=loc;
+			auto stmts=(d1?[d1]:[])~[d2,d3,fe];
+			if(ce.e1 !is tmpl){
+				auto d4=lowerDefine!flags(ce.e1,tmpl,loc,sc,unchecked);
+				d4.loc=loc;
+				stmts~=d4;
+			}
+			if(ce.e2 !is tmpr){
+				auto d5=lowerDefine!flags(ce.e2,tmpr,loc,sc,unchecked);
+				d5.loc=loc;
+				stmts~=d5;
+			}
+			return res=new CompoundExp(stmts);
 		}
-		auto d2=lowerDefine!flags(tmpl.copy(),s1,loc,sc,unchecked);
-		d2.loc=loc;
-		auto tmpr=cast(Identifier)ce.e2?ce.e2:new Identifier(freshName);
-		if(tmpr!is ce.e2){
-			tmpr.loc=ce.e2.loc;
-			static if(reverseMode) tmpr.type=ce.e2.type;
-		}
-		auto d3=lowerDefine!flags(tmpr.copy(),s2,loc,sc,unchecked);
-		d3.loc=loc;
-		auto tmp3=tmp.copy();
-		tmp3.loc=orhs.loc;
-		auto cat=new CatExp(tmpl.copy(),tmpr.copy());
-		cat.loc=ce.loc;
-		auto fe=new ForgetExp(tmp3,cat);
-		fe.loc=loc;
-		auto stmts=[d1,d2,d3,fe];
-		if(ce.e1 !is tmpl){
-			auto d4=lowerDefine!flags(ce.e1,tmpl,loc,sc,unchecked);
-			d4.loc=loc;
-			stmts~=d4;
-		}
-		if(ce.e2 !is tmpr){
-			auto d5=lowerDefine!flags(ce.e2,tmpr,loc,sc,unchecked);
-			d5.loc=loc;
-			stmts~=d5;
-		}
-		return res=new CompoundExp(stmts);
 	}
 	if(auto fe=cast(ForgetExp)olhs){
 		if(!fe.val){

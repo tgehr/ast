@@ -455,8 +455,7 @@ class Checker {
 		import ast.reverse: knownLength;
 		auto l1=knownLength(e.e1,false);
 		auto l2=knownLength(e.e2,false);
-		assert(!!l1);
-		assert(!!l2);
+		assert(l1||l2);
 		expectMoved(ast_sem.unwrap(e.e1), "concat LHS");
 		expectMoved(ast_sem.unwrap(e.e2), "concat RHS");
 		visLhs(ast_sem.unwrap(e.e1));

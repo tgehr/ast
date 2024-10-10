@@ -436,6 +436,7 @@ struct Parser{
 				mixin(rule!(LiteralExp,Existing,"t"));
 			mixin(getTTCases(literals,["``","``c","``w","``d","true","false"])); {res=New!LiteralExp(tok); nextToken(); return res;}
 			case Tok!"forget": return parseForget();
+			case Tok!"typeof": return parseTypeof();
 			case Tok!"true",Tok!"⊤":{
 				nextToken();
 				auto tok=Token(Tok!"0");
@@ -1101,6 +1102,14 @@ struct Parser{
 		}
 		expect(Tok!")");
 		return res=New!ForgetExp(var,val);
+	}
+	TypeofExp parseTypeof(){
+		mixin(SetLoc!TypeofExp);
+		expect(Tok!"typeof");
+		Location varBegin=tok.loc;
+		if(ttype!=Tok!"(") expect(Tok!"(");
+		auto e=parseExpression(rbp!(Tok!","));
+		return res=New!TypeofExp(e);
 	}
 };
 
