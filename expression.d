@@ -650,6 +650,19 @@ class PlaceholderExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 }
 
+class WildcardExp: Expression{
+	this(){}
+	override WildcardExp copyImpl(CopyArgs args){
+		return new WildcardExp();
+	}
+	override string toString(){ return _brk("_"); }
+	override @property string kind(){ return "wildcard"; }
+
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
+}
+
 class TypeofExp: Expression{
 	Expression e;
 	this(Expression e){ this.e=e; }
@@ -2283,6 +2296,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 
 	static if(unanalyzed){
 		// expression types that only occur in unanalyzed expressions
+		if(auto we=cast(WildcardExp)e) return f(we,forward!args);
 		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);

@@ -297,7 +297,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}else if(cast(IndexExp)be.e1){
 			return be;
 		}else if(auto ce=cast(CatExp)be.e1){
-			if(!knownLength(ce.e1,true)||!knownLength(ce.e2,true))
+			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
 				goto LbadDefLhs;
 			if(auto id=cast(Identifier)unwrap(ce.e1)) propErr(makeVar(id),be);
 			else if(!cast(IndexExp)unwrap(be.e1)) goto LbadDefLhs;
@@ -1473,7 +1473,14 @@ Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	auto sc=context.sc;
-	tae.type=typeSemantic(tae.t,context.sc);
+	static if(!isPresemantic){
+		if(context.type){
+			if(auto r=resolveWildcards(tae.t,context.type))
+				tae.t=r;
+		}
+		tae.type=typeSemantic(tae.t,context.sc);
+		if(tae.type) tae.t=tae.type;
+	}
 	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type));
 	static if(!isPresemantic){
 		return expressionSemantic(tae,context.expSem);
@@ -1564,17 +1571,53 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 	auto sc=context.sc;
 	auto l1=knownLength(ce.e1,true),l2=knownLength(ce.e2,true);
 	static if(!isPresemantic){
-		if(!l1||!l2||!context.type){
+		Expression ntype1=null,ntype2=null;
+		if(!l1&&!l2||!context.type){
 			return defineLhsSemanticImplCurrentlyUnsupported(ce,context);
 		}
-	}
-	Expression ntype1=null,ntype2=null;
-	if(context.type&&l1.type&&l2.type&&isSubtype(l1.type,ℕt(true))&&isSubtype(l2.type,ℕt(true))){
-		if(auto vt=cast(VectorTy)context.type){
-			if(l1) ntype1=vectorTy(vt.next,l1);
-			if(l2) ntype2=vectorTy(vt.next,l2);
+		if(l1){
+			l1=expressionSemantic(l1,context.expSem.nestConst);
+			propErr(l1,ce);
 		}
-	}
+		if(l2){
+			l2=expressionSemantic(l2,context.expSem.nestConst);
+			propErr(l2,ce);
+		}
+		if(context.type&&
+		   (!l1||l1.sstate==SemState.completed||l1.type&&isSubtype(l1.type,ℕt(true)))&&
+		   (!l2||l2.sstate==SemState.completed&&l2.type&&isSubtype(l2.type,ℕt(true)))
+		){
+			if(auto vt=cast(VectorTy)context.type){
+				if(l1){
+					if(!l2){
+						auto sub=new NSubExp(vt.num,l1);
+						sub.loc=l1.loc;
+						sub.type=ℕt(true);
+						sub.sstate=SemState.completed;
+						ntype2=vectorTy(vt.next,sub);
+					}
+					ntype1=vectorTy(vt.next,l1);
+				}
+				if(l2){
+					if(!l1){
+						auto sub=new NSubExp(vt.num,l2);
+						sub.loc=l2.loc;
+						sub.type=ℕt(true);
+						sub.sstate=SemState.completed;
+						ntype1=vectorTy(vt.next,sub);
+					}
+					ntype2=vectorTy(vt.next,l2);
+				}
+			}else if(auto at=cast(ArrayTy)context.type){
+				ntype1=ntype2=context.type;
+				if(l1) ntype1=vectorTy(at.next,l1);
+				if(l2) ntype2=vectorTy(at.next,l2);
+			}else if(auto tt=context.type.isTupleTy){
+				// TODO
+			}
+		}
+		//imported!"util.io".writeln("!! ",ce," ",ntype1," ",ntype2," ",l1," ",l2," ",context.type);
+	}else auto ntype1=null,ntype2=null;
 	auto ncontext1=context.nest(context.constResult,ntype1);
 	auto ncontext2=context.nest(context.constResult,ntype2);
 	ce.e1=defineLhsSemantic!isPresemantic(ce.e1,ncontext1);
@@ -1587,11 +1630,26 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 			if(ce.e1.type&&ce.e2.type)
 				sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 			ce.sstate=SemState.error;
-		}else if(!isSubtype(context.type,ce.type)){
+		}else if(context.type&&!isSubtype(context.type,ce.type)){
+			//if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
 			sc.error(format("incompatible types for split: '%s' vs '%s",ce.type,context.type),ce.loc);
+			ce.sstate=SemState.error;
+			//}
+			/+auto result=new TypeAnnotationExp(ce,context.type,TypeAnnotationType.coercion);
+			result.loc=result.loc;
+			result.type=context.type;
+			result.sstate=SemState.completed;
+			propErr(ce,result);
+			return result;+/
 		}
 	}
 	return ce;
+}
+
+Expression defineLhsSemanticImpl(WildcardExp e,DefineLhsContext context){
+	e.type=context.type;
+	e.sstate=SemState.completed;
+	return e;
 }
 
 Expression defineLhsSemanticImpl(TypeofExp ty,DefineLhsContext context){
@@ -1605,6 +1663,9 @@ Expression defineLhsSemanticImpl(BinaryExp!(Tok!"→") ex,DefineLhsContext conte
 }
 Expression defineLhsSemanticImpl(RawProductTy fa,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(fa,context);
+}
+Expression defineLhsSemanticImpl(RawVariadicTy va,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(va,context);
 }
 
 
@@ -1659,7 +1720,7 @@ Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsC
 		}
 	}
 	if(context.constResult) return r=expressionSemantic(lhs,context.expSem);
-	return r=dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic)(lhs,context);
+	return r=dispatchExp!(defineLhsSemanticImpl!isPresemantic,defineLhsSemanticImplDefault!isPresemantic,true)(lhs,context);
 }
 
 Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
@@ -3723,6 +3784,9 @@ Expression expressionSemanticImpl(ArrayExp arr,ExpSemContext context){
 Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	auto sc=context.sc;
 	tae.e=expressionSemantic(tae.e,context);
+	if(tae.e.type)
+		if(auto r=resolveWildcards(tae.t,tae.e.type))
+			tae.t=r;
 	tae.type=typeSemantic(tae.t,sc);
 	propErr(tae.e,tae);
 	propErr(tae.t,tae);
@@ -4170,6 +4234,37 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 		ce.sstate=SemState.error;
 	}
 	return ce;
+}
+
+Expression resolveWildcards(Expression wildcards,Expression analyzed){
+	// TODO: improve
+	if(auto pow=cast(PowExp)wildcards){
+		if(cast(WildcardExp)pow.e1){
+			Expression elemTy=null;
+			if(auto aty=cast(ArrayTy)analyzed)
+				elemTy=aty.next;
+			if(auto vty=cast(VectorTy)analyzed)
+				elemTy=vty.next;
+			if(auto tpl=analyzed.isTupleTy)
+				foreach(i;0..tpl.length){
+					elemTy=joinTypes(elemTy, tpl[i]);
+					if(!elemTy) break;
+				}
+			if(!elemTy) return null;
+			auto npow=new PowExp(elemTy,pow.e2);
+			npow.loc=pow.loc;
+			return npow;
+		}
+	}
+	return null;
+}
+
+Expression expressionSemanticImpl(WildcardExp we,ExpSemContext context){
+	if(we.sstate!=SemState.error){
+		context.sc.error("unable to resolve wildcard",we.loc);
+		we.sstate=SemState.error;
+	}
+	return we;
 }
 
 Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){

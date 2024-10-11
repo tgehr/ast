@@ -64,8 +64,8 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		return cast(Identifier)e||cast(IndexExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
-	/+if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
-		                              &&knownLength(cat.e1,true)&&knownLength(cat.e2,true);+/
+	if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
+		                              &&(knownLength(cat.e1,true)||knownLength(cat.e2,true));
 	if(auto ce=cast(CallExp)olhs){
 		static if(language==silq)
 		if(isBuiltInCall(cast(CallExp)unwrap(ce.e)))
@@ -356,6 +356,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
 	}
 	if(auto ce=cast(CatExp)olhs){
+		//scope(exit) imported!"util.io".writeln(olhs," := ",orhs," → ",res);
 		auto l1=knownLength(ce.e1,false),l2=knownLength(ce.e2,false);
 		if(!l1&&!l2){
 			sc.error("concatenation of arrays of unknown length not supported as definition left-hand side",ce.loc);
@@ -363,7 +364,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		if(l1) l1=l1.copy();
 		if(l2) l2=l2.copy();
-		//auto tmp=cast(Identifier)orhs?orhs:new Identifier(freshName);
 		auto tmp=new Identifier(freshName);
 		tmp.loc=orhs.loc;
 		auto tmpLen(){
@@ -371,37 +371,11 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			id.loc=tmp.loc;
 			return new FieldExp(tmp.copy(),id);
 		}
-		if(!l1){
-			auto l=tmpLen();
-			l.loc=l2.loc;
-			auto s=new NSubExp(l,l2);
-			s.loc=l2.loc;
-			l1=s;
-		}else if(!l2){
-			auto l=tmpLen();
-			l.loc=l1.loc;
-			auto s=new NSubExp(l,l1);
-			s.loc=l1.loc;
-			l2=s;
-		}
-		assert(l1&&l2);
-		auto d1=tmp !is orhs?lowerDefine!flags(tmp,orhs,loc,sc,unchecked):null;
-		auto z=constantExp(0);
-		z.loc=olhs.loc;
-		auto tmp1=tmp.copy();
-		tmp1.loc=orhs.loc;
-		Expression s1=new SliceExp(tmp1,z,l1);
-		s1.loc=tmp1.loc;
-		auto tmp2=tmp.copy();
-		tmp2.loc=orhs.loc;
-		auto l=tmpLen();
-		l.loc=olhs.loc;
-		Expression s2=new SliceExp(tmp2,l1.copy(),l);
-		s2.loc=tmp2.loc;
+		auto d1=lowerDefine!flags(tmp,orhs,loc,sc,unchecked);
 		auto known1=knownLength(ce.e1,true),known2=knownLength(ce.e2,true);
 		auto ue1=unwrap(ce.e1),ue2=unwrap(ce.e2);
-		auto valid1=known1&&cast(Identifier)ue1,valid2=known2&&cast(Identifier)ue2;
-		if((!valid1||!valid2)&&false){
+		auto valid1=cast(Identifier)ue1,valid2=cast(Identifier)ue2;
+		if(!valid1||!valid2){
 			Expression[] stmts1=d1?[d1]:[],stmts2=[];
 			auto ne1=ce.e1,ne2=ce.e2;
 			if(!cast(Identifier)ue1){
@@ -418,15 +392,22 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				ne2=tmpe2.copy();
 				ne2.loc=ce.e2.loc;
 			}
-			if(!valid1){
-				auto ty1=new TypeofExp(s1);
-				ty1.loc=s1.loc;
+			assert(l1||l2);
+			if(!(known1&&valid1)&&l1){
+				ne1=unwrap(ne1); // TODO: ok?
+				auto w1=new WildcardExp();
+				w1.loc=ce.e1.loc;
+				auto ty1=new PowExp(w1,l1);
+				ty1.loc=ce.e1.loc;
 				ne1=new TypeAnnotationExp(ne1,ty1,TypeAnnotationType.coercion);
 				ne1.loc=ce.e1.loc;
 			}
-			if(!valid2){
-				auto ty2=new TypeofExp(s2);
-				ty2.loc=s2.loc;
+			if(!(known2&&valid2)&&l2){
+				ne2=unwrap(ne2); // TODO: ok?
+				auto w2=new WildcardExp();
+				w2.loc=ce.e2.loc;
+				auto ty2=new PowExp(w2,l2);
+				ty2.loc=ce.e2.loc;
 				ne2=new TypeAnnotationExp(ne2,ty2,TypeAnnotationType.coercion);
 				ne2.loc=ce.e2.loc;
 			}
@@ -436,12 +417,37 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			tmp3.loc=orhs.loc;
 			auto d2=lowerDefine!flags(nce,tmp3,loc,sc,unchecked);
 			stmts1~=d2;
-			//scope(exit) imported!"util.io".writeln(olhs," := ",orhs," → ",res);
 			return res=new CompoundExp(stmts1~stmts2);
 		}else{
 			// default lowering
 			//imported!"util.io".writeln("default lowering: ",olhs," := ",orhs,"; ",known1," ",known2);
 			// TODO: nicer runtime error message for inconsistent array lengths?
+			if(!l1){
+				auto l=tmpLen();
+				l.loc=l2.loc;
+				auto s=new NSubExp(l,l2);
+				s.loc=l2.loc;
+				l1=s;
+			}else if(!l2){
+				auto l=tmpLen();
+				l.loc=l1.loc;
+				auto s=new NSubExp(l,l1);
+				s.loc=l1.loc;
+				l2=s;
+			}
+			assert(l1&&l2);
+			auto tmp1=tmp.copy();
+			tmp1.loc=orhs.loc;
+			auto z=constantExp(0);
+			z.loc=olhs.loc;
+			Expression s1=new SliceExp(tmp1,z,l1);
+			s1.loc=tmp1.loc;
+			auto tmp2=tmp.copy();
+			tmp2.loc=orhs.loc;
+			auto l=tmpLen();
+			l.loc=olhs.loc;
+			Expression s2=new SliceExp(tmp2,l1.copy(),l);
+			s2.loc=tmp2.loc;
 			auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
 			if(tmpl!is ce.e1){
 				tmpl.loc=ce.e1.loc;
@@ -657,6 +663,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		newrhs.loc=newarg.loc;
 		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
 	}
+	if(auto we=cast(WildcardExp)olhs)
+		return res=new ForgetExp(rhs,null);
 	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
 }

@@ -333,6 +333,7 @@ struct Parser{
 	Identifier parseIdentifier(){ // Identifier(null) is the error value
 		string name;
 		if(ttype==Tok!"i") name=tok.name;
+		else if(ttype==Tok!"_"){ import ast.semantic_; name=freshName().str; } // TODO: remove dependency
 		else{expectErr!"identifier"(); auto e=New!Identifier(string.init); e.loc=tok.loc; return e;}
 		displayExpectErr=true;
 		auto e=New!Identifier(name);
@@ -425,6 +426,7 @@ struct Parser{
 			case Tok!"i": return parseIdentifier();
 			case Tok!"*": auto r=New!Identifier("*"); r.loc=tok.loc; nextToken(); return r;
 			case Tok!"?": nextToken(); return res=New!PlaceholderExp(parseIdentifier());
+			case Tok!"_": nextToken(); return res=New!WildcardExp();
 			case Tok!"``", Tok!"``c", Tok!"``w", Tok!"``d": // adjacent string tokens get concatenated
 				t=tok;
 				for(nextToken();;nextToken()){
