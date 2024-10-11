@@ -12,7 +12,10 @@ Expression constantExp(size_t l){
 	Token tok;
 	tok.type=Tok!"0";
 	tok.str=to!string(l);
-	return new LiteralExp(tok);
+	auto r=new LiteralExp(tok);
+	r.type=ℕt(true);
+	r.sstate=SemState.completed;
+	return r;
 }
 
 static if(language==silq)
@@ -292,14 +295,16 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	static if(createFresh) Expression nlhs;
 	Expression lhs(){ // TODO: solve better
 		static if(createFresh){
-			if(!nlhs) nlhs=olhs.copy();
+			Expression.CopyArgs cargs={ coerceAll: true };
+			if(!nlhs) nlhs=olhs.copy(cargs);
 			return nlhs;
 		}else return olhs;
 	}
 	static if(createFresh) Expression nrhs;
 	Expression rhs(){ // TODO: solve better
 		static if(createFresh){
-			if(!nrhs) nrhs=orhs.copy();
+			Expression.CopyArgs cargs={ coerceAll: true };
+			if(!nrhs) nrhs=orhs.copy(cargs);
 			return nrhs;
 		}else return orhs;
 	}

@@ -1613,7 +1613,38 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 				if(l1) ntype1=vectorTy(at.next,l1);
 				if(l2) ntype2=vectorTy(at.next,l2);
 			}else if(auto tt=context.type.isTupleTy){
-				// TODO
+				import util.maybe:mfold;
+				size_t mid;
+				bool ok=false;
+				if(!ok&&l1){
+					if(auto x=l1.asIntegerConstant()){
+						ok=true;
+						try mid=min(x.get.to!size_t,tt.length);
+						catch(Exception) ok=false;
+					}
+				}
+				if(!ok&&l2){
+					if(auto x=l2.asIntegerConstant()){
+						ok=true;
+						try mid=tt.length-min(x.get.to!size_t,tt.length);
+						catch(Exception) ok=false;
+					}
+				}
+				if(ok){
+					assert(mid<=tt.length);
+					ntype1=tupleTy(iota(0,mid).map!(i=>tt[i]).array);
+					ntype2=tupleTy(iota(mid,tt.length).map!(i=>tt[i]).array);
+				}else if(l1||l2){
+					Expression elemTy=null;
+					foreach(i;0..tt.length){
+						elemTy=joinTypes(elemTy, tt[i]);
+						if(!elemTy) break;
+					}
+					if(elemTy){
+						if(l1) ntype1=vectorTy(elemTy,l1);
+						if(l2) ntype2=vectorTy(elemTy,l2);
+					}
+				}
 			}
 		}
 		//imported!"util.io".writeln("!! ",ce," ",ntype1," ",ntype2," ",l1," ",l2," ",context.type);
@@ -1631,16 +1662,10 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 				sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
 			ce.sstate=SemState.error;
 		}else if(context.type&&!isSubtype(context.type,ce.type)){
-			//if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
-			sc.error(format("incompatible types for split: '%s' vs '%s",ce.type,context.type),ce.loc);
-			ce.sstate=SemState.error;
-			//}
-			/+auto result=new TypeAnnotationExp(ce,context.type,TypeAnnotationType.coercion);
-			result.loc=result.loc;
-			result.type=context.type;
-			result.sstate=SemState.completed;
-			propErr(ce,result);
-			return result;+/
+			if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){ // TODO: ok?
+				sc.error(format("incompatible types for split: '%s' vs '%s",ce.type,context.type),ce.loc);
+				ce.sstate=SemState.error;
+			}
 		}
 	}
 	return ce;
@@ -4245,11 +4270,16 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 				elemTy=aty.next;
 			if(auto vty=cast(VectorTy)analyzed)
 				elemTy=vty.next;
-			if(auto tpl=analyzed.isTupleTy)
+			if(auto tpl=analyzed.isTupleTy){
+				import util.maybe:mfold;
+				if(new EqExp(pow.e2,LiteralExp.makeInteger(tpl.length)).eval().asIntegerConstant.mfold!(z=>z==1,()=>false)){
+					return analyzed; // TODO: revisit
+				}
 				foreach(i;0..tpl.length){
 					elemTy=joinTypes(elemTy, tpl[i]);
 					if(!elemTy) break;
 				}
+			}
 			if(!elemTy) return null;
 			auto npow=new PowExp(elemTy,pow.e2);
 			npow.loc=pow.loc;
@@ -4261,7 +4291,7 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 
 Expression expressionSemanticImpl(WildcardExp we,ExpSemContext context){
 	if(we.sstate!=SemState.error){
-		context.sc.error("unable to resolve wildcard",we.loc);
+		context.sc.error("unable to determine type",we.loc);
 		we.sstate=SemState.error;
 	}
 	return we;

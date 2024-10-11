@@ -32,6 +32,7 @@ abstract class Expression: Node{
 	struct CopyArgs{
 		bool preserveSemantic=false;
 		bool preserveMeanings=false;
+		bool coerceAll=false;
 	}
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
@@ -226,7 +227,7 @@ class TypeAnnotationExp: Expression{
 		this.annotationType=annotationType;
 	}
 	override TypeAnnotationExp copyImpl(CopyArgs args){
-		return new TypeAnnotationExp(e.copy(args),t.copy(args),annotationType);
+		return new TypeAnnotationExp(e.copy(args),t.copy(args),args.coerceAll?TypeAnnotationType.coercion:annotationType);
 	}
 	override @property string kind(){ return e.kind; }
 	override string toString(){
