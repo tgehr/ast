@@ -803,26 +803,28 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 		}
 	}
 	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
-	sc.merge(false,with_.trans.blscope_);
+	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	propErr(with_.trans,with_);
 	with_.bdy=compoundExpSemantic(with_.bdy,sc);
-	sc.merge(false,with_.bdy.blscope_);
+	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
 	propErr(with_.trans,with_);
 	if(with_.itrans){
 		if(with_.itrans.sstate!=SemState.completed&&with_.itrans.sstate!=SemState.error){
 			with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
-			sc.merge(false,with_.itrans.blscope_);
+			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.sstate==SemState.completed){
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,sc,false)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
-		sc.merge(false,with_.itrans.blscope_);
+		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		if(with_.itrans.sstate==SemState.error){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
 		}
 		propErr(with_.itrans,with_);
 	}
+	with_.type=unit;
+	if(with_.sstate!=SemState.error) with_.sstate=SemState.completed;
 	return with_;
 }
 
@@ -1788,14 +1790,41 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	Expression[] prologues,epilogues;
+	CompoundExp[] prologues,epilogues;
 	Expression finish(Expression r){
 		static if(language==silq) sc.pushConsumed();
 		if(!prologues.length||!epilogues.length) return r;
 		assert(prologues.length==epilogues.length);
 		assert(prologues.all!(prologue=>util.among(prologue.sstate,SemState.completed,SemState.error)));
 		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
-		auto prologue=new CompoundExp(prologues);
+		Expression current=r;
+		foreach_reverse(eplg;epilogues){
+			eplg=statementSemanticImpl(eplg,sc);
+			if(eplg.sstate!=SemState.error) eplg.sstate=SemState.completed;
+		}
+		foreach_reverse(prlg,eplg;zip(prologues,epilogues)){
+			auto prev=cast(CompoundExp)current;
+			if(!prev){
+				prev=new CompoundExp([current]);
+				prev.loc=current.loc;
+				prev.type=unit;
+				prev.sstate=SemState.completed;
+				propErr(current,prev);
+			}
+			auto with_=new WithExp(prlg,prev);
+			with_.itrans=eplg;
+			with_.loc=r.loc;
+			with_.isIndices=true;
+			with_.type=unit;
+			with_.sstate=SemState.completed;
+			propErr(prlg,with_);
+			propErr(prev,with_);
+			propErr(eplg,with_);
+			current=with_;
+		}
+		//imported!"util.io".writeln(current);
+		return current;
+		/+auto prologue=new CompoundExp(prologues);
 		prologue.type=unit;
 		prologue.sstate=SemState.completed;
 		foreach(prlg;prologues)
@@ -1809,7 +1838,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		res.loc=be.loc;
 		res.sstate=SemState.completed;
 		foreach(e;res.s) propErr(e,res);
-		return res;
+		return res;+/
 	}
 	static if(language==silq)
 	if(sc.allowsLinear){

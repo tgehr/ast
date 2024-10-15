@@ -334,21 +334,36 @@ class Checker {
 	bool implStmt(ast_exp.WithExp e) {
 		Checker trans, bdy, itrans;
 
-		visSplit(trans, e.trans.blscope_, e);
-		auto retTrans = trans.visCompoundStmt(e.trans);
-		assert(!retTrans);
-		visMerge(trans, e);
+		if(e.trans.blscope_) {
+			visSplit(trans, e.trans.blscope_, e);
+			auto retTrans = trans.visCompoundStmt(e.trans);
+			assert(!retTrans);
+			visMerge(trans, e);
+		} else {
+			auto retTrans = visCompoundStmt(e.trans);
+			assert(!retTrans);
+		}
 
-		visSplit(bdy, e.bdy.blscope_, e);
-		auto retBdy = bdy.visCompoundStmt(e.bdy);
-		assert(!retBdy);
-		visMerge(bdy, e);
+		if(e.bdy.blscope_) {
+			visSplit(bdy, e.bdy.blscope_, e);
+			auto retBdy = bdy.visCompoundStmt(e.bdy);
+			assert(!retBdy);
+			visMerge(bdy, e);
+		} else {
+			auto retBdy = visCompoundStmt(e.bdy);
+			assert(!retBdy);
+		}
 
 		assert(!!e.itrans);
-		visSplit(itrans, e.itrans.blscope_, e);
-		auto retItrans = itrans.visCompoundStmt(e.itrans);
-		assert(!retItrans);
-		visMerge(itrans, e);
+		if(e.itrans.blscope_) {
+			visSplit(itrans, e.itrans.blscope_, e);
+			auto retItrans = itrans.visCompoundStmt(e.itrans);
+			assert(!retItrans);
+			visMerge(itrans, e);
+		} else {
+			auto retItrans = visCompoundStmt(e.itrans);
+			assert(!retItrans);
+		}
 
 		return false;
 	}
