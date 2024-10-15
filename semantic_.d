@@ -808,7 +808,12 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	with_.bdy=compoundExpSemantic(with_.bdy,sc);
 	sc.merge(false,with_.bdy.blscope_);
 	propErr(with_.trans,with_);
-	if(with_.trans.sstate==SemState.completed){
+	if(with_.itrans){
+		if(with_.itrans.sstate!=SemState.completed&&with_.itrans.sstate!=SemState.error){
+			with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
+			sc.merge(false,with_.itrans.blscope_);
+		}
+	}else if(with_.trans.sstate==SemState.completed){
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,sc,false)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
@@ -1783,17 +1788,23 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 
 Expression defineSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	CompoundExp prologue=null,epilogue=null;
+	Expression[] prologues,epilogues;
 	Expression finish(Expression r){
 		static if(language==silq) sc.pushConsumed();
-		if(!prologue&&!epilogue) return r;
-		assert(!prologue||util.among(prologue.sstate,SemState.completed,SemState.error));
+		if(!prologues.length||!epilogues.length) return r;
+		assert(prologues.length==epilogues.length);
+		assert(prologues.all!(prologue=>util.among(prologue.sstate,SemState.completed,SemState.error)));
 		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
-		if(epilogue){
-			propErr(prologue,epilogue);
-			epilogue=statementSemanticImpl(epilogue,sc);
-			if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
-		}
+		auto prologue=new CompoundExp(prologues);
+		prologue.type=unit;
+		prologue.sstate=SemState.completed;
+		foreach(prlg;prologues)
+			propErr(prlg,prologue);
+		reverse(epilogues);
+		auto epilogue=new CompoundExp(epilogues);
+		propErr(prologue,epilogue);
+		epilogue=statementSemanticImpl(epilogue,sc);
+		if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
 		auto res=new ComponentReplaceExp(prologue,r,epilogue);
 		res.loc=be.loc;
 		res.sstate=SemState.completed;
@@ -1807,8 +1818,11 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
-		auto crepls=sc.localComponentReplacements();
-		if(crepls.length){
+		Expression[][] readss,writess;
+		auto creplss=sc.localComponentReplacementsByDecl();
+		if(!creplss.length) sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
+		foreach(crepls;creplss){
+			assert(crepls.length);
 			Expression[] reads;
 			foreach(ref crepl;crepls){
 				if(!crepl.write) continue;
@@ -1822,14 +1836,15 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				reads~=read;
 			}
 			auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
-			prologue=new CompoundExp(reads);
+			auto prologue=new CompoundExp(reads);
 			prologue.loc=be.loc;
 			prologue=statementSemanticImpl(prologue,sc);
 			if(prologue.sstate!=SemState.error) prologue.sstate=SemState.completed;
+			prologues~=prologue;
 			sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 			prologue.loc=be.loc;
 			Expression[] writes;
-			foreach(ref crepl;crepls){
+			foreach_reverse(ref crepl;crepls){
 				if(!crepl.write) continue;
 				auto id=new Identifier(crepl.name);
 				id.loc=be.loc;
@@ -1840,9 +1855,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				write.loc=crepl.write.loc;
 				writes~=write;
 			}
-			epilogue=new CompoundExp(writes);
+			auto epilogue=new CompoundExp(writes);
 			epilogue.loc=be.loc;
-		}else sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
+			epilogues~=epilogue;
+		}
 	}
 	propErr(be.e1,be);
 	static if(language==psi){ // TODO: remove this?
@@ -1886,7 +1902,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				return finish(e);
 			}
 		}else{
-			epilogue=null; // (avoids error messages)
+			epilogues=[]; // (avoids error messages)
 			// TODO: clean up other temporaries
 		}
 		static if(language==silq)

@@ -238,6 +238,17 @@ abstract class Scope{
 				r~=prop.componentReplacements;
 			return r;
 		}
+		final DeclProp.ComponentReplacement[][] localComponentReplacementsByDecl(){
+			Declaration[] decls;
+			typeof(return) r;
+			foreach(decl,ref prop;declProps.props){
+				if(!prop.componentReplacements.length) continue;
+				decls~=decl;
+				r~=prop.componentReplacements;
+			}
+			sort!"a[0].getName<b[0].getName"(zip(decls,r));
+			return r;
+		}
 		DeclProp.ComponentReplacement*[] allComponentReplacements(){ // TODO: get rid of this?
 			typeof(return) r=[];
 			foreach(ref props;&nestedDeclProps)
