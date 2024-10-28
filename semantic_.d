@@ -1849,7 +1849,6 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
 		Expression[][] readss,writess;
 		auto creplss=sc.localComponentReplacementsByDecl();
-		creplss=unnestComponentReplacements(creplss,be.loc,sc);
 		if(!creplss.length) sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
 		foreach(crepls;creplss){
 			assert(crepls.length);
@@ -2261,54 +2260,6 @@ Expression replaceBaseIndex(T)(T e,Expression newBase)if(is(T==IndexExp)||is(T==
 		}
 	}
 	return null;
-}
-
-Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Location loc,Scope sc){
-    Scope.DeclProp.ComponentReplacement[][] result;
-    foreach(crepls;creplss){
-        void doIt(Scope.DeclProp.ComponentReplacement[] crepls){
-            Scope.DeclProp.ComponentReplacement[] curGroup;
-	        static struct MapEntry{
-		        IndexExp idx;
-		        Id name;
-	        }
-	        MapEntry[] entries;
-	        Scope.DeclProp.ComponentReplacement[][] newGroups;
-            foreach(crepl;crepls){
-	            assert(!!crepl.write);
-	            auto idx=getBaseIndex(crepl.write);
-	            assert(!!idx);
-	            if(idx is crepl.write){
-		            curGroup~=crepl;
-		            continue;
-	            }
-	            auto nname=freshName();
-	            curGroup~=Scope.DeclProp.ComponentReplacement(idx,nname);
-	            auto id=new Identifier(nname);
-	            id.loc=idx.loc;
-	            auto nidx=cast(IndexExp)replaceBaseIndex(crepl.write.copy(),id);
-	            assert(!!nidx,text(crepl.write," ",id));
-	            auto ncrepl=Scope.DeclProp.ComponentReplacement(nidx,crepl.name);
-                bool ok=false;
-                foreach(i,entry;entries){
-	                if(guaranteedSameLocations(entry.idx,idx,loc,sc,InType.no)){
-		                newGroups[i]~=ncrepl;
-                        ok=true;
-                        break;
-                    }
-                }
-                if(!ok){
-	                entries~=MapEntry(nidx,nname);
-                    newGroups~=[ncrepl];
-                }
-            }
-            result~=curGroup;
-            foreach(newGroup;newGroups)
-	            doIt(newGroup);
-        }
-        doIt(crepls);
-    }
-    return result;
 }
 
 void typeConstBlock(Declaration decl,Expression blocker,Scope sc){
