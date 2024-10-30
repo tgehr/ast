@@ -39,6 +39,11 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 	scope(exit) if(res) res.loc=e.loc;
 	if(auto arr=cast(ArrayExp)e) return res=constantExp(arr.e.length);
 	if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
+	if(auto cat=cast(CatExp)e){
+		auto a=cat.e1.knownLength(ignoreType);
+		auto b=cat.e2.knownLength(ignoreType);
+		if(a&&b) return res=new AddExp(a,b);
+	}
 	if(auto tae=cast(TypeAnnotationExp)e){
 		if(auto vec=cast(VectorTy)tae.t)
 			return vec.num;
