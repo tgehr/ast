@@ -877,15 +877,76 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	enum returnOnlyMoved=false; // (experimental)
 	auto constParams=state.nextStateSnapshot.loopParams(true);
 	auto movedParams=state.nextStateSnapshot.loopParams(false);
-	Expression.CopyArgs cargsDefault;
 	static if(is(T==WhileExp)){
-		auto ncond=loop.cond.copy(cargsDefault);
 		Q!(Id,Expression,bool,Location)[] loopParams=[];
 	}else static if(is(T==ForExp)){
 		auto loopVarId=loop.var.id;
 		assert(loop.left.type && loop.right.type);
 		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
-		auto loopParams=[q(loopVarId,loopVarType,true,loop.var.loc)];
+		auto loopParams=[q(loopVarId,cast(BoolTy)loopVarType?ℕt(true):loopVarType,true,loop.var.loc)];
+	}else static if(is(T==RepeatExp)){
+		auto loopVarId=freshName();
+		Expression loopVarType=ℕt(true);
+		auto loopParams=[q(loopVarId,loopVarType,true,loop.num.loc)];
+	}else static assert(0);
+	Expression.CopyArgs cargsDefault;
+	auto nbdy=loop.bdy.copy(cargsDefault);
+	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
+	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms){
+		return prms.map!((p){
+			auto id=new Identifier(p[0]);
+			id.loc=p[3];
+			return id;
+		}).array;
+	}
+	auto fi=freshName();
+	auto allParams=loopParams~constParams~movedParams;
+	auto loopConstParams=loopParams~constParams;
+	auto constMovedParams=constParams~movedParams;
+	static if(returnOnlyMoved){
+		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
+		movedTpl.loc=loop.loc;
+		auto returnTpl=movedTpl;
+	}else{
+		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[2]).array));
+		returnTpl.loc=loop.loc;
+	}
+	auto cee=new Identifier(fi);
+	cee.loc=loop.loc;
+	Identifier[] constTmpNames;
+	Parameter[] params;
+	foreach(i,p;allParams){
+		bool isConst=i<loopParams.length+constParams.length;
+		bool mayChange=p[2];
+		auto id=isConst&&mayChange?freshName:p[0];
+		auto pname=new Identifier(id);
+		pname.loc=p[3];
+		if(isConst&&mayChange) constTmpNames~=pname.copy(cargsDefault);
+		auto ptype=p[1];
+		auto param=new Parameter(isConst,pname,ptype);
+		params~=param;
+	}
+	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
+	Expression rret=new TypeofExp(paramTmpTpl.copy(cargsDefault));
+	DefineExp constParamDef=null;
+	if(constTmpNames.length){
+		auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
+		constTmpTpl.loc=loop.loc;
+		auto constTpl=new TupleExp(cast(Expression[])ids(loopConstParams.filter!(p=>p[2]).array));
+		constTpl.loc=loop.loc;
+		static if(is(T==ForExp)){
+			if(loopConstParams[0][2]&&loopConstParams[0][1]!is loopVarType){
+				auto tae=new TypeAnnotationExp(constTpl.e[0],loopVarType,TypeAnnotationType.coercion);
+				tae.loc=constTpl.e[0].loc;
+				constTpl.e[0]=tae;
+			}
+		}
+		constParamDef=new DefineExp(constTpl,constTmpTpl);
+		constParamDef.loc=loop.loc;
+	}
+	static if(is(T==WhileExp)){
+		auto ncond=loop.cond.copy(cargsDefault);
+	}else static if(is(T==ForExp)){
 		//writeln("?? ",constParams);
 		auto leftName=new Identifier(freshName());
 		leftName.loc=loop.left.loc;
@@ -920,14 +981,11 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 			stepDef=new DefineExp(stepName,stepInit);
 			stepDef.loc=loop.step.loc;
 		}
-		auto loopVarName=new Identifier(loopVarId);
+		auto loopVarName=constTmpNames[0].copy(cargsDefault);
 		loopVarName.loc=loop.var.loc;
 		auto ncond=new LtExp(loopVarName,rightName.copy(cargsDefault));
 		ncond.loc=loop.loc;
 	}else static if(is(T==RepeatExp)){
-		auto loopVarId=freshName();
-		Expression loopVarType=ℕt(true);
-		auto loopParams=[q(loopVarId,loopVarType,true,loop.num.loc)];
 		auto numName=new Identifier(freshName());
 		numName.loc=loop.num.loc;
 		auto numInit=loop.num.copy(cargsDefault);
@@ -939,33 +997,10 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto ncond=new LtExp(loopVarName,numName.copy(cargsDefault));
 		ncond.loc=loop.loc;
 	}else static assert(0,"unsupported type of loop for lowering: ",T);
-	auto nbdy=loop.bdy.copy(cargsDefault);
-	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
-	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms){
-		return prms.map!((p){
-			auto id=new Identifier(p[0]);
-			id.loc=p[3];
-			return id;
-		}).array;
-	}
-	auto fi=freshName();
-	auto allParams=loopParams~constParams~movedParams;
-	auto loopConstParams=loopParams~constParams;
-	auto constMovedParams=constParams~movedParams;
-	static if(returnOnlyMoved){
-		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
-		movedTpl.loc=loop.loc;
-		auto returnTpl=movedTpl;
-	}else{
-		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[2]).array));
-		returnTpl.loc=loop.loc;
-	}
-	auto cee=new Identifier(fi);
-	cee.loc=loop.loc;
 	auto paramTpl=new TupleExp(cast(Expression[])ids(allParams));
 	paramTpl.loc=loop.loc;
 	static if(is(T==ForExp)){{
-		auto loopVar=paramTpl.e[0];
+		auto loopVar=constTmpNames[0].copy(cargsDefault);
 		auto step=stepName?stepName.copy(cargsDefault):LiteralExp.makeInteger(1);
 		step.loc=loopVar.loc;
 		auto addExp=new AddExp(loopVar,step);
@@ -990,30 +1025,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	ite.loc=loop.loc;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
-	Identifier[] constTmpNames;
-	Parameter[] params;
-	foreach(i,p;allParams){
-		bool isConst=i<loopParams.length+constParams.length;
-		bool mayChange=p[2];
-		auto id=isConst&&mayChange?freshName:p[0];
-		auto pname=new Identifier(id);
-		pname.loc=p[3];
-		if(isConst&&mayChange) constTmpNames~=pname.copy(cargsDefault);
-		auto ptype=p[1];
-		auto param=new Parameter(isConst,pname,ptype);
-		params~=param;
-	}
-	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
-	Expression rret=new TypeofExp(paramTmpTpl.copy(cargsDefault));
-	DefineExp constParamDef=null;
-	if(constTmpNames.length){
-		auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
-		constTmpTpl.loc=loop.loc;
-		auto constTpl=new TupleExp(cast(Expression[])ids(loopConstParams.filter!(p=>p[2]).array));
-		constTpl.loc=loop.loc;
-		constParamDef=new DefineExp(constTpl,constTmpTpl);
-		constParamDef.loc=loop.loc;
-	}
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite]);
 	fbdy.loc=ite.loc;
 	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
