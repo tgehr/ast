@@ -1050,6 +1050,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 			auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
 			assgnTpl2.loc=loop.loc;
 			auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
+			assgn.loc=loop.loc;
 			stmts~=assgn;
 		}
 	}

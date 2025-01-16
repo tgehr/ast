@@ -1062,7 +1062,7 @@ class CapturingScope(T): NestedScope{
 				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
-					auto recapture=new Identifier(capture.getId);
+					auto recapture=new Identifier(capture.name.id);
 					recapture.loc=id.loc;
 					import ast.semantic_:lookupMeaning,typeForDecl;
 					lookupMeaning(recapture,kind,origin);
