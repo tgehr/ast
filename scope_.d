@@ -790,16 +790,18 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Expression,bool,Location)[] loopParams(bool forgettable){ // (name,type,mayChange,loc)
+		Q!(Id,Expression,bool,Location)[] loopParams(bool constParams){ // (name,type,mayChange,loc)
 			typeof(return) r;
 			foreach(id,decl;symtab){
 				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
 				if(!type) continue;
-				bool declForgettable=type.isClassical()||dependencies.canForget(id);
-				if(forgettable!=declForgettable) continue;
 				bool mayChange=isNonConstVar(decl)||decl.isLinear();
-				if(type.isClassical()&&!mayChange) continue; // (can just capture)
+				if(!mayChange){
+					if(type.isClassical) continue;
+				}
+				bool isConstParamDecl=type.isClassical()||dependencies.canForget(id)||!mayChange;
+				if(constParams!=isConstParamDecl) continue;
 				Expression.CopyArgs cargs;
 				r~=q(id,type.copy(cargs),mayChange,decl.loc);
 			}

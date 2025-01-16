@@ -1042,15 +1042,16 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	}
 	auto def=new DefineExp(defTpl,ce2);
 	def.loc=loop.loc;
-	static if(returnOnlyMoved){
-		Expression[] stmts=[fd,def];
-	}else{
-		auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[2]).array));
-		assgnTpl1.loc=loop.loc;
-		auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
-		assgnTpl2.loc=loop.loc;
-		auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
-		Expression[] stmts=[fd,def,assgn];
+	Expression[] stmts=[fd,def];
+	static if(!returnOnlyMoved){
+		if(constTmpNames[loopParams.length..$].length){
+			auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[2]).array));
+			assgnTpl1.loc=loop.loc;
+			auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
+			assgnTpl2.loc=loop.loc;
+			auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
+			stmts~=assgn;
+		}
 	}
 	static if(is(T==ForExp)){
 		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~stmts;
