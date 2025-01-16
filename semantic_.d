@@ -861,10 +861,9 @@ struct FixedPointIterState{
 	}
 }
 FixedPointIterState startFixedPointIteration(Scope sc){
-	auto origStateSnapshot=sc.getStateSnapshot();
+	auto origStateSnapshot=sc.getStateSnapshot(true);
 	return FixedPointIterState(origStateSnapshot,origStateSnapshot,origStateSnapshot);
 }
-
 
 // TODO: supertypes for define and assign?
 Expression statementSemanticImpl(ForExp fe,Scope sc){
@@ -983,6 +982,82 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	we.cond=cond;
 	we.bdy=bdy;
 	we.type=unit;
+	if(we.sstate!=SemState.error)
+		we.sstate=SemState.completed;
+	if(we.sstate==SemState.completed&&astopt.removeLoops){
+		auto constParams=state.nextStateSnapshot.loopParams(true);
+		auto movedParams=state.nextStateSnapshot.loopParams(false);
+		Expression.CopyArgs cargsDefault;
+		auto ncond=we.cond.copy(cargsDefault);
+		auto nbdy=we.bdy.copy(cargsDefault);
+		//imported!"util.io".writeln(constParams,movedParams,nsbdy);
+		Identifier[] ids(Q!(Id,Expression,Location)[] prms){
+			return prms.map!((p){
+				auto id=new Identifier(p[0]);
+				id.loc=p[2];
+				return id;
+			}).array;
+		}
+		auto fi=freshName();
+		auto allParams=constParams~movedParams;
+		auto paramTpl=new TupleExp(cast(Expression[])ids(allParams));
+		paramTpl.loc=we.loc;
+		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
+		movedTpl.loc=we.loc;
+		auto cee=new Identifier(fi);
+		cee.loc=we.loc;
+		auto ce=new CallExp(cee,paramTpl,false,false);
+		ce.loc=we.loc;
+		auto thene=new ReturnExp(ce);
+		thene.loc=ce.loc;
+		nbdy.s~=thene;
+		auto othwe=new ReturnExp(movedTpl);
+		othwe.loc=we.loc;
+		auto othw=new CompoundExp([othwe]);
+		othw.loc=othwe.loc;
+		auto ite=new IteExp(ncond,nbdy,othw);
+		ite.loc=we.loc;
+		auto fdn=new Identifier(fi);
+		fdn.loc=we.loc;
+		Identifier[] constTmpNames;
+		Parameter[] params;
+		foreach(i,p;allParams){
+			bool isConst=i<constParams.length;
+			auto id=isConst?freshName:p[0];
+			auto pname=new Identifier(id);
+			if(isConst) constTmpNames~=pname.copy(cargsDefault);
+			auto ptype=p[1];
+			pname.loc=p[2];
+			auto param=new Parameter(isConst,pname,ptype);
+			params~=param;
+		}
+		Expression rret=new TypeofExp(movedTpl.copy(cargsDefault));
+		DefineExp constParamDef=null;
+		if(constTmpNames.length){
+			auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
+			constTmpTpl.loc=we.loc;
+			auto constTpl=new TupleExp(cast(Expression[])ids(constParams));
+			constTpl.loc=we.loc;
+			constParamDef=new DefineExp(constTpl,constTmpTpl);
+			constParamDef.loc=we.loc;
+		}
+		auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite]);
+		fbdy.loc=ite.loc;
+		auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
+		fd.loc=we.loc;
+		auto ce2=ce.copy(cargsDefault);
+		auto def=new DefineExp(movedTpl.copy(cargsDefault),ce2);
+		def.loc=we.loc;
+		auto lowered=new CompoundExp([fd,def]);
+		lowered.loc=we.loc;
+		sc.restoreStateSnapshot(state.origStateSnapshot);
+		auto result=statementSemantic(lowered,sc);
+		if(result.sstate==SemState.error){
+			sc.note("uncomputation pattern in loop not yet supported by loop lowering pass",result.loc);
+			imported!"util.io".writeln(result);
+		}
+		return result;
+	}
 	return we;
 }
 
@@ -2291,7 +2366,8 @@ void typeConstBlockNote(VarDecl vd,Scope sc)in{
 }
 
 bool isNonConstVar(VarDecl vd,Scope sc){
-	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd))
+	bool isConst=!vd||vd.isConst;
+	if(isConst||vd.typeConstBlocker||sc.isConst(vd))
 		return false;
 	return true;
 }
@@ -3401,7 +3477,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		static if(language==silq){
 			if(auto meaning=sc.lookup(id,false,true,Lookup.probing)){
 				auto name=meaning.rename?meaning.rename:meaning.name;
-				if(!name||!sc.dependencyTracked(name)) return false;
+				if(!name) return false;
+				if(!sc.dependencyTracked(name)) return false;
 				return sc.canForget(meaning);
 			}else return false;
 		}else return true;
@@ -3489,7 +3566,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				result.constLookup=true;
 				if(result.calledDirectly||result.indexedDirectly) return result;
 				if(result.sstate!=SemState.error) result.sstate=SemState.completed;
-				return expressionSemantic(dupExp(result,result.loc,context.sc),context);
+				auto nresult=expressionSemantic(dupExp(result,result.loc,context.sc),context);
+				return nresult;
 			}
 		}
 		return result;

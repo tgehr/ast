@@ -777,6 +777,19 @@ abstract class Scope{
 			r~=text("{",symtab.values.map!(decl=>text(decl.getName,": ",typeForDecl(decl))).join(", "),"}");
 			return r;
 		}
+		Q!(Id,Expression,Location)[] loopParams(bool forgettable){
+			typeof(return) r;
+			foreach(id,decl;symtab){
+				import ast.semantic_: typeForDecl;
+				auto type=typeForDecl(decl);
+				if(!type) continue;
+				bool declForgettable=type.isClassical()||dependencies.canForget(id);
+				if(forgettable!=declForgettable) continue;
+				Expression.CopyArgs cargs;
+				r~=q(id,type.copy(cargs),decl.loc);
+			}
+			return r;
+		}
 	private:
 		static if(language==silq){
 			Dependencies dependencies;
