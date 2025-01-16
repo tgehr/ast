@@ -777,7 +777,20 @@ abstract class Scope{
 			r~=text("{",symtab.values.map!(decl=>text(decl.getName,": ",typeForDecl(decl))).join(", "),"}");
 			return r;
 		}
-		Q!(Id,Expression,Location)[] loopParams(bool forgettable){
+		private Identifier isConst(Declaration decl)in{
+			assert(restoreable);
+		}do{
+			if(auto dprop=declProps.tryGet(decl))
+				return dprop.constBlock;
+			return null;
+		}
+		private bool isNonConstVar(Declaration decl){ // TODO: get rid of code duplication?
+			auto vd=cast(VarDecl)decl;
+			if(!vd||vd.isConst||vd.typeConstBlocker||isConst(vd))
+				return false;
+			return true;
+		}
+		Q!(Id,Expression,bool,Location)[] loopParams(bool forgettable){ // (name,type,mayChange,loc)
 			typeof(return) r;
 			foreach(id,decl;symtab){
 				import ast.semantic_: typeForDecl;
@@ -785,9 +798,12 @@ abstract class Scope{
 				if(!type) continue;
 				bool declForgettable=type.isClassical()||dependencies.canForget(id);
 				if(forgettable!=declForgettable) continue;
+				bool mayChange=isNonConstVar(decl)||decl.isLinear();
+				if(type.isClassical()&&!mayChange) continue; // (can just capture)
 				Expression.CopyArgs cargs;
-				r~=q(id,type.copy(cargs),decl.loc);
+				r~=q(id,type.copy(cargs),mayChange,decl.loc);
 			}
+			sort!"a[0].str<b[0].str"(r);
 			return r;
 		}
 	private:

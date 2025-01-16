@@ -853,7 +853,7 @@ struct FixedPointIterState{
 		forgetScope=new BlockScope(sc);
 		return loopScope;
 	}
-	void endIteration(Scope sc){ nextStateSnapshot=sc.getStateSnapshot(); }
+	void endIteration(Scope sc){ nextStateSnapshot=sc.getStateSnapshot(true); }
 	bool converged(){ return nextStateSnapshot==prevStateSnapshot; }
 
 	void fixSplitMergeGraph(Scope sc){
@@ -863,6 +863,210 @@ struct FixedPointIterState{
 FixedPointIterState startFixedPointIteration(Scope sc){
 	auto origStateSnapshot=sc.getStateSnapshot(true);
 	return FixedPointIterState(origStateSnapshot,origStateSnapshot,origStateSnapshot);
+}
+
+Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
+	assert(loop.sstate==SemState.completed);
+}do{
+	if(auto ret=mayReturn(loop.bdy)){
+		sc.error("early returns are not yet supported by loop lowering pass",ret.loc);
+		sc.note("encountered during lowering of this loop",loop.loc);
+		loop.sstate=SemState.error;
+		return loop;
+	}
+	enum returnOnlyMoved=false; // (experimental)
+	auto constParams=state.nextStateSnapshot.loopParams(true);
+	auto movedParams=state.nextStateSnapshot.loopParams(false);
+	Expression.CopyArgs cargsDefault;
+	static if(is(T==WhileExp)){
+		auto ncond=loop.cond.copy(cargsDefault);
+		Q!(Id,Expression,bool,Location)[] loopParams=[];
+	}else static if(is(T==ForExp)){
+		auto loopVarId=loop.var.id;
+		assert(loop.left.type && loop.right.type);
+		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
+		auto loopParams=[q(loopVarId,loopVarType,true,loop.var.loc)];
+		//writeln("?? ",constParams);
+		auto leftName=new Identifier(freshName());
+		leftName.loc=loop.left.loc;
+		auto leftInit=loop.left.copy(cargsDefault);
+		leftInit.loc=loop.left.loc;
+		if(loop.leftExclusive){
+			auto one=LiteralExp.makeInteger(1);
+			one.loc=loop.left.loc;
+			leftInit=new AddExp(leftInit,one);
+			leftInit.loc=loop.left.loc;
+		}
+		auto leftDef=new DefineExp(leftName,leftInit);
+		leftDef.loc=loop.left.loc;
+		auto rightName=new Identifier(freshName());
+		rightName.loc=loop.right.loc;
+		auto rightInit=loop.right.copy(cargsDefault);
+		rightInit.loc=loop.right.loc;
+		if(!loop.rightExclusive){
+			auto one=LiteralExp.makeInteger(1);
+			one.loc=loop.right.loc;
+			rightInit=new AddExp(rightInit,one);
+			rightInit.loc=loop.right.loc;
+		}
+		auto rightDef=new DefineExp(rightName,rightInit);
+		rightDef.loc=loop.right.loc;
+		Identifier stepName=null;
+		Expression stepDef=null;
+		if(loop.step){
+			stepName=new Identifier(freshName());
+			auto stepInit=loop.step.copy(cargsDefault);
+			stepInit.loc=loop.step.loc;
+			stepDef=new DefineExp(stepName,stepInit);
+			stepDef.loc=loop.step.loc;
+		}
+		auto loopVarName=new Identifier(loopVarId);
+		loopVarName.loc=loop.var.loc;
+		auto ncond=new LtExp(loopVarName,rightName.copy(cargsDefault));
+		ncond.loc=loop.loc;
+	}else static if(is(T==RepeatExp)){
+		auto loopVarId=freshName();
+		Expression loopVarType=ℕt(true);
+		auto loopParams=[q(loopVarId,loopVarType,true,loop.num.loc)];
+		auto numName=new Identifier(freshName());
+		numName.loc=loop.num.loc;
+		auto numInit=loop.num.copy(cargsDefault);
+		numInit.loc=loop.num.loc;
+		auto numDef=new DefineExp(numName,numInit);
+		numDef.loc=loop.num.loc;
+		auto loopVarName=new Identifier(loopVarId);
+		loopVarName.loc=loop.num.loc;
+		auto ncond=new LtExp(loopVarName,numName.copy(cargsDefault));
+		ncond.loc=loop.loc;
+	}else static assert(0,"unsupported type of loop for lowering: ",T);
+	auto nbdy=loop.bdy.copy(cargsDefault);
+	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
+	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms){
+		return prms.map!((p){
+			auto id=new Identifier(p[0]);
+			id.loc=p[3];
+			return id;
+		}).array;
+	}
+	auto fi=freshName();
+	auto allParams=loopParams~constParams~movedParams;
+	auto loopConstParams=loopParams~constParams;
+	auto constMovedParams=constParams~movedParams;
+	static if(returnOnlyMoved){
+		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
+		movedTpl.loc=loop.loc;
+		auto returnTpl=movedTpl;
+	}else{
+		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[2]).array));
+		returnTpl.loc=loop.loc;
+	}
+	auto cee=new Identifier(fi);
+	cee.loc=loop.loc;
+	auto paramTpl=new TupleExp(cast(Expression[])ids(allParams));
+	paramTpl.loc=loop.loc;
+	static if(is(T==ForExp)){{
+		auto loopVar=paramTpl.e[0];
+		auto step=stepName?stepName.copy(cargsDefault):LiteralExp.makeInteger(1);
+		step.loc=loopVar.loc;
+		auto addExp=new AddExp(loopVar,step);
+		paramTpl.e[0]=addExp;
+	}}else static if(is(T==RepeatExp)){{
+		auto loopVar=paramTpl.e[0];
+		auto step=LiteralExp.makeInteger(1);
+		step.loc=loopVar.loc;
+		auto addExp=new AddExp(loopVar,step);
+		paramTpl.e[0]=addExp;
+	}}
+	auto ce=new CallExp(cee,paramTpl,false,false);
+	ce.loc=loop.loc;
+	auto thene=new ReturnExp(ce);
+	thene.loc=ce.loc;
+	nbdy.s~=thene;
+	auto othwe=new ReturnExp(returnTpl);
+	othwe.loc=loop.loc;
+	auto othw=new CompoundExp([othwe]);
+	othw.loc=othwe.loc;
+	auto ite=new IteExp(ncond,nbdy,othw);
+	ite.loc=loop.loc;
+	auto fdn=new Identifier(fi);
+	fdn.loc=loop.loc;
+	Identifier[] constTmpNames;
+	Parameter[] params;
+	foreach(i,p;allParams){
+		bool isConst=i<loopParams.length+constParams.length;
+		bool mayChange=p[2];
+		auto id=isConst&&mayChange?freshName:p[0];
+		auto pname=new Identifier(id);
+		pname.loc=p[3];
+		if(isConst&&mayChange) constTmpNames~=pname.copy(cargsDefault);
+		auto ptype=p[1];
+		auto param=new Parameter(isConst,pname,ptype);
+		params~=param;
+	}
+	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
+	Expression rret=new TypeofExp(paramTmpTpl.copy(cargsDefault));
+	DefineExp constParamDef=null;
+	if(constTmpNames.length){
+		auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
+		constTmpTpl.loc=loop.loc;
+		auto constTpl=new TupleExp(cast(Expression[])ids(loopConstParams.filter!(p=>p[2]).array));
+		constTpl.loc=loop.loc;
+		constParamDef=new DefineExp(constTpl,constTmpTpl);
+		constParamDef.loc=loop.loc;
+	}
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite]);
+	fbdy.loc=ite.loc;
+	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
+	fd.annotation=sc.getFunction().annotation;// loop.getAnnotation; // TODO
+	fd.loc=loop.loc;
+	static if(is(T==ForExp)){
+		auto paramTpl2=new TupleExp([cast(Expression)leftName.copy(cargsDefault)]~cast(Expression[])ids(constMovedParams));
+		paramTpl2.loc=loop.loc;
+		auto ce2=new CallExp(cee.copy(cargsDefault),paramTpl2,false,false);
+		ce2.loc=loop.loc;
+	}else static if(is(T==RepeatExp)){
+		auto zero=LiteralExp.makeInteger(0);
+		zero.loc=loop.loc;
+		auto paramTpl2=new TupleExp([cast(Expression)zero]~cast(Expression[])ids(constMovedParams));
+		paramTpl2.loc=loop.loc;
+		auto ce2=new CallExp(cee.copy(cargsDefault),paramTpl2,false,false);
+		ce2.loc=loop.loc;
+	}else{
+		auto ce2=ce.copy(cargsDefault);
+	}
+	static if(returnOnlyMoved){
+		auto defTpl=movedTpl.copy(cargsDefault);
+	}else{
+		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
+		defTpl.loc=loop.loc;
+	}
+	auto def=new DefineExp(defTpl,ce2);
+	def.loc=loop.loc;
+	static if(returnOnlyMoved){
+		Expression[] stmts=[fd,def];
+	}else{
+		auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[2]).array));
+		assgnTpl1.loc=loop.loc;
+		auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
+		assgnTpl2.loc=loop.loc;
+		auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
+		Expression[] stmts=[fd,def,assgn];
+	}
+	static if(is(T==ForExp)){
+		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~stmts;
+	}else static if(is(T==RepeatExp)){
+		stmts=[cast(Expression)numDef]~stmts;
+	}
+	auto lowered=new CompoundExp(stmts);
+	lowered.loc=loop.loc;
+	sc.restoreStateSnapshot(state.origStateSnapshot);
+	//imported!"util.io".writeln(lowered);
+	auto result=statementSemantic(lowered,sc);
+	if(result.sstate==SemState.error){
+		sc.note("loop not yet supported by loop lowering pass",result.loc);
+	}
+	//imported!"util.io".writeln(result);
+	return result;
 }
 
 // TODO: supertypes for define and assign?
@@ -936,6 +1140,10 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
 	fe.type=unit;
+	if(fe.sstate!=SemState.error)
+		fe.sstate=SemState.completed;
+	if(fe.sstate==SemState.completed&&astopt.removeLoops)
+		return lowerLoop(fe,state,sc);
 	return fe;
 }
 
@@ -984,80 +1192,8 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	we.type=unit;
 	if(we.sstate!=SemState.error)
 		we.sstate=SemState.completed;
-	if(we.sstate==SemState.completed&&astopt.removeLoops){
-		auto constParams=state.nextStateSnapshot.loopParams(true);
-		auto movedParams=state.nextStateSnapshot.loopParams(false);
-		Expression.CopyArgs cargsDefault;
-		auto ncond=we.cond.copy(cargsDefault);
-		auto nbdy=we.bdy.copy(cargsDefault);
-		//imported!"util.io".writeln(constParams,movedParams,nsbdy);
-		Identifier[] ids(Q!(Id,Expression,Location)[] prms){
-			return prms.map!((p){
-				auto id=new Identifier(p[0]);
-				id.loc=p[2];
-				return id;
-			}).array;
-		}
-		auto fi=freshName();
-		auto allParams=constParams~movedParams;
-		auto paramTpl=new TupleExp(cast(Expression[])ids(allParams));
-		paramTpl.loc=we.loc;
-		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
-		movedTpl.loc=we.loc;
-		auto cee=new Identifier(fi);
-		cee.loc=we.loc;
-		auto ce=new CallExp(cee,paramTpl,false,false);
-		ce.loc=we.loc;
-		auto thene=new ReturnExp(ce);
-		thene.loc=ce.loc;
-		nbdy.s~=thene;
-		auto othwe=new ReturnExp(movedTpl);
-		othwe.loc=we.loc;
-		auto othw=new CompoundExp([othwe]);
-		othw.loc=othwe.loc;
-		auto ite=new IteExp(ncond,nbdy,othw);
-		ite.loc=we.loc;
-		auto fdn=new Identifier(fi);
-		fdn.loc=we.loc;
-		Identifier[] constTmpNames;
-		Parameter[] params;
-		foreach(i,p;allParams){
-			bool isConst=i<constParams.length;
-			auto id=isConst?freshName:p[0];
-			auto pname=new Identifier(id);
-			if(isConst) constTmpNames~=pname.copy(cargsDefault);
-			auto ptype=p[1];
-			pname.loc=p[2];
-			auto param=new Parameter(isConst,pname,ptype);
-			params~=param;
-		}
-		Expression rret=new TypeofExp(movedTpl.copy(cargsDefault));
-		DefineExp constParamDef=null;
-		if(constTmpNames.length){
-			auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
-			constTmpTpl.loc=we.loc;
-			auto constTpl=new TupleExp(cast(Expression[])ids(constParams));
-			constTpl.loc=we.loc;
-			constParamDef=new DefineExp(constTpl,constTmpTpl);
-			constParamDef.loc=we.loc;
-		}
-		auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite]);
-		fbdy.loc=ite.loc;
-		auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
-		fd.loc=we.loc;
-		auto ce2=ce.copy(cargsDefault);
-		auto def=new DefineExp(movedTpl.copy(cargsDefault),ce2);
-		def.loc=we.loc;
-		auto lowered=new CompoundExp([fd,def]);
-		lowered.loc=we.loc;
-		sc.restoreStateSnapshot(state.origStateSnapshot);
-		auto result=statementSemantic(lowered,sc);
-		if(result.sstate==SemState.error){
-			sc.note("uncomputation pattern in loop not yet supported by loop lowering pass",result.loc);
-			imported!"util.io".writeln(result);
-		}
-		return result;
-	}
+	if(we.sstate==SemState.completed&&astopt.removeLoops)
+		return lowerLoop(we,state,sc);
 	return we;
 }
 
@@ -1100,6 +1236,10 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
 	re.type=unit;
+	if(re.sstate!=SemState.error)
+		re.sstate=SemState.completed;
+	if(re.sstate==SemState.completed&&astopt.removeLoops)
+		return lowerLoop(re,state,sc);
 	return re;
 }
 
@@ -2365,16 +2505,16 @@ void typeConstBlockNote(VarDecl vd,Scope sc)in{
 	}
 }
 
-bool isNonConstVar(VarDecl vd,Scope sc){
-	bool isConst=!vd||vd.isConst;
-	if(isConst||vd.typeConstBlocker||sc.isConst(vd))
+bool isNonConstVar(Declaration decl,Scope sc){
+	auto vd=cast(VarDecl)decl;
+	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd))
 		return false;
 	return true;
 }
 
 bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){
+	if(isNonConstVar(meaning,sc)) return true;
 	auto vd=cast(VarDecl)meaning;
-	if(isNonConstVar(vd,sc)) return true;
 	if(vd&&(vd.isConst||vd.typeConstBlocker||sc.isConst(vd))){
 		if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
 			sc.error("cannot "~action~" 'const' parameters",loc);
@@ -5017,6 +5157,34 @@ bool definitelyReturns(Expression e){
 	if(auto re=cast(RepeatExp)e)
 		return isPositive(re.num) && definitelyReturns(re.bdy);
 	return false;
+}
+
+ReturnExp mayReturn(Expression e){
+	if(auto ret=cast(ReturnExp)e)
+		return ret;
+	if(auto ce=cast(CompoundExp)e){
+		foreach(s;ce.s)
+			if(auto ret=mayReturn(s))
+				return ret;
+	}
+	if(auto ite=cast(IteExp)e){
+		if(auto ret=mayReturn(ite.then)) return ret;
+		if(auto ret=mayReturn(ite.othw)) return ret;
+	}
+	if(auto fe=cast(ForExp)e){
+		if(auto ret=mayReturn(fe.bdy)) return ret;
+	}
+	if(auto we=cast(WhileExp)e){
+		if(!isFalse(we.cond)){
+			if(auto ret=mayReturn(we.bdy)) return ret;
+		}
+	}
+	if(auto re=cast(RepeatExp)e){
+		if(!isZero(re.num)){
+			if(auto ret=mayReturn(re.bdy)) return ret;
+		}
+	}
+	return null;
 }
 
 static if(language==psi){
