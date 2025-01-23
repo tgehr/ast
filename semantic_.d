@@ -1014,10 +1014,14 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	}}
 	auto ce=new CallExp(cee,paramTpl,false,false);
 	ce.loc=loop.loc;
-	auto thene=new ReturnExp(ce);
+	//auto thene=new ReturnExp(ce); // avoid non-toplevel return
+	auto retName=new Identifier(freshName());
+	retName.loc=loop.loc;
+	auto thene=new DefineExp(retName,ce);
 	thene.loc=ce.loc;
 	nbdy.s~=thene;
-	auto othwe=new ReturnExp(returnTpl);
+	//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
+	auto othwe=new DefineExp(retName.copy(cargsDefault),returnTpl);
 	othwe.loc=loop.loc;
 	auto othw=new CompoundExp([othwe]);
 	othw.loc=othwe.loc;
@@ -1025,7 +1029,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	ite.loc=loop.loc;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
-	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite]);
+	auto ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
+	ret.loc=loop.loc;
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite,ret]);
 	fbdy.loc=ite.loc;
 	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
 	fd.annotation=sc.getFunction().annotation;// loop.getAnnotation; // TODO
