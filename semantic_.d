@@ -814,7 +814,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.sstate==SemState.completed){
-		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,sc,false)); // TODO: fix (this is incomplete)
+		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,false)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);

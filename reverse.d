@@ -849,7 +849,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~(retDef?[retDef]:[])~reverseStatements(fd.body_.s[0..$-1],fd.fscope_,unchecked)~[argRet]);
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fd.body_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
 	}
 	import options;
 	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
@@ -998,13 +998,13 @@ Expression[] mergeCompound(Expression[] s){
 	return r;
 }
 
-Expression[] reverseStatements(Expression[] statements,Scope sc,bool unchecked){
+Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked){
 	statements=mergeCompound(statements);
 	Expression[] classicalStatements=statements.filter!(s=>classifyStatement(s)==ComputationClass.classical).array;
 	foreach(ref e;classicalStatements) e=e.copy();
 	Expression[] quantumStatements=statements.retro.filter!(s=>classifyStatement(s)!=ComputationClass.classical).array;
 	foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked);
-	return classicalStatements~quantumStatements;
+	return classicalStatements~middle~quantumStatements;
 }
 
 Expression reverseStatement(Expression e,Scope sc,bool unchecked){
@@ -1034,7 +1034,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		auto res=new CompoundExp(reverseStatements(ce.s,sc,unchecked));
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked));
 		res.loc=ce.loc;
 		static if(language==silq){
 			if(ce.blscope_&&ce.blscope_.forgottenVars.any!(d=>d.isLinear())){
