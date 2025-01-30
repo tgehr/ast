@@ -1052,6 +1052,7 @@ class CapturingScope(T): NestedScope{
 		}
 		if(!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
 		if(id.sstate==SemState.error) return null;
+		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
 			//auto fd2=chain(meaning.derivedSequence.map!(x=>cast(FunctionDef)x).filter!(x=>!!x),only(null)).front;

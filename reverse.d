@@ -708,6 +708,15 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 				fd.sstate=SemState.error;
 		}
 	}
+	/+if(fd.name){
+		auto scope_=fd.scope_; // TODO: this is a bit hacky
+		if(!scope_.lookup(fd.name,true,true,Lookup.probing)){
+			fd.scope_=null;
+			fd.rename=null;
+			if(!scope_.insert(fd,true))
+				fd.sstate=SemState.error;
+		}
+	}+/
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
 	bool simplify=r.innerNeeded;
