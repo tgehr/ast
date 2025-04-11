@@ -402,6 +402,7 @@ enum BuiltIn{
 	show,
 	query,
 	typeTy,
+	bottom,
 	unit,
 	B,two=B,
 	ℕ,N=ℕ,
@@ -420,6 +421,7 @@ enum BuiltIn{
 	sampleFrom,
 	Expectation,
 	typeTy,
+	bottom,
 	unit,
 	B,two=B,
 	ℕ,N=ℕ,
@@ -455,6 +457,8 @@ BuiltIn isBuiltIn(Identifier id){
 		}else static assert(0);
 		case "*":
 			return BuiltIn.typeTy;
+		case "𝟘","⊥","bottom","never":
+			return BuiltIn.bottom;
 		case "𝟙","unit":
 			return BuiltIn.unit;
 		case "𝔹","B","𝟚":
@@ -613,24 +617,30 @@ Expression builtIn(Identifier id,Scope sc){
 			case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
 		}
 		static if(language==silq){
-			case "type","ctype","qtype","qnumeric":
+			case "ctype","qtype","qnumeric","utype","etype":
 				goto case;
 		}
-		case "*","𝟙","unit","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
+		case "*","type","𝟘","⊥","bottom","never","𝟙","unit","𝟚","B","𝔹","N","ℕ","Z","ℤ","Q","ℚ","R","ℝ","C","ℂ":
 			id.type=ctypeTy;
-			if(id.name=="*"||id.name=="type") return typeTy;
-			if(id.name=="ctype") return ctypeTy;
-			if(id.name=="qtype") return qtypeTy;
-			static if(language==silq)
-				if(id.name=="qnumeric") return qnumericTy;
-			if(id.name=="𝟙"||id.name=="unit") return unit;
-			if(id.name=="𝟚"||id.name=="B"||id.name=="𝔹") return Bool(false);
-			if(id.name=="N"||id.name=="ℕ") return ℕt(false);
-			if(id.name=="Z"||id.name=="ℤ") return ℤt(false);
-			if(id.name=="Q"||id.name=="ℚ") return ℚt(false);
-			if(id.name=="R"||id.name=="ℝ") return ℝ(false);
-			if(id.name=="C"||id.name=="ℂ") return ℂ(false);
-			return null;
+			switch(id.name){
+				case "*","type": return typeTy;
+				static if(language==silq){
+					case "ctype": return ctypeTy;
+					case "qtype": return qtypeTy;
+					case "qnumeric": return qnumericTy;
+				}
+				case "utype": return utypeTy;
+				case "etype": return etypeTy;
+				case "𝟘","⊥","bottom","never": return bottom;
+				case "𝟙","unit": return unit;
+				case "𝟚","B","𝔹": return Bool(false);
+				case "N","ℕ": return ℕt(false);
+				case "Z","ℤ": return ℤt(false);
+				case "Q","ℚ": return ℚt(false);
+				case "R","ℝ": return ℝ(false);
+				case "C","ℂ": return ℂ(false);
+				default: return null;
+			}
 		default: return null;
 	}
 	id.type=t;

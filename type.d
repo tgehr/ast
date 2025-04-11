@@ -476,6 +476,42 @@ ContextTy contextTy(bool classical=true){
 	else return theContextTy?theContextTy:(theContextTy=new ContextTy(true));
 }
 
+
+class BottomTy: Type{
+	this(){ type=etypeTy; }
+	override BottomTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "⊥";
+	}
+	override bool isConstant(){ return true; }
+	override bool isTotal(){ return true; }
+	override bool opEquals(Object o){
+		auto bot=cast(BottomTy)o;
+		return !!bot;
+	}
+	override bool isSubtypeImpl(Expression r){
+		return true;
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		return meet?this:r;
+	}
+	override BottomTy getClassical(){
+		return this;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) e){
+		return 0;
+	}
+}
+private BottomTy theBottomTy;
+BottomTy bottom(){
+	return theBottomTy?theBottomTy:(theBottomTy=new BottomTy());
+}
+
+
 interface ITupleTy{
 	@property size_t length();
 	Expression opIndex(size_t i);
@@ -1524,6 +1560,41 @@ bool hasFreeIdentifier(Expression self,Id name){
 }
 
 static if(language==silq)
+class ETypeTy: Type{
+	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
+	override ETypeTy copyImpl(CopyArgs args){
+		return this;
+	}
+	override string toString(){
+		return "etype";
+	}
+	override bool opEquals(Object o){
+		return !!cast(ETypeTy)o;
+	}
+	override Expression evalImpl(Expression ntype){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+	override bool isSubtypeImpl(Expression r){
+		return util.among(r,this,utypeTy,ctypeTy,qtypeTy,typeTy);
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		if(meet){
+			if(isSubtypeImpl(r)) return this;
+			return null;
+		}else{
+			if(isSubtypeImpl(r)) return r;
+			return null;
+		}
+	}
+}
+static if(language==silq){
+	private ETypeTy theETypeTy;
+	ETypeTy etypeTy(){ return theETypeTy?theETypeTy:(theETypeTy=new ETypeTy()); }
+}else alias etypeTy=typeTy;
+
+static if(language==silq)
 class UTypeTy: Type{
 	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
 	override UTypeTy copyImpl(CopyArgs args){
@@ -1672,6 +1743,12 @@ TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
 bool isTypeTy(Expression e){ return isSubtype(e,typeTy); }
 bool isType(Expression e){ return e&&isTypeTy(e.type); }
 
+bool isEmptyTy(Expression e){ return isSubtype(e,etypeTy); }
+bool isEmpty(Expression e){ return e&&isEmptyTy(e.type); }
+
+bool isUnitTy(Expression e){ return isSubtype(e,utypeTy); }
+bool isUnit(Expression e){ return e&&isUnitTy(e.type); }
+
 bool isClassicalTy(Expression e){ return isSubtype(e,ctypeTy); }
 bool isClassical(Expression e){ return e&&isClassicalTy(e.type); }
 
@@ -1735,9 +1812,11 @@ Expression typeOfTupleTy(scope Expression[] e...)in{
 	assert(e.all!(e=>isType(e)||isQNumeric(e)));
 }do{
 	if(!e.length) return utypeTy;
+	if(e.any!isEmpty) return etypeTy;
 	static if(language==silq){
 		if(e.any!isQNumeric) return qnumericTy;
 	}
+	if(e.all!isUnit) return utypeTy;
 	if(e.all!isClassical) return ctypeTy;
 	if(e.all!isQuantum) return qtypeTy;
 	return typeTy;
@@ -1749,7 +1828,10 @@ Expression typeOfArrayTy(Expression e)in{
 	static if(language==silq){
 		if(isQNumeric(e)) return qnumericTy;
 	}
-	return typeOfTupleTy(e,ctypeTy);
+	if(isEmpty(e)) return utypeTy;
+	if(isQNumeric(e)) return qnumericTy;
+	if(isClassical(e)) return ctypeTy;
+	return typeTy;
 }
 
 Expression typeOfVectorTy(Expression e,Expression num)in{
@@ -1757,6 +1839,7 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
 	// TODO: num=0 ↦ utype
+	if(isEmpty(e)) return utypeTy; // TODO: num≠0 ↦ etype
 	return e.type;
 }
 

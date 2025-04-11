@@ -22,7 +22,20 @@ abstract class Conversion{
 		this.to=to;
 	}
 
+	ExplosionConversion isExplosion(){ return null; }
 	NoOpConversion isNoOp(){ return null; }
+}
+
+class ExplosionConversion: Conversion{
+	this(Expression type){
+		super(type,type);
+	}
+	this(Expression from,Expression to)in{
+		assert(from&&isEmpty(from.type));
+	}do{
+		super(from,to);
+	}
+	override ExplosionConversion isExplosion(){ return this; }
 }
 
 bool isNoOpConversion(Expression from,Expression to)in{
@@ -42,7 +55,7 @@ class NoOpConversion: Conversion{
 		super(type,type);
 	}
 	this(Expression from,Expression to)in{
-		isNoOpConversion(from,to);
+		assert(isNoOpConversion(from,to));
 	}do{
 		super(from,to);
 	}
@@ -555,6 +568,7 @@ class ParameterizedSubtypeConversion: Conversion{
 Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
 	to=to.eval();
 	static if(witness){
+		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
 		if(isTypeTy(from)&&isTypeTy(to)&&isSubtype(from,to)) return new TypeConversion(from,to);
 		if(from.isClassical()&&!to.isClassical()){
