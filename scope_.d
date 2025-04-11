@@ -632,9 +632,12 @@ abstract class Scope{
 						if(!ot) ot=st;
 						if(!st) st=ot;
 						if(ot&&st){
+							if(quantumControl){ // automatically promote to quantum if possible
+								if(auto qt=ot.getQuantum)
+									ot=qt;
+							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
-								// TODO: automatically promote to quantum if possible
 								static if(language==silq){
 									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
 										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
