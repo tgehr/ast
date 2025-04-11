@@ -2253,6 +2253,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	import core.lifetime:forward;
 	// TODO: implement without cast cascade
 	if(auto ite=cast(IteExp)e) return f(ite,forward!args);
+	if(auto ae=cast(AssertExp)e) return f(ae,forward!args);
 	if(auto le=cast(LiteralExp)e) return f(le,forward!args);
 	if(auto le=cast(LambdaExp)e) return f(le,forward!args);
 	if(auto ce=cast(CallExp)e) return f(ce,forward!args);

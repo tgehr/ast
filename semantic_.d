@@ -1462,6 +1462,10 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){
 	return defineLhsSemanticImplCurrentlyUnsupported(ite,context);
 }
 
+Expression defineLhsSemanticImpl(AssertExp ae,DefineLhsContext context){
+	return defineLhsSemanticImplCurrentlyUnsupported(ae,context);
+}
+
 Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(lit,context);
 }
@@ -3504,16 +3508,10 @@ Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InTy
 	return e;
 }
 
-Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumControl,ref int numBottom){ // TODO: actually introduce a bottom type?
+Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumControl){ // TODO: actually introduce a bottom type?
 	auto sc=context.sc, inType=context.inType;
 	if(inType) return expressionSemantic(branch,context);
-	if(auto ae=cast(AssertExp)branch){
-		branch=statementSemantic(branch,sc);
-		if(isZero(ae.e)){
-			branch.type=null;
-			++numBottom;
-		}
-	}else branch=expressionSemantic(branch,context);
+	branch=expressionSemantic(branch,context);
 	if(quantumControl){
 		if(branch.type&&branch.type.hasClassicalComponent()){
 			if(auto qtype=branch.type.getQuantum()){
@@ -3545,11 +3543,10 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		enum quantumControl=false;
 		enum restriction_=Annotation.none;
 	}
-	int numBottom=0; // TODO: actually introduce a bottom type?
 	// initialize scopes, to allow captures to be inserted
 	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_);
 	if(ite.othw&&!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
-	ite.then.s[0]=branchSemantic(ite.then.s[0],ExpSemContext(ite.then.blscope_,context.constResult,inType),quantumControl,numBottom);
+	ite.then.s[0]=branchSemantic(ite.then.s[0],ExpSemContext(ite.then.blscope_,context.constResult,inType),quantumControl);
 	static if(language==silq) ite.then.blscope_.pushConsumed();
 	propErr(ite.then.s[0],ite.then);
 	if(!ite.othw){
@@ -3557,7 +3554,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		ite.sstate=SemState.error;
 		return ite;
 	}
-	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ExpSemContext(ite.othw.blscope_,context.constResult,inType),quantumControl,numBottom);
+	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ExpSemContext(ite.othw.blscope_,context.constResult,inType),quantumControl);
 	static if(language==silq) ite.othw.blscope_.pushConsumed();
 	propErr(ite.othw.s[0],ite.othw);
 	propErr(ite.cond,ite);
@@ -3569,9 +3566,6 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		auto t1=ite.then.s[0].type;
 		auto t2=ite.othw.s[0].type;
 		ite.type=joinTypes(t1,t2);
-		if(!t1 && !t2 && numBottom==2){
-			ite.type=ite.then.s[0].type=ite.othw.s[0].type=unit;
-		}
 		if(t1 && t2 && !ite.type){
 			sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
 			ite.sstate=SemState.error;
@@ -3591,6 +3585,14 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	}
 	if(ite.sstate!=SemState.error) ite.sstate=SemState.completed;
 	return ite;
+}
+
+Expression expressionSemanticImpl(AssertExp ae,ExpSemContext context){
+	auto sc=context.sc,inType=context.inType;
+	ae.e=conditionSemantic(ae.e,sc,inType);
+	propErr(ae.e,ae);
+	ae.type=isFalse(ae.e)?bottom:unit;
+	return ae;
 }
 
 Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
@@ -4279,7 +4281,7 @@ Expression notType(Expression t){
 	return t;
 }
 Expression logicType(Expression t1,Expression t2){
-	if(!t2) return cast(BoolTy)t1; // (t2 is bootomo)
+	if(isEmpty(t2)) return cast(BoolTy)t1;
 	if(!cast(BoolTy)t1||!cast(BoolTy)t2) return null;
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
@@ -4464,11 +4466,10 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 		enum quantumControl=false;
 		enum restriction_=Annotation.none;
 	}
-	int numBottom=0;
 	// initialize scopes, to allow captures to be inserted
 	e.blscope_=new BlockScope(sc,restriction_);
 	e.forgetScope=new BlockScope(sc,restriction_);
-	e2=branchSemantic(e2,ExpSemContext(e.blscope_,ConstResult.yes,inType),quantumControl,numBottom);
+	e2=branchSemantic(e2,ExpSemContext(e.blscope_,ConstResult.yes,inType),quantumControl);
 	static if(language==silq) e.blscope_.pushConsumed();
 	propErr(e1,e);
 	propErr(e2,e);
