@@ -437,6 +437,7 @@ struct Parser{
 				}
 				mixin(rule!(LiteralExp,Existing,"t"));
 			mixin(getTTCases(literals,["``","``c","``w","``d","true","false"])); {res=New!LiteralExp(tok); nextToken(); return res;}
+			case Tok!"assert": return parseAssert();
 			case Tok!"forget": return parseForget();
 			case Tok!"typeof": return parseTypeof();
 			case Tok!"true",Tok!"⊤":{
@@ -740,7 +741,6 @@ struct Parser{
 			case Tok!"repeat": return parseRepeat();
 			case Tok!"for": return parseFor();
 			case Tok!"while": return parseWhile();
-			case Tok!"assert": return parseAssert();
 			static if(language==psi) case Tok!"observe": return parseObserve();
 			static if(language==psi) case Tok!"cobserve": return parseCObserve();
 			default: break;

@@ -4185,8 +4185,9 @@ Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
 	if(int2 && !int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
 	if(int1 || int2)
 		return joinTypes(t1,t2);
-	if(!isNumeric(t1)||!isNumeric(t2)) return null;
+	if(!(isNumeric(t1)||isEmpty(t1))||!(isNumeric(t2)||isEmpty(t2))) return null;
 	auto r=joinTypes(t1,t2);
+	if((isEmpty(t1)||isEmpty(t2))&&isSubtype(r,ℤt(false))) return bottom; // 1+(_:⊥) may become 1+(0:int[n])
 	static if(!preserveBool){
 		if(r==Bool(true)) return ℕt(true);
 		if(r==Bool(false)) return ℕt(false);
@@ -4205,6 +4206,7 @@ Expression divisionType(Expression t1, Expression t2){
 }
 Expression iDivType(Expression t1, Expression t2){
 	auto r=arithmeticType!true(t1,t2);
+	if((isEmpty(t1)||isEmpty(t2))&&!isFixedIntTy(r)) return bottom;
 	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
 	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
 	if(isFixed1&&isNumeric2&&!isSubtype(t2,ℤt(false))) return null; // TODO: int/uint div ℚ/ℝ seems useful
@@ -4220,8 +4222,10 @@ Expression iDivType(Expression t1, Expression t2){
 	return (cast(BoolTy)t1||cast(ℕTy)t1)&&(cast(BoolTy)t2||cast(ℕTy)t2)?ℕt(classical):ℤt(classical);
 }
 Expression nSubType(Expression t1, Expression t2){
-	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(false)))
-		return Bool(t1.isClassical()&&t2.isClassical());
+	if(!isEmpty(t1)&&!isEmpty(t2)){
+		if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(false)))
+			return Bool(t1.isClassical()&&t2.isClassical());
+	}
 	auto r=arithmeticType!true(t1,t2);
 	if(auto fi=isFixedIntTy(r)){
 		if(!fi.isSigned) return r;
@@ -4238,10 +4242,12 @@ Expression nSubType(Expression t1, Expression t2){
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
-	if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(true)))
-		return Bool(t1.isClassical()&&t2.isClassical());
-	if(isSubtype(t1,ℤt(true))&&isSubtype(t2,Bool(false)))
-		return Bool(t1.isClassical()&&t2.isClassical());
+	if(!isEmpty(t1)&&!isEmpty(t2)){
+		if(isSubtype(t1,Bool(false))&&isSubtype(t2,ℕt(true)))
+			return Bool(t1.isClassical()&&t2.isClassical());
+		if(isSubtype(t1,ℤt(true))&&isSubtype(t2,Bool(false)))
+			return Bool(t1.isClassical()&&t2.isClassical());
+	}
 	auto r=arithmeticType!true(t1,t2);
 	if(!r) return null;
 	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
@@ -4255,7 +4261,8 @@ Expression moduloType(Expression t1, Expression t2){
 }
 Expression powerType(Expression t1, Expression t2){
 	bool classical=t1.isClassical()&&t2.isClassical();
-	if(!isNumeric(t1)||!isNumeric(t2)) return null;
+	if(!(isNumeric(t1)||isEmpty(t1))||!(isNumeric(t2)||isEmpty(t2))) return null;
+	if(isEmpty(t1)) return bottom;
 	if(cast(BoolTy)t1&&isSubtype(t2,ℕt(classical))) return Bool(classical);
 	if(cast(ℕTy)t1&&isSubtype(t2,ℕt(classical))) return ℕt(classical);
 	if(cast(ℤTy)t1&&isSubtype(t2,ℕt(classical))) return ℤt(classical);
@@ -4266,27 +4273,27 @@ Expression powerType(Expression t1, Expression t2){
 }
 Expression minusType(Expression t){
 	if(isFixedIntTy(t)) return t;
-	if(!isNumeric(t)) return null;
+	if(!(isNumeric(t)||isEmpty(t))) return null;
 	if(cast(BoolTy)t||cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
 }
 Expression bitNotType(Expression t){
 	if(isFixedIntTy(t)) return t;
-	if(!isNumeric(t)) return null;
+	if(!(isNumeric(t)||isEmpty(t))) return null;
 	if(cast(ℕTy)t) return ℤt(t.isClassical());
 	return t;
 }
 Expression notType(Expression t){
-	if(!t||!cast(BoolTy)t.eval()) return null;
+	if(!t||!(cast(BoolTy)t||isEmpty(t))) return null;
 	return t;
 }
 Expression logicType(Expression t1,Expression t2){
-	if(isEmpty(t2)) return cast(BoolTy)t1;
-	if(!cast(BoolTy)t1||!cast(BoolTy)t2) return null;
+	if(!(cast(BoolTy)t1||isEmpty(t1))||!(cast(BoolTy)t2||isEmpty(t2))) return null;
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
 Expression bitwiseType(Expression t1,Expression t2){
 	auto r=arithmeticType!true(t1,t2);
+	if(isEmpty(r)) return r;
 	if(!isFixedIntTy(r)&&!isSubtype(r,ℤt(false))) // TODO?
 	   return null;
 	return r;
@@ -4303,6 +4310,8 @@ Expression bitAndType(Expression t1,Expression t2){
 	return r;
 }
 Expression cmpType(Expression t1,Expression t2){
+	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
+	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
 		if(!(joinTypes(t1,t2)||isNumeric(t1)||isNumeric(t2)))
 			return null;
@@ -4357,7 +4366,7 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 	propErr(e1,e);
 	if(e.sstate==SemState.error)
 		return e;
-	e.type=determineType(e1.type);
+	e.type=determineType(e1.type?e1.type.eval():null);
 	if(!e.type){
 		context.sc.error(format("incompatible type %s for %s",e1.type,name),e.loc);
 		e.sstate=SemState.error;
@@ -4406,6 +4415,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	if(e.sstate==SemState.error)
 		return e;
 	if((isType(e1)||isQNumeric(e1))&&name=="power"){
+		if(isEmpty(e1)) return bottom;
 		if(!isSubtype(e2.type,ℕt(true))){
 			sc.error(format("vector length should be of type !ℕ, not %s",e2.type), e2.loc);
 			e.sstate=SemState.error;

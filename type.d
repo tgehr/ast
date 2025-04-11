@@ -130,7 +130,11 @@ Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumer
 	auto l=lhs.eval(), r=rhs.eval();
 	auto wl=whichNumeric(l), wr=whichNumeric(r);
 	if(wl==NumericType.none&&wr==NumericType.none) return l.combineTypesImpl(r,meet);
-	if(wl==NumericType.none||wr==NumericType.none) return null;
+	if(wl==NumericType.none||wr==NumericType.none){
+		if(isEmpty(lhs)) return meet?lhs:rhs;
+		if(isEmpty(rhs)) return meet?rhs:lhs;
+		return null;
+	}
 	auto result=getNumeric(meet?min(wl,wr):max(wl,wr),meet?lhs.isClassical()||rhs.isClassical():lhs.isClassical()&&rhs.isClassical());
 	if(!allowQNumeric&&isQNumeric(result)) return null;
 	return result;
