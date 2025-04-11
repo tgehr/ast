@@ -794,7 +794,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.sstate=SemState.error;
 	}
-	ite.type=unit;
+	ite.type=definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
 	return ite;
 }
 
@@ -1218,7 +1218,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	state.fixSplitMergeGraph(sc);
 	we.cond=cond;
 	we.bdy=bdy;
-	we.type=unit;
+	we.type=isTrue(we.cond)?bottom:unit;
 	if(we.sstate!=SemState.error)
 		we.sstate=SemState.completed;
 	if(we.sstate==SemState.completed&&astopt.removeLoops)
@@ -1264,7 +1264,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 	}
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
-	re.type=unit;
+	re.type=isPositive(re.num)&&definitelyReturns(re.bdy)?bottom:unit;
 	if(re.sstate!=SemState.error)
 		re.sstate=SemState.completed;
 	if(re.sstate==SemState.completed&&astopt.removeLoops)
@@ -1275,7 +1275,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 Expression statementSemanticImpl(ObserveExp oe,Scope sc){
 	oe.e=conditionSemantic(oe.e,sc,InType.no);
 	propErr(oe.e,oe);
-	oe.type=unit;
+	oe.type=isFalse(oe.e)?bottom:unit;
 	return oe;
 }
 
@@ -1300,7 +1300,7 @@ Expression statementSemanticImpl(CObserveExp oe,Scope sc){
 Expression statementSemanticImpl(AssertExp ae,Scope sc){
 	ae.e=conditionSemantic(ae.e,sc,InType.no);
 	propErr(ae.e,ae);
-	ae.type=unit;
+	ae.type=isFalse(ae.e)?bottom:unit;
 	return ae;
 }
 
@@ -1355,7 +1355,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce,Scope sc,Annotation restriction_=
 		//writeln("after: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
 		propErr(e,ce);
 	}
-	ce.type=unit;
+	ce.type=definitelyReturns(ce)?bottom:unit;
 	if(ce.sstate!=SemState.error)
 		ce.sstate=SemState.completed;
 	return ce;
@@ -4892,7 +4892,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
-	if(!fd.ret) fd.ret=unit; // TODO: add bottom type
+	if(!fd.ret) fd.ret=bottom;
 	if(!setFtype(fd,true))
 		fd.sstate=SemState.error;
 	foreach(ref n;fd.retNames){
@@ -5019,7 +5019,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 		return ret;
 	}
-	ret.type=unit;
+	ret.type=.bottom;
 	Expression[] returns;
 	if(auto tpl=cast(TupleExp)ret.e) returns=tpl.e;
 	else returns = [ret.e];
@@ -5160,6 +5160,7 @@ bool isPositive(Expression e){
 }
 
 bool definitelyReturns(Expression e){
+	if(e.type) return isEmpty(e.type);
 	if(auto ret=cast(ReturnExp)e)
 		return true;
 	if(auto ae=cast(AssertExp)e)
