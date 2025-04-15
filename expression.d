@@ -2214,6 +2214,7 @@ auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T.
 	// TODO: implement without cast cascade
 	if(auto ce=cast(CallExp)s) return f(ce,forward!args);
 	static if(unanalyzed) if(auto idx=cast(IndexExp)s) return f(idx,forward!args);
+	if(auto tae=cast(TypeAnnotationExp)s) return f(tae,forward!args);
 	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
 	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
 	static if(language==silq){

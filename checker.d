@@ -152,10 +152,13 @@ class Checker {
 			if(auto te = cast(ast_ty.VariadicTy) e) {
 				return this.implTy(te);
 			}
-			if(cast(ast_ty.TypeTy) e || cast(ast_ty.QTypeTy) e || cast(ast_ty.CTypeTy) e || cast(ast_ty.UTypeTy) e) {
+			if(cast(ast_ty.TypeTy) e || cast(ast_ty.QTypeTy) e || cast(ast_ty.CTypeTy) e || cast(ast_ty.UTypeTy) e || cast(ast_ty.ETypeTy) e) {
 				return;
 			}
 			if(cast(ast_ty.BoolTy) e || cast(ast_ty.ℕTy) e || cast(ast_ty.ℤTy) e || cast(ast_ty.ℚTy) e || cast(ast_ty.ℝTy) e || cast(ast_ty.ℂTy) e) {
+				return;
+			}
+			if(cast(ast_ty.BottomTy) e) {
 				return;
 			}
 			assert(0, format("TODO: type %s: << %s >>", typeid(e).name, e));
@@ -529,7 +532,7 @@ class Checker {
 	bool implStmt(ast_exp.Expression e) {
 		expectConst(e, "expression statement");
 		visExpr(e);
-		return false;
+		return ast_ty.isEmpty(e.type);
 	}
 
 	void implTy(ast_ty.VectorTy e) {
@@ -772,6 +775,11 @@ class Checker {
 
 		assert(ifFalse.nscope.mergedVars.length == 0);
 		ifFalse.checkEmpty();
+	}
+
+	void implExpr(ast_exp.AssertExp e) {
+		expectConst(e.e, "assert condition");
+		visExpr(e.e);
 	}
 
 	void implExpr(ast_exp.TupleExp e) {

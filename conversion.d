@@ -31,7 +31,7 @@ class ExplosionConversion: Conversion{
 		super(type,type);
 	}
 	this(Expression from,Expression to)in{
-		assert(from&&isEmpty(from.type));
+		assert(isEmpty(from));
 	}do{
 		super(from,to);
 	}

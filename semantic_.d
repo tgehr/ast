@@ -753,6 +753,12 @@ Expression statementSemanticImpl(IndexExp idx,Scope sc){
 	}else return statementSemanticImplDefault(idx,sc);
 }
 
+Expression statementSemanticImpl(TypeAnnotationExp tae,Scope sc){
+	tae.e=statementSemantic(tae.e,sc);
+	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	return expressionSemantic(tae,context.nestConst);
+}
+
 CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc){
 	foreach(ref s;ce.s){
 		s=statementSemantic(s,sc);
