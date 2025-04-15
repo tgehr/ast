@@ -1104,7 +1104,7 @@ class CapturingScope(T): NestedScope{
 					if(recapture.sstate==SemState.error)
 						id.sstate=SemState.error;
 				}
-			}else if(decl.sealedLinearCaptures&&meaning.isLinear()&&meaning !in decl.captures){
+			}else if(decl.sealed&&meaning.isLinear()&&meaning !in decl.captures){
 				if(id.sstate!=SemState.error){
 					origin.error("capturing additional quantum variables after a recursive call is not supported yet", id.loc);
 					id.sstate=SemState.error;

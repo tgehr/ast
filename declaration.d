@@ -159,9 +159,9 @@ class FunctionDef: Declaration{
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
 	Declaration[] capturedDecls;
-	bool sealedLinearCaptures=false;
+	bool sealed=false;
 	void addCapture(Declaration meaning,Identifier id)in{
-		assert(!!meaning||!sealedLinearCaptures||!meaning.isLinear);
+		assert(!!meaning||!sealed||!meaning.isLinear);
 	}do{
 		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
@@ -176,7 +176,7 @@ class FunctionDef: Declaration{
 	string[] attributes;
 
 	void seal(){
-		sealedLinearCaptures=true;
+		sealed=true;
 	}
 
 	@property Scope realScope(){

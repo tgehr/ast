@@ -4838,7 +4838,7 @@ bool setFtype(FunctionDef fd,bool force){
 		if(fd.ftype) return true;
 	}
 	if(fd.isNested){
-		if(!force&&!fd.sealedLinearCaptures) return false;
+		if(!force&&!fd.sealed) return false;
 		fd.seal();
 	}
 	bool[] pc;
