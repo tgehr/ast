@@ -119,6 +119,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		declareParameters(fd,fd.isSquare,fd.params,fsc); // parameter variables
 		if(fd.rret){
 			fd.ret=typeSemantic(fd.rret,fsc);
+			propErr(fd.rret,fd);
 			setFtype(fd,false);
 			if(!fd.body_){
 				switch(fd.getName){
@@ -138,8 +139,9 @@ Expression presemantic(Declaration expr,Scope sc){
 			fd.sstate=SemState.error;
 			return expr;
 		}
-		assert(!fd.body_.blscope_);
-		fd.body_.blscope_=new BlockScope(fsc);
+		if(fd.sstate==SemState.completed)
+			return fd;
+		if(!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(fsc);
 		if(auto dsc=isInDataScope(sc)){
 			auto id=new Identifier(dsc.decl.name.name);
 			id.loc=dsc.decl.loc;
@@ -4631,10 +4633,17 @@ Expression expressionSemanticImpl(WildcardExp we,ExpSemContext context){
 
 Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 	auto sc=context.sc;
-	Scope.ConstBlockContext constSave;
-	if(!context.constResult) constSave=sc.saveConst();
-	scope(exit) sc.resetConst(constSave);
-	ty.e=expressionSemantic(ty.e,context.nestConst); // TODO: technically const not needed
+	auto toPush=sc.toPush;
+	sc.toPush=[];
+	auto scopeState=sc.getStateSnapshot(true);
+	scope(exit){
+		sc.toPush=[];
+		sc.restoreStateSnapshot(scopeState);
+		sc.toPush=toPush;
+	}
+	auto ncontext=context;
+	ncontext.inType=InType.no;
+	ty.e=expressionSemantic(ty.e,ncontext.nestConsumed);
 	propErr(ty.e,ty);
 	if(ty.sstate==SemState.error)
 		return ty;
