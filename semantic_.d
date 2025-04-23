@@ -5079,10 +5079,15 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 Expression typeSemantic(Expression expr,Scope sc,bool allowQNumeric=false)in{assert(!!expr&&!!sc);}do{
 	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return unwrap(expr);
 	if(auto lit=cast(LiteralExp)expr){
-		lit.type=utypeTy;
 		if(lit.lit.type==Tok!"0"){
-			if(lit.lit.str=="1")
+			if(lit.lit.str=="0"){
+				lit.type=etypeTy;
+				return bottom;
+			}
+			if(lit.lit.str=="1"){
+				lit.type=utypeTy;
 				return unit;
+			}
 		}
 	}
 	if(auto at=cast(IndexExp)expr){
