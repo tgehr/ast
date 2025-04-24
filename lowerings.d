@@ -110,6 +110,12 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 }
 
 Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression[] args,Location loc,ExpSemContext context){
+	foreach(arg;args){
+		if(isEmpty(arg.type)){
+			arg.constLookup=context.constResult;
+			return arg;
+		}
+	}
 	auto sc=context.sc;
 	Expression arg;
 	if(args.length!=1){
