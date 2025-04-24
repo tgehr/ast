@@ -5036,6 +5036,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			fd.fscope_.insert(p);
 		}
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
+			if(!capture.isLinear) continue;
 			if(!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
 				while(capture.scope_.isNestedIn(oldfscope_)){
 					capture=capture.splitFrom;
