@@ -4919,6 +4919,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
 				return false;
 			}else{
+				if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
 				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
 					fd.functionDefsToUpdate~=cfd;
@@ -4936,7 +4937,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
 	if(fd.sstate==SemState.started) return fd; // only one active semantic analysis at one time
 	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
-	auto ftypeBefore=fd.ftype;
+	auto ftypeBefore=fd.ftype; // TODO: also have to track captures
 	fd.inferringReturnType|=!fd.ret;
 	if(fd.inferringReturnType){
 		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
