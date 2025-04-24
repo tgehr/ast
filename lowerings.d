@@ -109,10 +109,14 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 	assert(0);
 }
 
-Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression[] args,Location loc,ExpSemContext context){
+Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression original,Expression[] args,Location loc,ExpSemContext context){
 	foreach(arg;args){
 		if(isEmpty(arg.type)){
 			arg.constLookup=context.constResult;
+			if(original&&original.type){
+				arg=new TypeAnnotationExp(arg,original.type,TypeAnnotationType.annotation);
+				arg=expressionSemantic(arg,context);
+			}
 			return arg;
 		}
 	}
@@ -147,32 +151,32 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression[] a
 }
 
 private alias OB=OperatorBehavior;
-Expression getLowering(UMinusExp ume,ExpSemContext context){ return makeFunctionCall(OB.default_,"__uminus",[ume.e],ume.loc,context); }
-Expression getLowering(UNotExp une,ExpSemContext context){ return makeFunctionCall(OB.default_,"__not",[une.e],une.loc,context); }
-Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFunctionCall(OB.default_,"__bitnot",[ubne.e],ubne.loc,context); }
+Expression getLowering(UMinusExp ume,ExpSemContext context){ return makeFunctionCall(OB.default_,"__uminus",ume,[ume.e],ume.loc,context); }
+Expression getLowering(UNotExp une,ExpSemContext context){ return makeFunctionCall(OB.default_,"__not",une,[une.e],une.loc,context); }
+Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFunctionCall(OB.default_,"__bitnot",ubne,[ubne.e],ubne.loc,context); }
 
-Expression getLowering(AddExp ae,ExpSemContext context){ return makeFunctionCall(OB.default_,"__add",[ae.e1,ae.e2],ae.loc,context); }
-Expression getLowering(SubExp se,ExpSemContext context){ return makeFunctionCall(OB.default_,"__sub",[se.e1,se.e2],se.loc,context); }
-Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCall(OB.nsub,"__nsub",[nse.e1,nse.e2],nse.loc,context); }
+Expression getLowering(AddExp ae,ExpSemContext context){ return makeFunctionCall(OB.default_,"__add",ae,[ae.e1,ae.e2],ae.loc,context); }
+Expression getLowering(SubExp se,ExpSemContext context){ return makeFunctionCall(OB.default_,"__sub",se,[se.e1,se.e2],se.loc,context); }
+Expression getLowering(NSubExp nse,ExpSemContext context){ return makeFunctionCall(OB.nsub,"__nsub",nse,[nse.e1,nse.e2],nse.loc,context); }
 
-Expression getLowering(MulExp me,ExpSemContext context){ return makeFunctionCall(OB.mul,"__mul",[me.e1,me.e2],me.loc,context); }
-Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__div",[de.e1,de.e2],de.loc,context); }
-Expression getLowering(IDivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__idiv",[de.e1,de.e2],de.loc,context); }
-Expression getLowering(ModExp de,ExpSemContext context){ return makeFunctionCall(OB.mod,"__mod",[de.e1,de.e2],de.loc,context); }
-Expression getLowering(PowExp pe,ExpSemContext context){ return makeFunctionCall(OB.pow,"__pow",[pe.e1,pe.e2],pe.loc,context); }
+Expression getLowering(MulExp me,ExpSemContext context){ return makeFunctionCall(OB.mul,"__mul",me,[me.e1,me.e2],me.loc,context); }
+Expression getLowering(DivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__div",de,[de.e1,de.e2],de.loc,context); }
+Expression getLowering(IDivExp de,ExpSemContext context){ return makeFunctionCall(OB.div,"__idiv",de,[de.e1,de.e2],de.loc,context); }
+Expression getLowering(ModExp de,ExpSemContext context){ return makeFunctionCall(OB.mod,"__mod",de,[de.e1,de.e2],de.loc,context); }
+Expression getLowering(PowExp pe,ExpSemContext context){ return makeFunctionCall(OB.pow,"__pow",pe,[pe.e1,pe.e2],pe.loc,context); }
 
-Expression getLowering(CatExp ce,ExpSemContext context){ return makeFunctionCall(OB.cat,"__cat",[ce.e1,ce.e2],ce.loc,context); }
+Expression getLowering(CatExp ce,ExpSemContext context){ return makeFunctionCall(OB.cat,"__cat",ce,[ce.e1,ce.e2],ce.loc,context); }
 
-Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",[lt.e1,lt.e2],lt.loc,context); }
-Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",[le.e1,le.e2],le.loc,context); }
-Expression getLowering(GtExp gt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__gt",[gt.e1,gt.e2],gt.loc,context); }
-Expression getLowering(GeExp ge,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__ge",[ge.e1,ge.e2],ge.loc,context); }
-Expression getLowering(EqExp eq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__eq",[eq.e1,eq.e2],eq.loc,context); }
-Expression getLowering(NeqExp neq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__neq",[neq.e1,neq.e2],neq.loc,context); }
+Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",lt,[lt.e1,lt.e2],lt.loc,context); }
+Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",le,[le.e1,le.e2],le.loc,context); }
+Expression getLowering(GtExp gt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__gt",gt,[gt.e1,gt.e2],gt.loc,context); }
+Expression getLowering(GeExp ge,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__ge",ge,[ge.e1,ge.e2],ge.loc,context); }
+Expression getLowering(EqExp eq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__eq",eq,[eq.e1,eq.e2],eq.loc,context); }
+Expression getLowering(NeqExp neq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__neq",neq,[neq.e1,neq.e2],neq.loc,context); }
 
-Expression getLowering(BitOrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__orb",[oe.e1,oe.e2],oe.loc,context); }
-Expression getLowering(BitXorExp xe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__xorb",[xe.e1,xe.e2],xe.loc,context); }
-Expression getLowering(BitAndExp ae,ExpSemContext context){ return makeFunctionCall(OB.andb,"__andb",[ae.e1,ae.e2],ae.loc,context); }
+Expression getLowering(BitOrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__orb",oe,[oe.e1,oe.e2],oe.loc,context); }
+Expression getLowering(BitXorExp xe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__xorb",xe,[xe.e1,xe.e2],xe.loc,context); }
+Expression getLowering(BitAndExp ae,ExpSemContext context){ return makeFunctionCall(OB.andb,"__andb",ae,[ae.e1,ae.e2],ae.loc,context); }
 
 
 private CompoundExp toCompound(Expression e){
@@ -226,7 +230,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			else static if(op==Tok!"⊕←") enum name="__xorb_assign", ob=OB.mul;
 			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
 			else static assert(0);
-			auto fc=makeFunctionCall(ob,name,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));
+			auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));
 			auto id2=new Identifier(id1.name);
 			auto de=new DefineExp(id2,fc);
 			assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
