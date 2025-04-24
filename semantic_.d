@@ -5054,7 +5054,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		prepareFunctionDef(fd,fd.scope_);
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
-	if(fd.sstate!=SemState.error&&fd.ftype!=ftypeBefore){
+	if(fd.sstate!=SemState.error&&fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)){
 		if(fd.sstate!=SemState.completed) resetFunction(fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
 		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
@@ -5168,13 +5168,18 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(fd.ret){
 		assert(!!ret.e.type);
 		if(!isSubtype(ret.e.type,fd.ret)){
+			bool ok=false;
 			if(fd.inferringReturnType){
 				if(fd.sealed) fd.unseal();
-				fd.ret=joinTypes(fd.ret,ret.e.type);
-				fd.ftype=null;
-				fd.retNames=[];
-				setFtype(fd,false);
-			}else{
+				if(auto nret=joinTypes(fd.ret,ret.e.type)){
+					fd.ret=nret;
+					fd.ftype=null;
+					fd.retNames=[];
+					setFtype(fd,false);
+					ok=true;
+				}
+			}
+			if(!ok){
 				sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
 				ret.sstate=SemState.error;
 				return ret;
