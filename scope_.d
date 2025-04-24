@@ -297,6 +297,11 @@ abstract class Scope{
 			return r;
 		return null;
 	}
+	final void unconsume(Declaration decl){
+		auto dId=decl.getId;
+		toPush=toPush.filter!(id=>id!=dId).array;
+		insert(decl);
+	}
 	Declaration[] consumedOuter;
 	Declaration[] splitVars;
 	final void splitVar(Declaration splitFrom,Declaration splitInto){
@@ -688,8 +693,8 @@ abstract class Scope{
 					dependencies.dependencies.remove(k);
 			}
 		}
-		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_));
-		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_));
+		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
+		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
 		return errors;
 	}
 
@@ -1107,10 +1112,11 @@ class CapturingScope(T): NestedScope{
 						id.sstate=SemState.error;
 				}
 			}else if(decl.sealed&&meaning.isLinear()&&meaning !in decl.captures){
-				if(id.sstate!=SemState.error){
+				/+if(id.sstate!=SemState.error){
 					origin.error("capturing additional quantum variables after a recursive call is not supported yet", id.loc);
 					id.sstate=SemState.error;
-				}
+				}+/
+				decl.unseal();
 			}
 		}
 		if(!type) return null;
@@ -1146,13 +1152,18 @@ class CapturingScope(T): NestedScope{
 			static if(is(T==FunctionDef)){
 				auto fd=decl;
 				if(fd&&fd.context&&fd.context.vtype==contextTy(true)){
-					if(fd.ftype){
+					if(fd.ftype&&fd.ftypeFinal){
 						assert(fd.ftype.isClassical_);
 						if(id.sstate!=SemState.error){
 							origin.error("cannot capture quantum variable in classical function", id.loc);
 							id.sstate=SemState.error;
 						}
-					}else fd.context.vtype=contextTy(false);
+					}else{
+						if(fd.sealed) fd.unseal();
+						fd.context.vtype=contextTy(false);
+						import ast.semantic_:setFtype;
+						setFtype(fd,false);
+					}
 				}
 			}
 		}

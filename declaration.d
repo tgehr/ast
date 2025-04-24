@@ -178,6 +178,19 @@ class FunctionDef: Declaration{
 	void seal(){
 		sealed=true;
 	}
+	bool inferringReturnType;
+	bool ftypeFinal=false;
+	FunctionDef[] functionDefsToUpdate=[];
+	//Parameter[] origParams;
+	Expression origRret=null;
+	CompoundExp origBody_=null;
+	bool unsealed=false; // need to redo analysis of dependent declarations
+	void unseal()in{
+		assert(sealed);
+	}do{
+		sealed=false;
+		unsealed=true;
+	}
 
 	@property Scope realScope(){
 		if(!scope_) return null;

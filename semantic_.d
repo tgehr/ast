@@ -64,6 +64,10 @@ AggregateTy isDataTyId(Expression e){
 }
 
 void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if(is(P==Parameter)||is(P==DatParameter)){
+	/+static if(is(P==Parameter)){
+		if(auto fd=cast(FunctionDef)parent)
+			if(!fd.origParams) fd.origParams=params.map!(x=>x.copy).array; // TODO: can we avoid this?
+	}+/
 	foreach(ref p;params){
 		if(!p.dtype){ // !ℝ is the default parameter type for () and * is the default parameter type for []
 			if(isSquare){
@@ -96,6 +100,77 @@ VarDecl addVar(string name,Expression ty,Location loc,Scope sc){
 	assert(!!var && var.sstate==SemState.completed);
 	return var;
 }
+
+void prepareFunctionDef(FunctionDef fd,Scope sc){
+	auto fsc=fd.fscope_;
+	if(!fsc) return;
+	if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(fsc);
+	if(auto dsc=isInDataScope(sc)){
+		auto id=new Identifier(dsc.decl.name.name);
+		id.loc=dsc.decl.loc;
+		id.meaning=dsc.decl;
+		id=cast(Identifier)expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
+		assert(!!id);
+		Expression ctxty=id;
+		if(dsc.decl.hasParams){
+			auto args=dsc.decl.params.map!((p){
+				auto id=new Identifier(p.name.name);
+				id.meaning=p;
+				auto r=expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
+				assert(r.sstate==SemState.completed);
+				return r;
+			}).array;
+			assert(dsc.decl.isTuple||args.length==1);
+			ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),expSemContext(sc,ConstResult.no,InType.yes));
+			ctxty.sstate=SemState.completed;
+			assert(isType(ctxty));
+		}
+		if(dsc.decl.name.name==fd.name.name){
+			assert(!fd.body_||!!fd.body_.blscope_);
+			fd.isConstructor=true;
+			if(fd.sstate!=SemState.error)
+				dsc.decl.constructor=fd;
+			if(fd.rret){
+				sc.error("constructor cannot have return type annotation",fd.loc);
+				fd.sstate=SemState.error;
+			}else{
+				assert(dsc.decl.dtype);
+				fd.ret=ctxty;
+			}
+			if(dsc.decl.context){
+				fd.context=dsc.decl.context; // TODO: ok?
+				static if(language==psi) fd.contextVal=fd.context;
+			}
+			if(!fd.body_) return;
+			auto thisVar=addVar("this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
+			fd.thisVar=thisVar;
+			if(!fd.body_.s.length||!cast(ReturnExp)fd.body_.s[$-1]){
+				auto thisid=new Identifier(thisVar.getName);
+				thisid.loc=fd.loc;
+				thisid.scope_=fd.body_.blscope_;
+				thisid.meaning=thisVar;
+				thisid.type=ctxty;
+				thisid.sstate=SemState.completed;
+				auto rete=new ReturnExp(thisid);
+				rete.loc=thisid.loc;
+				rete.sstate=SemState.completed;
+				fd.body_.s~=rete;
+			}
+		}else{
+			static if(language==psi) fd.contextVal=addVar("this",unit,fd.loc,fsc);
+			assert(!fd.body_||!!fd.body_.blscope_);
+			assert(fsc.allowMerge);
+			fsc.allowMerge=false; // TODO: this is hacky
+			if(fd.body_) fd.context=addVar("this",ctxty,fd.loc,fd.body_.blscope_);
+			fsc.allowMerge=true;
+		}
+		assert(dsc.decl.dtype);
+	}else if(auto nsc=cast(NestedScope)sc){
+		fd.context=addVar("`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
+		static if(language==psi) fd.contextVal=fd.context;
+	}
+}
+
 Expression presemantic(Declaration expr,Scope sc){
 	bool success=true; // dummy
 	if(!expr.scope_) makeDeclaration(expr,success,sc);
@@ -141,70 +216,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		}
 		if(fd.sstate==SemState.completed)
 			return fd;
-		if(!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(fsc);
-		if(auto dsc=isInDataScope(sc)){
-			auto id=new Identifier(dsc.decl.name.name);
-			id.loc=dsc.decl.loc;
-			id.meaning=dsc.decl;
-			id=cast(Identifier)expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
-			assert(!!id);
-			Expression ctxty=id;
-			if(dsc.decl.hasParams){
-				auto args=dsc.decl.params.map!((p){
-					auto id=new Identifier(p.name.name);
-					id.meaning=p;
-					auto r=expressionSemantic(id,expSemContext(sc,ConstResult.no,InType.yes));
-					assert(r.sstate==SemState.completed);
-					return r;
-				}).array;
-				assert(dsc.decl.isTuple||args.length==1);
-				ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),expSemContext(sc,ConstResult.no,InType.yes));
-				ctxty.sstate=SemState.completed;
-				assert(isType(ctxty));
-			}
-			if(dsc.decl.name.name==fd.name.name){
-				assert(!!fd.body_.blscope_);
-				auto thisVar=addVar("this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
-				fd.isConstructor=true;
-				if(fd.sstate!=SemState.error)
-					dsc.decl.constructor=fd;
-				if(fd.rret){
-					sc.error("constructor cannot have return type annotation",fd.loc);
-					fd.sstate=SemState.error;
-				}else{
-					assert(dsc.decl.dtype);
-					fd.ret=ctxty;
-				}
-				if(!fd.body_.s.length||!cast(ReturnExp)fd.body_.s[$-1]){
-					auto thisid=new Identifier(thisVar.getName);
-					thisid.loc=fd.loc;
-					thisid.scope_=fd.body_.blscope_;
-					thisid.meaning=thisVar;
-					thisid.type=ctxty;
-					thisid.sstate=SemState.completed;
-					auto rete=new ReturnExp(thisid);
-					rete.loc=thisid.loc;
-					rete.sstate=SemState.completed;
-					fd.body_.s~=rete;
-				}
-				if(dsc.decl.context){
-					fd.context=dsc.decl.context; // TODO: ok?
-					static if(language==psi) fd.contextVal=fd.context;
-				}
-				fd.thisVar=thisVar;
-			}else{
-				static if(language==psi) fd.contextVal=addVar("this",unit,fd.loc,fsc);
-				assert(!!fd.body_.blscope_);
-				assert(fsc.allowMerge);
-				fsc.allowMerge=false; // TODO: this is hacky
-				fd.context=addVar("this",ctxty,fd.loc,fd.body_.blscope_);
-				fsc.allowMerge=true;
-			}
-			assert(dsc.decl.dtype);
-		}else if(auto nsc=cast(NestedScope)sc){
-			fd.context=addVar("`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
-			static if(language==psi) fd.contextVal=fd.context;
-		}
+		prepareFunctionDef(fd,sc);
 	}
 	return expr;
 }
@@ -3628,8 +3640,13 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	le.fd=functionDefSemantic(nfd,sc);
 	assert(!!le.fd);
 	propErr(le.fd,le);
-	if(le.fd.sstate==SemState.completed){
-		le.type=typeForDecl(le.fd);
+	le.type=typeForDecl(le.fd);
+	if(!le.type){
+		sc.error("invalid forward reference",le.loc);
+		le.sstate=SemState.error;
+	}else if(!subscribeToTypeUpdates(le.fd,sc,le.loc))
+		le.sstate=SemState.error;
+	if(le.sstate!=SemState.error){
 		le.sstate=SemState.completed;
 	}
 	if(inType) le.fd.scope_=null;
@@ -3734,6 +3751,11 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	auto sc=context.sc;
 	id.scope_=sc;
 	if(id.sstate==SemState.error) return id;
+	if(id.sstate==SemState.started){
+		sc.error("invalid forward reference",id.loc);
+		id.sstate=SemState.error;
+		return id;
+	}
 	assert(id.sstate!=SemState.started);
 	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
@@ -3788,11 +3810,23 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	propErr(meaning,id);
 	id.type=id.typeFromMeaning;
 	if(!id.type&&id.sstate!=SemState.error){
-		sc.error("invalid forward reference",id.loc);
 		auto fd=cast(FunctionDef)meaning;
-		if(fd&&!fd.rret)
-			sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
-		id.sstate=SemState.error;
+		if(fd){
+			fd.ret=bottom;
+			fd.retNames=[];
+			setFtype(fd,true);
+			id.type=id.typeFromMeaning;
+		}
+		if(!id.type){
+			sc.error("invalid forward reference",id.loc);
+			if(fd&&!fd.rret)
+				sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
+			id.sstate=SemState.error;
+		}
+	}
+	if(id.type){
+		if(!subscribeToTypeUpdates(meaning,sc,id.loc))
+			id.sstate=SemState.error;
 	}
 	if(!isType(id)){
 		if(auto dsc=isInDataScope(meaning.scope_)){
@@ -4799,7 +4833,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 		static if(language==silq){
 			if(!context.constResult) sc.resetConst(constSave);
 			if(expr.sstate!=SemState.error){
-				assert(!!expr.type);
+				assert(!!expr.type,text(expr," ",expr.type));
 				if(auto id=cast(Identifier)expr){
 					auto consumesIdentifier=!id.constLookup&&id.meaning;
 					if(context.inType&&consumesIdentifier){
@@ -4831,7 +4865,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 
 
 bool setFtype(FunctionDef fd,bool force){
-	if(fd.ftype) return true;
+	if(fd.ftype&&fd.ftypeFinal) return true;
 	if(!fd.ret){
 		// TODO: only consider statements
 		if(fd.body_) foreach(e;fd.body_.subexpressions()){
@@ -4848,7 +4882,6 @@ bool setFtype(FunctionDef fd,bool force){
 	}
 	if(fd.isNested){
 		if(!force&&!fd.sealed) return false;
-		fd.seal();
 	}
 	bool[] pc;
 	Id[] pn;
@@ -4865,42 +4898,54 @@ bool setFtype(FunctionDef fd,bool force){
 	assert(fd.isTuple||pty.length==1);
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
 	fd.ftype=productTy(pc,pn,pt,fd.ret,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
-	assert(fd.retNames==[]);
-	if(!fd.retNames) fd.retNames = new string[](fd.numReturns);
-	assert(fd.fscope_||fd.sstate==SemState.error);
+	fd.seal();
+	if(fd.retNames==[]){
+		if(!fd.retNames) fd.retNames = new string[](fd.numReturns);
+		assert(fd.fscope_||fd.sstate==SemState.error);
+	}
 	foreach(callback;fd.ftypeCallbacks)
 		callback(fd.ftype);
 	fd.ftypeCallbacks=[];
 	return true;
 }
 
+bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
+	if(auto fd=cast(FunctionDef)meaning){
+		if(!fd.ftypeFinal){
+			auto cfd=sc.getFunction();
+			if(!cfd){
+				sc.error("invalid forward reference",loc);
+				if(fd&&!fd.rret)
+					sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
+				return false;
+			}else{
+				//imported!"util.io".writeln("adding ",cfd," to ",fd);
+				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
+					fd.functionDefsToUpdate~=cfd;
+				}
+				cfd.unsealed=true;
+			}
+		}
+	}
+	return true;
+}
+
+
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(fd.sstate==SemState.completed||fd.sstate==SemState.error) return fd;
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
+	if(fd.sstate==SemState.started) return fd; // only one active semantic analysis at one time
 	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
+	auto ftypeBefore=fd.ftype;
+	fd.inferringReturnType|=!fd.ret;
+	if(fd.inferringReturnType){
+		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
+	}
+	if(fd.body_&&!fd.origBody_) fd.origBody_=fd.body_.copy();
 	auto fsc=fd.fscope_;
 	assert(!!fsc,text(fd));
 	assert(fsc.allowsLinear());
 	auto bdy=fd.body_?compoundExpSemantic(fd.body_,fsc):null;
-	scope(exit){
-		static if(language==silq) fsc.pushConsumed();
-		if(fd.sstate==SemState.completed){
-			foreach(id;fd.ftype.freeIdentifiers){
-				assert(!!id.meaning,text(id));
-				if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
-				if(id.meaning.scope_.isNestedIn(fsc)){
-					fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
-					fd.sstate=SemState.error;
-				}
-				typeConstBlock(id.meaning,fd,sc);
-			}
-		}
-		if(bdy){
-			if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
-		}else{
-			fsc.forceClose();
-		}
-	}
 	fd.body_=bdy;
 	fd.type=unit;
 	if(bdy){
@@ -4918,26 +4963,110 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
-	if(!fd.ret) fd.ret=bottom;
+	if(!fd.ret){
+		fd.ret=bottom;
+		if(fd.rret) fd.unsealed=true;
+	}
 	if(!setFtype(fd,true))
 		fd.sstate=SemState.error;
-	foreach(ref n;fd.retNames){
-		if(n is null) n="r";
-		else n=n.stripRight('\'');
+	static if(language==silq) fsc.pushConsumed();
+	if(fd.ftype&&fd.sstate!=SemState.error){
+		foreach(id;fd.ftype.freeIdentifiers){
+			assert(!!id.meaning,text(id));
+			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
+			if(id.meaning.scope_.isNestedIn(fsc)){
+				fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
+				fd.sstate=SemState.error;
+			}
+			typeConstBlock(id.meaning,fd,sc);
+		}
 	}
-	void[0][string] vars;
-	foreach(p;fd.params) vars[p.getName]=[];
-	int[string] counts1,counts2;
-	foreach(n;fd.retNames)
-		++counts1[n];
-	foreach(ref n;fd.retNames){
-		if(counts1[n]>1)
-			n~=lowNum(++counts2[n]);
-		while(n in vars) n~="'";
-		vars[n]=[];
+	if(bdy){
+		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
+	}else{
+		fsc.forceClose();
 	}
-	if(fd.sstate!=SemState.error)
-		fd.sstate=SemState.completed;
+	if(!fd.sealed) fd.seal();
+	if(fd.unsealed){
+		fd.sealed=false;
+		fd.unsealed=false;
+		// TODO: redo semantic
+	}else{
+		fd.ftypeFinal=true;
+		fd.inferringReturnType=false;
+	}
+	if(fd.ftypeFinal){
+		foreach(ref n;fd.retNames){
+			if(n is null) n="r";
+			else n=n.stripRight('\'');
+		}
+		void[0][string] vars;
+		foreach(p;fd.params) vars[p.getName]=[];
+		int[string] counts1,counts2;
+		foreach(n;fd.retNames)
+			++counts1[n];
+		foreach(ref n;fd.retNames){
+			if(counts1[n]>1)
+				n~=lowNum(++counts2[n]);
+			while(n in vars) n~="'";
+			vars[n]=[];
+		}
+		if(fd.sstate!=SemState.error)
+			fd.sstate=SemState.completed;
+	}
+	static void resetFunction(FunctionDef fd)in{
+		assert(fd.sstate!=SemState.completed);
+		assert(fd.sstate!=SemState.error);
+	}do{
+		if(fd.sealed) fd.unseal();
+		fd.retNames=[];
+		if(fd.origRret) fd.rret=fd.origRret.copy();
+		assert(!!fd.origBody_);
+		fd.body_=fd.origBody_.copy();
+		auto oldfscope_=fd.fscope_;
+		fd.fscope_=new FunctionScope(fd.scope_,fd);
+		//fd.params=fd.origParams.map!(p=>p.copy).array;
+		fd.sstate=SemState.initial;
+		//declareParameters(fd,fd.isSquare,fd.params,fd.fscope_);
+		foreach(p;fd.params){
+			p.splitInto=[];
+			assert(p.scope_ is oldfscope_);
+			p.scope_=null;
+			fd.fscope_.insert(p);
+		}
+		foreach(capture;fd.capturedDecls){ // undo consumption of captures
+			if(!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
+				while(capture.scope_.isNestedIn(oldfscope_)){
+					capture=capture.splitFrom;
+				}
+				capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
+				assert(!capture.isLinear||capture.scope_ is fd.scope_); // TODO: ok?
+				//imported!"util.io".writeln("INSERTING: ",capture);
+				capture.scope_=null;
+				fd.scope_.unconsume(capture);
+			}
+		}
+		fd.captures=null;
+		fd.capturedDecls=[];
+		fd.context=null;
+		fd.thisVar=null;
+		prepareFunctionDef(fd,fd.scope_);
+	}
+	auto functionDefsToUpdate=fd.functionDefsToUpdate;
+	if(fd.sstate!=SemState.error&&fd.ftype!=ftypeBefore){
+		if(fd.sstate!=SemState.completed) resetFunction(fd);
+		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
+		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
+			assert(!!ufd.scope_);
+			resetFunction(ufd);
+			auto nufd=functionDefSemantic(ufd,ufd.scope_);
+			assert(nufd is ufd);
+		}
+		return functionDefSemantic(fd,sc);
+	}else{
+		// TODO: notify
+		fd.functionDefsToUpdate=[];
+	}
 	return fd;
 }
 
@@ -5036,10 +5165,19 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		return ret;
 	}
 	if(fd.ret){
+		assert(!!ret.e.type);
 		if(!isSubtype(ret.e.type,fd.ret)){
-			sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
-			ret.sstate=SemState.error;
-			return ret;
+			if(fd.inferringReturnType){
+				if(fd.sealed) fd.unseal();
+				fd.ret=joinTypes(fd.ret,ret.e.type);
+				fd.ftype=null;
+				fd.retNames=[];
+				setFtype(fd,false);
+			}else{
+				sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
+				ret.sstate=SemState.error;
+				return ret;
+			}
 		}
 	}else{
 		ret.sstate=SemState.error;
@@ -5158,8 +5296,8 @@ Expression typeForDecl(Declaration decl){
 		return vd.vtype;
 	}
 	if(auto fd=cast(FunctionDef)decl){
-		if(!fd.ftype) setFtype(fd,true);
-		if(!fd.ftype&&fd.scope_&&fd.sstate!=SemState.started) fd=functionDefSemantic(fd,fd.scope_);
+		if(!fd.ftype||!fd.ftypeFinal) setFtype(fd,true);
+		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started) fd=functionDefSemantic(fd,fd.scope_);
 		assert(!!fd);
 		return fd.ftype;
 	}
