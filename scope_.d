@@ -989,10 +989,12 @@ class NestedScope: Scope{
 		}
 		if(type){
 			static if(language==silq){
-				if(odecl.getId in parent.dependencies.dependencies){
-					auto parentDep=parent.dependencies.dependencies[odecl.getId];
-					addDependency(ndecl,parentDep);
-				}
+				if(parent.getFunction() is getFunction()){
+					if(odecl.getId in parent.dependencies.dependencies){
+						auto parentDep=parent.dependencies.dependencies[odecl.getId];
+						addDependency(ndecl,parentDep);
+					}
+				}else addDependency(ndecl,Dependency(true));
 			}
 			if(auto added=addVariable(ndecl,type,true))
 				result=added;
