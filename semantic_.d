@@ -64,10 +64,6 @@ AggregateTy isDataTyId(Expression e){
 }
 
 void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if(is(P==Parameter)||is(P==DatParameter)){
-	/+static if(is(P==Parameter)){
-		if(auto fd=cast(FunctionDef)parent)
-			if(!fd.origParams) fd.origParams=params.map!(x=>x.copy).array; // TODO: can we avoid this?
-	}+/
 	foreach(ref p;params){
 		if(!p.dtype){ // !ℝ is the default parameter type for () and * is the default parameter type for []
 			if(isSquare){
@@ -4923,6 +4919,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
 				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
 					fd.functionDefsToUpdate~=cfd;
+					cfd.numUpdatesPending+=1;
 				}
 				cfd.unsealed=true;
 			}
@@ -4989,10 +4986,9 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fsc.forceClose();
 	}
 	if(!fd.sealed) fd.seal();
-	if(fd.unsealed){
+	if(fd.unsealed||fd.numUpdatesPending!=0){
 		fd.sealed=false;
 		fd.unsealed=false;
-		// TODO: redo semantic
 	}else{
 		fd.ftypeFinal=true;
 		fd.inferringReturnType=false;
@@ -5027,9 +5023,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.body_=fd.origBody_.copy();
 		auto oldfscope_=fd.fscope_;
 		fd.fscope_=new FunctionScope(fd.scope_,fd);
-		//fd.params=fd.origParams.map!(p=>p.copy).array;
 		fd.sstate=SemState.initial;
-		//declareParameters(fd,fd.isSquare,fd.params,fd.fscope_);
 		foreach(p;fd.params){
 			p.splitInto=[];
 			assert(p.scope_ is oldfscope_);
@@ -5077,6 +5071,17 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
 	auto numCapturesAfter=fd.capturedDecls.filter!(d=>d.isLinear).walkLength;
+	static void finalize(FunctionDef fd){
+		if(fd.ftypeFinal&&fd.sstate!=SemState.error)
+			fd.sstate=SemState.completed;
+	}
+	static void notify(FunctionDef fd,FunctionDef ufd){
+		assert(fd.numUpdatesPending>0);
+		if(--fd.numUpdatesPending==0){
+			fd.ftypeFinal=true;
+			finalize(fd);
+		}
+	}
 	if(fd.sstate!=SemState.error&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)||numCapturesAfter!=numCapturesBefore)){
 		if(fd.sstate!=SemState.completed) resetFunction(fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
@@ -5090,9 +5095,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 		return functionDefSemantic(fd,sc);
 	}else{
-		// TODO: notify
+		foreach(ofd;fd.functionDefsToUpdate)
+			notify(ofd,fd);
 		fd.functionDefsToUpdate=[];
 	}
+	finalize(fd);
 	return fd;
 }
 

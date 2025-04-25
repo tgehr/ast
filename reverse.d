@@ -867,7 +867,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		writeln(result);
 	}
 	result=functionDefSemantic(result,sc);
-	enforce(result.sstate!=SemState.error,text("semantic errors while reversing function"));
+	enforce(result.sstate==SemState.completed,text("semantic errors while reversing function"));
 	if(equal(fd.ftype.isConst,only(true,false))) result.reversed=fd; // TODO: fix condition
 	fd.reversed=result;
 	return result;

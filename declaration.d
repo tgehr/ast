@@ -181,7 +181,7 @@ class FunctionDef: Declaration{
 	bool inferringReturnType;
 	bool ftypeFinal=false;
 	FunctionDef[] functionDefsToUpdate=[];
-	//Parameter[] origParams;
+	size_t numUpdatesPending=0;
 	Expression origRret=null;
 	CompoundExp origBody_=null;
 	bool unsealed=false; // need to redo analysis of dependent declarations

@@ -600,6 +600,7 @@ class Checker {
 	}
 
 	void getFunc(ast_decl.FunctionDef fd, bool isBorrow, ast_exp.Expression causeExpr) {
+		assert(fd.sstate == ast_exp.SemState.completed);
 		foreach(decl; fd.capturedDecls) {
 			auto ty = typeForDecl(decl);
 			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty) || imported!"astopt".allowUnsafeCaptureConst && decl.isConst();
@@ -1012,6 +1013,7 @@ class Checker {
 }
 
 void checkFunction(ast_decl.FunctionDef fd) {
+	assert(fd.sstate == ast_exp.SemState.completed);
 	auto sc = new Checker(fd.fscope_, null);
 
 	sc.strictScope = false;
