@@ -586,7 +586,7 @@ abstract class Scope{
 		static if(language==silq){
 			toPush=[];
 		}
-		assert(scopes==activeNestedScopes);
+		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
 		activeNestedScopes=[];
 		allowMerge=false;
 		static if(language==silq){
