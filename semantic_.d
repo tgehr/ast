@@ -4937,7 +4937,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
 	if(fd.sstate==SemState.started) return fd; // only one active semantic analysis at one time
 	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
-	auto ftypeBefore=fd.ftype; // TODO: also have to track captures
+	auto ftypeBefore=fd.ftype;
+	auto numCapturesBefore=fd.capturedDecls.filter!(d=>d.isLinear).walkLength; // TODO: really needed?
 	fd.inferringReturnType|=!fd.ret;
 	if(fd.inferringReturnType){
 		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
@@ -5035,30 +5036,53 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			p.scope_=null;
 			fd.fscope_.insert(p);
 		}
+		Declaration[] ncapturedDecls;
+		Identifier[][Declaration] ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
 			if(!capture.isLinear) continue;
 			if(!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
-				while(capture.scope_.isNestedIn(oldfscope_)){
-					capture=capture.splitFrom;
+				auto ocapture=capture;
+				while(ocapture.scope_.isNestedIn(oldfscope_)){
+					ocapture=ocapture.splitFrom;
 				}
-				capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
-				assert(!capture.isLinear||capture.scope_ is fd.scope_); // TODO: ok?
+				ocapture.splitInto=ocapture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
+				assert(!ocapture.isLinear||ocapture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
-				capture.scope_=null;
-				fd.scope_.unconsume(capture);
+				ocapture.scope_=null;
+				fd.scope_.unconsume(ocapture);
+				auto loc=fd.captures[capture][0].loc;
+				auto id=new Identifier(capture.getId);
+				id.loc=loc;
+				auto nid=expressionSemantic(id,ExpSemContext(fd.fscope_,ConstResult.no,InType.no));
+				assert(nid is id);
+				propErr(id,fd);
+				if(id.meaning){
+					id.meaning.scope_=null;
+					fd.fscope_.unconsume(id.meaning);
+					assert(id.meaning.isSplitFrom(ocapture));
+					ncapturedDecls~=id.meaning;
+					ncaptures[id.meaning]~=id;
+				}
 			}
 		}
-		fd.captures=null;
-		fd.capturedDecls=[];
+		fd.captures=ncaptures;
+		fd.capturedDecls=ncapturedDecls;
 		fd.context=null;
 		fd.thisVar=null;
 		prepareFunctionDef(fd,fd.scope_);
+		if(fd.captures.length){
+			assert(!!fd.context);
+			fd.context.vtype=contextTy(false);
+		}
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
-	if(fd.sstate!=SemState.error&&fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)){
+	auto numCapturesAfter=fd.capturedDecls.filter!(d=>d.isLinear).walkLength;
+	if(fd.sstate!=SemState.error&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)||numCapturesAfter!=numCapturesBefore)){
 		if(fd.sstate!=SemState.completed) resetFunction(fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
 		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
+			if(ufd.sstate==SemState.error) continue;
+			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd);
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
