@@ -4932,6 +4932,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(fd.sstate==SemState.completed||fd.sstate==SemState.error) return fd;
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
+	if(fd.sstate==SemState.completed||fd.body_&&fd.body_.sstate==SemState.completed) return fd;
 	if(fd.sstate==SemState.started) return fd; // only one active semantic analysis at one time
 	if(fd.sstate!=SemState.error) fd.sstate=SemState.started;
 	auto ftypeBefore=fd.ftype;
