@@ -5108,7 +5108,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.sstate==SemState.completed)
 				ufd=ufd.scope_.getFunction();
-			if(!ufd) continue; // TODO: needed?
+			if(!ufd||!ufd.inferringReturnType) continue; // TODO: needed?
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
