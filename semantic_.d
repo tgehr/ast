@@ -3640,6 +3640,8 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	le.fd=functionDefSemantic(nfd,sc);
 	assert(!!le.fd);
 	propErr(le.fd,le);
+	if(le.fd.sstate==SemState.passive)
+		le.fd.sstate=SemState.completed; // TODO: ok?
 	le.type=typeForDecl(le.fd);
 	if(!le.type){
 		sc.error("invalid forward reference",le.loc);
