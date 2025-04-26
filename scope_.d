@@ -1161,8 +1161,9 @@ class CapturingScope(T): NestedScope{
 					}else{
 						if(fd.sealed) fd.unseal();
 						fd.context.vtype=contextTy(false);
+						fd.ftype=null;
 						import ast.semantic_:setFtype;
-						setFtype(fd,false);
+						setFtype(fd,true);
 					}
 				}
 			}
