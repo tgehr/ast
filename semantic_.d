@@ -4919,11 +4919,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
 				return false;
 			}else{
-				//if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
-				while(auto nfd=cfd.scope_.getFunction()){
-					cfd=nfd;
-					if(cfd is fd) break;
-				}
+				if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
 				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
 					fd.functionDefsToUpdate~=cfd;
@@ -5104,12 +5100,15 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 	}
 	if(fd.sstate!=SemState.error&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)||numCapturesAfter!=numCapturesBefore)){
-		//imported!"util.io".writeln("NOTIFYING: ",fd," ",fd.ftype," ⇒ ",ftypeBefore," ",numCapturesBefore," ⇒ ",numCapturesAfter);
+		//imported!"util.io".writeln("NOTIFYING: ",fd," ",ftypeBefore," ⇒ ",fd.ftype," ",numCapturesBefore," ⇒ ",numCapturesAfter);
 		if(fd.sstate!=SemState.completed) resetFunction(fd,fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
 		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
 			if(ufd.sstate==SemState.error) continue;
 			if(ufd is fd) continue;
+			while(ufd&&ufd.sstate==SemState.completed)
+				ufd=ufd.scope_.getFunction();
+			if(!ufd) continue; // TODO: needed?
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
@@ -5226,9 +5225,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 					fd.ftype=null;
 					fd.retNames=[];
 					setFtype(fd,true);
-					assert(fd.ftype);
-					if(fd.sealed) fd.unseal();
-					ok=true;
+					if(fd.ftype){
+						if(fd.sealed) fd.unseal();
+						ok=true;
+					}
 				}
 			}
 			if(!ok){
