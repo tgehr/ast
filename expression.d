@@ -11,6 +11,7 @@ import astopt;
 enum SemState{
 	initial,
 	started,
+	passive,
 	completed,
 	error,
 }

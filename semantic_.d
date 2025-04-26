@@ -191,7 +191,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		if(fd.rret){
 			fd.ret=typeSemantic(fd.rret,fsc);
 			propErr(fd.rret,fd);
-			setFtype(fd,false);
+			setFtype(fd,true);
 			if(!fd.body_){
 				switch(fd.getName){
 					case "invQImpl":
@@ -368,6 +368,10 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		if(auto decl=cast(Declaration)expr) expr=presemantic(decl,sc);
 		expr=toplevelSemantic(expr,sc);
 		success&=expr.sstate==SemState.completed;
+	}
+	foreach(expr;exprs){ // TODO: ok?
+		if(expr.sstate==SemState.passive)
+			expr.sstate=SemState.completed;
 	}
 	if(!sc.allowsLinear()){
 		foreach(ref expr;exprs){
@@ -4915,7 +4919,11 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
 				return false;
 			}else{
-				if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
+				//if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
+				while(auto nfd=cfd.scope_.getFunction()){
+					cfd=nfd;
+					if(cfd is fd) break;
+				}
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
 				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
 					fd.functionDefsToUpdate~=cfd;
@@ -4938,6 +4946,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	auto ftypeBefore=fd.ftype;
 	auto numCapturesBefore=fd.capturedDecls.filter!(d=>d.isLinear).walkLength; // TODO: really needed?
 	fd.inferringReturnType|=!fd.ret;
+	//imported!"util.io".writeln("STARTING: ",fd," ",fd.ret," ",fd.rret," ",fd.inferringReturnType);
 	if(fd.inferringReturnType){
 		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
 	}
@@ -5013,7 +5022,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.sstate!=SemState.error)
 			fd.sstate=SemState.completed;
 	}
-	static void resetFunction(FunctionDef fd)in{
+	static void resetFunction(FunctionDef fd,FunctionDef cause)in{
+		//imported!"util.io".writeln("RESETTING: ",fd," FROM ",cause);
 		assert(fd.sstate!=SemState.completed);
 		assert(fd.sstate!=SemState.error);
 	}do{
@@ -5072,33 +5082,41 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
 	auto numCapturesAfter=fd.capturedDecls.filter!(d=>d.isLinear).walkLength;
-	static void finalize(FunctionDef fd){
-		if(fd.ftypeFinal&&fd.sstate!=SemState.error)
+	static void resetFunctionDefsToUpdate()(FunctionDef fd){
+		foreach(ofd;fd.functionDefsToUpdate)
+			notify(ofd,fd);
+		fd.functionDefsToUpdate=[];
+	}
+	static void finalize()(FunctionDef fd){
+		if(fd.sstate==SemState.error) return;
+		//imported!"util.io".writeln("FINALIZING: ",fd," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
+		if(fd.ftypeFinal){
 			fd.sstate=SemState.completed;
+			resetFunctionDefsToUpdate(fd);
+		}else fd.sstate=SemState.passive;
 	}
 	static void notify(FunctionDef fd,FunctionDef ufd){
 		assert(fd.numUpdatesPending>0);
 		if(--fd.numUpdatesPending==0){
 			fd.ftypeFinal=true;
+			fd.inferringReturnType=false;
 			finalize(fd);
 		}
 	}
 	if(fd.sstate!=SemState.error&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate)||numCapturesAfter!=numCapturesBefore)){
-		if(fd.sstate!=SemState.completed) resetFunction(fd);
+		//imported!"util.io".writeln("NOTIFYING: ",fd," ",fd.ftype," ⇒ ",ftypeBefore," ",numCapturesBefore," ⇒ ",numCapturesAfter);
+		if(fd.sstate!=SemState.completed) resetFunction(fd,fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
 		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
 			if(ufd.sstate==SemState.error) continue;
+			if(ufd is fd) continue;
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
-			resetFunction(ufd);
+			resetFunction(ufd,fd);
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
 			assert(nufd is ufd);
 		}
 		return functionDefSemantic(fd,sc);
-	}else{
-		foreach(ofd;fd.functionDefsToUpdate)
-			notify(ofd,fd);
-		fd.functionDefsToUpdate=[];
 	}
 	finalize(fd);
 	return fd;
@@ -5203,12 +5221,13 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		if(!isSubtype(ret.e.type,fd.ret)){
 			bool ok=false;
 			if(fd.inferringReturnType){
-				if(fd.sealed) fd.unseal();
 				if(auto nret=joinTypes(fd.ret,ret.e.type)){
 					fd.ret=nret;
 					fd.ftype=null;
 					fd.retNames=[];
-					setFtype(fd,false);
+					setFtype(fd,true);
+					assert(fd.ftype);
+					if(fd.sealed) fd.unseal();
 					ok=true;
 				}
 			}
