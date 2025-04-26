@@ -789,7 +789,7 @@ class IndexExp: Expression{ //e[a...]
 		auto na=a.eval();
 		Expression[] exprs;
 		if(auto tpl=cast(TupleExp)ne) exprs=tpl.e;
-		if(auto arr=cast(ArrayExp)ne) exprs=arr.e;
+		if(auto vec=cast(VectorExp)ne) exprs=vec.e;
 		if(exprs.length){
 			if(auto v=na.asIntegerConstant()){
 				auto idx=v.get();
@@ -843,10 +843,10 @@ class SliceExp: Expression{
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.eval(), nl=l.eval(), nr=r.eval();
 		Expression[] exprs;
-		auto tpl=cast(TupleExp)ne, arr=cast(ArrayExp)ne;
+		auto tpl=cast(TupleExp)ne, vec=cast(VectorExp)ne;
 		if(tpl) exprs=tpl.e;
-		if(arr) exprs=arr.e;
-		if(tpl||arr){
+		if(vec) exprs=vec.e;
+		if(tpl||vec){
 			if(auto lv=nl.asIntegerConstant()){
 				if(auto rv=nr.asIntegerConstant()){
 					auto lid=lv.get(), rid=rv.get();
@@ -858,8 +858,8 @@ class SliceExp: Expression{
 							res.loc=loc;
 							return res;
 						}
-						if(arr){
-							auto res=new ArrayExp(rexprs);
+						if(vec){
+							auto res=new VectorExp(rexprs);
 							res.loc=loc;
 							return res;
 						}
@@ -1505,9 +1505,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				auto ok1=false,ok2=false;
 				Expression[] es1=[],es2=[];
 				if(auto tpl1=cast(TupleExp)e1){ ok1=true; es1=tpl1.e; }
-				if(auto arr1=cast(ArrayExp)e1){ ok1=true; es1=arr1.e; }
+				if(auto vec1=cast(VectorExp)e1){ ok1=true; es1=vec1.e; }
 				if(auto tpl2=cast(TupleExp)e2){ ok2=true; es2=tpl2.e; }
-				if(auto arr2=cast(ArrayExp)e2){ ok2=true; es2=arr2.e; }
+				if(auto vec2=cast(VectorExp)e2){ ok2=true; es2=vec2.e; }
 				if(ok1&&ok2) return make(new TupleExp(es1~es2));
 			}
 			static if(op==Tok!"+"||op==Tok!"-"||op==Tok!"sub"){
@@ -1984,20 +1984,20 @@ class LambdaExp: Expression{
 	override Annotation getAnnotation(){ return pure_; }
 }
 
-class ArrayExp: Expression{
+class VectorExp: Expression{
 	Expression[] e;
 	this(Expression[] e){
 		this.e=e;
 	}
-	override ArrayExp copyImpl(CopyArgs args){
-		return new ArrayExp(e.map!(e=>e.copy(args)).array);
+	override VectorExp copyImpl(CopyArgs args){
+		return new VectorExp(e.map!(e=>e.copy(args)).array);
 	}
 	override string toString(){ return _brk("["~e.map!(to!string).join(",")~"]");}
 	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
 	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 
 	override bool opEquals(Object o){
-		auto r=cast(ArrayExp)o;
+		auto r=cast(VectorExp)o;
 		return r&&e==r.e;
 	}
 
@@ -2009,16 +2009,16 @@ class ArrayExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override ArrayExp substituteImpl(Expression[Id] subst){
+	override VectorExp substituteImpl(Expression[Id] subst){
 		auto ne=e.dup;
 		foreach(ref x;ne) x=x.substitute(subst);
 		if(ne==e) return this;
-		auto r=new ArrayExp(ne);
+		auto r=new VectorExp(ne);
 		r.loc=loc;
 		return r;
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
-		auto ae=cast(ArrayExp)rhs;
+		auto ae=cast(VectorExp)rhs;
 		if(!ae||e.length!=ae.e.length) return false;
 		return all!(i=>e[i].unify(ae.e[i],subst,meet))(iota(e.length));
 	}
@@ -2026,7 +2026,7 @@ class ArrayExp: Expression{
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.map!(e=>e.eval()).array;
 		if(ne == e && ntype==type) return this;
-		return new ArrayExp(ne);
+		return new VectorExp(ne);
 	}
 }
 
@@ -2266,7 +2266,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	if(auto idx=cast(IndexExp)e) return f(idx,forward!args);
 	if(auto sl=cast(SliceExp)e) return f(sl,forward!args);
 	if(auto tpl=cast(TupleExp)e) return f(tpl,forward!args);
-	if(auto arr=cast(ArrayExp)e) return f(arr,forward!args);
+	if(auto vec=cast(VectorExp)e) return f(vec,forward!args);
 
 	if(auto tae=cast(TypeAnnotationExp)e) return f(tae,forward!args);
 

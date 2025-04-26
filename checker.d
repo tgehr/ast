@@ -789,7 +789,7 @@ class Checker {
 		}
 	}
 
-	void implExpr(ast_exp.ArrayExp e) {
+	void implExpr(ast_exp.VectorExp e) {
 		foreach(ei; e.e) {
 			visExpr(ei);
 		}

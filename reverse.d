@@ -37,7 +37,7 @@ enum LowerDefineFlags{
 Expression knownLength(Expression e,bool ignoreType){ // TODO: version that returns bool
 	Expression res;
 	scope(exit) if(res) res.loc=e.loc;
-	if(auto arr=cast(ArrayExp)e) return res=constantExp(arr.e.length);
+	if(auto vec=cast(VectorExp)e) return res=constantExp(vec.e.length);
 	if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
 	if(auto cat=cast(CatExp)e){
 		auto a=cat.e1.knownLength(ignoreType);
@@ -323,12 +323,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res=new DefineExp(lhs,rhs);
 	}
 	Expression forget(){ return res=new ForgetExp(rhs,lhs); }
-	if(auto arr=cast(ArrayExp)olhs){
-		auto newLhs=new TupleExp(arr.copy().e);
+	if(auto vec=cast(VectorExp)olhs){
+		auto newLhs=new TupleExp(vec.copy().e);
 		newLhs.loc=olhs.loc;
 		auto newRhs=orhs;
 		if(auto aty=cast(ArrayTy)orhs.type){
-			auto tty=tupleTy(aty.next.repeat(arr.e.length).array);
+			auto tty=tupleTy(aty.next.repeat(vec.e.length).array); // TODO: use vectorTy?
 			newRhs=new TypeAnnotationExp(orhs,tty,TypeAnnotationType.coercion);
 			newRhs.type=tty;
 			newRhs.loc=orhs.loc;

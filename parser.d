@@ -483,7 +483,7 @@ struct Parser{
 				}else{
 					assert(ttype==Tok!"[");
 					nextToken();
-					res=New!ArrayExp(parseArgumentList(Tok!"]")[0]);
+					res=New!VectorExp(parseArgumentList(Tok!"]")[0]);
 					expect(Tok!"]");
 					return res;
 				}

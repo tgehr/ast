@@ -1420,9 +1420,9 @@ class VariadicTy: Type{
 			assert(isType(et)||isQNumeric(et));
 		}
 	}do{
-		if(auto ae=cast(ArrayExp)next){
-			this.next=new TupleExp(ae.e);
-			this.next.type=tupleTy(ae.e.map!(e=>e.type).array);
+		if(auto ve=cast(VectorExp)next){
+			this.next=new TupleExp(ve.e);
+			this.next.type=tupleTy(ve.e.map!(e=>e.type).array);
 			this.next.sstate=SemState.completed;
 		}else this.next=next;
 		this.type=typeOfVariadicTy(next);
@@ -1465,9 +1465,9 @@ class VariadicTy: Type{
 		auto ne=next.eval();
 		bool hasElements=false;
 		Expression[] elements;
-		if(auto arr=cast(ArrayExp)ne){
+		if(auto vec=cast(VectorExp)ne){
 			hasElements=true;
-			elements=arr.e;
+			elements=vec.e;
 		}
 		if(auto tpl=cast(TupleExp)ne){
 			hasElements=true;

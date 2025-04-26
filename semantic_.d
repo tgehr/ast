@@ -1710,40 +1710,51 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 	}
 	return tpl;
 }
-Expression defineLhsSemanticImpl(ArrayExp arr,DefineLhsContext context){
+Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	// TODO: do we even keep this?
 	auto at=cast(ArrayTy)context.type;
-	// auto vt=cast(VectorTy)context.type; // TODO
-	auto tt=!at&&context.type?context.type.isTupleTy:null;
-	foreach(i,ref e;arr.e){
-		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:null;
+	auto vt=cast(VectorTy)context.type;
+	auto tt=!at&&!vt&&context.type?context.type.isTupleTy:null;
+	foreach(i,ref e;vec.e){
+		auto ttype=at?at.next:vt?vt.next:tt&&i<tt.length?tt[i]:null;
 		e=defineLhsSemantic!isPresemantic(e,context);
-		propErr(e,arr);
+		propErr(e,vec);
 	}
 	static if(!isPresemantic){
 		auto sc=context.sc;
 		if(context.type){
 			if(tt){
-				if(arr.e.length!=tt.length){
-					sc.error(text("inconsistent number of array entries for definition: ",arr.e.length," vs. ",tt.length),arr.loc);
-					arr.sstate=SemState.error;
+				if(vec.e.length!=tt.length){
+					sc.error(text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",tt.length),vec.loc);
+					vec.sstate=SemState.error;
+				}
+			}else if(vt){
+				// TODO: technically this violates type refinement
+				auto lit=LiteralExp.makeInteger(vec.e.length);
+				Expression neq=new NeqExp(lit,vt.num);
+				neq=expressionSemantic(neq,context.expSem.nestConst);
+				assert(neq.sstate==SemState.completed);
+				if(neq.eval()==LiteralExp.makeBoolean(1)){
+					sc.error(text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc);
+					vec.sstate=SemState.error;
 				}
 			}else if(!at){
-				sc.error(format("cannot unpack type %s as an array",context.type),arr.loc);
-				arr.sstate=SemState.error;
+				sc.error(format("cannot unpack type %s as a vector",context.type),vec.loc);
+				vec.sstate=SemState.error;
 			}
-		}else arr.sstate=SemState.error; // TODO: ok?
-		if(arr.e.all!(e=>!!e.type)){
+		}else vec.sstate=SemState.error; // TODO: ok?
+		if(vec.e.all!(e=>!!e.type)){
 			Expression t=null;
-			foreach(e;arr.e){
+			foreach(e;vec.e){
 				t=joinTypes(t,e.type);
 				if(!t) break;
 			}
-			if(t) arr.type=arrayTy(t);
-			else arr.type=tupleTy(arr.e.map!(e=>e.type).array);
+			if(t) vec.type=vectorTy(t,LiteralExp.makeInteger(vec.e.length));
+			else if(vec.e.length) vec.type=tupleTy(vec.e.map!(e=>e.type).array);
+			else vec.type=vectorTy(bottom,LiteralExp.makeInteger(0));
 		}
 	}
-	return arr;
+	return vec;
 }
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
@@ -4172,33 +4183,35 @@ Expression expressionSemanticImpl(TupleExp tpl,ExpSemContext context){
 	return tpl;
 }
 
-Expression expressionSemanticImpl(ArrayExp arr,ExpSemContext context){
+Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 	auto sc=context.sc;
 	Expression t; bool tok=true;
-	foreach(i,ref exp;arr.e){
+	foreach(i,ref exp;vec.e){
 		exp=expressionSemantic(exp,context);
-		propErr(exp,arr);
+		propErr(exp,vec);
 		auto nt = joinTypes(t, exp.type);
 		if(!nt&&tok){
 			Expression texp;
-			foreach(j,oexp;arr.e[0..i]){
+			foreach(j,oexp;vec.e[0..i]){
 				if(!joinTypes(oexp, exp)){
 					texp=oexp;
 					break;
 				}
 			}
 			if(texp){
-				sc.error(format("incompatible types %s and %s in array literal",t,exp.type),texp.loc);
+				sc.error(format("incompatible types %s and %s in vector literal",t,exp.type),texp.loc);
 				sc.note("incompatible entry",exp.loc);
 			}
-			arr.sstate=SemState.error;
+			vec.sstate=SemState.error;
 			tok=false;
 		}else t=nt;
 	}
-	if(arr.e.length && t){
-		if(arr.e[0].type) arr.type=arrayTy(t);
-	}else arr.type=arrayTy(ℝ(true)); // TODO: type inference?
-	return arr;
+	if(vec.e.length && t){
+		if(vec.e[0].type) vec.type=vectorTy(t,LiteralExp.makeInteger(vec.e.length));
+	}else{
+		vec.type=vectorTy(bottom,LiteralExp.makeInteger(0));
+	}
+	return vec;
 }
 
 Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
@@ -4214,14 +4227,6 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	else tae.sstate=SemState.error;
 	if(tae.sstate==SemState.error)
 		return tae;
-	if(auto arr=cast(ArrayExp)tae.e){
-		if(!arr.e.length){
-			if(auto aty=cast(ArrayTy)tae.type)
-				arr.type=aty;
-			if(auto vty=cast(VectorTy)tae.type)
-				arr.type=arrayTy(vty.next);
-		}
-	}
 	if(auto ce=cast(CallExp)tae.e){
 		if(auto id=cast(Identifier)ce.e){
 			if(id.name=="sampleFrom"||id.name=="readCSV"&&tae.type==arrayTy(arrayTy(ℝ(true))))
