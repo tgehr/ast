@@ -733,7 +733,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	auto asc=cd.ascope_;
 	if(!asc) asc=new AggregateScope(sc);
 	++asc.getDatDecl().semanticDepth;
-	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&!asc.close()) cd.sstate=SemState.error; // TODO: fix
+	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&asc.close()) cd.sstate=SemState.error; // TODO: fix
 	cd.ascope_=asc;
 	bool success=true; // dummy
 	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc);
@@ -1577,7 +1577,10 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 		// TODO: create variable and insert it here?
 		if(context.type){
 			id.type=context.type;
-		}else id.sstate=SemState.error;
+		}else{
+			context.sc.error(format("cannot determine type for '%s",id),id.loc);
+			id.sstate=SemState.error;
+		}
 	}
 	return id;
 }
@@ -1903,14 +1906,14 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 				size_t mid;
 				bool ok=false;
 				if(!ok&&l1){
-					if(auto x=l1.asIntegerConstant()){
+					if(auto x=l1.eval().asIntegerConstant()){
 						ok=true;
 						try mid=min(x.get.to!size_t,tt.length);
 						catch(Exception) ok=false;
 					}
 				}
 				if(!ok&&l2){
-					if(auto x=l2.asIntegerConstant()){
+					if(auto x=l2.eval().asIntegerConstant()){
 						ok=true;
 						try mid=tt.length-min(x.get.to!size_t,tt.length);
 						catch(Exception) ok=false;
@@ -3659,7 +3662,7 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 	switch(le.lit.type){
 		case Tok!"0",Tok!".0":
 			if(!le.type)
-				le.type=/+util.among(le.lit.str,"0","1")?Bool(true):+/le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
+				le.type=util.among(le.lit.str,"0","1")?Bool(true):le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
 			return le;
 		case Tok!"``":
 			le.type=stringTy(true);
@@ -4054,7 +4057,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		idx.type=check(Bool(idxInt.isClassical), idx.a, idx.a.type, idx.a.loc);
 	}else if(auto tt=cast(TupleTy)idx.e.type){
 		Expression checkTpl(Expression index){
-			if(auto lit=index.asIntegerConstant()){
+			if(auto lit=index.eval().asIntegerConstant()){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
 					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
@@ -4132,7 +4135,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		sl.type=at;
 	}else if(auto vt=cast(VectorTy)sl.e.type){
 		auto se=new NSubExp(sl.r,sl.l);
-		se.type=ℕt(true);
+		se.type=nSubType(sl.r.type,sl.l.type);
 		se.sstate=SemState.completed;
 		sl.type=vectorTy(vt.next,se.eval());
 	}else if(auto tt=sl.e.type.isTupleTy){

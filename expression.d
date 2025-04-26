@@ -303,7 +303,7 @@ class LiteralExp: Expression{
 		tok.type=Tok!"0";
 		tok.str=text(i);
 		auto r=new LiteralExp(tok);
-		r.type=i>=0?ℕt(true):ℤt(true);
+		r.type=i>=0?(i<=1?Bool(true):ℕt(true)):ℤt(true);
 		r.sstate=SemState.completed;
 		return r;
 	}

@@ -606,10 +606,6 @@ bool annotateLiteral(Expression expr, Expression type){
 			return true;
 		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 			return true;
-		if(lit&&cast(BoolTy)type&&lit.lit.type==Tok!"0"){
-			auto val=ℤ(lit.lit.str);
-			if(val==0||val==1) return true;
-		}
 		return false;
 	}
 	if(!check()) return false;
