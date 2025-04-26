@@ -124,8 +124,8 @@ bool isSubtype(Expression lhs,Expression rhs){
 }
 
 Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
-	if(!lhs) return rhs;
-	if(!rhs) return lhs;
+	if(!lhs||isEmpty(lhs)) return rhs;
+	if(!rhs||isEmpty(rhs)) return lhs;
 	if(lhs == rhs) return lhs;
 	auto l=lhs.eval(), r=rhs.eval();
 	auto wl=whichNumeric(l), wr=whichNumeric(r);

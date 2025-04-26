@@ -3333,6 +3333,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}
 				if(auto codft=cast(ProductTy)nft.cod){
+					if(codft.isSquare) return false;
 					if(matchArg(codft)) return true;
 					propErr(ce.arg,ce);
 					if(ce.arg.sstate==SemState.error) return true;
@@ -3356,6 +3357,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}
 			}
+			if(ft.isSquare!=ce.isSquare) return false;
 			if(matchArg(ft)) return true;
 			propErr(ce.arg,ce);
 			if(ce.arg.sstate==SemState.error) return true;
@@ -3396,6 +3398,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}
 		if(ce.sstate!=SemState.error&&!tryCall()){
 			auto aty=ce.arg.type;
+			if(isEmpty(aty)) return ce.arg;
+			if(ft.isSquare&&!ce.isSquare&&isEmpty(ft.cod)){
+				auto lit=LiteralExp.makeBoolean(false);
+				lit.loc=ce.e.loc;
+				auto garg=new AssertExp(lit); // TODO: detect and error out if this makes it past type checking?
+				garg.loc=ce.e.loc;
+				ce.e=new CallExp(ce.e,garg,true,false);
+				return callSemantic(ce,context);
+			}
+			if(!aty) aty=ce.arg;
 			if(ce.isSquare!=ft.isSquare)
 				sc.error(text("function of type ",ft," cannot be called with arguments ",ce.isSquare?"[":"",aty,ce.isSquare?"]":""),ce.loc);
 			else sc.error(format("expected argument types %s, but %s was provided",ft.dom,aty),ce.loc);
@@ -3470,6 +3482,23 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				default: assert(0,text("TODO: ",id.name));
 			}
 		}else assert(0);
+	}else if(isType(fun.type)&&isEmpty(fun.type)){
+		// TODO: treat as const those arguments that are used again
+		if(!isPresemantic){
+			static if(isRhs){
+				ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+			}else{
+				auto ncontext=context.nest(ConstResult.no,bottom);
+				ce.arg=defineLhsSemantic!isPresemantic(ce.arg,ncontext);
+			}
+			propErr(ce.arg,ce);
+			//imported!"util.io".writeln(ce.arg," ",ce.arg.type);
+			auto nfunTy=new BinaryExp!(Tok!"→")(ce.arg.type,bottom,Annotation.qfree,false);
+			nfunTy.loc=ce.e.loc;
+			auto nfun=new TypeAnnotationExp(ce.e,nfunTy,TypeAnnotationType.annotation);
+			ce.e=nfun;
+			return callSemantic(ce,context);
+		}
 	}else{
 		sc.error(format("cannot call expression of type %s",fun.type),ce.loc);
 		ce.sstate=SemState.error;
@@ -3518,7 +3547,7 @@ Expression conditionSemantic(bool allowQuantum=false)(Expression e,Scope sc,InTy
 	e=expressionSemantic(e,expSemContext(sc,ConstResult.yes,inType));
 	static if(language==silq) sc.pushConsumed();
 	auto ty=e.sstate==SemState.completed&&e.type?e.type.eval():null;
-	if(e.sstate==SemState.completed && (allowQuantum?!cast(BoolTy)ty:ty!=Bool(true))){
+	if(e.sstate==SemState.completed && !isSubtype(ty,Bool(!allowQuantum))){
 		static if(language==silq){
 			static if(allowQuantum) sc.error(format("type of condition should be !𝔹 or 𝔹, not %s",e.type),e.loc);
 			else sc.error(format("type of condition should be !𝔹, not %s",e.type),e.loc);
@@ -3921,7 +3950,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq)
 	if(auto cid=getIdFromIndex(idx)) if(cid.meaning){
 		auto crepls=sc.componentReplacements(cid.meaning);
-		foreach(i,ref crepl;crepls){
+		foreach(i,crepl;crepls){
+			static assert(is(typeof(crepl):T*,T));
 			if(crepl.write&&!crepl.read&&guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
 				auto rid=getIdFromIndex(crepl.write);
 				assert(rid && rid.meaning);
@@ -4033,6 +4063,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			return null;
 		}
 		idx.type=checkTpl(idx.a);
+	}else if(isEmpty(idx.e.type)){
+		return idx.e;
 	}else{
 		sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
 		if(isType(idx.e)||isQNumeric(idx.e)){
@@ -4120,6 +4152,8 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		if(sl.sstate!=SemState.error){
 			sl.type=tt[cast(size_t)lc..cast(size_t)rc];
 		}
+	}else if(isEmpty(sl.e.type)){
+		return sl.e;
 	}else{
 		sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
 		sl.sstate=SemState.error;
@@ -4574,6 +4608,15 @@ Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
 }
 
 Expression concatType(Expression t1,Expression t2){
+	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
+	if(isEmpty(t1)){
+		if(cast(ArrayTy)t2) return t2;
+		return bottom;
+	}
+	if(isEmpty(t2)){
+		if(cast(ArrayTy)t1) return t1;
+		return bottom;
+	}
 	auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
 	if(vt1&&vt2){
 		if(auto netype=joinTypes(vt1.next,vt2.next)){
@@ -4868,6 +4911,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype&&fd.ftypeFinal) return true;
+	bool temporary=false;
 	if(!fd.ret){
 		// TODO: only consider statements
 		if(fd.body_) foreach(e;fd.body_.subexpressions()){
@@ -4879,12 +4923,13 @@ bool setFtype(FunctionDef fd,bool force){
 				break;
 			}
 		}
-		if(!fd.ret) return false;
-		if(fd.ftype) return true;
+		if(!fd.ret&&!(force&&!fd.sealed&&fd.inferringReturnType))
+			return false;
+		if(fd.ftype&&fd.ftypeFinal)
+			return true;
 	}
-	if(fd.isNested){
-		if(!force&&!fd.sealed) return false;
-	}
+	if(fd.isNested&&!force&&!fd.sealed)
+		return false;
 	bool[] pc;
 	Id[] pn;
 	Expression[] pty;
@@ -4899,8 +4944,9 @@ bool setFtype(FunctionDef fd,bool force){
 	}
 	assert(fd.isTuple||pty.length==1);
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
-	fd.ftype=productTy(pc,pn,pt,fd.ret,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
+	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
+	if(!fd.ret) fd.unseal();
 	if(fd.retNames==[]){
 		if(!fd.retNames) fd.retNames = new string[](fd.numReturns);
 		assert(fd.fscope_||fd.sstate==SemState.error);
@@ -5025,6 +5071,15 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		assert(fd.sstate!=SemState.completed);
 		assert(fd.sstate!=SemState.error);
 	}do{
+		auto crepls=fd.scope_.allComponentReplacements();
+		foreach(i,crepl;crepls){ // reset component replacements
+			static assert(is(typeof(crepl):T*,T));
+			if(!crepl.read) continue;
+			if(auto id=getIdFromIndex(crepl.read)){
+				if(id.scope_&&id.scope_.isNestedIn(fd.fscope_))
+					crepl.read=null;
+			}
+		}
 		if(fd.sealed) fd.unseal();
 		fd.retNames=[];
 		if(fd.origRret) fd.rret=fd.origRret.copy();
