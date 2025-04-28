@@ -4020,8 +4020,12 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
 		if(isBasicIndexType(indexTy)){
 			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
-				sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
-				idx.sstate=SemState.error;
+				if(auto qty=next.getQuantum()){
+					return qty;
+				}else{
+					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
+					idx.sstate=SemState.error;
+				}
 			}
 			return next;
 		}
