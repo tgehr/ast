@@ -1619,6 +1619,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		if(auto idx=cast(IndexExp)next){
 			if(auto r=analyzeAggregate(idx,context.nestConst(null))){
 				e.e=r;
+				propErr(e.e,e);
 				return e;
 			}
 		}
@@ -1627,10 +1628,20 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		return null;
 	}
 	if(auto r=analyzeAggregate(idx,context)) return r;
+	auto sc=context.sc;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
 		e.a=expressionSemantic(e.a,context.expSem.nestConst);
-		propErr(e.e,e);
+		propErr(e.a,e);
+		if(e.a.type&&!isBasicIndexType(e.a.type)){
+			sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
+			idx.sstate=SemState.error;
+		}
+		if(!e.a.isLifted(sc)){
+			sc.error("index for component replacement must be 'lifted'",e.a.loc);
+			sc.pushConsumed();
+			idx.sstate=SemState.error;
+		}
 	}
 	analyzeIndex(idx);
 	if(idx.byRef){
@@ -1643,7 +1654,6 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		}
 		return result;
 	}
-	auto sc=context.sc;
 	if(idx.e.type&&idx.e.type.isClassical()){
 		sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
 		idx.sstate=SemState.error;
@@ -1655,16 +1665,13 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			assert(id.sstate==SemState.error);
 			return true; // TODO: ok?
 		}
-		if(!e.a.isLifted(sc)||e.a.type&&!e.a.type.isClassical()){ // TODO: quantum index replacement
-			sc.error("index for component replacement must be 'lifted' and classical",e.a.loc);
-			return false;
-		}
-		if(e.a.type&&!isBasicIndexType(e.a.type)){
-			sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
-			return false;
-		}
 		if(auto idx2=cast(IndexExp)unwrap(e.e)) return checkReplaceable(idx2);
-		return true;
+		static if(isPresemantic){
+			context.sc.error("not supported at this location",unwrap(e.e).loc);
+			unwrap(e.e).sstate=SemState.error;
+			e.e.sstate=SemState.error;
+		}else assert(e.e.sstate==SemState.error);
+		return false;
 	}
 	if(!checkReplaceable(idx)){
 		idx.sstate=SemState.error;
@@ -2480,7 +2487,7 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 
 	auto crepls=sc.localComponentReplacements();
 	scope(exit) sc.resetLocalComponentReplacements();
-	auto indicesToReplace=crepls.map!(x=>x.write).array;
+	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 	ArrayConsumer consumer;
 	foreach(ref theIndex;indicesToReplace)
@@ -2629,28 +2636,33 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	sc.resetConst(constSave);
 	if(ae.sstate==SemState.error)
 		return ae;
-	void checkLhs(Expression lhs){
+	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
 			if(!checkAssignable(id.meaning,ae.loc,sc))
 				ae.sstate=SemState.error;
 		}else if(auto tpl=cast(TupleExp)lhs){
+			if(indexed){
+				sc.error("cannot index into tuple expression in left-hand side of assignment",lhs.loc);
+				ae.sstate=SemState.error;
+				return;
+			}
 			foreach(exp;tpl.e)
-				checkLhs(exp);
+				checkLhs(exp,indexed);
 		}else if(auto idx=cast(IndexExp)lhs){
-			checkLhs(idx.e);
+			checkLhs(idx.e,true);
 		}else if(auto fe=cast(FieldExp)lhs){
 			if(isBuiltIn(fe))
 				goto LbadAssgnmLhs;
-			checkLhs(fe.e);
+			checkLhs(fe.e,true);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
-			checkLhs(tae.e);
+			checkLhs(tae.e,indexed);
 		}else{
 		LbadAssgnmLhs:
 			sc.error(format("cannot assign to %s",lhs),ae.e1.loc);
 			ae.sstate=SemState.error;
 		}
 	}
-	checkLhs(ae.e1);
+	checkLhs(ae.e1,false);
 	sc.resetConst(lhsConst);
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	sc.resetConst(constSave);
