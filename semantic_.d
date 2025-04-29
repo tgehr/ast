@@ -4116,8 +4116,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			}
 			Expression next=bottom;
 			foreach(i;0..tt.types.length) next=joinTypes(next,tt.types[i]);
-			if(next) return check(next,idx.a,idx.a.type,idx.a.loc);
-			if(isEmpty(idx.a.type)) return bottom;
+			if(next) return check(next,index,index.type,index.loc);
+			if(isEmpty(index.type)) return bottom;
 			sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
 			idx.sstate=SemState.error;
 			return null;
