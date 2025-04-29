@@ -48,7 +48,7 @@ string readBuiltin(string[] paths)(int index){
 	}
 }
 
-Scope getPreludeScope(ErrorHandler err, Location loc){
+Scope getPreludeScope(ErrorHandler err){
 	import ast.semantic_: semantic;
 	if(preludeScope) return preludeScope;
 	preludeScope = new TopScope(err);
@@ -56,10 +56,8 @@ Scope getPreludeScope(ErrorHandler err, Location loc){
 	int nerr = err.nerrors;
 	auto exprs = parseSource(preludeSrc, err);
 	exprs = semantic(exprs, preludeScope);
-	if(nerr != err.nerrors) {
-		if(loc.line) preludeScope.error("failed to import prelude", loc);
-		else preludeScope.message("failed to import prelude");
-	}
+	// failure to import prelude is non-recoverable.
+	assert(nerr == err.nerrors);
 	return preludeScope;
 }
 
@@ -90,7 +88,7 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 	if(auto r=parseFile(getActualPath(path),err,exprs,loc))
 		return r;
 	sc=new TopScope(err);
-	sc.import_(getPreludeScope(err, loc));
+	sc.import_(getPreludeScope(err));
 	int nerr=err.nerrors;
 	exprs=semantic(exprs,sc);
 	if(nerr!=err.nerrors){
@@ -127,19 +125,16 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 }
 
 static if(language==silq)
-Scope getOperatorScope(ErrorHandler err, Location loc){
+Scope getOperatorScope(ErrorHandler err){
 	import ast.semantic_: semantic;
 	if(operatorScope) return operatorScope;
 	operatorScope = new TopScope(err);
-	operatorScope.import_(getPreludeScope(err, loc));
+	operatorScope.import_(getPreludeScope(err));
 	auto src = new Source(".operators", readBuiltin!([operatorsPath])(0));
 	int nerr = err.nerrors;
 	auto exprs = parseSource(src, err);
 	exprs = semantic(exprs,operatorScope);
-	if(nerr != err.nerrors) {
-		if(loc.line) operatorScope.error("failed to import operators", loc);
-		else operatorScope.message("failed to import operators");
-	}
+	assert(nerr == err.nerrors, "failed to import operators");
 	return operatorScope;
 }
 

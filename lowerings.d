@@ -11,19 +11,18 @@ static if(language==silq):
 
 Identifier getOperatorSymbol(string name,Location loc,Scope isc){
 	import ast.modules: getOperatorScope;
-	auto sc=getOperatorScope(isc.handler, loc);
+	auto sc=getOperatorScope(isc.handler);
 	if(!sc) return null;
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
 	res.meaning=sc.lookup(res,false,false,Lookup.constant);
 	if(!res.meaning){
-		res.sstate=SemState.error;
-	}else{
-		res.type=res.typeFromMeaning;
-		res.constLookup=false;
-		res.sstate=SemState.completed;
+		return null;
 	}
+	res.type=res.typeFromMeaning;
+	res.constLookup=false;
+	res.sstate=SemState.completed;
 	return res;
 }
 

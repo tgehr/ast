@@ -589,7 +589,7 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
-	res.meaning=getPreludeScope(isc.handler, loc).lookup(res,false,false,Lookup.constant);
+	res.meaning=getPreludeScope(isc.handler).lookup(res,false,false,Lookup.constant);
 	if(!res.meaning){
 		res.sstate=SemState.error;
 	}else{
