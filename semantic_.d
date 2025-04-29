@@ -4049,6 +4049,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			if(types.all!(e=>e!is null)) return tupleTy(types);
 			return null;
 		}
+		if(isEmpty(indexTy)) return bottom;
 		sc.error(format("index should be integer, not %s",indexTy),indexLoc);
 		idx.sstate=SemState.error;
 		return null;
@@ -4064,6 +4065,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			if(auto lit=index.eval().asIntegerConstant()){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
+					// TODO: technically this violates monotonicity of type checking w.r.t subtyping
 					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
 					idx.sstate=SemState.error;
 					return null;
@@ -4076,6 +4078,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				if(types.all!(e=>e!is null)) return tupleTy(types);
 				return null;
 			}
+			Expression next=bottom;
+			foreach(i;0..tt.types.length) next=joinTypes(next,tt.types[i]);
+			if(next) return check(next,idx.a,idx.a.type,idx.a.loc);
+			if(isEmpty(idx.a.type)) return bottom;
 			sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
 			idx.sstate=SemState.error;
 			return null;
