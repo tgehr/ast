@@ -1630,17 +1630,26 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	if(auto r=analyzeAggregate(idx,context)) return r;
 	auto sc=context.sc;
 	void analyzeIndex(IndexExp e){
-		if(auto idx=cast(IndexExp)unwrap(e.e)) analyzeIndex(idx);
-		e.a=expressionSemantic(e.a,context.expSem.nestConst);
-		propErr(e.a,e);
-		if(e.a.type&&!isBasicIndexType(e.a.type)){
-			sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
-			idx.sstate=SemState.error;
+		if(auto idx=cast(IndexExp)unwrap(e.e)){
+			analyzeIndex(idx);
+			propErr(idx,e);
 		}
-		if(!e.a.isLifted(sc)){
-			sc.error("index for component replacement must be 'lifted'",e.a.loc);
-			sc.pushConsumed();
-			idx.sstate=SemState.error;
+		auto toPushPrev=sc.toPush;
+		e.a=expressionSemantic(e.a,context.expSem.nestConst);
+		if(e.a.sstate==SemState.error)
+			sc.toPush=toPushPrev; // TODO: this is a bit hacky
+		propErr(e.a,e);
+		propErr(e.a,idx);
+		if(e.a.sstate==SemState.completed){
+			if(e.a.type&&!isBasicIndexType(e.a.type)){
+				sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
+				idx.sstate=SemState.error;
+			}
+			if(!e.a.isLifted(sc)){
+				sc.error("index for component replacement must be 'lifted'",e.a.loc);
+				sc.pushConsumed();
+				idx.sstate=SemState.error;
+			}
 		}
 	}
 	analyzeIndex(idx);
@@ -3986,8 +3995,27 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
 	idx.e=expressionSemantic(idx.e,context.nestConst);
 	propErr(idx.e,idx);
-	bool replaceIndex=false;
-	size_t replaceIndexLoc=size_t.max;
+	if(auto ft=cast(FunTy)idx.e.type){
+		auto ce=new CallExp(idx.e,idx.a,true,false);
+		ce.loc=idx.loc;
+		return callSemantic(ce,context);
+	}
+	if(isType(idx.e)||isQNumeric(idx.e)){
+		if(auto tpl=cast(TupleExp)idx.a){
+			if(tpl.length==0){
+				if(auto tty=typeSemantic(idx,sc,true))
+					return tty;
+			}
+		}
+	}
+	idx.a=expressionSemantic(idx.a,context.nestConst);
+	propErr(idx.a,idx);
+	if(idx.sstate==SemState.error)
+		return idx;
+	static if(language==silq){
+		bool replaceIndex=false;
+		size_t replaceIndexLoc=size_t.max;
+	}
 	static if(language==silq)
 	if(auto cid=getIdFromIndex(idx)) if(cid.meaning){
 		auto crepls=sc.componentReplacements(cid.meaning);
@@ -4025,25 +4053,6 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			}
 		}
 	}
-	if(auto ft=cast(FunTy)idx.e.type){
-		assert(!replaceIndex);
-		auto ce=new CallExp(idx.e,idx.a,true,false);
-		ce.loc=idx.loc;
-		return callSemantic(ce,context);
-	}
-	if(isType(idx.e)||isQNumeric(idx.e)){
-		assert(!replaceIndex);
-		if(auto tpl=cast(TupleExp)idx.a){
-			if(tpl.length==0){
-				if(auto tty=typeSemantic(idx,sc,true))
-					return tty;
-			}
-		}
-	}
-	idx.a=expressionSemantic(idx.a,context.nestConst);
-	propErr(idx.a,idx);
-	if(idx.sstate==SemState.error)
-		return idx;
 	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
 		if(isBasicIndexType(indexTy)){
 			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
