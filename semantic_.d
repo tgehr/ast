@@ -3572,8 +3572,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					case "__show":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
 						auto lit=cast(LiteralExp)ce.arg;
-						if(lit&&lit.lit.type==Tok!"``") sc.message(lit.lit.str);
-						else sc.message(text(ce.arg));
+						if(lit&&lit.lit.type==Tok!"``") sc.message(lit.lit.str,ce.loc);
+						else sc.message(text(ce.arg),ce.loc);
 						ce.type=unit;
 						break;
 					case "__query":

@@ -72,14 +72,15 @@ bool isPreludeSource(Source src){
 	return src is preludeSrc;
 }
 
-int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc=Location.init){
+int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
 	import ast.semantic_: semantic;
 	if(path in modules){
+		// only the main module doesn't have an import location
+		assert(loc.line);
 		auto exprssc=modules[path];
 		exprs=exprssc[0],sc=exprssc[1];
 		if(!sc){
-			if(loc.line) err.error("circular imports not supported",loc);
-			else err.message("error: circular imports not supported");
+			err.error("circular imports not supported",loc);
 			return 1;
 		}
 		return 0;

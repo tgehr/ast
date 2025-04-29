@@ -862,9 +862,9 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}
 	import options;
 	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
-		writeln(fd);
-		writeln("-reverse→");
-		writeln(result);
+		stderr.writeln(fd);
+		stderr.writeln("-reverse→");
+		stderr.writeln(result);
 	}
 	result=functionDefSemantic(result,sc);
 	if(result.sstate==SemState.passive) result.sstate=SemState.completed; // TODO: ok?

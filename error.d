@@ -17,9 +17,8 @@ abstract class ErrorHandler{
 
 	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{nerrors++;}   // in{assert(loc.rep);}body
 	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
-	void note(lazy string note, Location loc)in{assert(loc.rep);}do{};
-
-	void message(string msg){ stderr.writeln(msg); }
+	void note(lazy string note, Location loc)in{assert(loc.rep);}do{}
+	void message(lazy string msg, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
 
 	bool showsEffect(){ return true; }
 
@@ -46,6 +45,9 @@ class SimpleErrorHandler: ErrorHandler{
 		}
 		nerrors++;
 		stderr.writeln(loc.source.name,'(',loc.line,"): warning: ",err);
+	}
+	override void message(lazy string msg, Location loc){
+		stderr.writeln(msg);
 	}
 }
 
@@ -80,18 +82,23 @@ class JSONErrorHandler: ErrorHandler{
 		return diagnosticJS;
 	}
 	override void error(lazy string error, Location loc){
-		if(!loc.line) return;
+		assert(loc.line>=1);
 		nerrors++;
 		result~=makeJS(error,loc,"error",true);
 	}
 	override void warning(lazy string warning, Location loc){
-		if(!loc.line) return;
+		assert(loc.line>=1);
 		nerrors++;
 		result~=makeJS(warning,loc,"warning",true);
 	}
 	override void note(lazy string note, Location loc){
-		if(!loc.line||!result.length) return;
+		assert(result.length>0);
+		assert(loc.line>=1);
 		result[$-1]["relatedInformation"]~=[makeJS(note,loc,"note",false)];
+	}
+	override void message(lazy string message, Location loc){
+		assert(loc.line>=1);
+		result~=[makeJS(message,loc,"message",false)];
 	}
 	override void finalize(){ stderr.writeln(result); }
 }
@@ -109,6 +116,9 @@ class VerboseErrorHandler: ErrorHandler{
 	}
 	override void note(lazy string err, Location loc){
 		impl(err, loc, "note");
+	}
+	override void message(lazy string err, Location loc){
+		impl(err, loc, "message");
 	}
 	private void impl(lazy string err, Location loc, string severity){
 		if(loc.line == 0||!loc.rep.length){ // just here for robustness

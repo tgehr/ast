@@ -427,7 +427,7 @@ abstract class Scope{
 
 	void error(lazy string err, Location loc){handler.error(err,loc);}
 	void note(lazy string err, Location loc){handler.note(err,loc);}
-	void message(lazy string msg){handler.message(msg);}
+	void message(lazy string msg, Location loc){handler.message(msg,loc);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
 		bool errors=false;
