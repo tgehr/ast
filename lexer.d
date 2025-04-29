@@ -3,6 +3,7 @@
 module ast.lexer;
 import astopt;
 
+import std.array;
 import std.string, utf = std.utf, std.uni;
 import std.conv;
 import std.algorithm;
@@ -12,7 +13,7 @@ import std.utf;
 
 //import core.memory;
 
-import util : lowerf, escape, mallocAppender, toEngNum;
+import util : lowerf, escape, mallocAppender, toEngNum, displayWidth;
 
 mixin("enum TokenType{"~TokenNames()~"}");
 
@@ -264,32 +265,40 @@ struct Location{
 		if(!rep) return "<??>";
 		return format("%s:%s <%s>", source.name, line, rep);
 	}
-}
-import std.array;
-int getColumn(Location loc, int tabsize){
-	return getStart(loc, tabsize).column;
-}
-struct LineCol{ int line; int column; }
-LineCol getStart(T=dchar)(Location loc, int tabsize){
-	int res=0;
-	auto l=loc.source.getLineOf(loc.rep);
-	for(;!l.empty&&l[0]&&l.ptr<loc.rep.ptr; l.popFront()){
-		if(l[0]=='\t') res=res-res%tabsize+tabsize;
-		else res+=l.front.codeLength!T();
+
+	// empty location pointing at end
+	LocationInfo info(int tabsize) {
+		if(!line) return LocationInfo.init;
+		LocationInfo r;
+		r.source = source();
+
+		r.startByte = cast(int)(rep.ptr - source.code.ptr);
+
+		string l = source.getLineOf(rep);
+		r.startLine = line;
+		r.startColumn = displayWidth(l[0..rep.ptr - l.ptr], tabsize);
+
+		r.endByte = r.startByte + cast(int)rep.length;
+		auto n = cast(int)rep.count('\n');
+		r.endLine = r.startLine + n;
+		string lastRep = rep;
+		if(n != 0) {
+			lastRep = rep[rep.lastIndexOf('\n') + 1..$];
+			l= source.getLineOf(lastRep);
+		}
+		r.endColumn = displayWidth(l[0..lastRep.ptr + lastRep.length - l.ptr], tabsize) - 1;
+		return r;
 	}
-	return LineCol(loc.line,res);
 }
-LineCol getEnd(T=dchar)(Location loc, int tabsize){
-	int res=0;
-	auto lines=loc.rep.splitLines();
-	auto llen=lines.length;
-	auto end=lines.back();
-	auto l=loc.source.getLineOf(end);
-	for(;!l.empty&&l.front&&l.ptr<loc.rep.ptr+loc.rep.length; l.popFront()){
-		if(l[0]=='\t') res=res-res%tabsize+tabsize;
-		else res+=l.front.codeLength!T();
-	}
-	return LineCol(to!int(loc.line+llen-1),res);
+
+struct LocationInfo {
+	Source source;
+	int startByte;
+	int startLine;
+	int startColumn;
+	int endByte;
+	int endLine;
+	int endColumn;
 }
 
 struct Token{

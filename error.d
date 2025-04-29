@@ -2,7 +2,7 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.error;
 
-import std.string, std.range, std.array, std.uni;
+import std.string, std.range, std.array, std.uni, std.algorithm.searching;
 
 import ast.lexer, util;
 import util.io;
@@ -13,7 +13,6 @@ abstract class ErrorHandler{
 	//string code;
 	int nerrors=0;
 	private int tabsize=8;
-
 
 	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{nerrors++;}   // in{assert(loc.rep);}body
 	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
@@ -43,7 +42,6 @@ class SimpleErrorHandler: ErrorHandler{
 			stderr.writeln("(location missing): warning: "~err);
 			return;
 		}
-		nerrors++;
 		stderr.writeln(loc.source.name,'(',loc.line,"): warning: ",err);
 	}
 	override void message(lazy string msg, Location loc){
@@ -71,18 +69,16 @@ class JSONErrorHandler: ErrorHandler{
 	}
 
 	private JS makeJS(string error, Location loc, string severity, bool addRelated){
-		auto source=loc.source.name;
-		auto start=getStart!wchar(loc,1);
-		auto end=getEnd!wchar(loc,1);
-		auto sourceJS=JS(source);
-		auto startJS=JS(["line": JS(start.line), "column": JS(start.column)]);
-		auto endJS=JS(["line": JS(end.line), "column": JS(end.column)]);
-		auto messageJS=JS(error);
-		auto severityJS=JS(severity);
-		auto diagnosticJS=JS(["source": sourceJS, "start": startJS, "end": endJS, "message": messageJS, "severity": severityJS]);
+		auto li = loc.info(getTabsize());
+		auto sourceJS = JS(li.source.name);
+		auto startJS = JS(["byte": li.startByte, "line": li.startLine, "column": li.startColumn]);
+		auto endJS = JS(["byte": li.endByte, "line": li.endLine, "column": li.endColumn]);
+		auto messageJS = JS(error);
+		auto severityJS = JS(severity);
+		auto diagnosticJS = JS(["source": sourceJS, "start": startJS, "end": endJS, "message": messageJS, "severity": severityJS]);
 		if(addRelated){
-			auto relatedInformationJS=JS((JS[]).init);
-			diagnosticJS["relatedInformation"]=relatedInformationJS;
+			auto relatedInformationJS = JS((JS[]).init);
+			diagnosticJS["relatedInformation"] = relatedInformationJS;
 		}
 		return diagnosticJS;
 	}
@@ -93,7 +89,6 @@ class JSONErrorHandler: ErrorHandler{
 	}
 	override void warning(lazy string warning, Location loc){
 		assert(loc.line>=1);
-		nerrors++;
 		result~=makeJS(warning,loc,"warning",true);
 	}
 	override void note(lazy string note, Location loc){
@@ -135,30 +130,40 @@ class VerboseErrorHandler: ErrorHandler{
 			stderr.writeln("(location missing): "~err);
 			return;
 		}
-		auto src = loc.source;
-		auto source = src.name;
-		auto line = src.getLineOf(loc.rep);
-		if(loc.rep.ptr<line.ptr) loc.rep=loc.rep[line.ptr-loc.rep.ptr..$];
-		auto column=getColumn(loc,tabsize);
-		write(source, loc.line, column, err, severity);
+		auto li = loc.info(getTabsize());
+		auto line = li.source.getLineOf(loc.rep);
+		write(li.source.name, li.startLine, li.startColumn, err, severity);
 		if(line.length&&line[0]){
 			display(line);
-			highlight(column,column-getColumn(loc,tabsize-1), loc.rep);
+			auto ntabs = line.countUntil!(c => c != '\t');
+			highlight(li.startColumn, cast(int)(ntabs < 0 ? line.length : ntabs), loc.rep);
 		}
 	}
 protected:
-	void write(string source, int line, int column, string error, string severity = "error"){
+	void write(string source, int line, int column, string error, string severity){
 		stderr.writeln(source,':',line,":",column,": ",severity,": ",error);
 	}
 	void display(string line){
 		stderr.writeln(line);
 	}
-	void highlight(int column, int ntabs, string rep){
-		foreach(i;0..column-ntabs*(getTabsize()-1)) stderr.write(i<ntabs?"\t":" ");
+	void writeIndent(int column, int ntabs){
+		foreach(i;0..ntabs) stderr.write("\t");
+		foreach(i;0..column-ntabs*getTabsize()) stderr.write(" ");
+	}
+	void writeUnderline(string rep, int column){
+		auto n = rep.countUntil('\n');
+		if(n >= 0) {
+			rep = rep[0..n];
+		}
 		stderr.write(underlineArrow);
-		rep.popFront();
-		foreach(dchar x;rep){if(isNewLine(x)) break; stderr.write(underlineStroke);}
+		foreach(i; 0..displayWidth(rep, getTabsize(), column) - 1) {
+			stderr.write(underlineStroke);
+		}
 		stderr.writeln();
+	}
+	void highlight(int column, int ntabs, string rep){
+		writeIndent(column, ntabs);
+		writeUnderline(rep, column);
 	}
 }
 
@@ -166,20 +171,16 @@ import util.terminal;
 class FormattingErrorHandler: VerboseErrorHandler{
 protected:
 	override void write(string source, int line, int column, string error, string severity = "error"){
-		if(isATTy(stderr)){
-			if(severity=="error") stderr.writeln(BOLD,source,':',line,":",column,": ",RED,"error:",RESET,BOLD," ",error,RESET);
-			else stderr.writeln(BOLD,source,':',line,":",column,": ",BLACK,severity,":",RESET,BOLD," ",error,RESET);
-		}else super.write(source, line, column, error, severity);
+		string color = BLACK;
+		if(severity=="error") color = RED;
+		stderr.writeln(BOLD,source,':',line,":",column,": ",color,severity,":",RESET,BOLD," ",error,RESET);
 	}
+
 	override void highlight(int column, int ntabs, string rep){
-		if(isATTy(stderr)){
-			foreach(i;0..column-ntabs*(getTabsize()-1)) stderr.write(i<ntabs?"\t":" ");
-			//stderr.write(CSI~"A",GREEN,";",CSI~"D",CSI~"B");
-			stderr.write(BOLD,GREEN,underlineArrow);
-			rep.popFront();
-			foreach(dchar x;rep){if(isNewLine(x)) break; stderr.write(underlineStroke);}
-			stderr.writeln(RESET);
-		}else super.highlight(column, ntabs, rep);
+		writeIndent(column, ntabs);
+		stderr.write(BOLD, GREEN);
+		writeUnderline(rep, column);
+		stderr.writeln(RESET);
 	}
 }
 
