@@ -2661,6 +2661,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		if(auto tpl=cast(TupleExp)lhs){
 			if(auto tt=type.isTupleTy){
 				if(tpl.length!=tt.length){
+					// TODO: technically this violates monotonicity of type checking w.r.t. subtyping
 					sc.error(text("inconsistent number of tuple entries for assignment: ",tpl.length," vs. ",tt.length),lhs.loc);
 					ae.sstate=SemState.error;
 				}else{
@@ -2709,77 +2710,91 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	}
 	Declaration[string] consumed;
 	void[0][string] defined;
-	void updateVars(Expression lhs,Expression rhs,bool expandTuples,Stage stage,bool indexed){
-		if(auto id=cast(Identifier)lhs){
-			if(id&&id.meaning&&id.meaning.name){
-				static if(language==psi){
-					if(auto fd=sc.getFunction){
-						if(id.meaning is fd.context)
-							return; // TODO: this is a hack. treat "this" parameter as ref instead.
+	void updateVars(Expression lhs,Expression rhs,Stage stage){
+		Dependency rhsdep(){
+			if(stage!=Stage.collectDeps||!rhs.isQfree()) return Dependency(true);
+			return rhs.getDependency(sc);
+		}
+		void updateVars2(Expression lhs,bool indexed,Expression rhsty,Dependency rhsdep,Stage stage){
+			if(auto id=cast(Identifier)lhs){
+				if(id&&id.meaning&&id.meaning.name){
+					static if(language==psi){
+						if(auto fd=sc.getFunction){
+							if(id.meaning is fd.context)
+								return; // TODO: this is a hack. treat "this" parameter as ref instead.
+						}
 					}
-				}
-				auto rename=id.meaning.getName;
-				final switch(stage){
-					static if(language==silq){
-						case Stage.collectDeps:
-							if(rhs.isQfree()){
-								auto dep=rhs.getDependency(sc);
-								if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-								if(rename in dependencies) dep.joinWith(dependencies[rename]);
-								dependencies[rename]=dep;
+					auto rename=id.meaning.getName;
+					final switch(stage){
+						static if(language==silq){
+							case Stage.collectDeps:
+								if(rhs.isQfree()){
+									auto dep=rhsdep.dup;
+									if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+									if(rename in dependencies) dep.joinWith(dependencies[rename]);
+									dependencies[rename]=dep;
+								}
+								break;
+						}
+						case Stage.consumeLhs:
+							if(rename !in consumed){
+								if(!indexed) id.constLookup=false;
+								consumed[id.name]=sc.consume(id.meaning);
+							}
+							break;
+						case Stage.defineVars:
+							if(rename !in defined){
+								static if(language==silq){
+									if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
+								}
+								auto name=id.meaning.name.name;
+								auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
+								defined[rename]=[];
+								ae.replacements~=AssignExp.Replacement(consumed[rename],var);
 							}
 							break;
 					}
-					case Stage.consumeLhs:
-						if(rename !in consumed){
-							if(!indexed) id.constLookup=false;
-							consumed[id.name]=sc.consume(id.meaning);
-						}
-						break;
-					case Stage.defineVars:
-						if(rename !in defined){
-							static if(language==silq){
-								if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
-							}
-							auto name=id.meaning.name.name;
-							auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
-							defined[rename]=[];
-							ae.replacements~=AssignExp.Replacement(consumed[rename],var);
-						}
-						break;
 				}
-			}
-		}else if(auto tpll=cast(TupleExp)lhs){
+			}else if(auto tpll=cast(TupleExp)lhs){
+				if(auto tt=rhsty.isTupleTy){
+					assert(tpll.length==tt.length);
+					foreach(i,exp;tpll.e) updateVars2(exp,indexed,tt[i],rhsdep,stage);
+				}else if(auto at=cast(ArrayTy)rhsty){
+					foreach(exp;tpll.e) updateVars2(exp,indexed,at.next,rhsdep,stage);
+				}else assert(0);
+			}else if(auto idx=cast(IndexExp)lhs){
+				updateVars2(idx.e,true,rhsty,rhsdep,stage); // TODO: pass indices down?
+			}else if(auto fe=cast(FieldExp)lhs){
+				updateVars2(fe.e,true,rhsty,rhsdep,stage);
+			}else if(auto tae=cast(TypeAnnotationExp)lhs){
+				updateVars2(tae.e,indexed,rhsty,rhsdep,stage);
+			}else assert(0);
+		}
+		if(auto tpll=cast(TupleExp)lhs){
 			bool ok=false;
-			if(expandTuples){
-				if(auto tplr=cast(TupleExp)rhs){
-					if(tpll.e.length==tplr.e.length){
-						foreach(i;0..tpll.e.length)
-							updateVars(tpll.e[i],tplr.e[i],true,stage,indexed);
-						ok=true;
-					}
+			if(auto tplr=cast(TupleExp)rhs){
+				if(tpll.e.length==tplr.e.length){
+					foreach(i;0..tpll.e.length)
+						updateVars(tpll.e[i],tplr.e[i],stage);
+					return;
 				}
 			}
-			if(!ok) foreach(exp;tpll.e) updateVars(exp,rhs,false,stage,indexed);
-		}else if(auto idx=cast(IndexExp)lhs){
-			updateVars(idx.e,rhs,false,stage,true); // TODO: pass indices down?
-		}else if(auto fe=cast(FieldExp)lhs){
-			updateVars(fe.e,rhs,false,stage,true);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
-			updateVars(tae.e,rhs,expandTuples,stage,indexed);
-		}else assert(0);
+			return updateVars(tae.e,rhs,stage);
+		}
+		return updateVars2(lhs,false,rhs.type,rhsdep,stage);
 	}
 	if(ae.sstate!=SemState.error){
 		static if(language==silq)
-			updateVars(ae.e1,ae.e2,true,Stage.collectDeps,false);
-		updateVars(ae.e1,ae.e2,true,Stage.consumeLhs,false);
+			updateVars(ae.e1,ae.e2,Stage.collectDeps);
+		updateVars(ae.e1,ae.e2,Stage.consumeLhs);
 		static if(language==silq){
 			foreach(ref dependency;dependencies)
 				foreach(name;sc.toPush)
 					sc.pushUp(dependency, name);
 			sc.pushConsumed();
 		}
-		updateVars(ae.e1,ae.e2,true,Stage.defineVars,false);
+		updateVars(ae.e1,ae.e2,Stage.defineVars);
 	}
 	if(ae.sstate!=SemState.error) ae.sstate=SemState.completed;
 	return ae;
