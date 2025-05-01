@@ -1664,7 +1664,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		return result;
 	}
 	if(idx.e.type&&idx.e.type.isClassical()){
-		sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
+		if(idx.sstate!=SemState.error)
+			sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
 		idx.sstate=SemState.error;
 		return idx;
 	}
@@ -2635,6 +2636,53 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 	return true;
 }
 
+Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
+	assert(id&&id.sstate==SemState.completed);
+	assert(lhs&&lhs.sstate==SemState.completed);
+	assert(!!rhsty);
+}do{
+	if(id is lhs) return rhsty;
+	auto idx=cast(IndexExp)lhs;
+	assert(!!idx,text(id," ",lhs));
+	if(id is idx.e&&isFixedIntTy(id.type)){
+		if(!cast(BoolTy)rhsty) return null;
+		auto rtype=id.type;
+		if(!rhsty.isClassical||!idx.a.type.isClassical) rtype=rtype.getQuantum();
+		return rtype;
+	}
+	Expression getNrhsty(){
+		if(auto tt=idx.e.type.isTupleTy){
+			if(auto lit=idx.a.eval().asIntegerConstant()){
+				auto c=lit.get();
+				if(c<0||c>=tt.length) return lhs.type;
+				return tupleTy(iota(tt.length).map!(i=>i==c?rhsty:tt[i]).array);
+			}
+			Expression[] ntypes;
+			foreach(i;0..tt.length){
+				auto ntype=joinTypes(tt[i],rhsty);
+				if(!ntype) return null;
+				ntypes~=ntype;
+			}
+			return tupleTy(ntypes);
+		}
+		if(auto vt=cast(VectorTy)idx.e.type){
+			auto nnext=joinTypes(vt.next,rhsty);
+			if(!nnext) return null;
+			return vectorTy(nnext,vt.num);
+		}
+		if(auto at=cast(ArrayTy)idx.e.type){
+			auto nnext=joinTypes(at.next,rhsty);
+			if(!nnext) return null;
+			return arrayTy(nnext);
+		}
+		return null;
+	}
+	auto nrhsty=getNrhsty();
+	if(nrhsty&&!idx.a.type.isClassical) nrhsty=nrhsty.getQuantum();
+	if(!nrhsty) return null;
+	return updatedType(id,idx.e,nrhsty);
+}
+
 AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	ae.type=unit;
@@ -2697,8 +2745,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 				ae.sstate=SemState.error;
 			}
 		}else if(auto idx=cast(IndexExp)lhs){
-			// TODO: allow strong component updates
-			if(!isSubtype(type,lhs.type)){
+			if(!joinTypes(type,lhs.type)){
 				sc.error(format("cannot assign '%s' to array entry '%s' of type '%s'",type,lhs,lhs.type),lhs.loc);
 				ae.sstate=SemState.error;
 			}
@@ -2736,7 +2783,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 			if(stage!=Stage.collectDeps||!rhs.isQfree()) return Dependency(true);
 			return rhs.getDependency(sc);
 		}
-		void updateVars2(Expression lhs,bool indexed,Expression rhsty,Dependency rhsdep,Stage stage){
+		void updateVars2(Expression lhs,Expression olhs,bool indexed,Expression rhsty,Dependency rhsdep,Stage stage){
 			if(auto id=cast(Identifier)lhs){
 				if(id&&id.meaning&&id.meaning.name){
 					static if(language==psi){
@@ -2769,7 +2816,13 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 									if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
 								}
 								auto name=id.meaning.name.name;
-								auto var=addVar(name,indexed?id.type:rhsty,lhs.loc,sc);
+								auto ntype=updatedType(id,olhs,rhsty);
+								if(!ntype){
+									sc.error("assignment not yet supported",ae.loc);
+									ae.sstate=SemState.error;
+									ntype=indexed?id.type:rhsty;
+								}
+								auto var=addVar(name,ntype,lhs.loc,sc);
 								defined[rename]=[];
 								ae.replacements~=AssignExp.Replacement(consumed[rename],var);
 							}
@@ -2779,16 +2832,21 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 			}else if(auto tpll=cast(TupleExp)lhs){
 				if(auto tt=rhsty.isTupleTy){
 					assert(tpll.length==tt.length);
-					foreach(i,exp;tpll.e) updateVars2(exp,indexed,tt[i],rhsdep,stage);
+					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
 				}else if(auto at=cast(ArrayTy)rhsty){
-					foreach(exp;tpll.e) updateVars2(exp,indexed,at.next,rhsdep,stage);
+					foreach(exp;tpll.e) updateVars2(exp,olhs,indexed,at.next,rhsdep,stage);
 				}else assert(0);
 			}else if(auto idx=cast(IndexExp)lhs){
-				updateVars2(idx.e,true,rhsty,rhsdep,stage); // TODO: pass indices down?
+				auto nrhsdep=rhsdep;
+				if(stage==Stage.collectDeps){
+					nrhsdep=nrhsdep.dup;
+					nrhsdep.joinWith(idx.a.getDependency(sc));
+				}
+				updateVars2(idx.e,olhs,true,rhsty,nrhsdep,stage); // TODO: pass indices down?
 			}else if(auto fe=cast(FieldExp)lhs){
-				updateVars2(fe.e,true,rhsty,rhsdep,stage);
+				updateVars2(fe.e,olhs,true,rhsty,rhsdep,stage);
 			}else if(auto tae=cast(TypeAnnotationExp)lhs){
-				updateVars2(tae.e,indexed,rhsty,rhsdep,stage);
+				updateVars2(tae.e,olhs,indexed,rhsty,rhsdep,stage);
 			}else assert(0);
 		}
 		if(auto tpll=cast(TupleExp)lhs){
@@ -2803,7 +2861,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
 			return updateVars(tae.e,rhs,stage);
 		}
-		return updateVars2(lhs,false,rhs.type,rhsdep,stage);
+		return updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
 	}
 	if(ae.sstate!=SemState.error){
 		static if(language==silq)
