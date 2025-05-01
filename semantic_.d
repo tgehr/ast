@@ -2769,7 +2769,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 									if(rhs.isQfree()) sc.addDependency(id.meaning,dependencies[rename]);
 								}
 								auto name=id.meaning.name.name;
-								auto var=addVar(name,indexed?id.type:rhs.type,lhs.loc,sc);
+								auto var=addVar(name,indexed?id.type:rhsty,lhs.loc,sc);
 								defined[rename]=[];
 								ae.replacements~=AssignExp.Replacement(consumed[rename],var);
 							}
