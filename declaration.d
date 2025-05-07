@@ -355,12 +355,12 @@ class DatDecl: Declaration{
 }
 
 string getActualPath(string path){
-	import util.path, options;
+	import util.path;
 	import util.io:file;
 	auto ext = path.extension;
 	if(ext=="") path = path.setExtension(astopt.defaultExtension);
 	if(file.exists(path)) return path;
-	foreach_reverse(p;opt.importPath){
+	foreach_reverse(p;astopt.importPath){
 		auto candidate=buildPath(p,path);
 		if(file.exists(candidate))
 			return candidate;

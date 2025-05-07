@@ -860,8 +860,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argRet.loc=argExp.loc;
 		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fd.body_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
 	}
-	import options;
-	static if(__traits(hasMember,opt,"dumpReverse")) if(opt.dumpReverse){
+	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		stderr.writeln(fd);
 		stderr.writeln("-reverse→");
 		stderr.writeln(result);

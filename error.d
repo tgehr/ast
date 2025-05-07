@@ -4,7 +4,7 @@ module ast.error;
 
 import std.string, std.range, std.array, std.uni;
 
-import ast.lexer, util, options;
+import ast.lexer, util;
 import util.io;
 
 
