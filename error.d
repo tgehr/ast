@@ -54,17 +54,22 @@ class SimpleErrorHandler: ErrorHandler{
 enum underlineArrow  = "^";
 enum underlineStroke = "─";
 
-ErrorHandler makeErrorHandler(ErrorFormat format){
-	final switch(format) with(ErrorFormat){
-		case default_: return new FormattingErrorHandler();
-		case json: return new JSONErrorHandler();
-	}
-}
 import std.json;
 class JSONErrorHandler: ErrorHandler{
 	alias JSONValue JS;
 	JS[] result=[];
-	this(){ tabsize=1; }
+	File output;
+	bool close;
+
+	this(){
+		this.output = stderr;
+		this.close = false;
+	}
+	this(File output, bool close){
+		this.output = output;
+		this.close = close;
+	}
+
 	private JS makeJS(string error, Location loc, string severity, bool addRelated){
 		auto source=loc.source.name;
 		auto start=getStart!wchar(loc,1);
@@ -100,7 +105,12 @@ class JSONErrorHandler: ErrorHandler{
 		assert(loc.line>=1);
 		result~=[makeJS(message,loc,"message",false)];
 	}
-	override void finalize(){ stderr.writeln(result); }
+	override void finalize(){
+		output.writeln(result);
+		if(close) {
+			output.close();
+		}
+	}
 }
 
 
