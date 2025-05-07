@@ -58,7 +58,7 @@ Scope getPreludeScope(ErrorHandler err, Location loc){
 	exprs = semantic(exprs, preludeScope);
 	if(nerr != err.nerrors) {
 		if(loc.line) preludeScope.error("failed to import prelude", loc);
-		else preludeScope.message("failed to import prelude");
+		else stderr.writeln("error: failed to import prelude");
 	}
 	return preludeScope;
 }
@@ -138,7 +138,7 @@ Scope getOperatorScope(ErrorHandler err, Location loc){
 	exprs = semantic(exprs,operatorScope);
 	if(nerr != err.nerrors) {
 		if(loc.line) operatorScope.error("failed to import operators", loc);
-		else operatorScope.message("failed to import operators");
+		else stderr.writeln("error: failed to import operators");
 	}
 	return operatorScope;
 }
