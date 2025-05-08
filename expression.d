@@ -2067,14 +2067,38 @@ class AssertExp: Expression{
 	}
 	override string toString(){ return _brk("assert("~e.toString()~")"); }
 
+	override bool isConstant(){ return e.isConstant(); }
+	override bool isTotal(){ return e.isTotal(); }
+
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		return e.freeVarsImpl(dg);
+	}
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return dg(e);
+	}
+	override AssertExp substituteImpl(Expression[Id] subst){
+		auto ne=e.substitute(subst);
+		if(ne==e) return this;
+		auto r=new AssertExp(ne);
+		r.loc=loc;
+		return r;
+	}
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+		auto ae=cast(AssertExp)rhs;
+		if(!ae) return false;
+		return e.unify(ae.e,subst,meet);
+	}
+	override bool opEquals(Object o){
+		auto ae=cast(AssertExp)o;
+		return ae&&e==ae.e;
+	}
+
+	override Annotation getAnnotation(){ return e.getAnnotation(); }
+
 	override Expression evalImpl(Expression ntype){
 		auto ne=e.eval();
 		if(ne==e&&ntype==type) return this;
 		return new AssertExp(e);
-	}
-	mixin VariableFree; // TODO!
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return dg(e);
 	}
 }
 
