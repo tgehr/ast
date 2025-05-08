@@ -11,7 +11,7 @@ import util, util.hashtable: HashMap;
 static if(language==silq){
 struct Dependency{
 	bool isTop;
-	SetX!Id dependencies;
+	SetX!Declaration dependencies;
 	void joinWith(Dependency rhs){
 		if(isTop) return;
 		if(rhs.isTop){
@@ -21,54 +21,65 @@ struct Dependency{
 		foreach(x;rhs.dependencies)
 			dependencies.insert(x);
 	}
-	void replace(Id name, Dependency rhs, Dependency control){
-		if(name !in dependencies) return;
-		dependencies.remove(name);
+	void replace(Declaration decl, Dependency rhs, Dependency control){
+		if(decl !in dependencies) return;
+		dependencies.remove(decl);
 		joinWith(rhs);
 		joinWith(control);
 	}
-	void rename(Id decl,Id ndecl){
+	void replace(Declaration decl,Declaration ndecl){
 		if(decl in dependencies){
 			dependencies.remove(decl);
 			dependencies.insert(ndecl);
 		}
 	}
-	void remove(Id decl,Dependency control){
+	void remove(Declaration decl,Dependency control)in{
+		assert(decl !in control.dependencies);
+	}do{
 		if(decl in dependencies) joinWith(control);
 		dependencies.remove(decl);
 	}
 	Dependency dup(){
 		return Dependency(isTop, dependencies.dup);
 	}
+	SetX!Id getIds(){
+		SetX!Id result;
+		foreach(decl;dependencies) result.insert(decl.getId);
+		return result;
+	}
+	bool matches(Dependency rhs){ // TODO: make faster?
+		auto ids=getIds,rids=rhs.getIds;
+		return ids==rids;
+	}
 }
 
 struct Dependencies{
-	HashMap!(Id,Dependency,(a,b)=>a==b,(a)=>a.toHash()) dependencies;
+	HashMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash()) dependencies;
 	void joinWith(Dependencies rhs){
 		foreach(k,ref v;dependencies){
 			if(k in rhs.dependencies){
 				v.joinWith(rhs.dependencies[k]);
 				if(k in v.dependencies)
-					v=Dependency(true);
+					v=Dependency(true); // TODO: get rid of this
 			}
 		}
 	}
-	void pushUp(Id removed, Dependency control)in{
-		assert(removed in dependencies,removed.str);
+	void pushUp(Declaration removed, Dependency control)in{
+		assert(removed in dependencies,text(removed," ",removed.loc," ",dependencies));
 	}do{
 		Dependency x=dependencies[removed];
 		dependencies.remove(removed);
 		foreach(k,ref v;dependencies){
 			v.replace(removed, x, control);
 			if(k in v.dependencies)
-				v=Dependency(true);
+				v=Dependency(true); // TODO: get rid of this
 		}
 	}
-	void rename(Id decl,Id ndecl)in{
-		assert(decl in dependencies);
-		assert(ndecl !in dependencies);
+	void replace(Declaration decl,Declaration ndecl)in{
+		assert(decl in dependencies,text(decl.loc," ",dependencies));
+		assert(ndecl !in dependencies,text(ndecl.loc," ",dependencies));
 	}do{
-		foreach(k,ref v;dependencies) v.rename(decl,ndecl);
+		foreach(k,ref v;dependencies) v.replace(decl,ndecl);
 		dependencies[ndecl]=dependencies[decl];
 		dependencies.remove(decl);
 	}
@@ -78,13 +89,24 @@ struct Dependencies{
 			result[k]=v.dup;
 		return Dependencies(result);
 	}
-	bool canForget(Id decl)in{
-		assert(decl in dependencies,text(decl," ",dependencies));
+	bool canForget(Declaration decl)in{
+		assert(decl in dependencies||decl.sstate==SemState.error,text(decl," ",dependencies));
 	}do{
+		if(decl !in dependencies) return true;
 		return !dependencies[decl].isTop;
 	}
 	void clear(){
 		dependencies.clear();
+	}
+	HashMap!(Id,SetX!Id,(a,b)=>a is b,(a)=>a.toHash) getIds(){
+		typeof(return) result;
+		foreach(decl,ref dependency;dependencies)
+			result[decl.getId]=dependency.getIds();
+		return result;
+	}
+	bool matches(Dependencies rhs){ // TODO: make faster?
+		auto ids=getIds,rids=rhs.getIds;
+		return ids==rids;
 	}
 }
 }
@@ -112,13 +134,18 @@ abstract class Scope{
 		return true;
 	}
 
-	void symtabInsert(Declaration decl){
+	void symtabInsert(Declaration decl)in{
+		assert(!toPush.canFind(decl));
+	}do{
 		symtab[decl.name.id]=decl;
 		if(decl.rename) rnsymtab[decl.rename.id]=decl;
-		static if(language==silq){
-			if(decl.getId !in dependencies.dependencies||toPush.canFind(decl.getId))
+		/+static if(language==silq){
+			if(decl !in dependencies.dependencies){
 				addDependency(decl,Dependency(true));
-		}
+				//imported!"util.io".writeln("!!! ",decl," ",decl.loc);
+				//if(decl.loc.line==4&&decl.getName=="x"&&!cast(Parameter)decl) assert(0);
+			}
+		}+/
 	}
 
 	void redefinitionError(Declaration decl, Declaration prev) in{
@@ -298,8 +325,7 @@ abstract class Scope{
 		return null;
 	}
 	final void unconsume(Declaration decl){
-		auto dId=decl.getId;
-		toPush=toPush.filter!(id=>id!=dId).array;
+		toPush=toPush.filter!(pdecl=>pdecl!is decl).array;
 		insert(decl);
 	}
 	Declaration[] consumedOuter;
@@ -319,7 +345,7 @@ abstract class Scope{
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			static if(language==silq)
-				toPush~=odecl.getId;
+				toPush~=odecl;
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
@@ -327,13 +353,15 @@ abstract class Scope{
 		return ndecl;
 	}
 	static if(language==silq){
-		/+private+/ Id[] toPush;
-		final void pushUp(ref Dependency dependency,Id removed){
+		/+private+/ Declaration[] toPush;
+		final void pushUp(ref Dependency dependency,Declaration removed){
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
 		}
 		final void pushConsumed(){
-			foreach(name;toPush)
-				dependencies.pushUp(name,controlDependency);
+			foreach(decl;toPush){
+				if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+				dependencies.pushUp(decl,controlDependency);
+			}
 			toPush=[];
 		}
 	}
@@ -482,55 +510,54 @@ abstract class Scope{
 	}
 
 	static if(language==silq){
-		auto controlDependency=Dependency(false,SetX!Id.init);
+		auto controlDependency=Dependency(false,SetX!Declaration.init);
 		void addControlDependency(Dependency dep){
 			controlDependency.joinWith(dep);
 		}
 
+		void addDefaultDependency(Declaration decl)in{
+			assert(!dependencyTracked(decl));
+		}do{
+			//imported!"util.io".writeln("ADDING DEFAULT: ",decl," ",Dependency(decl.sstate==SemState.completed&&decl.isLinear));
+			addDependency(decl,Dependency(decl.sstate==SemState.completed&&decl.isLinear));
+			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
+			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
+			//assert(decl.getName!="rrr");
+		}
+		
 		void addDependency(Declaration decl, Dependency dep){
-			addDependencies([q(decl.getId,dep)]);
+			addDependencies([q(decl,dep)]);
 		}
-		void removeDependency(Id name){
-			dependencies.dependencies.remove(name);
+		void removeDependency(Declaration decl){
+			dependencies.dependencies.remove(decl);
 		}
-		void addDependencies(scope Q!(Id,Dependency)[] deps){
+		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
 			foreach(i,ref dep;deps){
 				if(dep[0] in dependencies.dependencies){
-					if(toPush.canFind(dep[0])){  // recently consumed
-						auto ndecl=Id.intern("`renamed`"~dep[0].str);
-						//assert(ndecl !in dependencies.dependencies);
-						foreach(ref x;toPush) if(x == dep[0]) x=ndecl;
-						dependencies.rename(dep[0],ndecl);
-						controlDependency.rename(dep[0],ndecl);
-						foreach(j,ref odep;deps){
-							if(i==j) continue;
-							odep[1].rename(dep[0],ndecl);
-						}
-					}else{
-						//writeln(dep[0]," ",toPush," ",dependencies)
-						dep[1].joinWith(dependencies.dependencies[dep[0]]);
-					}
+					//writeln(dep[0]," ",toPush," ",dependencies)
+					dep[1].joinWith(dependencies.dependencies[dep[0]]);
 				}
 			}
-			foreach(rename,dep;deps.map!(x=>x)){
+			foreach(decl,dep;deps.map!(x=>x)){
 				dep.joinWith(controlDependency);
-				if(rename in dep.dependencies) dependencies.dependencies[rename]=Dependency(true);
-				else dependencies.dependencies[rename]=dep;
+				dependencies.dependencies[decl]=dep;
 			}
 		}
 
-		final bool dependencyTracked(Identifier id){
-			return !!(id.id in dependencies.dependencies);
+		final bool dependencyTracked(Declaration decl){
+			return !!(decl in dependencies.dependencies);
 		}
 		final Dependency getDependency(Identifier id)in{
 			assert(id.sstate==SemState.completed);
+			assert(!!id.meaning);
 		}do{
-			return dependencies.dependencies.get(id.id,Dependency(true));
+			return getDependency(id.meaning);
 		}
 		final Dependency getDependency(Declaration decl)in{
 			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
 		}do{
-			return dependencies.dependencies.get(decl.getId,Dependency(true));
+			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+			return dependencies.dependencies[decl];
 		}
 
 		bool canForget(Declaration decl)in{
@@ -541,7 +568,7 @@ abstract class Scope{
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
-			return dependencies.canForget(decl.getId);
+			return dependencies.canForget(decl);
 		}
 
 		Declaration[] forgottenVars;
@@ -594,11 +621,6 @@ abstract class Scope{
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
 		activeNestedScopes=[];
 		allowMerge=false;
-		static if(language==silq){
-			dependencies=scopes[0].dependencies.dup;
-			foreach(sc;scopes[1..$])
-				dependencies.joinWith(sc.dependencies);
-		}
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		bool errors=false;
@@ -661,14 +683,38 @@ abstract class Scope{
 				if(auto ntype=typeForDecl(sym)){
 					if(sym.scope_ is scopes[0]) promoteSym(ntype);
 					scopes[0].mergeVar(psym,sym);
+					static if(language==silq)
+						scopes[0].dependencies.replace(psym,sym);
 					foreach(sc;scopes[1..$]){
 						assert(sym.name.id in sc.symtab);
 						auto osym=sc.symtab[sym.name.id];
 						sc.mergeVar(osym,sym);
+						static if(language==silq)
+							sc.dependencies.replace(osym,sym);
 					}
 				}else sym.scope_=this;
 				producedOuter~=sym;
 			}
+		}
+		static if(language==silq){
+			/+imported!"util.io".writeln("/---");
+			scopes[].each!((sc){
+				imported!"util.io".writeln(sc.dependencies);
+				foreach(decl,ref dep;sc.dependencies.dependencies){ // !!!
+					imported!"util.io".writeln(cast(void*)decl);
+				}
+			});+/
+			dependencies=scopes[0].dependencies.dup;
+			foreach(sc;scopes[1..$])
+				dependencies.joinWith(sc.dependencies);
+			/+imported!"util.io".writeln("----");
+			imported!"util.io".writeln(dependencies);
+			foreach(decl,ref dep;dependencies.dependencies){ // !!!
+				imported!"util.io".writeln(cast(void*)decl);
+				assert(decl.getId in rnsymtab);
+				assert(rnsymtab[decl.getId] is decl);
+			}
+			imported!"util.io".writeln("---/");+/
 		}
 		static if(language==silq){
 			foreach(sc;scopes[1..$]){
@@ -689,7 +735,7 @@ abstract class Scope{
 		}
 		static if(language==silq){
 			foreach(k,v;dependencies.dependencies.dup){
-				if(k !in symtab && k !in rnsymtab)
+				if(k.getId !in symtab && k.getId !in rnsymtab)
 					dependencies.dependencies.remove(k);
 			}
 		}
@@ -712,10 +758,10 @@ abstract class Scope{
 			else redefinitionError(var,d);
 			return null;
 		}
-		static if(language==silq){
-			if(decl.getId !in dependencies.dependencies||toPush.canFind(decl.getId))
-				addDependency(decl,Dependency(true));
-		}
+		/+static if(language==silq){
+			if(decl !in dependencies.dependencies||toPush.canFind(decl))
+				addDefaultDependency(decl);
+		}+/
 		symtabInsert(var);
 		var.vtype=type;
 		var.scope_=this;
@@ -760,7 +806,7 @@ abstract class Scope{
 	struct ScopeState{
 		bool opEquals(ref ScopeState rhs){
 			static if(language==silq){
-				if(dependencies!=rhs.dependencies)
+				if(!dependencies.matches(rhs.dependencies))
 					return false;
 			}
 			import ast.semantic_: typeForDecl;
@@ -808,7 +854,7 @@ abstract class Scope{
 				if(!mayChange){
 					if(type.isClassical) continue;
 				}
-				bool isConstParamDecl=type.isClassical()||dependencies.canForget(id)||!mayChange;
+				bool isConstParamDecl=type.isClassical()||dependencies.canForget(decl)||!mayChange;
 				if(constParams!=isConstParamDecl) continue;
 				Expression.CopyArgs cargs;
 				r~=q(id,type.copy(cargs),mayChange,decl.loc);
@@ -916,7 +962,7 @@ abstract class Scope{
 			outer=newOuter;
 		}
 	}
-private:
+//private: // !!!
 	static if(language==silq){
 		Dependencies dependencies;
 		DeclProps declProps;
@@ -989,21 +1035,27 @@ class NestedScope: Scope{
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			static if(language==silq){
-				if(type) removeDependency(odecl.getId);
+				if(type) removeDependency(odecl);
 			}
 		}
 		if(type){
 			static if(language==silq){
-				if(parent.getFunction() is getFunction()){
-					if(odecl.getId in parent.dependencies.dependencies){
-						auto parentDep=parent.dependencies.dependencies[odecl.getId];
-						addDependency(ndecl,parentDep);
-					}
-				}else addDependency(ndecl,Dependency(true));
+				if(parent.getFunction() is getFunction() && odecl in parent.dependencies.dependencies){
+					auto parentDep=parent.dependencies.dependencies[odecl];
+					addDependency(ndecl,parentDep.dup);
+				}else addDefaultDependency(ndecl);
 			}
 			if(auto added=addVariable(ndecl,type,true))
 				result=added;
 			splitVar(ndecl,result);
+			dependencies.replace(ndecl,result); // TODO: fix
+			/+imported!"util.io".writeln("SPLITTING: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
+			foreach(decl,ref dep;dependencies.dependencies){ // !!!
+				imported!"util.io".writeln(decl," ",cast(void*)decl);
+				assert(decl.getId in rnsymtab);
+				assert(rnsymtab[decl.getId] is decl);
+			}
+			imported!"util.io".writeln("=====");+/
 		}
 		if(!remove) return result;
 		return type?consume(result):result;
