@@ -149,7 +149,7 @@ abstract class Scope{
 	}
 
 	void redefinitionError(Declaration decl, Declaration prev) in{
-		assert(decl);
+		assert(!!decl);
 	}do{
 		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
 		note("previous definition was here",prev.name.loc);
@@ -355,12 +355,14 @@ abstract class Scope{
 	static if(language==silq){
 		/+private+/ Declaration[] toPush;
 		final void pushUp(ref Dependency dependency,Declaration removed){
+			if(!dependencyTracked(removed)) addDefaultDependency(removed); // TODO: ideally can be removed
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
 		}
-		final void pushConsumed(){
-			foreach(decl;toPush){
-				if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-				dependencies.pushUp(decl,controlDependency);
+		final void pushConsumed(string file=__FILE__,int line=__LINE__)(){
+			//imported!"util.io".writeln("PUSHING: ",toPush," at: ",file," ",line); // !!!
+			foreach(removed;toPush){
+				if(!dependencyTracked(removed)) addDefaultDependency(removed); // TODO: ideally can be removed
+				dependencies.pushUp(removed,controlDependency);
 			}
 			toPush=[];
 		}
@@ -568,6 +570,7 @@ abstract class Scope{
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
+			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.canForget(decl);
 		}
 
@@ -683,14 +686,20 @@ abstract class Scope{
 				if(auto ntype=typeForDecl(sym)){
 					if(sym.scope_ is scopes[0]) promoteSym(ntype);
 					scopes[0].mergeVar(psym,sym);
-					static if(language==silq)
+					static if(language==silq){
+						if(!scopes[0].dependencyTracked(psym))
+							scopes[0].addDefaultDependency(psym); // TODO: ideally can be removed
 						scopes[0].dependencies.replace(psym,sym);
+					}
 					foreach(sc;scopes[1..$]){
 						assert(sym.name.id in sc.symtab);
 						auto osym=sc.symtab[sym.name.id];
 						sc.mergeVar(osym,sym);
-						static if(language==silq)
+						static if(language==silq){
+							if(!scopes[0].dependencyTracked(osym))
+								scopes[0].addDefaultDependency(osym); // TODO: ideally can be removed
 							sc.dependencies.replace(osym,sym);
+						}
 					}
 				}else sym.scope_=this;
 				producedOuter~=sym;
