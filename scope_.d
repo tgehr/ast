@@ -42,10 +42,10 @@ struct Dependency{
 	Dependency dup(){
 		return Dependency(isTop, dependencies.dup);
 	}
-	SetX!Id getIds(){
+	private Q!(bool,SetX!Id) getIds(){
 		SetX!Id result;
 		foreach(decl;dependencies) result.insert(decl.getId);
-		return result;
+		return q(isTop,result);
 	}
 	bool matches(Dependency rhs){ // TODO: make faster?
 		auto ids=getIds,rids=rhs.getIds;
@@ -98,7 +98,7 @@ struct Dependencies{
 	void clear(){
 		dependencies.clear();
 	}
-	HashMap!(Id,SetX!Id,(a,b)=>a is b,(a)=>a.toHash) getIds(){
+	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
 		foreach(decl,ref dependency;dependencies)
 			result[decl.getId]=dependency.getIds();
@@ -355,13 +355,12 @@ abstract class Scope{
 	static if(language==silq){
 		/+private+/ Declaration[] toPush;
 		final void pushUp(ref Dependency dependency,Declaration removed){
-			if(!dependencyTracked(removed)) addDefaultDependency(removed); // TODO: ideally can be removed
+			if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
 		}
-		final void pushConsumed(string file=__FILE__,int line=__LINE__)(){
-			//imported!"util.io".writeln("PUSHING: ",toPush," at: ",file," ",line); // !!!
+		final void pushConsumed(){
 			foreach(removed;toPush){
-				if(!dependencyTracked(removed)) addDefaultDependency(removed); // TODO: ideally can be removed
+				if(!dependencyTracked(removed)) continue; // TODO: ideally can be removed
 				dependencies.pushUp(removed,controlDependency);
 			}
 			toPush=[];
@@ -642,7 +641,7 @@ abstract class Scope{
 			void promoteSym(Expression ntype){
 				symtab.remove(sym.name.id);
 				if(sym.rename) rnsymtab.remove(sym.rename.id);
-				addVariable(sym,ntype,true);
+				auto var=addVariable(sym,ntype,true);
 				sym=symtab[sym.name.id];
 				needMerge=true;
 			}
@@ -696,8 +695,8 @@ abstract class Scope{
 						auto osym=sc.symtab[sym.name.id];
 						sc.mergeVar(osym,sym);
 						static if(language==silq){
-							if(!scopes[0].dependencyTracked(osym))
-								scopes[0].addDefaultDependency(osym); // TODO: ideally can be removed
+							if(!sc.dependencyTracked(osym))
+								sc.addDefaultDependency(osym); // TODO: ideally can be removed
 							sc.dependencies.replace(osym,sym);
 						}
 					}
@@ -767,10 +766,6 @@ abstract class Scope{
 			else redefinitionError(var,d);
 			return null;
 		}
-		/+static if(language==silq){
-			if(decl !in dependencies.dependencies||toPush.canFind(decl))
-				addDefaultDependency(decl);
-		}+/
 		symtabInsert(var);
 		var.vtype=type;
 		var.scope_=this;
@@ -1026,14 +1021,23 @@ class NestedScope: Scope{
 		if(!type) type=typeForDecl(ndecl);
 		if(remove){
 			assert(odecl is ndecl);
+			auto pdep=parent.getDependency(odecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
+				static if(language==silq){
+					parent.pushConsumed();
+				}
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
-					if(sc.consumeImpl(odecl,ndecl,type,false)){
+					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false)){
 						static if(language==silq){
 							sc.pushConsumed();
+							if(parent.getFunction() is sc.getFunction()){
+								auto cdep=pdep.dup;
+								cdep.replace(odecl,cdecl);
+								sc.addDependency(cdecl,cdep);
+							}
 						}
 					}
 				}
@@ -1048,16 +1052,9 @@ class NestedScope: Scope{
 			}
 		}
 		if(type){
-			static if(language==silq){
-				if(parent.getFunction() is getFunction() && odecl in parent.dependencies.dependencies){
-					auto parentDep=parent.dependencies.dependencies[odecl];
-					addDependency(ndecl,parentDep.dup);
-				}else addDefaultDependency(ndecl);
-			}
 			if(auto added=addVariable(ndecl,type,true))
 				result=added;
 			splitVar(ndecl,result);
-			dependencies.replace(ndecl,result); // TODO: fix
 			/+imported!"util.io".writeln("SPLITTING: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 			foreach(decl,ref dep;dependencies.dependencies){ // !!!
 				imported!"util.io".writeln(decl," ",cast(void*)decl);
