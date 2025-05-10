@@ -540,6 +540,8 @@ abstract class Scope{
 				}
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
+				foreach(odecl;dep.dependencies)
+					assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep));
 				dep.joinWith(controlDependency);
 				dependencies.dependencies[decl]=dep;
 			}
@@ -549,13 +551,13 @@ abstract class Scope{
 			return !!(decl in dependencies.dependencies);
 		}
 		final Dependency getDependency(Identifier id)in{
-			assert(id.sstate==SemState.completed);
+			assert(id.sstate==SemState.completed||id.sstate==SemState.error);
 			assert(!!id.meaning);
 		}do{
 			return getDependency(id.meaning);
 		}
 		final Dependency getDependency(Declaration decl)in{
-			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
+			assert(decl.sstate==SemState.completed||decl.sstate==SemState.error,text(decl," ",decl.sstate));
 		}do{
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];
@@ -1019,24 +1021,21 @@ class NestedScope: Scope{
 		if(symtab.get(odecl.name.id,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
+		auto pdep=Dependency(true);
 		if(remove){
 			assert(odecl is ndecl);
-			auto pdep=parent.getDependency(odecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
-				static if(language==silq){
-					parent.pushConsumed();
-				}
+				pdep=parent.getDependency(nndecl);
+				static if(language==silq) parent.pushConsumed();
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false)){
 						static if(language==silq){
-							sc.pushConsumed();
 							if(parent.getFunction() is sc.getFunction()){
-								auto cdep=pdep.dup;
-								cdep.replace(odecl,cdecl);
-								sc.addDependency(cdecl,cdep);
+								sc.addDependency(ndecl,pdep.dup);
+								sc.dependencies.replace(ndecl,cdecl);
 							}
 						}
 					}
@@ -1047,14 +1046,24 @@ class NestedScope: Scope{
 		if(remove||type){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			static if(language==silq){
-				if(type) removeDependency(odecl);
-			}
+			/+static if(language==silq){
+				if(type&&dependencyTracked(odecl)){
+					dependencies.pushUp(odecl,controlDependency);
+					removeDependency(odecl);
+				}
+			}+/
 		}
 		if(type){
-			if(auto added=addVariable(ndecl,type,true))
+			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
-			splitVar(ndecl,result);
+				splitVar(ndecl,result);
+				static if(language==silq){
+					if(remove&&parent.getFunction() is getFunction()){
+						addDependency(ndecl,pdep.dup);
+						dependencies.replace(ndecl,result);
+					}
+				}
+			}
 			/+imported!"util.io".writeln("SPLITTING: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 			foreach(decl,ref dep;dependencies.dependencies){ // !!!
 				imported!"util.io".writeln(decl," ",cast(void*)decl);
