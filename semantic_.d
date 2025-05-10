@@ -2267,7 +2267,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 						} else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
-				//imported!"util.io".writeln("ADDING: ",dependencies);
+				//imported!"util.io".writeln("ADDING: ",dependencies," ",lhs," ",rhs);
 				sc.addDependencies(dependencies);
 			}
 			void addDependencyMulti(Expression[] lhs,Dependency dependency){
