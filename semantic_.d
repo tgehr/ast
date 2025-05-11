@@ -1608,6 +1608,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
 			propErr(next,e);
 			if(id.meaning){
+				id.meaning=context.sc.split(id.meaning);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
@@ -2231,8 +2232,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					static if(language==silq){
 						finishIndexReplacement(be,sc);
 					}
-					if(be.sstate==SemState.error)
+					if(be.sstate==SemState.error){
+						sc.pushConsumed();
 						return be;
+					}
 					return finish(r);
 				}
 				static if(language==silq)
@@ -2551,7 +2554,7 @@ void finishIndexReplacement(DefineExp be,Scope sc){
 	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 	ArrayConsumer consumer;
-	foreach(ref theIndex;indicesToReplace)
+	foreach(theIndex;indicesToReplace)
 		consumer.consumeArray(theIndex,context);
 	consumer.redefineArrays(be.loc,sc);
 	foreach(theIndex;indicesToReplace)

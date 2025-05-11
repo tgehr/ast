@@ -323,8 +323,21 @@ abstract class Scope{
 			return r;
 		return null;
 	}
-	final void unconsume(Declaration decl){
+	final Declaration split(Declaration decl)in{
+		assert(decl.scope_&&this.isNestedIn(decl.scope_));
+	}do{
+		if(decl.scope_ is this) return decl;
+		Expression type;
+		auto result=consume(decl);
+		if(!result) return null;
+		unconsume(result);
+		return result;
+	}
+	final void unconsume(Declaration decl)in{
+		assert(decl.scope_ is null||decl.scope_ is this);
+	}do{
 		toPush=toPush.filter!(pdecl=>pdecl!is decl).array;
+		decl.scope_=null;
 		insert(decl);
 	}
 	Declaration[] consumedOuter;
@@ -743,7 +756,8 @@ abstract class Scope{
 			imported!"util.io".writeln("---/");+/
 			foreach(k,v;dependencies.dependencies.dup){
 				if(k.getId !in symtab && k.getId !in rnsymtab)
-					assert(!dependencyTracked(k),text(k," ",k.loc," ",dependencies," ",toPush," ",k.scope_," ",scopes[0]," ",scopes[0].dependencies," ",scopes[0].getFunction));
+					if(dependencyTracked(k))
+						dependencies.dependencies.remove(k);
 			}
 		}
 		foreach(sc;scopes){
@@ -919,7 +933,7 @@ abstract class Scope{
 			auto split=getSplit(decl,true);
 			symtab[decl.name.id]=split;
 			static if(language==silq){
-				if(decl !is split){
+				if(decl !is split && dependencyTracked(decl)){
 					dependencies.replace(decl,split);
 				}
 			}
@@ -1045,7 +1059,8 @@ class NestedScope: Scope{
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
 								sc.addDependency(ndecl,pdep.dup);
-								sc.dependencies.replace(ndecl,cdecl);
+								if(ndecl !is cdecl)
+									sc.dependencies.replace(ndecl,cdecl);
 							}
 						}
 					}
