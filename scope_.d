@@ -327,6 +327,8 @@ abstract class Scope{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return decl;
+		auto vd=cast(VarDecl)decl;
+		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return decl;
 		Expression type;
 		auto result=consume(decl);
 		if(!result) return null;
@@ -1068,18 +1070,11 @@ class NestedScope: Scope{
 			}
 		}else consumedOuter~=ndecl;
 		Declaration result=ndecl;
-		if(remove||type){
+		if(type){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			static if(language==silq){
-				if(dependencyTracked(odecl)){
-					//dependencies.pushUp(odecl,controlDependency);
-					removeDependency(odecl);
-				}
-			}
-			//imported!"util.io".writeln("REMOVED: ",odecl," ",dependencies," ",this);
-		}
-		if(type){
+			if(odecl !is ndecl&&dependencyTracked(odecl))
+				dependencies.replace(odecl,ndecl);
 			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
 				splitVar(ndecl,result);
@@ -1098,6 +1093,13 @@ class NestedScope: Scope{
 				assert(rnsymtab[decl.getId] is decl);
 			}
 			imported!"util.io".writeln("=====");+/
+		}else if(remove){
+			symtab.remove(odecl.name.id);
+			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
+			if(dependencyTracked(odecl)){
+				dependencies.pushUp(odecl,controlDependency);
+				removeDependency(odecl);
+			}
 		}
 		if(!remove) return result;
 		return type?consume(result):result;
