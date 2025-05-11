@@ -151,7 +151,8 @@ protected:
 		foreach(i;0..column-ntabs*getTabsize()) stderr.write(" ");
 	}
 	void writeUnderline(string rep, int column){
-		auto n = rep.countUntil('\n');
+		import std.utf:byChar;
+		auto n = rep.byChar.countUntil('\n');
 		if(n >= 0) {
 			rep = rep[0..n];
 		}
