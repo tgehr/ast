@@ -316,7 +316,6 @@ abstract class Scope{
 		final void resetConst(){ }
 		final void resetComponentReplacement(){ }
 	}
-
 	final Declaration consume(Declaration decl){
 		if(decl.name.id !in symtab) return null;
 		Expression type;
@@ -533,7 +532,7 @@ abstract class Scope{
 			dependencies.dependencies.remove(decl);
 		}
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
-			//imported!"util.io".writeln("ADDING: ",deps);
+			//imported!"util.io".writeln("ADDING: ",this,"(",cast(void*)this,") ",deps);
 			foreach(i,ref dep;deps){
 				if(dep[0] in dependencies.dependencies){
 					//writeln(dep[0]," ",toPush," ",dependencies)
@@ -744,7 +743,7 @@ abstract class Scope{
 			imported!"util.io".writeln("---/");+/
 			foreach(k,v;dependencies.dependencies.dup){
 				if(k.getId !in symtab && k.getId !in rnsymtab)
-					assert(!dependencyTracked(k),text(k," ",k.loc," ",dependencies," ",toPush," ",k.scope_," ",scopes[0]," ",scopes[0].dependencies));
+					assert(!dependencyTracked(k),text(k," ",k.loc," ",dependencies," ",toPush," ",k.scope_," ",scopes[0]," ",scopes[0].dependencies," ",scopes[0].getFunction));
 			}
 		}
 		foreach(sc;scopes){
@@ -916,7 +915,15 @@ abstract class Scope{
 			resetDeclProps(state.declProps);
 		}
 		symtab.clear();
-		foreach(_,decl;state.symtab) symtab[decl.name.id]=getSplit(decl,true);
+		foreach(_,decl;state.symtab){
+			auto split=getSplit(decl,true);
+			symtab[decl.name.id]=split;
+			static if(language==silq){
+				if(decl !is split){
+					dependencies.replace(decl,split);
+				}
+			}
+		}
 		foreach(_,decl;symtab) if(decl.rename.id !in rnsymtab) rnsymtab[decl.rename.id]=decl; // TODO: ok?
 		state=ScopeState.init;
 	}
