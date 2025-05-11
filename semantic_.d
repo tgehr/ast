@@ -2825,7 +2825,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 								if(rhs.isQfree()){
 									auto dep=rhsdep.dup;
 									if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-									if(decl in dependencies) dep.joinWith(dependencies[decl]);
+									if(indexed&&decl in dependencies) dep.joinWith(dependencies[decl]);
 									dep.remove(decl,sc.controlDependency);
 									dependencies[decl]=dep;
 								}
@@ -2835,6 +2835,8 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 							if(decl !in consumed){
 								if(!indexed) id.constLookup=false;
 								consumed[decl]=sc.consume(decl);
+								static if(language==silq)
+									sc.pushConsumed();
 							}
 							break;
 						case Stage.defineVars:
@@ -5183,6 +5185,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 	}
 	if(bdy){
+		//imported!"util.io".writeln("CLOSING FUNCTION ",fd," ",bdy.blscope_.getStateSnapshot);
 		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
 	}else{
 		fsc.forceClose();

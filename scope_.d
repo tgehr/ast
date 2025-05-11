@@ -533,6 +533,7 @@ abstract class Scope{
 			dependencies.dependencies.remove(decl);
 		}
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
+			//imported!"util.io".writeln("ADDING: ",deps);
 			foreach(i,ref dep;deps){
 				if(dep[0] in dependencies.dependencies){
 					//writeln(dep[0]," ",toPush," ",dependencies)
@@ -627,6 +628,7 @@ abstract class Scope{
 		allowMerge=false;
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
+		dependencies=scopes[0].dependencies.dup;
 		bool errors=false;
 		foreach(psym;symtab.dup){
 			auto sym=psym;
@@ -635,27 +637,34 @@ abstract class Scope{
 			void removeOSym(Scope sc,Declaration osym){
 				sc.symtab.remove(osym.name.id);
 				if(osym.rename) sc.rnsymtab.remove(osym.rename.id);
+				static if(language==silq){
+					if(sc.dependencyTracked(osym))
+						sc.dependencies.pushUp(osym,controlDependency);
+				}
 			}
 			void removeSym(){
 				removeOSym(this,sym);
+				removeOSym(scopes[0],psym);
 				symExists=false;
 			}
 			void promoteSym(Expression ntype){
 				symtab.remove(sym.name.id);
 				if(sym.rename) rnsymtab.remove(sym.rename.id);
 				auto var=addVariable(sym,ntype,true);
-				sym=symtab[sym.name.id];
+				if(dependencyTracked(sym))
+					dependencies.replace(sym,var);
+				sym=var;
 				needMerge=true;
 			}
 			foreach(sc;scopes[1..$]){
 				if(sym.name.id !in sc.symtab){
-					removeSym();
 					static if(language==silq){
 						if(!scopes[0].canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
 						}
 					}
+					removeSym();
 				}else{
 					auto osym=sc.symtab[sym.name.id];
 					if(sym!=osym){
@@ -686,13 +695,7 @@ abstract class Scope{
 			if(symExists&&needMerge){
 				if(auto ntype=typeForDecl(sym)){
 					if(sym.scope_ is scopes[0]) promoteSym(ntype);
-					scopes[0].mergeVar(psym,sym);
-					static if(language==silq){
-						if(!scopes[0].dependencyTracked(psym))
-							scopes[0].addDefaultDependency(psym); // TODO: ideally can be removed
-						scopes[0].dependencies.replace(psym,sym);
-					}
-					foreach(sc;scopes[1..$]){
+					foreach(sc;scopes){
 						assert(sym.name.id in sc.symtab);
 						auto osym=sc.symtab[sym.name.id];
 						sc.mergeVar(osym,sym);
@@ -707,6 +710,20 @@ abstract class Scope{
 			}
 		}
 		static if(language==silq){
+			foreach(sc;scopes){
+				foreach(sym;sc.symtab){
+					if(sym.name.id !in symtab){ // TODO: needed at all?
+						if(!sc.canForgetAppend(sym)){
+							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
+							errors=true;
+						}
+						static if(language==silq){
+							if(sc.dependencyTracked(sym))
+								sc.dependencies.pushUp(sym,controlDependency);
+						}
+					}
+				}
+			}
 			/+imported!"util.io".writeln("/---");
 			scopes[].each!((sc){
 				imported!"util.io".writeln(sc.dependencies);
@@ -714,7 +731,7 @@ abstract class Scope{
 					imported!"util.io".writeln(cast(void*)decl);
 				}
 			});+/
-			dependencies=scopes[0].dependencies.dup;
+			//dependencies=scopes[0].dependencies.dup;
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
 			/+imported!"util.io".writeln("----");
@@ -725,29 +742,15 @@ abstract class Scope{
 				assert(rnsymtab[decl.getId] is decl);
 			}
 			imported!"util.io".writeln("---/");+/
-		}
-		static if(language==silq){
-			foreach(sc;scopes[1..$]){
-				foreach(sym;sc.symtab){
-					if(sym.name.id !in symtab){
-						if(!sc.canForgetAppend(sym)){
-							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
-							errors=true;
-						}
-					}
-				}
+			foreach(k,v;dependencies.dependencies.dup){
+				if(k.getId !in symtab && k.getId !in rnsymtab)
+					assert(!dependencyTracked(k),text(k," ",k.loc," ",dependencies," ",toPush," ",k.scope_," ",scopes[0]," ",scopes[0].dependencies));
 			}
 		}
 		foreach(sc;scopes){
 			static if(language==silq) sc.dependencies.clear();
 			sc.symtab.clear();
 			sc.rnsymtab.clear();
-		}
-		static if(language==silq){
-			foreach(k,v;dependencies.dependencies.dup){
-				if(k.getId !in symtab && k.getId !in rnsymtab)
-					dependencies.dependencies.remove(k);
-			}
 		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
@@ -1046,12 +1049,13 @@ class NestedScope: Scope{
 		if(remove||type){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			/+static if(language==silq){
-				if(type&&dependencyTracked(odecl)){
-					dependencies.pushUp(odecl,controlDependency);
+			static if(language==silq){
+				if(dependencyTracked(odecl)){
+					//dependencies.pushUp(odecl,controlDependency);
 					removeDependency(odecl);
 				}
-			}+/
+			}
+			//imported!"util.io".writeln("REMOVED: ",odecl," ",dependencies," ",this);
 		}
 		if(type){
 			if(auto added=addVariable(ndecl,type,true)){
@@ -1061,6 +1065,7 @@ class NestedScope: Scope{
 					if(remove&&parent.getFunction() is getFunction()){
 						addDependency(ndecl,pdep.dup);
 						dependencies.replace(ndecl,result);
+						//imported!"util.io".writeln("NEW DEPS: ",dependencies);
 					}
 				}
 			}
