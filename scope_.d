@@ -1052,7 +1052,6 @@ class NestedScope: Scope{
 			assert(odecl is ndecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
 				pdep=parent.getDependency(nndecl);
-				static if(language==silq) parent.pushConsumed();
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
