@@ -656,7 +656,9 @@ class Checker {
 			t.dFalse = decl;
 		}
 
-		foreach(name, t; splitVars) {
+		foreach(decl; scTrue.splitVars) {
+			auto name = decl.splitFrom.getId;
+			Triple* t = name in splitVars;
 			assert(t.dFalse, format("ERROR: Split variable %s missing in if-false", name));
 			auto vTrue = t.dTrue;
 			auto vFalse = t.dFalse;
@@ -693,7 +695,9 @@ class Checker {
 			t.dFalse = decl;
 		}
 
-		foreach(name, t; mergedVars) {
+		foreach(decl; scTrue.mergedVars) {
+			auto name = decl.mergedInto.getId;
+			auto t = name in mergedVars;
 			assert(t.dFalse, format("ERROR: Merged variable %s missing in if-false", name));
 			auto outer = t.outer;
 			// TODO types as part of merge result?
@@ -708,48 +712,32 @@ class Checker {
 		assert(scNested is nscope || scNested.parent is nscope);
 		nested = new Checker(scNested, this);
 
-		struct Pair {
-			ast_decl.Declaration outer, nested;
-		}
-		IdMap!Pair splitVars;
-		foreach(decl; scNested.splitVars) {
-			assert(decl.scope_ is scNested);
-			auto outer = decl.splitFrom;
+		foreach(vNested; scNested.splitVars) {
+			assert(vNested.scope_ is scNested);
+			auto outer = vNested.splitFrom;
+			auto name = outer.getId;
 			assert(outer.scope_ is nscope);
-			splitVars[outer.getId] = Pair(outer, decl);
-		}
-
-		foreach(name, p; splitVars) {
-			auto vNested = p.nested;
-			auto vtype = ast_sem.typeForDecl(p.outer);
+			auto vtype = ast_sem.typeForDecl(outer);
 			assert(typeForDecl(vNested) == vtype, format("ERROR: Split variable %s changed type in nested scope", name));
-			getVar(p.outer, false, "splitVars", cause);
+			getVar(outer, false, "splitVars", cause);
 			nested.defineVar(vNested, "splitVars-nested", cause);
-		}
-
-		// Make sure the merged types are evaluated in the outer scope.
-		foreach(decl; scNested.mergedVars) {
-			visExpr(typeForDecl(decl.mergedInto));
 		}
 	}
 
 	void visMerge(Checker nested, ast_exp.Expression cause) {
 		auto scNested = nested.nscope;
 
-		struct Pair {
-			ast_decl.Declaration outer, nested;
-		}
-		IdMap!Pair mergedVars;
-		foreach(decl; scNested.mergedVars) {
-			mergedVars[decl.mergedInto.getId] = Pair(decl.mergedInto, decl);
-		}
-
-		foreach(name, p; mergedVars) {
-			auto outer = p.outer;
+		foreach(vNested; scNested.mergedVars) {
+			auto outer = vNested.mergedInto;
 			// TODO types as part of merge result?
 			visExpr(typeForDecl(outer));
-			nested.getVar(p.nested, false, "mergedVars-nested", cause);
+			nested.getVar(vNested, false, "mergedVars-nested", cause);
 			defineVar(outer, "mergedVars", cause);
+		}
+
+		// Make sure the merged types are evaluated in the outer scope.
+		foreach(decl; scNested.mergedVars) {
+			visExpr(typeForDecl(decl.mergedInto));
 		}
 	}
 
