@@ -2827,9 +2827,14 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 							case Stage.collectDeps:
 								if(rhs.isQfree()){
 									auto dep=rhsdep.dup;
-									if(indexed) dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-									if(indexed&&decl in dependencies) dep.joinWith(dependencies[decl]);
-									dep.remove(decl,sc.controlDependency);
+									if(indexed){
+										dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+										if(decl in dependencies) dep.joinWith(dependencies[decl]);
+									}
+									if(decl in dep.dependencies){
+										dep.remove(decl,sc.controlDependency);
+										dep.joinWith(sc.getDependency(decl));
+									}
 									dependencies[decl]=dep;
 								}
 								break;

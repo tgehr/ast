@@ -331,7 +331,7 @@ abstract class Scope{
 		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return decl;
 		Expression type;
 		auto result=consume(decl);
-		if(!result) return null;
+		if(!result) return decl;
 		unconsume(result);
 		return result;
 	}
@@ -556,7 +556,7 @@ abstract class Scope{
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
 				foreach(odecl;dep.dependencies)
-					assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep));
+					assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl));
 				dep.joinWith(controlDependency);
 				dependencies.dependencies[decl]=dep;
 			}
@@ -571,9 +571,17 @@ abstract class Scope{
 		}do{
 			return getDependency(id.meaning);
 		}
-		final Dependency getDependency(Declaration decl)in{
+		final Dependency getDependency(Declaration decl,bool pushed=false)in{
 			assert(decl.sstate==SemState.completed||decl.sstate==SemState.error,text(decl," ",decl.sstate));
 		}do{
+			if(pushed&&toPush.length){ // TODO: push on consume instead, turn toPush into toRemove
+				if(!dependencyTracked(decl)) return Dependency(true);
+				auto deps=dependencies.dup;
+				foreach(odecl;toPush)
+					if(odecl !is decl&&dependencyTracked(odecl))
+						deps.pushUp(odecl,controlDependency);
+				return deps.dependencies[decl];
+			}
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];
 		}
@@ -1051,7 +1059,7 @@ class NestedScope: Scope{
 		if(remove){
 			assert(odecl is ndecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
-				pdep=parent.getDependency(nndecl);
+				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
@@ -1059,6 +1067,8 @@ class NestedScope: Scope{
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
+								if(sc.dependencyTracked(ndecl)) // TODO: can we get rid of this?
+									sc.removeDependency(ndecl);
 								sc.addDependency(ndecl,pdep.dup);
 								if(ndecl !is cdecl)
 									sc.dependencies.replace(ndecl,cdecl);
@@ -1097,7 +1107,7 @@ class NestedScope: Scope{
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			if(dependencyTracked(odecl)){
 				dependencies.pushUp(odecl,controlDependency);
-				removeDependency(odecl);
+				toPush~=odecl;
 			}
 		}
 		if(!remove) return result;
