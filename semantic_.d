@@ -5256,30 +5256,29 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		Declaration[] ncapturedDecls;
 		Identifier[][Declaration] ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
-			if(!capture.isLinear) continue;
-			if(!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
-				auto ocapture=capture;
-				while(ocapture.scope_.isNestedIn(oldfscope_)){
-					ocapture=ocapture.splitFrom;
-				}
-				ocapture.splitInto=ocapture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
-				assert(!ocapture.isLinear||ocapture.scope_ is fd.scope_); // TODO: ok?
+			auto ocapture=capture;
+			while(ocapture.scope_.isNestedIn(oldfscope_)){
+				ocapture=ocapture.splitFrom;
+			}
+			ocapture.splitInto=ocapture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
+			if(capture.isLinear&&!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
+				assert(ocapture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
 				ocapture.scope_=null;
 				fd.scope_.unconsume(ocapture);
-				auto loc=fd.captures[capture][0].loc;
-				auto id=new Identifier(capture.getId);
-				id.loc=loc;
-				auto nid=expressionSemantic(id,ExpSemContext(fd.fscope_,ConstResult.no,InType.no));
-				assert(nid is id);
-				propErr(id,fd);
-				if(id.meaning){
-					id.meaning.scope_=null;
-					fd.fscope_.unconsume(id.meaning);
-					assert(id.meaning.isSplitFrom(ocapture));
-					ncapturedDecls~=id.meaning;
-					ncaptures[id.meaning]~=id;
-				}
+				fd.fscope_.symtabInsert(ocapture);
+			}
+			auto loc=fd.captures[capture][0].loc;
+			auto id=new Identifier(capture.getName);
+			id.loc=loc;
+			id.meaning=capture.isLinear?fd.fscope_.split(ocapture):ocapture;
+			id.type=id.typeFromMeaning;
+			id.constLookup=false;
+			id.sstate=id.type?SemState.completed:SemState.error;
+			propErr(id,fd);
+			if(id.meaning){
+				ncapturedDecls~=id.meaning;
+				ncaptures[id.meaning]~=id;
 			}
 		}
 		fd.captures=ncaptures;
@@ -5287,7 +5286,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.context=null;
 		fd.thisVar=null;
 		prepareFunctionDef(fd,fd.scope_);
-		if(fd.captures.length){
+		if(fd.capturedDecls.any!(d=>d.isLinear)){
 			assert(!!fd.context);
 			fd.context.vtype=contextTy(false);
 		}
