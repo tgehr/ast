@@ -4080,9 +4080,10 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 		}
 		if(fe.f.name=="length"&&!hasSideEffect){
 			if(auto vt=cast(VectorTy)fe.e.type){
-				auto len=vt.num.copy();
+				Expression.CopyArgs cargs={ preserveMeanings: true };
+				auto len=vt.num.copy(cargs);
 				len.loc=fe.loc;
-				return expressionSemantic(len,context);// TODO: preserve semantic on clone
+				return expressionSemantic(len,context);
 			}else if(auto tt=cast(TupleTy)fe.e.type){
 				auto len=LiteralExp.makeInteger(tt.length);
 				len.loc=fe.loc;
