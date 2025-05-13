@@ -1416,7 +1416,7 @@ Dependency getDependency(Expression e,Scope sc)in{
 				if(!id.constLookup){
 					/+auto vd=cast(VarDecl)id.meaning;
 					 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
-					result.replace(decl,sc.getDependency(decl),sc.controlDependency);
+					result.replace(decl,sc.getDependency(decl));
 				}
 			}
 		}
@@ -2822,7 +2822,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 										if(decl in dependencies) dep.joinWith(dependencies[decl]);
 									}
 									if(decl in dep.dependencies){
-										dep.remove(decl,sc.controlDependency);
+										dep.remove(decl);
 										dep.joinWith(sc.getDependency(decl));
 									}
 									dependencies[decl]=dep;
@@ -3016,7 +3016,7 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				if(be.e2.isQfree()){
 					auto dependency=sc.getDependency(id.meaning);
 					auto rhsDep=be.e2.getDependency(sc);
-					rhsDep.remove(id.meaning,sc.controlDependency);
+					rhsDep.remove(id.meaning);
 					dependency.joinWith(rhsDep);
 					consume();
 					define(dependency);

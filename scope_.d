@@ -21,23 +21,19 @@ struct Dependency{
 		foreach(x;rhs.dependencies)
 			dependencies.insert(x);
 	}
-	void replace(Declaration decl, Dependency rhs, Dependency control){
+	void remove(Declaration decl){
+		dependencies.remove(decl);
+	}
+	void replace(Declaration decl, Dependency rhs){
 		if(decl !in dependencies) return;
 		dependencies.remove(decl);
 		joinWith(rhs);
-		joinWith(control);
 	}
 	void replace(Declaration decl,Declaration ndecl){
 		if(decl in dependencies){
 			dependencies.remove(decl);
 			dependencies.insert(ndecl);
 		}
-	}
-	void remove(Declaration decl,Dependency control)in{
-		assert(decl !in control.dependencies);
-	}do{
-		if(decl in dependencies) joinWith(control);
-		dependencies.remove(decl);
 	}
 	Dependency dup(){
 		return Dependency(isTop, dependencies.dup);
@@ -64,13 +60,13 @@ struct Dependencies{
 			}
 		}
 	}
-	void pushUp(Declaration removed, Dependency control, bool keep)in{
+	void pushUp(Declaration removed, bool keep)in{
 		assert(removed in dependencies,text(removed," ",removed.loc," ",dependencies));
 	}do{
 		Dependency x=dependencies[removed];
 		if(!keep) dependencies.remove(removed);
 		foreach(k,ref v;dependencies){
-			v.replace(removed, x, control);
+			v.replace(removed, x);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
 		}
@@ -353,7 +349,7 @@ abstract class Scope{
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			static if(language==silq){
 				if(dependencyTracked(odecl)){
-					dependencies.pushUp(odecl,controlDependency,true);
+					dependencies.pushUp(odecl,true);
 					toRemove~=odecl;
 				}
 			}
@@ -367,7 +363,7 @@ abstract class Scope{
 		private Declaration[] toRemove;
 		final void pushUp(ref Dependency dependency,Declaration removed){
 			if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
-			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
+			dependency.replace(removed,dependencies.dependencies[removed]);
 		}
 		final void clearConsumed(){
 			foreach(removed;toRemove)
@@ -551,7 +547,6 @@ abstract class Scope{
 			foreach(decl,dep;deps.map!(x=>x)){
 				foreach(odecl;dep.dependencies)
 					assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl));
-				dep.joinWith(controlDependency);
 				dependencies.dependencies[decl]=dep;
 			}
 		}
@@ -633,6 +628,7 @@ abstract class Scope{
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		dependencies=scopes[0].dependencies.dup;
+		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
 		foreach(psym;symtab.dup){
 			auto sym=psym;
@@ -643,7 +639,7 @@ abstract class Scope{
 				if(osym.rename) sc.rnsymtab.remove(osym.rename.id);
 				static if(language==silq){
 					if(sc.dependencyTracked(osym)){
-						sc.dependencies.pushUp(osym,controlDependency,true);
+						sc.dependencies.pushUp(osym,true);
 						sc.removeDependency(osym);
 					}
 				}
@@ -657,8 +653,13 @@ abstract class Scope{
 				symtab.remove(sym.name.id);
 				if(sym.rename) rnsymtab.remove(sym.rename.id);
 				auto var=addVariable(sym,ntype,true);
-				if(dependencyTracked(sym))
-					dependencies.replace(sym,var);
+				if(!dependencyTracked(sym))
+					addDefaultDependency(sym); // TODO: ideally can be removed
+				//dependencies.replace(sym,var); // reverse-inherit dependencies
+				auto dep=getDependency(sym);
+				dep.joinWith(nestedControlDependency);
+				addDependency(var,dep);
+				dependencies.pushUp(sym,false);
 				sym=var;
 				needMerge=true;
 			}
@@ -708,7 +709,11 @@ abstract class Scope{
 						static if(language==silq){
 							if(!sc.dependencyTracked(osym))
 								sc.addDefaultDependency(osym); // TODO: ideally can be removed
-							sc.dependencies.replace(osym,sym);
+							//sc.dependencies.replace(osym,sym); // reverse-inherit dependencies
+							auto dep=sc.getDependency(osym);
+							dep.joinWith(sc.controlDependency);
+							sc.addDependency(sym,dep);
+							sc.dependencies.pushUp(osym,false);
 						}
 					}
 				}else sym.scope_=this;
@@ -724,11 +729,8 @@ abstract class Scope{
 							errors=true;
 						}
 						static if(language==silq){
-							if(sc.dependencyTracked(sym)){
-								sc.dependencies.pushUp(sym,controlDependency,true);
-								sc.removeDependency(sym);
-							}
-						}
+							if(sc.dependencyTracked(sym))
+								sc.dependencies.pushUp(sym,false);							}
 					}
 				}
 			}
@@ -1048,8 +1050,11 @@ class NestedScope: Scope{
 		if(type){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			if(odecl !is ndecl&&dependencyTracked(odecl))
-				dependencies.replace(odecl,ndecl);
+			if(odecl !is ndecl&&dependencyTracked(odecl)){
+				//dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
+				dependencies.pushUp(odecl,false); // consume declaration normally on split
+				// TODO: backtrace forgets and last usages
+			}
 			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
 				splitVar(ndecl,result);
@@ -1065,7 +1070,7 @@ class NestedScope: Scope{
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			static if(language==silq){
 				if(dependencyTracked(odecl)){
-					dependencies.pushUp(odecl,controlDependency,true);
+					dependencies.pushUp(odecl,true);
 					toRemove~=odecl;
 				}
 			}
