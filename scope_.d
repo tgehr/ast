@@ -64,11 +64,11 @@ struct Dependencies{
 			}
 		}
 	}
-	void pushUp(Declaration removed, Dependency control)in{
+	void pushUp(Declaration removed, Dependency control, bool keep)in{
 		assert(removed in dependencies,text(removed," ",removed.loc," ",dependencies));
 	}do{
 		Dependency x=dependencies[removed];
-		dependencies.remove(removed);
+		if(!keep) dependencies.remove(removed);
 		foreach(k,ref v;dependencies){
 			v.replace(removed, x, control);
 			if(k in v.dependencies)
@@ -135,17 +135,10 @@ abstract class Scope{
 	}
 
 	void symtabInsert(Declaration decl)in{
-		assert(!toPush.canFind(decl));
+		assert(!toRemove.canFind(decl));
 	}do{
 		symtab[decl.name.id]=decl;
 		if(decl.rename) rnsymtab[decl.rename.id]=decl;
-		/+static if(language==silq){
-			if(decl !in dependencies.dependencies){
-				addDependency(decl,Dependency(true));
-				//imported!"util.io".writeln("!!! ",decl," ",decl.loc);
-				//if(decl.loc.line==4&&decl.getName=="x"&&!cast(Parameter)decl) assert(0);
-			}
-		}+/
 	}
 
 	void redefinitionError(Declaration decl, Declaration prev) in{
@@ -338,7 +331,7 @@ abstract class Scope{
 	final void unconsume(Declaration decl)in{
 		assert(decl.scope_ is null||decl.scope_ is this);
 	}do{
-		toPush=toPush.filter!(pdecl=>pdecl!is decl).array;
+		toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array;
 		decl.scope_=null;
 		insert(decl);
 	}
@@ -358,8 +351,12 @@ abstract class Scope{
 		if(remove){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			static if(language==silq)
-				toPush~=odecl;
+			static if(language==silq){
+				if(dependencyTracked(odecl)){
+					dependencies.pushUp(odecl,controlDependency,true);
+					toRemove~=odecl;
+				}
+			}
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
@@ -367,17 +364,15 @@ abstract class Scope{
 		return ndecl;
 	}
 	static if(language==silq){
-		/+private+/ Declaration[] toPush;
+		private Declaration[] toRemove;
 		final void pushUp(ref Dependency dependency,Declaration removed){
 			if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
 			dependency.replace(removed,dependencies.dependencies[removed],controlDependency);
 		}
-		final void pushConsumed(){
-			foreach(removed;toPush){
-				if(!dependencyTracked(removed)) continue; // TODO: ideally can be removed
-				dependencies.pushUp(removed,controlDependency);
-			}
-			toPush=[];
+		final void clearConsumed(){
+			foreach(removed;toRemove)
+				removeDependency(removed);
+			toRemove=[];
 		}
 	}
 
@@ -493,7 +488,7 @@ abstract class Scope{
 						d.sstate=SemState.error;
 					}else{
 						consume(d);
-						pushConsumed();
+						clearConsumed();
 					}
 				}
 			}
@@ -507,9 +502,8 @@ abstract class Scope{
 	}
 
 	final bool closeUnreachable(){
-		static if(language==silq){
-			toPush=[];
-		}
+		static if(language==silq)
+			clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
 		foreach(n,d;symtab.dup){
@@ -517,7 +511,7 @@ abstract class Scope{
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d);
 				static if(language==silq){
-					pushConsumed();
+					clearConsumed();
 				}
 			}
 		}
@@ -550,7 +544,7 @@ abstract class Scope{
 			//imported!"util.io".writeln("ADDING: ",this,"(",cast(void*)this,") ",deps);
 			foreach(i,ref dep;deps){
 				if(dep[0] in dependencies.dependencies){
-					//writeln(dep[0]," ",toPush," ",dependencies)
+					//writeln(dep[0]," ",toRemove," ",dependencies)
 					dep[1].joinWith(dependencies.dependencies[dep[0]]);
 				}
 			}
@@ -574,21 +568,11 @@ abstract class Scope{
 		final Dependency getDependency(Declaration decl,bool pushed=false)in{
 			assert(decl.sstate==SemState.completed||decl.sstate==SemState.error,text(decl," ",decl.sstate));
 		}do{
-			if(pushed&&toPush.length){ // TODO: push on consume instead, turn toPush into toRemove
-				if(!dependencyTracked(decl)) return Dependency(true);
-				auto deps=dependencies.dup;
-				foreach(odecl;toPush)
-					if(odecl !is decl&&dependencyTracked(odecl))
-						deps.pushUp(odecl,controlDependency);
-				return deps.dependencies[decl];
-			}
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];
 		}
 
-		bool canForget(Declaration decl)in{
-			assert(toPush.length==0,text(toPush));
-		}do{
+		bool canForget(Declaration decl){
 			if(decl.sstate==SemState.error) return true;
 			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
 			import ast.semantic_:typeForDecl;
@@ -636,14 +620,12 @@ abstract class Scope{
 
 	bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
-		static if(language==silq){
-			assert(scopes.all!(sc=>sc.toPush.length==0));
-		}
 		//debug assert(allowMerge);
 	}do{
 		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
+		foreach(sc;scopes) sc.clearConsumed();
 		static if(language==silq){
-			toPush=[];
+			clearConsumed();
 		}
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
 		activeNestedScopes=[];
@@ -660,8 +642,10 @@ abstract class Scope{
 				sc.symtab.remove(osym.name.id);
 				if(osym.rename) sc.rnsymtab.remove(osym.rename.id);
 				static if(language==silq){
-					if(sc.dependencyTracked(osym))
-						sc.dependencies.pushUp(osym,controlDependency);
+					if(sc.dependencyTracked(osym)){
+						sc.dependencies.pushUp(osym,controlDependency,true);
+						sc.removeDependency(osym);
+					}
 				}
 			}
 			void removeSym(){
@@ -740,30 +724,16 @@ abstract class Scope{
 							errors=true;
 						}
 						static if(language==silq){
-							if(sc.dependencyTracked(sym))
-								sc.dependencies.pushUp(sym,controlDependency);
+							if(sc.dependencyTracked(sym)){
+								sc.dependencies.pushUp(sym,controlDependency,true);
+								sc.removeDependency(sym);
+							}
 						}
 					}
 				}
 			}
-			/+imported!"util.io".writeln("/---");
-			scopes[].each!((sc){
-				imported!"util.io".writeln(sc.dependencies);
-				foreach(decl,ref dep;sc.dependencies.dependencies){ // !!!
-					imported!"util.io".writeln(cast(void*)decl);
-				}
-			});+/
-			//dependencies=scopes[0].dependencies.dup;
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
-			/+imported!"util.io".writeln("----");
-			imported!"util.io".writeln(dependencies);
-			foreach(decl,ref dep;dependencies.dependencies){ // !!!
-				imported!"util.io".writeln(cast(void*)decl);
-				assert(decl.getId in rnsymtab);
-				assert(rnsymtab[decl.getId] is decl);
-			}
-			imported!"util.io".writeln("---/");+/
 			foreach(k,v;dependencies.dependencies.dup){
 				if(k.getId !in symtab && k.getId !in rnsymtab)
 					if(dependencyTracked(k))
@@ -898,18 +868,16 @@ abstract class Scope{
 		static if(language==silq){
 			Dependencies dependencies;
 			DeclProps declProps;
+			Declaration[] toRemove;
 		}
 		Declaration[Id] symtab;
 		bool restoreable=false;
 	}
-	ScopeState getStateSnapshot(bool restoreable=false)in{
-		static if(language==silq)
-			assert(!toPush.length);
-	}do{
+	ScopeState getStateSnapshot(bool restoreable=false){
 		Declaration[Id] nsymtab;
 		foreach(_,decl;symtab) nsymtab[decl.name.id]=decl;
 		static if(language==silq){
-			return ScopeState(dependencies.dup,restoreable?saveDeclProps:DeclProps.init,nsymtab,restoreable);
+			return ScopeState(dependencies.dup,restoreable?saveDeclProps:DeclProps.init,toRemove,nsymtab,restoreable);
 		}else{
 			return ScopeState(nsymtab,restoreable);
 		}
@@ -929,14 +897,12 @@ abstract class Scope{
 		assert(0);
 	}
 	void restoreStateSnapshot(ref ScopeState state)in{
-		static if(language==silq){
-			assert(!toPush.length);
-		}
 		assert(state.restoreable);
 	}do{
 		static if(language==silq){
 			dependencies=state.dependencies;
 			resetDeclProps(state.declProps);
+			toRemove=state.toRemove;
 		}
 		symtab.clear();
 		foreach(_,decl;state.symtab){
@@ -1091,23 +1057,17 @@ class NestedScope: Scope{
 					if(remove&&parent.getFunction() is getFunction()){
 						addDependency(ndecl,pdep.dup);
 						dependencies.replace(ndecl,result);
-						//imported!"util.io".writeln("NEW DEPS: ",dependencies);
 					}
 				}
 			}
-			/+imported!"util.io".writeln("SPLITTING: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
-			foreach(decl,ref dep;dependencies.dependencies){ // !!!
-				imported!"util.io".writeln(decl," ",cast(void*)decl);
-				assert(decl.getId in rnsymtab);
-				assert(rnsymtab[decl.getId] is decl);
-			}
-			imported!"util.io".writeln("=====");+/
 		}else if(remove){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			if(dependencyTracked(odecl)){
-				dependencies.pushUp(odecl,controlDependency);
-				toPush~=odecl;
+			static if(language==silq){
+				if(dependencyTracked(odecl)){
+					dependencies.pushUp(odecl,controlDependency,true);
+					toRemove~=odecl;
+				}
 			}
 		}
 		if(!remove) return result;
@@ -1170,10 +1130,7 @@ class CapturingScope(T): NestedScope{
 		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
-			//auto fd2=chain(meaning.derivedSequence.map!(x=>cast(FunctionDef)x).filter!(x=>!!x),only(null)).front;
 			if(meaning.isSplitFrom(decl)/+||fd2&&!fd2.isLinear()+/){
-				//if(fd2&&!fd2.isLinear()) meaning=fd2; // TODO: this is a bit hacky
-				//if(fd2&&fd2.sstate!=SemState.completed) fd2.seal();
 				if(meaning.isSplitFrom(decl)) decl.seal();
 				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
