@@ -1461,18 +1461,19 @@ struct DefineLhsContext{
 		return name;
 	}
 	Expression type;
+	Expression initializer;
 }
-auto defineLhsContext(ExpSemContext expSem,Expression type){
-	return DefineLhsContext(expSem,type);
+auto defineLhsContext(ExpSemContext expSem,Expression type,Expression initializer){
+	return DefineLhsContext(expSem,type,initializer);
 }
-auto nest(DefineLhsContext context,ConstResult newConstResult,Expression newType){
-	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$-1],newType);
+auto nest(DefineLhsContext context,ConstResult newConstResult,Expression newType,Expression newInitializer){
+	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$-2],newType,newInitializer);
 }
-auto nestConst(ref DefineLhsContext context,Expression newType){
-	return context.nest(ConstResult.yes,newType);
+auto nestConst(ref DefineLhsContext context,Expression newType,Expression newInitializer){
+	return context.nest(ConstResult.yes,newType,newInitializer);
 }
-auto nestConsumed(ref DefineLhsContext context,Expression newType){
-	return context.nest(ConstResult.no,newType);
+auto nestConsumed(ref DefineLhsContext context,Expression newType,Expression newInitializer){
+	return context.nest(ConstResult.no,newType,newInitializer);
 }
 
 template defineLhsSemanticImpls(bool isPresemantic){
@@ -1582,7 +1583,27 @@ Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 	if(!isPresemantic){
-		// TODO: create variable and insert it here?
+		if(id.sstate!=SemState.error)
+		if(auto vd=cast(VarDecl)id.meaning){
+			if(context.type){
+				if(vd.vtype){
+					if(auto nt=joinTypes(vd.vtype,context.type)){
+						vd.vtype=nt;
+					}else{
+						context.sc.error(format("incompatible types '%s' and '%s' for variable '%s'",vd.vtype,context.type),id.loc);
+						id.sstate=SemState.error;
+					}
+				}else vd.vtype=context.type;
+			}else id.sstate=SemState.error;
+			if(context.initializer){
+				assert(!vd.initializer);
+				vd.initializer=context.initializer;
+			}
+		}
+		if(id.meaning){
+			propErr(id,id.meaning);
+			propErr(id.meaning,id);
+		}
 		if(context.type){
 			id.type=context.type;
 		}else{
@@ -1626,7 +1647,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			}
 		}
 		if(auto idx=cast(IndexExp)next){
-			if(auto r=analyzeAggregate(idx,context.nestConst(null))){
+			if(auto r=analyzeAggregate(idx,context.nestConst(null,null))){
 				e.e=r;
 				propErr(e.e,e);
 				return e;
@@ -1713,9 +1734,13 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 	auto at=cast(ArrayTy)context.type;
 	// auto vt=cast(VectorTy)context.type; // TODO
 	auto tt=!at&&context.type?context.type.isTupleTy:null;
+	Expression[] es=[];
+	if(auto te=cast(TupleExp)context.initializer) es=te.e;
+	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
 	foreach(i,ref e;tpl.e){
 		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:null;
-		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype));
+		auto ninit=i<es.length?es[i]:null;
+		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype,ninit));
 		propErr(e,tpl);
 	}
 	static if(!isPresemantic){
@@ -1793,7 +1818,7 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 		tae.type=typeSemantic(tae.t,context.sc);
 		if(tae.type) tae.t=tae.type;
 	}
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type));
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type,context.initializer));
 	static if(!isPresemantic){
 		return expressionSemantic(tae,context.expSem);
 	}else return tae;
@@ -1925,7 +1950,6 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 				if(l1) ntype1=vectorTy(at.next,l1);
 				if(l2) ntype2=vectorTy(at.next,l2);
 			}else if(auto tt=context.type.isTupleTy){
-				import util.maybe:mfold;
 				size_t mid;
 				bool ok=false;
 				if(!ok&&l1){
@@ -1961,8 +1985,44 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 		}
 		//imported!"util.io".writeln("!! ",ce," ",ntype1," ",ntype2," ",l1," ",l2," ",context.type);
 	}else auto ntype1=null,ntype2=null;
-	auto ncontext1=context.nest(context.constResult,ntype1);
-	auto ncontext2=context.nest(context.constResult,ntype2);
+	Expression ninit1=null,ninit2=null;
+	if(context.initializer&&context.initializer.sstate==SemState.completed){
+		assert(!!context.initializer.type);
+		bool isTupleExp=false,isVectorExp=false;
+		Expression[] es;
+		if(auto te=cast(TupleExp)context.initializer){
+			es=te.e;
+			isTupleExp=true;
+		}
+		if(auto ve=cast(VectorExp)context.initializer){
+			es=ve.e;
+			isVectorExp=true;
+		}
+		if(isTupleExp||isVectorExp){
+			bool ok=false;
+			size_t mid;
+			if(!ok&&l1){
+				if(auto x=l1.eval().asIntegerConstant()){
+					ok=true;
+					try mid=min(x.get.to!size_t,es.length);
+					catch(Exception) ok=false;
+				}
+			}
+			if(!ok&&l2){
+				if(auto x=l2.eval().asIntegerConstant()){
+					ok=true;
+					try mid=es.length-min(x.get.to!size_t,es.length);
+					catch(Exception) ok=false;
+				}
+			}
+			if(ok){
+				ninit1=expressionSemantic(isTupleExp?new TupleExp(es[0..mid]):new VectorExp(es[0..mid]),context.expSem);
+				ninit2=expressionSemantic(isTupleExp?new TupleExp(es[mid..$]):new VectorExp(es[mid..$]),context.expSem);
+			}
+		}
+	}
+	auto ncontext1=context.nest(context.constResult,ntype1,ninit1);
+	auto ncontext2=context.nest(context.constResult,ntype2,ninit2);
 	ce.e1=defineLhsSemantic!isPresemantic(ce.e1,ncontext1);
 	propErr(ce.e1,ce);
 	ce.e2=defineLhsSemantic!isPresemantic(ce.e2,ncontext2);
@@ -2147,7 +2207,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	static if(language==silq)
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
-		auto dcontext=defineLhsContext(econtext,null);
+		auto dcontext=defineLhsContext(econtext,null,null);
 		auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		be.e1=defineLhsPresemantic(be.e1,dcontext);
 		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
@@ -2313,13 +2373,11 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	if(be.e2.sstate==SemState.completed){
 		auto tpl=cast(TupleExp)be.e1;
 		if(be.e2.type){
-			auto dcontext=defineLhsContext(econtext,be.e2.type);
+			auto dcontext=defineLhsContext(econtext,be.e2.type,be.e2);
 			defineLhsSemantic(be.e1,dcontext);
 		}
 		if(de){
 			if(be.e1.sstate==SemState.error) de.setError();
-			de.setType(be.e2.type);
-			de.setInitializer();
 			if(de.sstate!=SemState.error){
 				int i=0;
 				foreach(vd;&de.varDecls){
@@ -3390,7 +3448,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}else{
 							auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
 							auto aty=ft.nargs==tpl.e.length?ft.argTy(i):null;
-							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
+							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
 						}
 						exp=argSemantic(exp,ncontext);
 						static if(isRhs) checkArg(i,exp);
@@ -3422,7 +3480,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}else{
 					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:true);
 					auto aty=ft.dom;
-					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
+					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
 				}
 				ce.arg=argSemantic(ce.arg,ncontext);
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
@@ -3440,7 +3498,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}else{
 				auto isConst=ft.isConstForReverse[0];
 				auto aty=ft.dom;
-				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty);
+				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
 			}
 			ce.arg=argSemantic(ce.arg,ncontext);
 			assert(ft.names.length==1);
@@ -3625,7 +3683,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			static if(isRhs){
 				ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
 			}else{
-				auto ncontext=context.nest(ConstResult.no,bottom);
+				auto ncontext=context.nest(ConstResult.no,bottom,null);
 				ce.arg=defineLhsSemantic!isPresemantic(ce.arg,ncontext);
 			}
 			propErr(ce.arg,ce);
