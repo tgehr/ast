@@ -1571,11 +1571,11 @@ Expression defineLhsSemanticImpl(PlaceholderExp pl,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
-	static if(!isPresemantic){
+	static if(isPresemantic){
 		fe.type=unit;
 	}else{
 		if(context.type&&fe.type&&!isSubtype(context.type,fe.type)){
-			context.sc.error(format("cannot assign %s to %s",context.type,fe.type),fe.loc);
+			context.sc.error(format("cannot assign '%s' to '%s'",context.type,fe.type),fe.loc);
 			fe.sstate=SemState.error;
 		}
 	}
@@ -1683,9 +1683,20 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	if(idx.byRef){
 		auto result=expressionSemantic(idx,context.expSem);
 		static if(!isPresemantic){
-			if(result.type&&context.type&&!isSubtype(context.type,result.type)){ // TODO: strong updates
-				context.sc.error(format("cannot assign %s to %s",context.type,result.type),result.loc);
-				result.sstate=SemState.error;
+			if(result.type&&context.type){
+				bool ok=true;
+				if(auto id=getIdFromIndex(idx)){
+					if(auto nt=updatedType(id,idx,context.type)){
+						if(auto vd=cast(VarDecl)id.meaning)
+							vd.vtype=nt;
+					}else ok=false;
+				}else if(!joinTypes(context.type,result.type)){
+					ok=false;
+				}
+				if(!ok){
+					context.sc.error(format("cannot assign '%s' to '%s'",context.type,result.type),result.loc);
+					result.sstate=SemState.error;
+				}
 			}
 		}
 		return result;
