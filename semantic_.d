@@ -2732,12 +2732,6 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 	if(id is lhs) return rhsty;
 	auto idx=cast(IndexExp)lhs;
 	assert(!!idx,text(id," ",lhs));
-	if(id is idx.e&&isFixedIntTy(id.type)){
-		if(!cast(BoolTy)rhsty) return null;
-		auto rtype=id.type;
-		if(!rhsty.isClassical||!idx.a.type.isClassical) rtype=rtype.getQuantum();
-		return rtype;
-	}
 	Expression getNrhsty(){
 		if(auto tt=idx.e.type.isTupleTy){
 			if(auto lit=idx.a.eval().asIntegerConstant()){
@@ -2762,6 +2756,12 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 			auto nnext=joinTypes(at.next,rhsty);
 			if(!nnext) return null;
 			return arrayTy(nnext);
+		}
+		if(isFixedIntTy(idx.e.type)){
+			if(!cast(BoolTy)rhsty) return null;
+			auto rtype=idx.e.type;
+			if(!rhsty.isClassical||!idx.a.type.isClassical) rtype=rtype.getQuantum();
+			return rtype;
 		}
 		return null;
 	}
