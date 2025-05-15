@@ -2163,106 +2163,115 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 	return be;
 }
 
-Expression defineSemantic(DefineExp be,Scope sc){
+bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	CompoundExp[] prologues,epilogues;
-	Expression finish(Expression r){
-		static if(language==silq) sc.clearConsumed();
-		if(!prologues.length||!epilogues.length) return r;
-		assert(prologues.length==epilogues.length);
-		assert(prologues.all!(prologue=>util.among(prologue.sstate,SemState.completed,SemState.error)));
-		assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
-		Expression current=r;
-		foreach_reverse(eplg;epilogues){
-			eplg=statementSemanticImpl(eplg,sc);
-			if(eplg.sstate!=SemState.error) eplg.sstate=SemState.completed;
+	auto dcontext=defineLhsContext(econtext,null,null);
+	auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
+	lhs=defineLhsPresemantic(lhs,dcontext);
+	//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
+	auto creplss=sc.localComponentReplacementsByDecl();
+	if(!creplss.length){
+		sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
+		return false;
+	}
+	foreach(crepls;creplss){
+		assert(crepls.length);
+		Expression[] reads;
+		foreach(ref crepl;crepls){
+			if(!crepl.write) continue;
+			auto id=new Identifier(crepl.name);
+			id.loc=loc;
+			auto idx=crepl.write.copy();
+			idx.loc=crepl.write.loc;
+			idx.byRef=true;
+			auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
+			read.loc=crepl.write.loc;
+			reads~=read;
 		}
-		foreach_reverse(prlg,eplg;zip(prologues,epilogues)){
-			auto prev=cast(CompoundExp)current;
-			if(!prev){
-				prev=new CompoundExp([current]);
-				prev.loc=current.loc;
-				prev.type=unit;
-				prev.sstate=SemState.completed;
-				propErr(current,prev);
-			}
-			auto with_=new WithExp(prlg,prev);
-			with_.itrans=eplg;
-			with_.loc=r.loc;
-			with_.isIndices=true;
+		auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
+		auto prologue=new CompoundExp(reads);
+		prologue.loc=loc;
+		prologue=statementSemanticImpl(prologue,sc);
+		if(prologue.sstate!=SemState.error) prologue.sstate=SemState.completed;
+		prologues~=prologue;
+		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
+		prologue.loc=loc;
+		Expression[] writes;
+		foreach_reverse(ref crepl;crepls){
+			if(!crepl.write) continue;
+			auto id=new Identifier(crepl.name);
+			id.loc=loc;
+			auto idx=crepl.write.copy();
+			idx.loc=crepl.write.loc;
+			idx.byRef=true;
+			auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
+			write.loc=crepl.write.loc;
+			writes~=write;
+		}
+		auto epilogue=new CompoundExp(writes);
+		epilogue.loc=loc;
+		epilogues~=epilogue;
+	}
+	return true;
+}
+
+Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues,Expression r,Scope sc){
+	static if(language==silq) sc.clearConsumed();
+	if(!prologues.length||!epilogues.length) return r;
+	assert(prologues.length==epilogues.length);
+	assert(prologues.all!(prologue=>util.among(prologue.sstate,SemState.completed,SemState.error)));
+	assert(r&&util.among(r.sstate,SemState.completed,SemState.error));
+	Expression current=r;
+	foreach_reverse(eplg;epilogues){
+		eplg=statementSemanticImpl(eplg,sc);
+		if(eplg.sstate!=SemState.error) eplg.sstate=SemState.completed;
+	}
+	foreach_reverse(prlg,eplg;zip(prologues,epilogues)){
+		auto prev=cast(CompoundExp)current;
+		if(!prev){
+			prev=new CompoundExp([current]);
+			prev.loc=current.loc;
+			prev.type=unit;
+			prev.sstate=SemState.completed;
+			propErr(current,prev);
+		}
+		auto with_=new WithExp(prlg,prev);
+		with_.itrans=eplg;
+		with_.loc=r.loc;
+		with_.isIndices=true;
 			with_.type=unit;
 			with_.sstate=SemState.completed;
 			propErr(prlg,with_);
 			propErr(prev,with_);
 			propErr(eplg,with_);
 			current=with_;
-		}
-		//imported!"util.io".writeln(current);
-		return current;
-		/+auto prologue=new CompoundExp(prologues);
-		prologue.type=unit;
-		prologue.sstate=SemState.completed;
-		foreach(prlg;prologues)
-			propErr(prlg,prologue);
-		reverse(epilogues);
-		auto epilogue=new CompoundExp(epilogues);
-		propErr(prologue,epilogue);
-		epilogue=statementSemanticImpl(epilogue,sc);
-		if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
-		auto res=new ComponentReplaceExp(prologue,r,epilogue);
-		res.loc=be.loc;
-		res.sstate=SemState.completed;
-		foreach(e;res.s) propErr(e,res);
-		return res;+/
 	}
+	//imported!"util.io".writeln(current);
+	return current;
+	/+auto prologue=new CompoundExp(prologues);
+	 prologue.type=unit;
+	 prologue.sstate=SemState.completed;
+	 foreach(prlg;prologues)
+	 propErr(prlg,prologue);
+	 reverse(epilogues);
+	 auto epilogue=new CompoundExp(epilogues);
+	 propErr(prologue,epilogue);
+	 epilogue=statementSemanticImpl(epilogue,sc);
+	 if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
+	 auto res=new ComponentReplaceExp(prologue,r,epilogue);
+	 res.loc=be.loc;
+	 res.sstate=SemState.completed;
+	 foreach(e;res.s) propErr(e,res);
+	 return res;+/
+}
+
+Expression defineSemantic(DefineExp be,Scope sc){
+	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
+	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
-		auto dcontext=defineLhsContext(econtext,null,null);
-		auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
-		be.e1=defineLhsPresemantic(be.e1,dcontext);
-		//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
-		Expression[][] readss,writess;
-		auto creplss=sc.localComponentReplacementsByDecl();
-		if(!creplss.length) sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
-		foreach(crepls;creplss){
-			assert(crepls.length);
-			Expression[] reads;
-			foreach(ref crepl;crepls){
-				if(!crepl.write) continue;
-				auto id=new Identifier(crepl.name);
-				id.loc=be.loc;
-				auto idx=crepl.write.copy();
-				idx.loc=crepl.write.loc;
-				idx.byRef=true;
-				auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
-				read.loc=crepl.write.loc;
-				reads~=read;
-			}
-			auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
-			auto prologue=new CompoundExp(reads);
-			prologue.loc=be.loc;
-			prologue=statementSemanticImpl(prologue,sc);
-			if(prologue.sstate!=SemState.error) prologue.sstate=SemState.completed;
-			prologues~=prologue;
-			sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
-			prologue.loc=be.loc;
-			Expression[] writes;
-			foreach_reverse(ref crepl;crepls){
-				if(!crepl.write) continue;
-				auto id=new Identifier(crepl.name);
-				id.loc=be.loc;
-				auto idx=crepl.write.copy();
-				idx.loc=crepl.write.loc;
-				idx.byRef=true;
-				auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
-				write.loc=crepl.write.loc;
-				writes~=write;
-			}
-			auto epilogue=new CompoundExp(writes);
-			epilogue.loc=be.loc;
-			epilogues~=epilogue;
-		}
+		prepareIndexReplacements(be.e1,sc,prologues,epilogues,be.loc);
 	}
 	propErr(be.e1,be);
 	static if(language==psi){ // TODO: remove this?
@@ -2297,11 +2306,12 @@ Expression defineSemantic(DefineExp be,Scope sc){
 						sc.clearConsumed();
 						return be;
 					}
-					return finish(r);
+					return lowerIndexReplacement(prologues,epilogues,r,sc);
+				}else{
+					static if(language==silq)
+						finishIndexReplacement(be,sc);
+					return lowerIndexReplacement(prologues,epilogues,e,sc);
 				}
-				static if(language==silq)
-					finishIndexReplacement(be,sc);
-				return finish(e);
 			}
 		}else{
 			epilogues=[]; // (avoids error messages)
@@ -2431,7 +2441,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}
 	if(r.sstate!=SemState.error) r.sstate=SemState.completed;
-	return finish(r);
+	return lowerIndexReplacement(prologues,epilogues,r,sc);
 }
 
 Identifier getIdFromIndex(IndexExp e){
