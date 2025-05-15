@@ -1456,7 +1456,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					if(ne1==ne2) return make(LiteralExp.makeBoolean(op==Tok!"="));
 					if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
 				}
-				if(util.among(ne1.type,ℕt(true),ℤt(true))&&util.among(ne2.type,ℕt(true),ℤt(true))){
+				if(util.among(ne1.type,Bool(true),ℕt(true),ℤt(true))&&util.among(ne2.type,Bool(true),ℕt(true),ℤt(true))){
 					if(!cast(LiteralExp)ne2){
 						import ast.semantic_: subtractionType;
 						auto sub=create(new BinaryExp!(Tok!"-")(ne1,ne2), subtractionType(ne1.type,ne2.type));
