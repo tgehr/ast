@@ -832,6 +832,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			assert(!!id);
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(!!idx);
+			id.byRef=true;
 			idx.byRef=true;
 		}
 	}
@@ -1415,7 +1416,7 @@ Dependency getDependency(Expression e,Scope sc)in{
 				if(!sc.dependencyTracked(decl))
 					sc.addDefaultDependency(decl); // TODO: ideally can be removed
 				result.dependencies.insert(decl);
-				if(!id.constLookup){
+				if(!id.constLookup||id.byRef){
 					/+auto vd=cast(VarDecl)id.meaning;
 					 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
 					result.replace(decl,sc.getDependency(decl));
@@ -1626,6 +1627,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		auto next=unwrap(e.e);
 		if(auto id=cast(Identifier)next){
+			if(idx.byRef) id.byRef=true;
 			id.indexedDirectly=true;
 			id.scope_=context.sc;
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
@@ -2182,6 +2184,8 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
+			if(auto cid=getIdFromIndex(idx))
+				cid.byRef=true;
 			auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
 			read.loc=crepl.write.loc;
 			reads~=read;
@@ -2203,6 +2207,8 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
+			if(auto cid=getIdFromIndex(idx))
+				cid.byRef=true;
 			auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
 			write.loc=crepl.write.loc;
 			writes~=write;
@@ -2359,7 +2365,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
 						if(id.meaning){
-							dependencies~=q(id.meaning,dependency);
+							auto dep=dependency.dup;
+							dep.joinWith(getIndexDependency(lhs[i]));
+							dependencies~=q(id.meaning,dep);
 						}else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
@@ -4341,7 +4349,6 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	}
 	static if(language==silq)
 	if(replaceIndex){
-		idx.byRef=true;
 		auto cid=getIdFromIndex(idx);
 		assert(cid&&cid.meaning);
 		auto crepls=sc.componentReplacements(cid.meaning);
@@ -4351,10 +4358,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			sc.note("replaced component is here",crepls[replaceIndexLoc].write.loc);
 			idx.sstate=SemState.error;
 		}
-		if(!context.constResult) crepls[replaceIndexLoc].read=idx; // matched
+		if(!context.constResult){
+			crepls[replaceIndexLoc].read=idx; // matched
+			cid.byRef=true;
+			idx.byRef=true;
+		}
 		auto id=new Identifier(crepls[replaceIndexLoc].name);
 		id.loc=idx.loc;
-		id.byRef=true;
+		if(!context.constResult) id.byRef=true;
 		return expressionSemantic(id,context);
 	}
 	static if(language==silq)
