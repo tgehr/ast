@@ -13,7 +13,7 @@ Expression constantExp(size_t l){
 	tok.type=Tok!"0";
 	tok.str=to!string(l);
 	auto r=new LiteralExp(tok);
-	r.type=ℕt(true);
+	r.type=l<=1?Bool(true):ℕt(true);
 	r.sstate=SemState.completed;
 	return r;
 }
@@ -42,7 +42,18 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 	if(auto cat=cast(CatExp)e){
 		auto a=cat.e1.knownLength(ignoreType);
 		auto b=cat.e2.knownLength(ignoreType);
-		if(a&&b) return res=new AddExp(a,b);
+		if(a&&b){
+			res=new AddExp(a,b);
+			propErr(a,res);
+			propErr(b,res);
+			if(a.type&&b.type){
+				res.type=arithmeticType!false(a.type,b.type);
+				if(!res.type) res.sstate=SemState.error;
+			}
+			if(res.type&&a.sstate==SemState.completed&&b.sstate==SemState.completed)
+				res.sstate=SemState.completed;
+			return res;
+		}
 	}
 	if(auto tae=cast(TypeAnnotationExp)e){
 		if(auto vec=cast(VectorTy)tae.t)
@@ -53,7 +64,16 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 			return pow.e2;
 		if(auto ty=cast(TypeofExp)tae.t){
 			if(auto sl=cast(SliceExp)ty.e){
-				return res=new NSubExp(sl.r,sl.l);
+				res=new NSubExp(sl.r,sl.l);
+				propErr(sl.r,res);
+				propErr(sl.l,res);
+				if(sl.r.type&&sl.l.type){
+					res.type=nSubType(sl.r,sl.l);
+					if(!res.type) res.sstate=SemState.error;
+				}
+				if(res.type&&sl.r.sstate==SemState.completed&&sl.l.sstate==SemState.completed)
+					res.sstate=SemState.completed;
+				return res;
 			}
 		}
 		return knownLength(tae.e,ignoreType);
