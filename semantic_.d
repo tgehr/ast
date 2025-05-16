@@ -92,9 +92,11 @@ VarDecl addVar(string name,Expression ty,Location loc,Scope sc){
 	auto var=new VarDecl(id);
 	var.loc=loc;
 	var.vtype=ty;
-	if(!sc) var.sstate=SemState.completed;
-	else var=varDeclSemantic(var,sc);
-	assert(!!var && var.sstate==SemState.completed);
+	if(var.vtype){
+		if(!sc) var.sstate=SemState.completed;
+		else var=varDeclSemantic(var,sc);
+		assert(!!var && var.sstate==SemState.completed);
+	}else var.sstate=SemState.error;
 	return var;
 }
 
@@ -1683,7 +1685,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	if(idx.byRef){
 		auto result=expressionSemantic(idx,context.expSem);
 		static if(!isPresemantic){
-			if(result.type&&context.type){
+			if(result.sstate==SemState.completed&&context.type){
+				assert(!!result.type);
 				bool ok=true;
 				if(auto id=getIdFromIndex(idx)){
 					if(auto nt=updatedType(id,idx,context.type)){
@@ -1700,12 +1703,6 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			}
 		}
 		return result;
-	}
-	if(idx.e.type&&idx.e.type.isClassical()){
-		if(idx.sstate!=SemState.error)
-			sc.error(format("use assignment statement '%s = ...;' to assign to classical array component",idx),idx.loc);
-		idx.sstate=SemState.error;
-		return idx;
 	}
 	bool checkReplaceable(IndexExp e){
 		if(auto id=cast(Identifier)unwrap(e.e)){
@@ -2181,6 +2178,7 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			if(!crepl.write) continue;
 			auto id=new Identifier(crepl.name);
 			id.loc=loc;
+			id.byRef=true;
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
@@ -2201,6 +2199,7 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			if(!crepl.write) continue;
 			auto id=new Identifier(crepl.name);
 			id.loc=loc;
+			id.byRef=true;
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
@@ -2314,6 +2313,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				}
 			}
 		}else{
+			sc.resetLocalComponentReplacements();
 			epilogues=[]; // (avoids error messages)
 			// TODO: clean up other temporaries
 		}
@@ -2326,6 +2326,15 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto de=cast(DefineExp)makeDeclaration(be,success,sc);
 	static if(language==silq){
 		if(be.e2.sstate==SemState.completed&&sc.getFunction()){
+			//getIndexDependency(be.e1)
+			Dependency getIndexDependency(Expression e){
+				if(auto idx=cast(IndexExp)e){
+					auto dep=getIndexDependency(idx.e);
+					dep.joinWith(idx.a.getDependency(sc));
+					return dep;
+				}
+				return Dependency(false);
+			}
 			void addDependencies(Expression[] lhs,Expression[] rhs)in{
 				assert(lhs.length==rhs.length);
 			}do{
@@ -2334,14 +2343,15 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					if(auto id=getIdFromDefLhs(lhs[i])){
 						if(id.meaning){
 							if(rhs[i].isQfree()){
-								dependencies~=q(id.meaning,rhs[i].getDependency(sc));
+								auto dep=rhs[i].getDependency(sc);
+								dep.joinWith(getIndexDependency(lhs[i]));
+								dependencies~=q(id.meaning,dep);
 							}else{
 								dependencies~=q(id.meaning,Dependency(true));
 							}
-						} else badUnpackLhs=true;
+						}else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
-				//imported!"util.io".writeln("ADDING: ",dependencies," ",lhs," ",rhs);
 				sc.addDependencies(dependencies);
 			}
 			void addDependencyMulti(Expression[] lhs,Dependency dependency){
@@ -2356,7 +2366,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				sc.addDependencies(dependencies);
 			}
 			if(auto id=getIdFromDefLhs(be.e1)){
-				addDependencies([id],[be.e2]);
+				addDependencies([be.e1],[be.e2]);
 			}else if(auto tpl1=cast(TupleExp)be.e1){
 				bool ok=false;
 				if(auto tpl2=cast(TupleExp)be.e2){
@@ -2553,7 +2563,9 @@ struct ArrayConsumer{
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
 			assert(id.sstate!=SemState.completed);
+			id.byRef=true;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
+			id.byRef=false;
 			auto dep=getDependency(e.e,context.sc);
 			if(e.e.sstate!=SemState.completed)
 				return;
@@ -2582,7 +2594,7 @@ struct ArrayConsumer{
 	}
 }
 
-void checkIndexReplacement(DefineExp be,Scope sc){
+void checkIndexReplacement(Expression be,Scope sc){
 	auto inType=InType.no;
 	auto crepls=sc.localComponentReplacements();
 	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
@@ -2614,7 +2626,7 @@ void checkIndexReplacement(DefineExp be,Scope sc){
 	}
 }
 
-void finishIndexReplacement(DefineExp be,Scope sc){
+void finishIndexReplacement(Expression be,Scope sc){
 	auto inType=InType.no;
 	auto context=expSemContext(sc,ConstResult.yes,inType);
 
@@ -2735,8 +2747,8 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 }
 
 Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
-	assert(id&&id.sstate==SemState.completed);
-	assert(lhs&&lhs.sstate==SemState.completed);
+	assert(id&&id.type);
+	assert(lhs&&lhs.type);
 	assert(!!rhsty);
 }do{
 	if(id is lhs) return rhsty;
@@ -2781,16 +2793,35 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 	return updatedType(id,idx.e,nrhsty);
 }
 
-AssignExp assignExpSemantic(AssignExp ae,Scope sc){
+Expression assignExpSemantic(AssignExp ae,Scope sc){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	CompoundExp[] prologues,epilogues;
+	static if(language==silq)
+	if(sc.allowsLinear){
+		auto oe1=ae.e1.copy();
+		prepareIndexReplacements(oe1,sc,prologues,epilogues,ae.loc);
+	}
+	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
+	propErr(ae.e2,ae);
 	ae.type=unit;
-	auto constSave=sc.saveConst();
-	ae.e1=expressionSemantic(ae.e1,context.nestConst); // reassigned variable should not be consumed (otherwise, can use ':=')
+	void prepareLhs(Expression lhs){
+		if(auto id=cast(Identifier)lhs){
+			id.byRef=true;
+		}else if(auto idx=cast(IndexExp)lhs){
+			idx.byRef=true;
+		}else if(auto tpl=cast(TupleExp)lhs){
+			foreach(exp;tpl.e)
+				prepareLhs(exp);
+		}
+	}
+	prepareLhs(ae.e1);
+	ae.e1=expressionSemantic(ae.e1,context.nestConsumed);
 	propErr(ae.e1,ae);
-	auto lhsConst=sc.saveConst();
-	sc.resetConst(constSave);
-	if(ae.sstate==SemState.error)
+	if(ae.e1.sstate==SemState.error){
+		sc.resetLocalComponentReplacements();
 		return ae;
+	}
+	checkIndexReplacement(ae,sc);
 	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
 			if(!checkAssignable(id.meaning,ae.loc,sc))
@@ -2818,10 +2849,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		}
 	}
 	checkLhs(ae.e1,false);
-	sc.resetConst(lhsConst);
-	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
-	sc.resetConst(constSave);
-	propErr(ae.e2,ae);
+	propErr(ae.e1,ae);
 	void checkCompat(Expression lhs,Expression type){
 		if(auto id=cast(Identifier)lhs)
 			return; // strong update allowed
@@ -2911,6 +2939,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 						case Stage.consumeLhs:
 							if(decl !in consumed){
 								if(!indexed) id.constLookup=false;
+								sc.unconsume(decl);
 								consumed[decl]=sc.consume(decl);
 								static if(language==silq)
 									sc.clearConsumed();
@@ -2919,11 +2948,14 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 						case Stage.defineVars:
 							if(decl.getId !in defined){
 								auto name=decl.name.name;
-								auto ntype=updatedType(id,olhs,rhsty);
-								if(!ntype){
-									sc.error("assignment not yet supported",ae.loc);
-									ae.sstate=SemState.error;
-									ntype=indexed?id.type:rhsty;
+								Expression ntype=indexed?null:rhsty;
+								if(id.type&&rhsty){
+									ntype=updatedType(id,olhs,rhsty);
+									if(!ntype){
+										sc.error("assignment not yet supported",ae.loc);
+										ae.sstate=SemState.error;
+										ntype=indexed?id.type:rhsty;
+									}
 								}
 								auto var=addVar(name,ntype,lhs.loc,sc);
 								static if(language==silq){
@@ -2941,7 +2973,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
 				}else if(auto at=cast(ArrayTy)rhsty){
 					foreach(exp;tpll.e) updateVars2(exp,olhs,indexed,at.next,rhsdep,stage);
-				}else assert(0);
+				}else assert(ae.sstate==SemState.error);
 			}else if(auto idx=cast(IndexExp)lhs){
 				auto nrhsdep=rhsdep;
 				if(stage==Stage.collectDeps){
@@ -2953,7 +2985,7 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 				updateVars2(fe.e,olhs,true,rhsty,rhsdep,stage);
 			}else if(auto tae=cast(TypeAnnotationExp)lhs){
 				updateVars2(tae.e,olhs,indexed,rhsty,rhsdep,stage);
-			}else assert(0);
+			}else assert(ae.sstate==SemState.error);
 		}
 		if(auto tpll=cast(TupleExp)lhs){
 			bool ok=false;
@@ -2969,16 +3001,23 @@ AssignExp assignExpSemantic(AssignExp ae,Scope sc){
 		}
 		return updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
 	}
+	static if(language==silq)
+		updateVars(ae.e1,ae.e2,Stage.collectDeps);
+	updateVars(ae.e1,ae.e2,Stage.consumeLhs);
+	static if(language==silq)
+		sc.clearConsumed();
+	updateVars(ae.e1,ae.e2,Stage.defineVars);
 	if(ae.sstate!=SemState.error){
-		static if(language==silq)
-			updateVars(ae.e1,ae.e2,Stage.collectDeps);
-		updateVars(ae.e1,ae.e2,Stage.consumeLhs);
-		static if(language==silq)
-			sc.clearConsumed();
-		updateVars(ae.e1,ae.e2,Stage.defineVars);
+		static if(language==silq){
+			finishIndexReplacement(ae,sc);
+		}
+	}else{
+		sc.resetLocalComponentReplacements();
+		epilogues=[]; // (avoids error messages)
+		// TODO: clean up other temporaries
 	}
 	if(ae.sstate!=SemState.error) ae.sstate=SemState.completed;
-	return ae;
+	return lowerIndexReplacement(prologues,epilogues,ae,sc);
 }
 
 AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssignExp)e; }
@@ -4206,7 +4245,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						assert(cid.type==rid.type);
 						assert(cid.meaning is rid.meaning);
 						if(!guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)){
-							sc.error("'const' lookup of index may refer to consumed value",idx.loc);
+							sc.error("lookup of index may refer to consumed value",idx.loc);
 							if(crepl.read) // should always be non-null
 								sc.note("consumed here",crepl.read.loc);
 							else sc.note("reassigned here",crepl.write.loc);
@@ -4305,14 +4344,15 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		assert(cid&&cid.meaning);
 		auto crepls=sc.componentReplacements(cid.meaning);
 		assert(replaceIndexLoc<crepls.length);
-		if(context.constResult){
+		if(context.constResult&&!sc.canForget(cid.meaning)){ // TODO: ok?
 			sc.error("replaced component must be consumed",idx.loc);
 			sc.note("replaced component is here",crepls[replaceIndexLoc].write.loc);
 			idx.sstate=SemState.error;
 		}
-		crepls[replaceIndexLoc].read=idx; // matched
+		if(!context.constResult) crepls[replaceIndexLoc].read=idx; // matched
 		auto id=new Identifier(crepls[replaceIndexLoc].name);
 		id.loc=idx.loc;
+		id.byRef=true;
 		return expressionSemantic(id,context);
 	}
 	static if(language==silq)
