@@ -4245,7 +4245,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						assert(cid.type==rid.type);
 						assert(cid.meaning is rid.meaning);
 						if(!guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)){
-							sc.error("lookup of index may refer to consumed value",idx.loc);
+							if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
+								sc.error("lookup of index refers to consumed value",idx.loc);
+							}else sc.error("lookup of index may refer to consumed value",idx.loc);
 							if(crepl.read) // should always be non-null
 								sc.note("consumed here",crepl.read.loc);
 							else sc.note("reassigned here",crepl.write.loc);
