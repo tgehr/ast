@@ -4366,7 +4366,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				return null;
 			}
 			Expression next=bottom;
-			foreach(i;0..tt.types.length) next=joinTypes(next,tt.types[i]);
+			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 			if(next) return check(next,index,index.type,index.loc);
 			if(isEmpty(index.type)) return bottom;
 			sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
@@ -4422,6 +4422,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	propErr(sl.r,sl);
 	if(sl.sstate==SemState.error)
 		return sl;
+	// TODO: quantum slicing (at least when length is known)
 	if(!isSubtype(sl.l.type,ℤt(true))){
 		sc.error(format("lower bound should be classical integer, not %s",sl.l.type),sl.l.loc);
 		sl.l.sstate=SemState.error;
@@ -4432,26 +4433,35 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	}
 	if(sl.sstate==SemState.error)
 		return sl;
-	if(auto at=cast(ArrayTy)sl.e.type){
-		sl.type=at;
-	}else if(auto vt=cast(VectorTy)sl.e.type){
-		auto se=new NSubExp(sl.r,sl.l);
+	auto at=cast(ArrayTy)sl.e.type;
+	auto vt=cast(VectorTy)sl.e.type;
+	auto lval=sl.l.eval(), rval=sl.r.eval();
+	auto mlc=lval.asIntegerConstant();
+	auto mrc=rval.asIntegerConstant();
+	auto next=at?at.next:vt?vt.next:null;
+	if(!next&&(!mlc||!mrc)){
+		if(auto tt=cast(TupleTy)sl.e.type){
+			next=bottom;
+			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
+		}
+	}
+	if(next){
+		auto se=new NSubExp(rval,lval);
 		se.type=nSubType(sl.r.type,sl.l.type);
 		se.sstate=SemState.completed;
-		sl.type=vectorTy(vt.next,se.eval());
-	}else if(auto tt=sl.e.type.isTupleTy){
-		auto llit=cast(LiteralExp)sl.l, rlit=cast(LiteralExp)sl.r;
-		if(!llit||llit.lit.type!=Tok!"0"){
+		sl.type=vectorTy(next,se.eval());
+	}else if(auto tt=cast(TupleTy)sl.e.type){
+		if(!mlc){
 			sc.error(format("slice lower bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
 			sl.sstate=SemState.error;
 		}
-		if(!rlit||rlit.lit.type!=Tok!"0"){
+		if(!mrc){
 			sc.error(format("slice upper bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
 			sl.sstate=SemState.error;
 		}
 		if(sl.sstate==SemState.error)
 			return sl;
-		auto lc=ℤ(llit.lit.str), rc=ℤ(rlit.lit.str);
+		auto lc=mlc.get(), rc=mrc.get();
 		if(lc<0){
 			sc.error(format("slice lower bound for type %s cannot be negative",tt),sl.loc);
 			sl.sstate=SemState.error;
