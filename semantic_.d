@@ -2766,7 +2766,7 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 		if(auto tt=idx.e.type.isTupleTy){
 			if(auto lit=idx.a.eval().asIntegerConstant()){
 				auto c=lit.get();
-				if(c<0||c>=tt.length) return lhs.type;
+				if(c<0||c>=tt.length) return idx.e.type;
 				return tupleTy(iota(tt.length).map!(i=>i==c?rhsty:tt[i]).array);
 			}
 			Expression[] ntypes;
