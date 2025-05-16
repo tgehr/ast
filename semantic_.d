@@ -2811,7 +2811,6 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	}
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	propErr(ae.e2,ae);
-	ae.type=unit;
 	void prepareLhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
 			id.byRef=true;
@@ -3015,6 +3014,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	static if(language==silq)
 		sc.clearConsumed();
 	updateVars(ae.e1,ae.e2,Stage.defineVars);
+	ae.type=unit;
 	if(ae.sstate!=SemState.error){
 		static if(language==silq){
 			finishIndexReplacement(ae,sc);
@@ -3037,10 +3037,16 @@ AAssignExp isInvertibleOpAssignExp(Expression e){
 	return null;
 }
 
-AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
+Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }do{
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	CompoundExp[] prologues,epilogues;
+	static if(language==silq)
+	if(sc.allowsLinear){
+		auto oe1=be.e1.copy();
+		prepareIndexReplacements(oe1,sc,prologues,epilogues,be.loc);
+	}
 	static if(language==silq){
 		// TODO: assignments to fields
 		auto semanticDone=false;
@@ -3064,12 +3070,32 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			semanticDone=true;
 		}
 	}else enum semanticDone=false;
-	if(!semanticDone) be.e1=expressionSemantic(be.e1,cast(IndexExp)be.e1?context:context.nestConsumed); // (hack: avoids implicit dup on IndexExp)
 	be.e2=expressionSemantic(be.e2,context.nest(cast(CatAssignExp)be?ConstResult.no:ConstResult.yes));
-	propErr(be.e1,be);
 	propErr(be.e2,be);
-	if(be.sstate==SemState.error)
+	if(!semanticDone){
+		void prepareLhs(Expression lhs){
+			if(auto id=cast(Identifier)lhs){
+				id.byRef=true;
+			}else if(auto idx=cast(IndexExp)lhs){
+				idx.byRef=true;
+			}
+		}
+		prepareLhs(be.e1);
+		be.e1=expressionSemantic(be.e1,context.nestConsumed);
+		propErr(be.e1,be);
+		if(auto id=cast(Identifier)be.e1){
+			if(id.meaning&&be.sstate!=SemState.error){
+				if(!sc.lookup(id,false,false,Lookup.probing))
+					sc.unconsume(id.meaning); // TODO: ok?
+			}
+			id.byRef=false; // TODO: why does checker not like this?
+		}
+	}
+	if(be.sstate==SemState.error){
+		sc.resetLocalComponentReplacements();
 		return be;
+	}
+	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
 			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be)))
@@ -3116,49 +3142,60 @@ AAssignExp opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			}
 		}
 	}
-	if(be.sstate!=SemState.error){
-		auto id=cast(Identifier)be.e1;
-		if(id&&id.meaning&&id.meaning.name){
-			void consume(){
-				id.constLookup=false;
-				sc.consume(id.meaning);
-				static if(language==silq)
-					sc.clearConsumed();
+	auto id=cast(Identifier)be.e1;
+	if(id&&id.meaning&&id.meaning.name){
+		void consume(){
+			id.constLookup=false;
+			sc.consume(id.meaning);
+			static if(language==silq)
+				sc.clearConsumed();
+		}
+		void define(Dependency dependency){
+			auto name=id.meaning.name.name;
+			auto var=addVar(name,ce.type,be.loc,sc);
+			be.replacements~=AAssignExp.Replacement(id.meaning,var);
+			sc.addDependency(var,dependency);
+			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
+			if(isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
+				sc.error(format("operator assign from type '%s' to type '%s' is disallowed",from,to),be.loc);
+				sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
+				be.sstate=SemState.error;
 			}
-			void define(Dependency dependency){
-				auto name=id.meaning.name.name;
-				auto var=addVar(name,ce.type,be.loc,sc);
-				be.replacements~=AAssignExp.Replacement(id.meaning,var);
-				sc.addDependency(var,dependency);
-				auto from=typeForDecl(id.meaning),to=typeForDecl(var);
-				if(isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
-					sc.error(format("operator assign from type '%s' to type '%s' is disallowed",from,to),be.loc);
-					sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
-					be.sstate=SemState.error;
-				}
-			}
-			static if(language==silq){
-				bool ok=false;
-				if(be.e2.isQfree()){
-					auto dependency=sc.getDependency(id.meaning);
-					auto rhsDep=be.e2.getDependency(sc);
-					rhsDep.remove(id.meaning);
-					dependency.joinWith(rhsDep);
-					consume();
-					define(dependency);
-				}else{
-					consume();
-					define(Dependency(true));
-				}
+		}
+		static if(language==silq){
+			bool ok=false;
+			if(be.e2.isQfree()){
+				auto dependency=sc.getDependency(id.meaning);
+				auto rhsDep=be.e2.getDependency(sc);
+				rhsDep.remove(id.meaning);
+				dependency.joinWith(rhsDep);
+				consume();
+				define(dependency);
 			}else{
 				consume();
-				define();
+				define(Dependency(true));
 			}
+		}else{
+			consume();
+			define();
 		}
 	}
 	be.type=unit;
+	if(be.sstate!=SemState.error){
+		static if(language==silq){
+			finishIndexReplacement(be,sc);
+		}
+	}else{
+		sc.resetLocalComponentReplacements();
+		epilogues=[]; // (avoids error messages)
+		if(id&&id.meaning&&id.meaning.getName.startsWith("__"))
+			sc.consume(id.meaning);
+		foreach(repl;be.replacements)
+			if(repl.new_.getName.startsWith("__"))
+			   sc.consume(repl.new_);
+	}
 	if(be.sstate!=SemState.error) be.sstate=SemState.completed;
-	return be;
+	return lowerIndexReplacement(prologues,epilogues,be,sc);
 }
 
 bool isAssignment(Expression e){
