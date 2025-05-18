@@ -2604,32 +2604,34 @@ struct ArrayConsumer{
 
 void checkIndexReplacement(Expression be,Scope sc){
 	auto inType=InType.no;
-	auto crepls=sc.localComponentReplacements();
-	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
-	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
-	foreach(i;0..indicesToReplace.length){
-		auto idx1=indicesToReplace[i];
-		if(idx1.sstate==SemState.error) continue;
-		foreach(j;i+1..indicesToReplace.length){
-			auto idx2=indicesToReplace[j];
-			// (scope will handle this)
-			if(idx2.sstate==SemState.error) continue;
-			if(!guaranteedDifferentLocations(idx1,idx2,be.loc,sc,inType)){
-				if(guaranteedSameLocations(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
-				else sc.error("indices may refer to same value in reassignment",idx2.loc);
-				sc.note("other index is here",idx1.loc);
-				idx2.sstate=SemState.error;
-				//return;
+	auto creplss=sc.localComponentReplacementsByDecl();
+	foreach(crepls;creplss){
+		auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
+		assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
+		foreach(i;0..indicesToReplace.length){
+			auto idx1=indicesToReplace[i];
+			if(idx1.sstate==SemState.error) continue;
+			foreach(j;i+1..indicesToReplace.length){
+				auto idx2=indicesToReplace[j];
+				// (scope will handle this)
+				if(idx2.sstate==SemState.error) continue;
+				if(!guaranteedDifferentLocations(idx1,idx2,be.loc,sc,inType)){
+					if(guaranteedSameLocations(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
+					else sc.error("indices may refer to same value in reassignment",idx2.loc);
+					sc.note("other index is here",idx1.loc);
+					idx2.sstate=SemState.error;
+					//return;
+				}
 			}
 		}
-	}
-	foreach(i;0..crepls.length){
-		if(!crepls[i].read){
-			sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
-			indicesToReplace[i].sstate=SemState.error;
-			be.sstate=SemState.error;
-			if(auto meaning=sc.peekSymtab(crepls[i].name))
-				meaning.sstate=SemState.error;
+		foreach(i;0..crepls.length){
+			if(!crepls[i].read){
+				sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
+				indicesToReplace[i].sstate=SemState.error;
+				be.sstate=SemState.error;
+				if(auto meaning=sc.peekSymtab(crepls[i].name))
+					meaning.sstate=SemState.error;
+			}
 		}
 	}
 }
