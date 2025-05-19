@@ -1630,10 +1630,9 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(idx.byRef) id.byRef=true;
 			id.indexedDirectly=true;
 			id.scope_=context.sc;
-			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probing,context.sc);
+			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc);
 			propErr(next,e);
 			if(id.meaning){
-				id.meaning=context.sc.split(id.meaning);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
@@ -1708,7 +1707,11 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	}
 	bool checkReplaceable(IndexExp e){
 		if(auto id=cast(Identifier)unwrap(e.e)){
-			if(id.meaning) return checkAssignable(id.meaning,idx.e.loc,sc,true);
+			if(id.meaning){
+				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true);
+				if(!r) id.meaning.sstate=SemState.error;
+				return r;
+			}
 			assert(id.sstate==SemState.error);
 			return true; // TODO: ok?
 		}
@@ -2135,7 +2138,7 @@ Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
 }
 
 static if(language==silq)
-Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
+Expression swapSemantic(DefineExp be,Scope sc){
 	bool isSwap=false;
 	auto tpl1=cast(TupleExp)unwrap(be.e1);
 	auto tpl2=cast(TupleExp)unwrap(be.e2);
@@ -2144,6 +2147,8 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 	IndexExp[2] idx1=[cast(IndexExp)tpl1.e[0],cast(IndexExp)tpl1.e[1]];
 	IndexExp[2] idx2=[cast(IndexExp)tpl2.e[0],cast(IndexExp)tpl2.e[1]];
 	if(!idx1[0]||!idx1[1]||!idx2[0]||!idx2[1]) return null;
+	if(!getIdFromIndex(idx1[0])||!getIdFromIndex(idx1[1])||!getIdFromIndex(idx2[0])||!getIdFromIndex(idx2[1]))
+		return null;
 	auto preState=sc.getStateSnapshot(true);
 	foreach(i;0..2){
 		if(!guaranteedSameLocations(idx1[i],idx2[$-1-i],be.loc,sc,InType.no)){
@@ -2151,13 +2156,28 @@ Expression swapSemantic(DefineExp be,Scope sc){ // TODO: placeholder. fix this
 			return null;
 		}
 	}
+	if(guaranteedDifferentLocations(idx2[0],idx2[1],be.loc,sc,InType.no)){
+		sc.restoreStateSnapshot(preState);
+		return null;
+	}
 	be.isSwap=true;
 	foreach(idx;chain(idx1[],idx2[])) idx.byRef=true;
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	be.e1=expressionSemantic(be.e1,econtext);
-	propErr(be.e1,be);
-	propErr(be.e1,be.e2);
+	auto id=getIdFromIndex(idx2[0]);
+	assert(!!id);
+	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,econtext.sc);
+	propErr(id,be.e2);
 	be.e2=expressionSemantic(be.e2,econtext);
+	propErr(be.e2,be);
+	if(be.sstate!=SemState.error){
+		ArrayConsumer consumer;
+		//imported!"util.io".writeln("!!! ",idx2[0]," ",idx2[0].sstate);
+		Expression.CopyArgs cargs={ preserveMeanings: true };
+		consumer.consumeArray(idx2[0].copy(),econtext);
+		consumer.redefineArrays(be.loc,sc);
+	}
+	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.type,be.e2));
+	propErr(be.e1,be);
 	if(be.sstate!=SemState.error) be.sstate=SemState.completed;
 	return be;
 }
@@ -2570,16 +2590,19 @@ struct ArrayConsumer{
 			if(id.meaning) id.id=id.meaning.name.id;
 			auto oldMeaning=id.meaning;
 			id.meaning=null;
-			assert(id.sstate!=SemState.completed);
+			//assert(id.sstate!=SemState.completed);
+			id.sstate=SemState.initial;
 			id.byRef=true;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
 			id.byRef=false;
 			auto dep=getDependency(e.e,context.sc);
 			if(e.e.sstate!=SemState.completed)
 				return;
-			// assert(id.meaning is oldMeaning); // TODO. (id.meaning should already move into local scope earlier)
-			assert(id.meaning is oldMeaning||oldMeaning.scope_!is context.sc&&id.meaning.scope_ is context.sc,text(id.meaning," ",oldMeaning," ",id.loc));
-			assert(id.name==oldMeaning.getName);
+			if(oldMeaning){
+				// assert(id.meaning is oldMeaning); // TODO. (id.meaning should already move into local scope earlier)
+				assert(id.meaning is oldMeaning||oldMeaning.scope_!is context.sc&&id.meaning.scope_ is context.sc,text(id.meaning," ",oldMeaning," ",id.loc));
+				assert(id.name==oldMeaning.getName);
+			}
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
@@ -2732,6 +2755,7 @@ bool checkNonConstVar(string action,string continuous)(Declaration meaning,Locat
 }
 
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
+	if(!meaning||meaning.sstate==SemState.error) return false;
 	if(!checkNonConstVar!("reassign","reassigning")(meaning,loc,sc))
 		return false;
 	auto vd=cast(VarDecl)meaning;
@@ -2749,7 +2773,11 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
 			// TODO: method calls are also implicit assignments.
-			sc.error("cannot assign to variable in closure context (capturing by value)",loc);
+			auto crepls=meaning.scope_.componentReplacements(meaning);
+			if(crepls.length){
+				sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),loc);
+				if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+			}else sc.error("cannot assign to variable in closure context (capturing by value)",loc);
 			return false;
 		}
 	}
@@ -3054,7 +3082,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
 			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-			auto meaning=sc.lookup(id,false,true,Lookup.probing);
+			auto meaning=sc.lookup(id,false,true,Lookup.probingWithCapture);
 			if(nerr!=sc.handler.nerrors){
 				sc.note("looked up here",id.loc);
 				return be;
@@ -4125,7 +4153,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return dupIfNeeded(id);
 		}else{
 			static if(language==silq){
-				if(!id.indexedDirectly){
+				if(!id.indexedDirectly&&meaning.sstate!=SemState.error){
 					auto crepls=sc.componentReplacements(meaning);
 					if(crepls.length){
 						sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);

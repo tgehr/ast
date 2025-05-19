@@ -110,6 +110,7 @@ enum Lookup{
 	consuming,
 	constant,
 	probing,
+	probingWithCapture,
 }
 
 abstract class Scope{
