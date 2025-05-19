@@ -2193,6 +2193,8 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 		sc.restoreLocalComponentReplacements(creplsCtx); // TODO: get rid of this
 		return false;
 	}
+	if(astopt.splitComponents)
+		creplss=unnestComponentReplacements(creplss,loc,sc);
 	foreach(crepls;creplss){
 		assert(crepls.length);
 		Expression[] reads;
@@ -2273,21 +2275,6 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 	}
 	//imported!"util.io".writeln(current);
 	return current;
-	/+auto prologue=new CompoundExp(prologues);
-	 prologue.type=unit;
-	 prologue.sstate=SemState.completed;
-	 foreach(prlg;prologues)
-	 propErr(prlg,prologue);
-	 reverse(epilogues);
-	 auto epilogue=new CompoundExp(epilogues);
-	 propErr(prologue,epilogue);
-	 epilogue=statementSemanticImpl(epilogue,sc);
-	 if(epilogue.sstate!=SemState.error) epilogue.sstate=SemState.completed;
-	 auto res=new ComponentReplaceExp(prologue,r,epilogue);
-	 res.loc=be.loc;
-	 res.sstate=SemState.completed;
-	 foreach(e;res.s) propErr(e,res);
-	 return res;+/
 }
 
 Expression defineSemantic(DefineExp be,Scope sc){
@@ -2702,6 +2689,72 @@ Expression replaceBaseIndex(T)(T e,Expression newBase)if(is(T==IndexExp)||is(T==
 		}
 	}
 	return null;
+}
+
+Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Location loc,Scope sc){
+    Scope.DeclProp.ComponentReplacement[][] result;
+    foreach(crepls;creplss){
+        void doIt(Scope.DeclProp.ComponentReplacement[] crepls){
+            Scope.DeclProp.ComponentReplacement[] curGroup;
+	        static struct MapEntry{
+		        IndexExp idx;
+		        Id name;
+	        }
+	        MapEntry[] entries;
+	        Scope.DeclProp.ComponentReplacement[][] newGroups;
+            foreach(crepl;crepls){
+	            assert(!!crepl.write);
+	            auto idx=getBaseIndex(crepl.write);
+	            assert(!!idx);
+	            if(idx is crepl.write){
+		            curGroup~=crepl;
+		            continue;
+	            }
+	            auto nname=freshName();
+	            curGroup~=Scope.DeclProp.ComponentReplacement(idx,nname);
+	            auto id=new Identifier(nname);
+	            id.loc=idx.loc;
+	            auto nidx=cast(IndexExp)replaceBaseIndex(crepl.write.copy(),id);
+	            assert(!!nidx,text(crepl.write," ",id));
+	            auto ncrepl=Scope.DeclProp.ComponentReplacement(nidx,crepl.name);
+                bool ok=false;
+                foreach(i,entry;entries){
+	                if(guaranteedSameLocations(entry.idx,idx,loc,sc,InType.no)){
+		                newGroups[i]~=ncrepl;
+                        ok=true;
+                        break;
+                    }
+                }
+                if(!ok){
+	                entries~=MapEntry(nidx,nname);
+                    newGroups~=[ncrepl];
+                }
+            }
+            bool ok=false;
+            foreach(i;0..curGroup.length){
+	            foreach(j;i+1..curGroup.length){
+		            auto a=curGroup[i],b=curGroup[j];
+		            assert(a.write&&b.write);
+		            if(a.write.sstate==SemState.error||b.write.sstate==SemState.error)
+			            continue;
+		            if(!guaranteedDifferentLocations(a.write,b.write,loc,sc,InType.no)){
+			            sc.error("potential aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+			            sc.note("other index is here",a.write.loc);
+			            a.write.sstate=SemState.error;
+			            b.write.sstate=SemState.error;
+			            ok=false;
+		            }
+	            }
+	            if(!ok) break;
+            }
+
+            result~=curGroup;
+            foreach(newGroup;newGroups)
+	            doIt(newGroup);
+        }
+        doIt(crepls);
+    }
+    return result;
 }
 
 void typeConstBlock(Declaration decl,Expression blocker,Scope sc){
