@@ -911,8 +911,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		return loop;
 	}
 	enum returnOnlyMoved=false; // (experimental)
-	auto constParams=state.nextStateSnapshot.loopParams(true);
-	auto movedParams=state.nextStateSnapshot.loopParams(false);
+	auto loopParams_=state.nextStateSnapshot.loopParams(loop.bdy.blscope_);
+	auto constParams=loopParams_[0], movedParams=loopParams_[1];
 	static if(is(T==WhileExp)){
 		Q!(Id,Expression,bool,Location)[] loopParams=[];
 	}else static if(is(T==ForExp)){
@@ -3058,7 +3058,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 					}
 				}
 			}else if(auto tpll=cast(TupleExp)lhs){
-				if(auto tt=rhsty.isTupleTy){
+				if(auto tt=rhsty?rhsty.isTupleTy:null){
 					assert(tpll.length==tt.length);
 					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
 				}else if(auto at=cast(ArrayTy)rhsty){
