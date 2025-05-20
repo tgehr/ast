@@ -1968,8 +1968,14 @@ class AssertExp: Expression{
 	}
 	override string toString(){ return _brk("assert("~e.toString()~")"); }
 
-	override bool isConstant(){ return e.isConstant(); }
-	override bool isTotal(){ return e.isTotal(); }
+	override bool isConstant(){
+		import ast.semantic_:isTrue;
+		return e.isConstant()&&isTrue(e);
+	}
+	override bool isTotal(){
+		import ast.semantic_:isTrue;
+		return e.isTotal()&&isTrue(e);
+	}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
