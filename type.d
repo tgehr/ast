@@ -781,8 +781,12 @@ class VectorTy: Type, ITupleTy{
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
 			return tt.types.all!(ty=>next.unifyImpl(ty,subst,meet)) && num.unifyImpl(LiteralExp.makeInteger(tt.length),subst,meet);
-		if(auto vt=cast(VectorTy)rhs)
-			return next.unifyImpl(vt.next,subst,meet) && num.unifyImpl(vt.num,subst,meet);
+		if(auto vt=cast(VectorTy)rhs){
+			auto r=next.unifyImpl(vt.next,subst,meet);
+			if(auto nlit=num.asIntegerConstant())
+				if(nlit.get()==0&&num==vt.num) return true;
+			return r && num.unifyImpl(vt.num,subst,meet);
+		}
 		return false;
 	}
 	override VectorTy evalImpl(Expression ntype){
@@ -797,7 +801,12 @@ class VectorTy: Type, ITupleTy{
 	override bool isSubtypeImpl(Expression r){
 		if(auto rarr=cast(ArrayTy)r) return isSubtype(next,rarr.next);
 		auto lvec=this,rvec=cast(VectorTy)r;
-		if(rvec) return isSubtype(lvec.next,rvec.next) && num==rvec.num;
+		if(rvec){
+			if(num!=rvec.num) return false;
+			if(auto nlit=num.asIntegerConstant())
+				if(nlit.get()==0) return true;
+			return isSubtype(lvec.next,rvec.next);
+		}
 		auto ltup=this.isTupleTy(),rtup=r.isTupleTy();
 		if(ltup&&rtup&&ltup.length==rtup.length)
 			return all!(i=>isSubtype(ltup[i],rtup[i]))(iota(ltup.length));
@@ -837,6 +846,8 @@ class VectorTy: Type, ITupleTy{
 		return null;
 	}
 	override Expression getClassical(){
+		if(auto nlit=num.asIntegerConstant())
+			if(nlit.get()==0) return this;
 		auto nnext=next.getClassical();
 		if(!nnext) return null;
 		return vectorTy(nnext,num);
@@ -1385,7 +1396,7 @@ class RawVariadicTy: Expression{
 }
 
 Expression typeOfVariadicTy(Expression next)in{
-	assert(next&&next.type);
+	assert(next&&next.type,text(next));
 	if(auto tpl=cast(TupleTy)next.type)
 		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
 	else{
@@ -1478,7 +1489,7 @@ class VariadicTy: Type{
 			if(isClassical_) return tt.getClassical;
 			return tt;
 		}
-		return variadicTy(next.eval(),isClassical_);
+		return variadicTy(ne,isClassical_);
 	}
 	override bool opEquals(Object o){
 		if(auto r=cast(VariadicTy)o)
@@ -1492,7 +1503,7 @@ class VariadicTy: Type{
 		// if(auto at=cast(ArrayTy)rhs) ... // TODO
 		if(auto tt=r.isTupleTy()){
 			auto tpl=new TupleExp(iota(tt.length).map!(i=>tt[i]).array);
-			tpl.type=typeOfVariadicTy(tpl);
+			tpl.type=tupleTy(iota(tt.length).map!(i=>tt[i].type).array);
 			tpl.sstate=SemState.completed;
 			return next==tpl; // TODO: improve
 		}
@@ -1842,8 +1853,13 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 	assert(isType(e)||isQNumeric(e));
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
-	// TODO: num=0 ↦ utype
-	if(isEmpty(e)) return utypeTy; // TODO: num≠0 ↦ etype
+	auto nlit=num.asIntegerConstant();
+	if(nlit){
+		if(nlit.get()==0) return utypeTy;
+		else if(isEmpty(e)) return etypeTy;
+	}else{
+		if(isEmpty(e)) return utypeTy;
+	}
 	return e.type;
 }
 
