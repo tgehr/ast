@@ -2266,12 +2266,12 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 		with_.itrans=eplg;
 		with_.loc=r.loc;
 		with_.isIndices=true;
-			with_.type=unit;
-			with_.sstate=SemState.completed;
-			propErr(prlg,with_);
-			propErr(prev,with_);
-			propErr(eplg,with_);
-			current=with_;
+		with_.type=unit;
+		with_.sstate=SemState.completed;
+		propErr(prlg,with_);
+		propErr(prev,with_);
+		propErr(eplg,with_);
+		current=with_;
 	}
 	//imported!"util.io".writeln(current);
 	return current;
