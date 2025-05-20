@@ -1636,12 +1636,13 @@ class IteExp: Expression{
 class WithExp: Expression{
 	CompoundExp trans;
 	CompoundExp bdy;
-	this(CompoundExp trans, CompoundExp bdy){
+	this(CompoundExp trans, CompoundExp bdy, bool isIndices=false){
 		this.trans=trans;
 		this.bdy=bdy;
+		this.isIndices=isIndices;
 	}
 	override WithExp copyImpl(CopyArgs args){
-		return new WithExp(trans.copy(args),bdy.copy(args));
+		return new WithExp(trans.copy(args),bdy.copy(args),isIndices);
 	}
 	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()); }
 	override @property string kind(){ return "with"; }
