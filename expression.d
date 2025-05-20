@@ -60,7 +60,7 @@ abstract class Expression: Node{
 
 	Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(!eval) return none!(ℤ);
-		if(type && isSubtype(type, ℤt(true))) return none!(ℤ);
+		if(type && !isSubtype(type, ℤt(true))) return none!(ℤ);
 		if(!isConstant()) return none!(ℤ);
 		auto r = this.eval().asIntegerConstant(false);
 		assert(r);
