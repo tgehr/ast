@@ -5019,15 +5019,7 @@ Expression concatType(Expression t1,Expression t2){
 		if(cast(ArrayTy)t1) return t1;
 		return bottom;
 	}
-	auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
-	if(vt1&&vt2){
-		if(auto netype=joinTypes(vt1.next,vt2.next)){
-			auto add=new AddExp(vt1.num,vt2.num);
-			add.type=ℕt(true);
-			add.sstate=SemState.completed;
-			return vectorTy(netype,add.eval()); // TODO: evaluation context
-		}
-	}else if(t1==unit||t2==unit){
+	if(t1==unit||t2==unit){
 		auto ntype=t1==unit?t2:t1;
 		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
 			return ntype;
@@ -5036,6 +5028,15 @@ Expression concatType(Expression t1,Expression t2){
 		if(tt1&&tt2){
 			return tupleTy(chain(iota(tt1.length).map!(i=>tt1[i]),
 			                     iota(tt2.length).map!(i=>tt2[i])).array);
+		}
+		auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
+		if(vt1&&vt2){
+			if(auto netype=joinTypes(vt1.next,vt2.next)){
+				auto add=new AddExp(vt1.num,vt2.num);
+				add.type=ℕt(true);
+				add.sstate=SemState.completed;
+				return vectorTy(netype,add.eval()); // TODO: evaluation context
+			}
 		}
 		if(vt1&&tt2){
 			if(auto at=cast(ArrayTy)joinTypes(arrayTy(vt1.next),t2)){

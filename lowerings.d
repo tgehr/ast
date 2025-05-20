@@ -80,8 +80,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 			case pow:
 				break;
 			case cat:
-				if(cast(VectorTy)t0&&cast(VectorTy)t1) return "v";
 				if(t0.isTupleTy()&&t1.isTupleTy()) return "t";
+				if(cast(VectorTy)t0&&cast(VectorTy)t1) return "v";
 				if(cast(ArrayTy)t0||cast(ArrayTy)t1) return "a";
 				if(cast(VectorTy)t0||cast(VectorTy)t1) return "v";
 				return "t";

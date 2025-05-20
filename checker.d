@@ -173,7 +173,7 @@ class Checker {
 		auto to = ast_low.getLowering(from, ast_sem.ExpSemContext(nscope, constResult, ast_sem.InType.no));
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
-		// imported!"util.io".writeln("lowered ", from, " → ", to);
+		// imported!"util.io".writeln("lowered ", from, " → ", to, " ", from.type, " ", to.type);
 		assert(to.type && from.type.eval() == to.type.eval());
 		return to;
 	}
