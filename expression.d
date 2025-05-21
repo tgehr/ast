@@ -539,6 +539,23 @@ class Identifier: Expression{
 		}
 		return false;
 	}
+	override bool isSubtypeImpl(Expression rhs){
+		if(auto r=cast(Identifier)rhs){
+			if(id==r.id && (isClassical(this)||!isClassical(r)) && meaning==r.meaning)
+				return true;
+		}
+		return false;
+	}
+	override Expression combineTypesImpl(Expression rhs, bool meet){
+		if(auto r=cast(Identifier)rhs){
+			if(id==r.id && meaning==r.meaning){
+				if(!isClassical(this)^meet) return this;
+				if(!isClassical(r)^meet) return rhs;
+				return this;
+			}
+		}
+		return null;
+	}
 	override Expression getClassical(){
 		static if(language==silq){
 			if(auto r=super.getClassical()) return r;
