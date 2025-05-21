@@ -1275,10 +1275,16 @@ class ProductTy: Type{
 			if(!ncod) return null;
 			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
 		}else{
-			auto name=names[0]==r.names[0]?names[0]:freshName(Id(),r);
-			auto var=varTy(name,ndom);
-			auto lCod=tryApply(var,isSquare);
-			auto rCod=r.tryApply(var,isSquare);
+			Expression lCod,rCod;
+			if(names[0]!=Id()||r.names[0]!=Id()){
+				auto name=names[0]==r.names[0]?names[0]:freshName(Id(),r);
+				auto var=varTy(name,ndom);
+				lCod=tryApply(var,isSquare);
+				rCod=r.tryApply(var,isSquare);
+			}else{
+				lCod=cod;
+				rCod=r.cod;
+			}
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
