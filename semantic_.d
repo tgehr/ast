@@ -2166,7 +2166,8 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto id=getIdFromIndex(idx2[0]);
 	assert(!!id);
-	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,econtext.sc);
+	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);
+	if(id.meaning) id.meaning=sc.split(id.meaning);
 	propErr(id,be.e2);
 	be.e2=expressionSemantic(be.e2,econtext);
 	propErr(be.e2,be);
@@ -3142,6 +3143,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				return be;
 			}
 			if(meaning){
+				meaning=sc.split(meaning);
 				id.meaning=meaning;
 				id.id=meaning.getId;
 				id.type=id.typeFromMeaning;
