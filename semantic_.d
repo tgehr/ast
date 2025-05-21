@@ -1638,7 +1638,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
 					auto ce=new CallExp(id,e.a,true,false);
-					ce.loc=idx.loc;
+					ce.loc=e.loc;
 					if(context.constResult) return callSemantic(ce,context.expSem);
 					else return callSemantic!isPresemantic(ce,context);
 				}
@@ -1661,7 +1661,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		propErr(next,e);
 		return null;
 	}
-	if(auto r=analyzeAggregate(idx,context)) return r;
+	if(auto r=analyzeAggregate(idx,context))
+		if(!cast(IndexExp)unwrap(r)) return r;
 	auto sc=context.sc;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)){
