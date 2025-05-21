@@ -58,9 +58,9 @@ enum OperatorBehavior{
 }
 
 string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: replace with some sort of language-level overloading support
-	if(types.length==1) return getSuffix(types[0]);
+	if(types.length==1) return getSuffix(types[0].eval());
 	if(types.length==2){
-		auto t0=types[0],t1=types[1];
+		auto t0=types[0].eval(),t1=types[1].eval();
 		final switch(behavior)with(OperatorBehavior){
 			case default_,comparison,mul,div:
 				if(isNumeric(t0)&&isNumeric(t1)&&(behavior==default_?!(cast(BoolTy)t0&&cast(BoolTy)t1):t0!=Bool(false)&&t1!=Bool(false))){
@@ -133,7 +133,7 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 	if(behavior==OB.cat){ // TODO: implicitly fill multiple square argument lists
 		if(fullName=="__cat_t"){
 			assert(args.length==2&&args[0].type&&args[1].type);
-			auto tt0=args[0].type.isTupleTy(),tt1=args[1].type.isTupleTy();
+			auto tt0=args[0].type.eval().isTupleTy(),tt1=args[1].type.eval().isTupleTy();
 			assert(tt0&&tt1);
 			auto n0=LiteralExp.makeInteger(tt0.length),n1=LiteralExp.makeInteger(tt1.length);
 			n0.loc=loc, n1.loc=loc;
