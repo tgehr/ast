@@ -4328,6 +4328,12 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
+	if(idx.byRef){
+		if(auto cid=getIdFromIndex(idx)){
+			cid.meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc);
+			if(cid.meaning) cid.meaning=sc.split(cid.meaning);
+		}
+	}
 	idx.e=expressionSemantic(idx.e,context.nestConst);
 	propErr(idx.e,idx);
 	if(auto ft=cast(FunTy)idx.e.type){
