@@ -1633,6 +1633,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc);
 			propErr(next,e);
 			if(id.meaning){
+				id.meaning=context.sc.split(id.meaning);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
