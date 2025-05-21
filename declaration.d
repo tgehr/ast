@@ -330,9 +330,11 @@ class DatDecl: Declaration{
 			arg.type=tupleTy(ids.map!(id=>id.type).array);
 			arg.sstate=SemState.completed;
 		}
-		auto call=new CallExp(id,arg,true,false);
+		CallExp call=new CallExp(id,arg,true,false);
 		call.loc=id.loc.to(arg.loc);
-		auto ret=new ReturnExp(call);
+		import ast.semantic_: ConstResult, InType, expSemContext, callSemantic; // TODO: get rid of this?
+		auto ncall=callSemantic(call,expSemContext(null,ConstResult.no,InType.no));
+		auto ret=new ReturnExp(ncall);
 		ret.type=unit;
 		ret.sstate=SemState.completed;
 		auto bdy=new CompoundExp([ret]);
