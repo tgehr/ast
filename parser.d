@@ -470,7 +470,7 @@ struct Parser{
 					}
 					switch(ttype){
 						case Tok!"{",Tok!"⇒",Tok!"↦",Tok!"=>":
-						static if(language==silq) case Tok!"lifted",Tok!"qfree",Tok!"mfree":{}
+						static if(language==silq) case Tok!"wild",Tok!"lifted",Tok!"qfree",Tok!"mfree":{}
 						static if(language==psi) case Tok!"pure":{}
 							restoreState(state);
 							return parseLambdaExp();
@@ -507,6 +507,9 @@ struct Parser{
 							}else if(ttype==Tok!"mfree"){
 								nextToken();
 								annotation=Annotation.mfree;
+							}else if(ttype==Tok!"wild"){
+								nextToken();
+								annotation=Annotation.none;
 							}
 							if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
 						}else static if(language==psi){
@@ -629,6 +632,9 @@ struct Parser{
 									}else if(ttype==Tok!"mfree"){
 										nextToken();
 										annotation=Annotation.mfree;
+									}else if(ttype==Tok!"wild"){
+										nextToken();
+										annotation=Annotation.none;
 									}
 								}else static if(language==psi){
 									if(ttype==Tok!"pure"){
@@ -806,6 +812,7 @@ struct Parser{
 		auto params=parseArgumentList!(false,Parameter)(constDefault,isSquare?Tok!"]":Tok!")");
 		expect(isSquare?Tok!"]":Tok!")");
 		auto annotation=Annotation.none;
+		bool inferAnnotation=true;
 		bool isLifted=false;
 		auto attributes=appender!(string[]);
 		while(ttype==Tok!"@"){
@@ -817,15 +824,22 @@ struct Parser{
 				isLifted=ttype==Tok!"lifted";
 				nextToken();
 				annotation=Annotation.qfree;
+				inferAnnotation=false;
 			}else if(ttype==Tok!"mfree"){
 				nextToken();
 				annotation=Annotation.mfree;
+				inferAnnotation=false;
+			}else if(ttype==Tok!"wild"){
+				nextToken();
+				annotation=Annotation.none;
+				inferAnnotation=false;
 			}
 			if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
 		}else static if(language==psi){
 			if(ttype==Tok!"pure"){
 				nextToken();
 				annotation=Annotation.pure_;
+				inferAnnotation=false;
 			}
 		}
 		Expression ret=null;
@@ -837,10 +851,14 @@ struct Parser{
 		if(ttype==Tok!";"){
 			nextToken();
 			body_=null;
+			inferAnnotation=false;
 		}else if(util.among(ttype,Tok!"⇒",Tok!"↦",Tok!"=>",Tok!"(",Tok!"[")||lambda&&ttype==Tok!"."&&peek.type!=Tok!"{"){
 			Expression e;
 			if(ttype==Tok!"("||ttype==Tok!"["){
-				if(annotation==Annotation.none) annotation=pure_;
+				if(annotation==Annotation.none){
+					annotation=pure_;
+					inferAnnotation=false;
+				}
 				attributes.put("artificial");
 				e=parseLambdaExp!semicolon();
 			}else{
@@ -858,12 +876,12 @@ struct Parser{
 		}
 		res=New!FunctionDef(name,cast(Parameter[])params[0],params[1]||params[0].length!=1,ret,body_);
 		res.isSquare=isSquare;
-		if(annotation==Annotation.none&&body_){
+		if(inferAnnotation){
 			static if(language==silq) annotation=Annotation.mfree; // TODO: annotation=pure_;
 			else annotation=pure_;
-			res.inferAnnotation=true;
 		}
 		res.annotation=annotation;
+		res.inferAnnotation=inferAnnotation;
 		res.attributes=attributes[];
 		return res;
 	}
