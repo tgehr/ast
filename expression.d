@@ -1844,6 +1844,8 @@ class TupleExp: Expression{
 		return new TupleExp(e.map!(e=>e.copy(args)).array);
 	}
 	override string toString(){ return _brk("("~e.map!(to!string).join(",")~(e.length==1?",":"")~")"); }
+	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
+	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 	final @property size_t length(){ return e.length; }
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
