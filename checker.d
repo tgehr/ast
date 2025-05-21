@@ -445,6 +445,12 @@ class Checker {
 	bool implStmt(ast_exp.BinaryExp!(Tok!":=") e){
 		auto lhs = e.e1;
 		auto rhs = e.e2;
+		if(auto idx = cast(ast_exp.IndexExp)rhs) {
+			if(idx.byRef) {
+				auto id = ast_sem.getIdFromIndex(idx);
+				assert(id && id.meaning && id.meaning.scope_ is nscope);
+			}
+		}
 		visExpr(rhs);
 		visLhs(lhs);
 		return false;
