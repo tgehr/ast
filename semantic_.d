@@ -1626,6 +1626,10 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	assert(!context.constResult);
 	Expression analyzeAggregate(IndexExp e,DefineLhsContext context){
 		auto next=unwrap(e.e);
+		propErr(next,e);
+		propErr(e,idx);
+		if(e.sstate==SemState.error)
+			return e;
 		if(auto id=cast(Identifier)next){
 			if(idx.byRef) id.byRef=true;
 			id.indexedDirectly=true;
