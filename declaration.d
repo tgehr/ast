@@ -127,6 +127,7 @@ class FunctionDef: Declaration{
 	bool isTuple;
 	bool isSquare=false;
 	auto annotation=Annotation.none;
+	bool inferAnnotation=false;
 	Expression rret;
 	CompoundExp body_;
 	this(Identifier name, Parameter[] params, bool isTuple, Expression rret, CompoundExp body_)in{
@@ -139,6 +140,7 @@ class FunctionDef: Declaration{
 		auto r=new FunctionDef(name?name.copy(args):null,params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
 		r.isSquare=isSquare;
 		r.annotation=annotation;
+		r.inferAnnotation=inferAnnotation;
 		r.attributes=attributes.array;
 		return r;
 	}

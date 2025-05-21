@@ -3566,13 +3566,27 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}
 					}
 				}
-				if(sc&&ft.annotation<sc.restriction()){
-					if(ft.annotation==Annotation.none){
-						sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(sc.restriction())), ce.loc);
-					}else{
-						sc.error(format("cannot call '%s' function '%s' in '%s' context", ft.annotation, ce.e, annotationToString(sc.restriction())), ce.loc);
+				FunctionDef reason=null;
+				auto restriction=Annotation.none;
+				if(sc) restriction=sc.restriction(reason);
+				if(sc&&ft.annotation<restriction){
+					bool fixed=false;
+					if(reason&&reason.inferAnnotation&&ft.annotation<reason.annotation){
+						reason.annotation=min(reason.annotation,ft.annotation);
+						reason.ftype=null;
+						setFtype(reason,true);
+						if(reason.sealed) reason.unseal();
+						fixed=true;
 					}
-					ce.sstate=SemState.error;
+					if(!fixed){
+						if(ft.annotation==Annotation.none){
+							sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(restriction)), ce.loc);
+						}else{
+							sc.error(format("cannot call '%s' function '%s' in '%s' context", ft.annotation, ce.e, annotationToString(restriction)), ce.loc);
+						}
+						// TODO: inference trace
+						ce.sstate=SemState.error;
+					}
 				}
 				static if(language==silq && isRhs){
 					if((isType(ce)||isQNumeric(ce))&&ce.isClassical_)
@@ -5329,12 +5343,14 @@ bool setFtype(FunctionDef fd,bool force){
 				break;
 			}
 		}
-		if(!fd.ret&&!(force&&!fd.sealed&&fd.inferringReturnType))
+		if(!fd.ret&&!(force&&!fd.sealed&&(fd.inferringReturnType||fd.inferAnnotation)))
 			return false;
 		if(fd.ftype&&fd.ftypeFinal)
 			return true;
 	}
 	if(fd.isNested&&!force&&!fd.sealed)
+		return false;
+	if(fd.sstate!=SemState.error&&(!fd.fscope_||fd.params.any!(p=>!p.vtype)))
 		return false;
 	bool[] pc;
 	Id[] pn;
@@ -5452,6 +5468,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	}else{
 		fd.ftypeFinal=true;
 		fd.inferringReturnType=false;
+		fd.inferAnnotation=false;
 	}
 	if(fd.ftypeFinal){
 		foreach(ref n;fd.retNames){
@@ -5558,6 +5575,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(--fd.numUpdatesPending==0){
 			fd.ftypeFinal=true;
 			fd.inferringReturnType=false;
+			fd.inferAnnotation=false;
 			finalize(fd);
 		}
 	}
@@ -5570,7 +5588,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.sstate==SemState.completed)
 				ufd=ufd.scope_.getFunction();
-			if(!ufd||!ufd.inferringReturnType) continue; // TODO: needed?
+			if(!ufd||!ufd.inferringReturnType&&!ufd.inferAnnotation) continue; // TODO: needed?
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
@@ -5600,8 +5618,10 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 		assert(fd&&fd.scope_);
 	}do{
 		setFtype(fd,force);
-		if(auto ty=fd.ftype)
-			return future(ty);
+		if(fd.ftypeFinal){
+			if(auto ty=fd.ftype)
+				return future(ty);
+		}
 		fd.ftypeCallbacks~=future;
 	}
 	if(auto le=cast(LambdaExp)e){

@@ -858,6 +858,11 @@ struct Parser{
 		}
 		res=New!FunctionDef(name,cast(Parameter[])params[0],params[1]||params[0].length!=1,ret,body_);
 		res.isSquare=isSquare;
+		if(annotation==Annotation.none&&body_){
+			static if(language==silq) annotation=Annotation.mfree; // TODO: annotation=pure_;
+			else annotation=pure_;
+			res.inferAnnotation=true;
+		}
 		res.annotation=annotation;
 		res.attributes=attributes[];
 		return res;

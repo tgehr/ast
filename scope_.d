@@ -326,7 +326,7 @@ abstract class Scope{
 		return result;
 	}
 	final void unconsume(Declaration decl)in{
-		assert(decl.scope_ is null||decl.scope_ is this);
+		assert(decl.scope_ is null||decl.scope_ is this||decl.sstate==SemState.error,text(decl," ",decl.loc));
 	}do{
 		toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array;
 		decl.scope_=null;
@@ -775,7 +775,7 @@ abstract class Scope{
 		return var;
 	}
 
-	Annotation restriction(){
+	Annotation restriction(ref FunctionDef reason){
 		return Annotation.none;
 	}
 
@@ -1087,7 +1087,7 @@ class NestedScope: Scope{
 		return parent.lookupImpl(ident,rnsym,lookupImports,kind,origin);
 	}
 
-	override Annotation restriction(){ return parent.restriction(); }
+	override Annotation restriction(ref FunctionDef reason){ return parent.restriction(reason); }
 	static if(language==silq){
 		override int outerDeclProps(scope int delegate(ref DeclProps) dg){
 			return parent.nestedDeclProps(dg);
@@ -1113,7 +1113,7 @@ class RawProductScope: NestedScope{
 		super(parent);
 		this.annotation=annotation;
 	}
-	override Annotation restriction(){
+	override Annotation restriction(ref FunctionDef reason){
 		return annotation;
 	}
 	void forceClose(){}
@@ -1265,7 +1265,8 @@ class FunctionScope: CapturingScope!FunctionDef{
 	this(Scope parent,FunctionDef fd){
 		super(parent,fd);
 	}
-	override Annotation restriction(){
+	override Annotation restriction(ref FunctionDef reason){
+		reason=fd;
 		return fd.annotation;
 	}
 	void forceClose(){}
@@ -1288,8 +1289,14 @@ class BlockScope: NestedScope{
 		this.restriction_=restriction_;
 	}
 	Annotation restriction_;
-	override Annotation restriction(){
-		return max(restriction_,super.restriction());
+	override Annotation restriction(ref FunctionDef reason){
+		FunctionDef parentReason=null;
+		auto parentRestriction=super.restriction(parentReason);
+		if(restriction_<parentRestriction){
+			reason=parentReason;
+			return parentRestriction;
+		}
+		return restriction_;
 	}
 }
 class AggregateScope: NestedScope{
