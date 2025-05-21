@@ -1662,7 +1662,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		return null;
 	}
 	if(auto r=analyzeAggregate(idx,context))
-		if(!cast(IndexExp)unwrap(r)) return r;
+		if(idx.sstate==SemState.error||!cast(IndexExp)unwrap(r))
+			return r;
 	auto sc=context.sc;
 	void analyzeIndex(IndexExp e){
 		if(auto idx=cast(IndexExp)unwrap(e.e)){
