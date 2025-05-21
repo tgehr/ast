@@ -861,7 +861,7 @@ abstract class Scope{
 				}
 				if(mayChange&&loopScope)
 					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
-				bool isConstParamDecl=type.isClassical()||dependencies.canForget(decl)||!mayChange;
+				bool isConstParamDecl=type.isClassical()||!mayChange||dependencies.canForget(decl);
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,type.copy(cargs),mayChange,decl.loc);
 			}
@@ -918,7 +918,8 @@ abstract class Scope{
 				}
 			}
 		}
-		foreach(_,decl;symtab) if(decl.rename.id !in rnsymtab) rnsymtab[decl.rename.id]=decl; // TODO: ok?
+		rnsymtab.clear();
+		foreach(_,decl;symtab) rnsymtab[decl.rename.id]=decl; // TODO: ok?
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
