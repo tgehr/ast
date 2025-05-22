@@ -3,7 +3,7 @@ static if(imported!"astopt".language==imported!"astopt".silq):
 
 import std.array: Appender, appender, array;
 import std.format: format;
-import std.algorithm: map, all;
+import std.algorithm: map, all, any;
 import std.range: repeat;
 
 import util.io: stderr;
@@ -578,7 +578,7 @@ class Checker {
 		}
 
 		auto decl = e.meaning;
-		assert(decl);
+		assert(!!decl);
 		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
 		return getVar(decl, e.constLookup, "identifier", e);
 	}
@@ -957,6 +957,7 @@ class Checker {
 		auto vd = cast(ast_decl.VarDecl) decl;
 		assert(fd || vd, format("TODO: Unsupported declaration type %s: %s on %s << %s >>", typeid(decl).name, causeType, causeExpr.loc, causeExpr));
 		assert(!vd || isBorrow || !vd.isConst, format("ERROR: Consuming const variable %s: %s on %s << %s >>", id, causeType, causeExpr.loc, causeExpr));
+		assert(!decl.splitInto.any!(d=>nscope.isNestedIn(d.scope_)), format("ERROR: variable access %s does not refer to maximally split version: %s on %s << %s >>", id, causeType, causeExpr.loc, causeExpr));
 
 		if(fd && (!fd.scope_.getFunction() || nscope.isNestedIn(fd.fscope_))) {
 			getFunc(fd, isBorrow, causeExpr);
