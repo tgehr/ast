@@ -178,6 +178,9 @@ abstract class Scope{
 			ref DeclProp set(Declaration decl,DeclProp prop){
 				return props[decl]=prop;
 			}
+			void remove(Declaration decl){
+				props.remove(decl);
+			}
 		}
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
@@ -379,8 +382,10 @@ abstract class Scope{
 			dependency.replace(removed,dependencies.dependencies[removed]);
 		}
 		final void clearConsumed(){
-			foreach(removed;toRemove)
+			foreach(removed;toRemove){
 				removeDependency(removed);
+				declProps.remove(removed);
+			}
 			toRemove=[];
 		}
 	}
