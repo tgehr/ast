@@ -162,6 +162,7 @@ abstract class Scope{
 				}
 			}
 			private Identifier[] accesses;
+			private Declaration[] capturers;
 			static DeclProp default_(){
 				return DeclProp.init;
 			}
@@ -219,6 +220,9 @@ abstract class Scope{
 		}
 		final void recordAccess(Identifier id,Declaration meaning){
 			updateDeclProps(meaning).accesses~=id;
+		}
+		final void recordCapturer(Declaration capturer,Declaration meaning){
+			updateDeclProps(meaning).capturers~=capturer;
 		}
 		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
@@ -351,6 +355,24 @@ abstract class Scope{
 				if(id.meaning !is splitFrom) continue;
 				id.meaning=splitInto;
 				recordAccess(id,splitInto);
+			}
+			foreach(capturer;declProps.capturers){
+				void doIt(T)(T capturer){
+					if(splitFrom !in capturer.captures) return;
+					capturer.captures[splitInto]=capturer.captures[splitFrom];
+					capturer.captures.remove(splitFrom);
+					foreach(ref oldDecl;capturer.capturedDecls){
+						if(oldDecl is splitFrom){
+							oldDecl=splitInto;
+							break;
+						}
+					}
+					foreach(id;capturer.captures[splitInto])
+						if(id.meaning is splitFrom) id.meaning=splitInto;
+				}
+				if(auto fd=cast(FunctionDef)capturer) doIt(fd);
+				else if(auto dat=cast(DatDecl)capturer) doIt(dat);
+				else assert(0,text(typeid(capturer)));
 			}
 			declProps.accesses=[];
 		}
@@ -1262,8 +1284,11 @@ class CapturingScope(T): NestedScope{
 				meaning=consume(meaning);
 				origin.insertCapture(id,meaning,this);
 			}
-			if(id.sstate!=SemState.error)
+			if(id.sstate!=SemState.error){
+				parent.recordAccess(id,meaning);
+				parent.recordCapturer(decl,meaning);
 				decl.addCapture(meaning,id);
+			}
 		}
 		return meaning;
 	}
