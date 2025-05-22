@@ -1367,7 +1367,14 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 						return make(LiteralExp.makeInteger(v)); // TODO: replace literal exp internal representation
 					}
 				}
-				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return ne1.evalImpl(ntype);
+				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0"){
+					static if(op==Tok!"sub"){
+						if(auto se1=cast(SubExp)ne1)
+							return make(new NSubExp(se1.e1,se1.e2));
+						// TODO: coerce?
+					}
+					return ne1.evalImpl(ntype);
+				}
 				}
 				if(this.isDeterministic()){
 					if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
