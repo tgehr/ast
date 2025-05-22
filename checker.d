@@ -461,7 +461,7 @@ class Checker {
 		}
 		visExpr(rhs);
 		visLhs(lhs);
-		return false;
+		return ast_ty.isEmpty(e.type);
 	}
 
 	void visLhs(ast_exp.Expression e) {

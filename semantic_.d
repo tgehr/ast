@@ -1072,19 +1072,23 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	auto thene=new DefineExp(retName,ce);
 	thene.loc=ce.loc;
 	nbdy.s~=thene;
-	//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
-	auto othwe=new DefineExp(retName.copy(cargsDefault),returnTpl);
-	othwe.loc=loop.loc;
-	auto othw=new CompoundExp([othwe]);
-	othw.loc=othwe.loc;
-	auto ite=new IteExp(ncond,nbdy,othw);
-	ite.loc=loop.loc;
+	Expression bdy;
+	if(!isTrue(ncond)){
+		//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
+		auto othwe=new DefineExp(retName.copy(cargsDefault),returnTpl);
+		othwe.loc=loop.loc;
+		auto othw=new CompoundExp([othwe]);
+		othw.loc=othwe.loc;
+		auto ite=new IteExp(ncond,nbdy,othw);
+		ite.loc=loop.loc;
+		bdy=ite;
+	}else bdy=thene;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
 	auto ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
 	ret.loc=loop.loc;
-	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite,ret]);
-	fbdy.loc=ite.loc;
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[bdy,ret]);
+	fbdy.loc=bdy.loc;
 	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
 	fd.annotation=pure_;
 	fd.inferAnnotation=true;
@@ -1110,8 +1114,11 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
-	auto def=new DefineExp(defTpl,ce2);
-	def.loc=loop.loc;
+	Expression def;
+	if(defTpl.e.length){
+		def=new DefineExp(defTpl,ce2);
+		def.loc=loop.loc;
+	}else def=ce2;
 	Expression[] stmts=[fd,def];
 	static if(!returnOnlyMoved){
 		if(constTmpNames[loopParams.length..$].length){
@@ -1777,8 +1784,9 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 	Expression[] es=[];
 	if(auto te=cast(TupleExp)context.initializer) es=te.e;
 	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
+	bool isBottom=context.type&&isEmpty(context.type);
 	foreach(i,ref e;tpl.e){
-		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:null;
+		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:isBottom?bottom:null;
 		auto ninit=i<es.length?es[i]:null;
 		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype,ninit));
 		propErr(e,tpl);
@@ -1791,12 +1799,13 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc);
 					tpl.sstate=SemState.error;
 				}
-			}else if(!at){
+			}else if(!at&&!isBottom){
 				sc.error(format("cannot unpack type %s as a tuple",context.type),tpl.loc);
 				tpl.sstate=SemState.error;
 			}
 		}else tpl.sstate=SemState.error; // TODO: ok?
-		if(tpl.e.all!(e=>!!e.type))
+		if(isBottom) tpl.type=bottom;
+		else if(tpl.e.all!(e=>!!e.type))
 			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 	}
 	return tpl;
@@ -2444,6 +2453,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	else propErr(de,be.e1);
 	assert(success && de is be || !de||de.sstate==SemState.error);
 	auto tt=be.e2.type?be.e2.type.isTupleTy:null;
+	auto isBottom=be.e2.type&&isEmpty(be.e2.type);
 	if(be.e2.sstate==SemState.completed){
 		auto tpl=cast(TupleExp)be.e1;
 		if(be.e2.type){
@@ -2474,7 +2484,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					}
 				}
 			}
-			de.type=unit;
+			de.type=isBottom?bottom:unit;
 			propErr(be,de);
 		}
 		if(cast(TopScope)sc){
@@ -2493,6 +2503,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			typeConstBlock(id.meaning,blocker,sc);
 		}
 	}
+	be.type=isBottom?bottom:unit;
 	if(r.sstate!=SemState.error) r.sstate=SemState.completed;
 	return lowerIndexReplacement(prologues,epilogues,r,sc);
 }
