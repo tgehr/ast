@@ -161,11 +161,12 @@ abstract class Scope{
 					componentReplacements~=r;
 				}
 			}
+			private Identifier[] accesses;
 			static DeclProp default_(){
 				return DeclProp.init;
 			}
 			DeclProp dup(){
-				return DeclProp(constBlock,componentReplacements.dup);
+				return DeclProp(constBlock,componentReplacements.dup,accesses.dup);
 			}
 			DeclProp inherit(){ return default_(); }
 		}
@@ -212,6 +213,9 @@ abstract class Scope{
 				return &declProps.set(decl,prop.inherit);
 			}
 			return &declProps.set(decl,DeclProp.default_());
+		}
+		final void recordAccess(Identifier id,Declaration meaning){
+			updateDeclProps(meaning).accesses~=id;
 		}
 		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
@@ -339,6 +343,14 @@ abstract class Scope{
 		splitFrom.splitInto~=splitInto;
 		splitInto.splitFrom=splitFrom;
 		splitVars~=splitInto;
+		if(auto declProps=updateDeclProps(splitFrom)){
+			foreach(id;declProps.accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+				if(id.meaning !is splitFrom) continue;
+				id.meaning=splitInto;
+				recordAccess(id,splitInto);
+			}
+			declProps.accesses=[];
+		}
 	}
 	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
 		assert(odecl is ndecl||!remove);
@@ -386,6 +398,7 @@ abstract class Scope{
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
+		recordAccess(id,meaning);
 		if(performConsume){
 			if(!meaning) return meaning;
 			if(kind==Lookup.consuming){
@@ -530,7 +543,7 @@ abstract class Scope{
 			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
 			//assert(decl.getName!="rrr");
 		}
-		
+
 		void addDependency(Declaration decl, Dependency dep){
 			addDependencies([q(decl,dep)]);
 		}
