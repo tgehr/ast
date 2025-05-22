@@ -942,11 +942,14 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	Expression.CopyArgs cargsDefault;
 	auto nbdy=loop.bdy.copy(cargsDefault);
 	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
-	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms){
+	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms,bool checkDefined=false){
 		return prms.map!((p){
 			auto id=new Identifier(p[0]);
 			id.loc=p[3];
 			return id;
+		}).filter!((id){
+			if(!checkDefined) return true;
+			return !!sc.lookupHere(id,false,Lookup.probing);
 		}).array;
 	}
 	auto fi=freshName();
@@ -954,11 +957,11 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	auto loopConstParams=loopParams~constParams;
 	auto constMovedParams=constParams~movedParams;
 	static if(returnOnlyMoved){
-		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams));
+		auto movedTpl=new TupleExp(cast(Expression[])ids(movedParams,true));
 		movedTpl.loc=loop.loc;
 		auto returnTpl=movedTpl;
 	}else{
-		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[2]).array));
+		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[2]).array,true));
 		returnTpl.loc=loop.loc;
 	}
 	auto cee=new Identifier(fi);
@@ -977,7 +980,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		params~=param;
 	}
 	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
-	Expression rret=new TypeofExp(paramTmpTpl.copy(cargsDefault));
 	DefineExp constParamDef=null;
 	if(constTmpNames.length){
 		auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
@@ -1083,8 +1085,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	ret.loc=loop.loc;
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[cast(Expression)ite,ret]);
 	fbdy.loc=ite.loc;
-	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
-	fd.annotation=sc.getFunction().annotation;// loop.getAnnotation; // TODO
+	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
+	fd.annotation=pure_;
+	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){
 		auto paramTpl2=new TupleExp([cast(Expression)leftName.copy(cargsDefault)]~cast(Expression[])ids(constMovedParams));
@@ -1104,7 +1107,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	static if(returnOnlyMoved){
 		auto defTpl=movedTpl.copy(cargsDefault);
 	}else{
-		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
+		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
 	auto def=new DefineExp(defTpl,ce2);
@@ -1217,26 +1220,26 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 }
 
 Expression statementSemanticImpl(WhileExp we,Scope sc){
-	bool converged=false;
 	Expression.CopyArgs cargs={preserveSemantic: true};
-	auto cond=we.cond.copy(cargs);
-	cond=conditionSemantic(cond,sc,InType.no);
-	propErr(cond,we);
 	static if(language==silq) sc.clearConsumed();
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc);
+	bool converged=false;
+	bool condSucceeded=false;
+	Expression ncond=null;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		auto prevStateSnapshot=sc.getStateSnapshot();
 		bdy=we.bdy.copy(cargs);
 		auto wesc=bdy.blscope_=state.makeScopes(sc);
-		bdy=compoundExpSemantic(bdy,sc);
-		propErr(bdy,we);
-		auto ncond=we.cond.copy(cargs);
-		ncond=conditionSemantic(ncond,wesc,InType.no);
+		ncond=we.cond.copy(cargs);
+		ncond=conditionSemantic(ncond,wesc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
 		static if(language==silq) wesc.clearConsumed();
 		propErr(ncond,we);
-		if(cond.sstate==SemState.completed&&ncond.sstate==SemState.error)
+		condSucceeded|=ncond.sstate==SemState.completed;
+		bdy=compoundExpSemantic(bdy,sc);
+		propErr(bdy,we);
+		if(condSucceeded&&ncond.sstate==SemState.error)
 			sc.note("variable declaration may be missing in while loop body", we.loc);
 		static if(language==silq){
 			if(sc.merge(false,bdy.blscope_,state.forgetScope)){
@@ -1256,8 +1259,11 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 		converged|=bdy.sstate==SemState.error||state.converged;
 	}
 	state.fixSplitMergeGraph(sc);
-	we.cond=cond;
-	we.bdy=bdy;
+	auto fcond=we.cond.copy(cargs);
+	fcond=conditionSemantic(fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
+	propErr(fcond,we);
+	if(ncond) we.cond=ncond;
+	if(bdy) we.bdy=bdy;
 	we.type=isTrue(we.cond)?bottom:unit;
 	if(we.sstate!=SemState.error)
 		we.sstate=SemState.completed;

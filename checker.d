@@ -373,8 +373,7 @@ class Checker {
 
 	bool implStmt(ast_exp.WhileExp e) {
 		expectConst(e.cond, "while condition");
-		visExpr(e.cond);
-		visLoop(e.bdy, null);
+		visLoop(e.bdy, null, e.cond);
 		return ast_sem.isTrue(e.cond);
 	}
 
@@ -398,7 +397,7 @@ class Checker {
 		return false;
 	}
 
-	bool visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar) { // (result: loop body definitely returns)
+	bool visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar, ast_exp.Expression condition = null) { // (result: loop body definitely returns)
 		auto sc = bdy.blscope_;
 		assert(sc.parent is nscope);
 
@@ -426,6 +425,10 @@ class Checker {
 			sub.defineVar(inner0, "splitVars", bdy);
 		}
 
+		if(condition) {
+			sub.visExpr(condition); // TODO: treat `while cond { ... }` like `if cond { do { ... } until cond; }` instead.
+		}
+
 		bool r = sub.visCompoundStmt(bdy);
 
 		foreach(inner1; sc.mergedVars) {
@@ -439,6 +442,11 @@ class Checker {
 			defineVar(outer1, "mergedVars", bdy);
 		}
 		assert(merged.length == sc.mergedVars.length);
+
+		if(condition) {
+			visExpr(condition); // TODO: treat `while cond { ... }` like `if cond { do { ... } until cond; }` instead.
+		}
+
 		return r;
 	}
 
