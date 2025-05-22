@@ -167,9 +167,23 @@ abstract class Scope{
 				return DeclProp.init;
 			}
 			DeclProp dup(){
-				return DeclProp(constBlock,componentReplacements.dup,accesses.dup);
+				return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup);
 			}
 			DeclProp inherit(){ return default_(); }
+			DeclProp merged()in{
+				//assert(!constBlock);
+				assert(!componentReplacements.length);
+			}do{
+				constBlock=null; // TODO: ok?
+				return this;
+			}
+			void merge(DeclProp nested)in{
+				//assert(!nested.constBlock);
+				assert(!nested.componentReplacements.length);
+			}do{
+				accesses~=nested.accesses;
+				capturers~=nested.capturers;
+			}
 		}
 		static struct DeclProps{
 			private DeclProp[Declaration] props;
@@ -182,10 +196,19 @@ abstract class Scope{
 			void remove(Declaration decl){
 				props.remove(decl);
 			}
+			void merge(ref DeclProps nested){
+				foreach(decl,ref prop;nested.props){
+					if(decl !in props) props[decl]=prop.merged();
+					else props[decl].merge(prop);
+				}
+			}
 		}
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
 		final void resetDeclProps(){ declProps.clear(); }
+		final void mergeDeclProps(ref DeclProps nested){
+			declProps.merge(nested);
+		}
 		final int nestedDeclProps(scope int delegate(ref DeclProps) dg){
 			if(auto r=dg(declProps)) return r;
 			return outerDeclProps(dg);
@@ -350,6 +373,12 @@ abstract class Scope{
 		splitFrom.splitInto~=splitInto;
 		splitInto.splitFrom=splitFrom;
 		splitVars~=splitInto;
+	}
+	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
+		assert(splitFrom !is splitInto);
+	}do{
+		if(dependencyTracked(splitFrom))
+			dependencies.replace(splitFrom,splitInto);
 		if(auto declProps=updateDeclProps(splitFrom)){
 			foreach(id;declProps.accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
 				if(id.meaning !is splitFrom) continue;
@@ -377,6 +406,7 @@ abstract class Scope{
 			declProps.accesses=[];
 		}
 	}
+
 	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
 		assert(odecl is ndecl||!remove);
 	}do{
@@ -386,14 +416,22 @@ abstract class Scope{
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
 			static if(language==silq){
-				if(dependencyTracked(odecl)){
-					dependencies.pushUp(odecl,true);
-					toRemove~=odecl;
+				static if(language==silq){
+					if(odecl !is ndecl)
+						replaceDecl(odecl,ndecl);
+				}
+				if(dependencyTracked(ndecl)){
+					dependencies.pushUp(ndecl,true);
+					toRemove~=ndecl;
 				}
 			}
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
+			rnsymtab.remove(odecl.rename.id);
+			rnsymtab[ndecl.getId]=ndecl;
+			static if(language==silq)
+				replaceDecl(odecl,ndecl);
 		}
 		return ndecl;
 	}
@@ -425,7 +463,9 @@ abstract class Scope{
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
-		recordAccess(id,meaning);
+		if(kind!=Lookup.probing&&meaning){
+			recordAccess(id,meaning);
+		}
 		if(performConsume){
 			if(!meaning) return meaning;
 			if(kind==Lookup.consuming){
@@ -510,7 +550,8 @@ abstract class Scope{
 			foreach(n,d;symtab.dup){
 				if(d.isLinear()||d.scope_ is this){
 					if(auto p=cast(Parameter)d) if(p.isConst) continue;
-					if(!canForgetAppend(loc,d)){
+					d=split(d);
+					if(d.scope_ !is this || !canForgetAppend(loc,d)){
 						errors=true;
 						import ast.semantic_: unrealizable;
 						if(d.sstate!=SemState.error){
@@ -538,7 +579,7 @@ abstract class Scope{
 		return Scope.close(this);
 	}
 
-	final bool closeUnreachable(){
+	final bool closeUnreachable(Scope mergeScope){
 		static if(language==silq)
 			clearConsumed();
 		activeNestedScopes=[];
@@ -552,6 +593,9 @@ abstract class Scope{
 				}
 			}
 		}
+		static if(language==silq)
+			if(mergeScope)
+				mergeScope.mergeDeclProps(this.declProps);
 		return false;
 	}
 
@@ -619,7 +663,9 @@ abstract class Scope{
 		}
 
 		Declaration[] forgottenVars;
-		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp)){
+		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
+			assert(decl.scope_ is this);
+		}do{
 			if(canForget(decl)){
 				cause.forgottenVars~=decl;
 				return true;
@@ -685,6 +731,15 @@ abstract class Scope{
 					}
 				}
 			}
+			void splitSym(){
+				auto nsym=scopes[0].split(sym);
+				if(nsym is sym) return;
+				symtab.remove(sym.name.id);
+				if(sym.rename) rnsymtab.remove(sym.rename.id);
+				symtab[sym.name.id]=nsym;
+				if(nsym.rename) rnsymtab[sym.rename.id]=sym;
+				sym=nsym;
+			}
 			void removeSym(){
 				removeOSym(this,sym);
 				removeOSym(scopes[0],psym);
@@ -707,6 +762,7 @@ abstract class Scope{
 			foreach(sc;scopes[1..$]){
 				if(sym.name.id !in sc.symtab){
 					static if(language==silq){
+						splitSym();
 						if(!scopes[0].canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
@@ -727,6 +783,7 @@ abstract class Scope{
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								static if(language==silq){
+									splitSym(), sc.split(osym);
 									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
 										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
@@ -763,8 +820,9 @@ abstract class Scope{
 		}
 		static if(language==silq){
 			foreach(sc;scopes){
-				foreach(sym;sc.symtab){
-					if(sym.name.id !in symtab){ // TODO: needed at all?
+				foreach(sym;sc.symtab.dup){
+					if(sym.name.id !in symtab){
+						sym=sc.split(sym);
 						if(!sc.canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
@@ -778,9 +836,13 @@ abstract class Scope{
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
 			foreach(k,v;dependencies.dependencies.dup){
-				if(k.getId !in symtab && k.getId !in rnsymtab)
+				if(k.name.id !in symtab && k.getId !in rnsymtab)
 					if(dependencyTracked(k))
 						dependencies.dependencies.remove(k);
+			}
+			foreach(sc;scopes){
+				mergeDeclProps(sc.declProps);
+				sc.resetDeclProps();
 			}
 		}
 		foreach(sc;scopes){
@@ -953,9 +1015,8 @@ abstract class Scope{
 			auto split=getSplit(decl,true);
 			symtab[decl.name.id]=split;
 			static if(language==silq){
-				if(decl !is split && dependencyTracked(decl)){
-					dependencies.replace(decl,split);
-				}
+				if(decl !is split)
+					replaceDecl(decl,split);
 			}
 		}
 		rnsymtab.clear();
@@ -1078,12 +1139,12 @@ class NestedScope: Scope{
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
-								if(sc.dependencyTracked(ndecl)) // TODO: can we get rid of this?
-									sc.removeDependency(ndecl);
-								sc.addDependency(ndecl,pdep.dup);
-								if(ndecl !is cdecl)
-									sc.dependencies.replace(ndecl,cdecl);
+								if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
+									sc.removeDependency(odecl);
+								sc.addDependency(odecl,pdep.dup);
 							}
+							if(odecl !is cdecl)
+								sc.replaceDecl(odecl,cdecl);
 						}
 					}
 				}
@@ -1093,18 +1154,24 @@ class NestedScope: Scope{
 		if(type){
 			symtab.remove(odecl.name.id);
 			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			if(odecl !is ndecl&&dependencyTracked(odecl)){
-				//dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
-				dependencies.pushUp(odecl,false); // consume declaration normally on split
-				// TODO: backtrace forgets and last usages
+			if(dependencyTracked(odecl)){
+				// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
+				dependencies.pushUp(odecl,true); // consume declaration normally on split
+				toRemove~=odecl;
 			}
+			// TODO: backtrace forgets and last usages
 			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
 				splitVar(ndecl,result);
 				static if(language==silq){
-					if(remove&&parent.getFunction() is getFunction()){
-						addDependency(ndecl,pdep.dup);
-						dependencies.replace(ndecl,result);
+					if(remove){ // TODO: cen we get rid of this?
+						if(parent.getFunction() is getFunction()){
+							if(dependencyTracked(odecl))
+								removeDependency(odecl);
+							addDependency(odecl,pdep.dup);
+						}
+						assert(odecl !is result);
+						replaceDecl(odecl,result);
 					}
 				}
 			}
@@ -1117,9 +1184,11 @@ class NestedScope: Scope{
 					toRemove~=odecl;
 				}
 			}
+			if(odecl !is result)
+				replaceDecl(odecl,result);
+			return result;
 		}
-		if(!remove) return result;
-		return type?consume(result):result;
+		return remove?consume(result):result;
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){

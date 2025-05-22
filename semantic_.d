@@ -810,7 +810,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
 	foreach(branch;only(ite.then,ite.othw)){
 		if(!definitelyReturns(branch)) scs~=branch.blscope_;
-		else branch.blscope_.closeUnreachable();
+		else branch.blscope_.closeUnreachable(sc);
 	}
 	sc.activeNestedScopes=scs;
 	if(scs.length && sc.merge(quantumControl,scs)){
@@ -5477,7 +5477,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 	}
 	if(bdy){
-		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable()) fd.sstate=SemState.error;
+		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(null)) fd.sstate=SemState.error;
 	}else{
 		fsc.forceClose();
 	}
