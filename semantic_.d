@@ -823,6 +823,20 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 
 static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc){
+	if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
+		if(ret.e.sstate==SemState.initial){
+			auto id=new Identifier(freshName());
+			id.loc=ret.e.loc;
+			auto id2=id.copy();
+			auto def=new DefineExp(id2,ret.e);
+			def.loc=ret.loc;
+			ret.e=id;
+			with_.bdy.s[$-1]=def;
+			auto r=new CompoundExp([with_,ret]);
+			r.loc=with_.loc;
+			return statementSemantic(r,sc);
+		}
+	}
 	// TODO: disallow early returns
 	if(with_.isIndices){
 		foreach(e;with_.trans.s){

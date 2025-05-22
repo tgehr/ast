@@ -740,7 +740,13 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
 	bool simplify=r.innerNeeded;
-	auto ret=fd.body_.s.length?cast(ReturnExp)fd.body_.s[$-1]:null;
+	ReturnExp getRet(CompoundExp bdy){
+		if(!fd.body_.s.length) return null;
+		if(auto ret=cast(ReturnExp)bdy.s[$-1]) return ret;
+		if(auto ce=cast(CompoundExp)bdy.s[$-1]) return getRet(ce);
+		return null;
+	}
+	auto ret=getRet(fd.body_);
 	if(!ret){
 		sc.error("reversing early returns not supported yet",fd.loc);
 		enforce(0,text("errors while reversing function"));
