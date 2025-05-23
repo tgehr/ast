@@ -1479,7 +1479,7 @@ bool isLifted(Expression e,Scope sc){
 }
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
-	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e)
+	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
 		return true;
 	if(cast(LiteralExp)e) return true;
 	if(cast(SliceExp)e) return true;
@@ -1531,7 +1531,7 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(AssertExp ae,DefineLhsContext context){
-	return defineLhsSemanticImplCurrentlyUnsupported(ae,context);
+	return defineLhsSemanticImplLifted(ae,context);
 }
 
 Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
@@ -2139,6 +2139,13 @@ Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
 
 Expression defineLhsSemanticImplCurrentlyUnsupported(Expression e,DefineLhsContext context){
 	auto sc=context.sc;
+	if(context.type&&context.type==bottom){
+		auto lit=LiteralExp.makeBoolean(false);
+		lit.loc=e.loc;
+		auto r=new AssertExp(lit); // TODO: detect and error out if this makes it past type checking?
+		r.loc=e.loc;
+		return defineLhsSemantic!isPresemantic(r,context);
+	}
 	if(e.sstate!=SemState.error){
 		sc.error("currently not supported as definition left-hand side",e.loc);
 		e.sstate=SemState.error;
@@ -3618,10 +3625,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				if(sc&&ft.annotation<restriction){
 					bool fixed=false;
 					if(reason&&reason.inferAnnotation&&ft.annotation<reason.annotation){
+						if(reason.sealed) reason.unseal();
 						reason.annotation=min(reason.annotation,ft.annotation);
 						reason.ftype=null;
 						setFtype(reason,true);
-						if(reason.sealed) reason.unseal();
 						fixed=true;
 					}
 					if(!fixed){
@@ -3941,9 +3948,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 			propErr(ce.arg,ce);
 			//imported!"util.io".writeln(ce.arg," ",ce.arg.type);
-			auto nfunTy=new BinaryExp!(Tok!"→")(ce.arg.type,bottom,Annotation.qfree,false);
+			auto argTy=ce.arg.type;
+			if(!argTy) argTy=bottom;
+			auto nfunTy=new BinaryExp!(Tok!"→")(argTy,bottom,Annotation.qfree,false);
 			nfunTy.loc=ce.e.loc;
-			auto nfun=new TypeAnnotationExp(ce.e,nfunTy,TypeAnnotationType.annotation);
+			auto cnfunTy=new UnaryExp!(Tok!"¬")(nfunTy);
+			cnfunTy.loc=nfunTy.loc;
+			auto nfun=new TypeAnnotationExp(ce.e,cnfunTy,TypeAnnotationType.annotation);
 			nfun.loc=ce.e.loc;
 			ce.e=nfun;
 			return callSemantic(ce,context);
@@ -4291,7 +4302,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		auto fd=cast(FunctionDef)meaning;
 		if(fd){
 			fd.ret=bottom;
-			fd.retNames=[];
 			setFtype(fd,true);
 			id.type=id.typeFromMeaning;
 		}
@@ -5380,23 +5390,8 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype&&fd.ftypeFinal) return true;
+	auto ftypeBefore=fd.ftype;
 	bool temporary=false;
-	if(!fd.ret){
-		// TODO: only consider statements
-		if(fd.body_) foreach(e;fd.body_.subexpressions()){
-			assert(!!e);
-			if(e.sstate!=SemState.started)
-				continue;
-			if(auto ret=cast(ReturnExp)e){
-				determineType(ret.e,ExpSemContext.init,(ty){ fd.ret=ty; },true);
-				break;
-			}
-		}
-		if(!fd.ret&&!(force&&!fd.sealed&&(fd.inferringReturnType||fd.inferAnnotation)))
-			return false;
-		if(fd.ftype&&fd.ftypeFinal)
-			return true;
-	}
 	if(fd.isNested&&!force&&!fd.sealed)
 		return false;
 	if(fd.sstate!=SemState.error&&(!fd.fscope_||fd.params.any!(p=>!p.vtype)))
@@ -5417,18 +5412,21 @@ bool setFtype(FunctionDef fd,bool force){
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
 	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
-	if(!fd.ret) fd.unseal();
-	if(fd.retNames==[]){
-		if(!fd.retNames) fd.retNames = new string[](fd.numReturns);
-		assert(fd.fscope_||fd.sstate==SemState.error);
+	if(fd.inferringReturnType||fd.inferAnnotation) fd.unseal();
+	if(fd.retNames.length!=fd.numReturns)
+		fd.retNames = new string[](fd.numReturns);
+	if(ftypeBefore!=fd.ftype){
+		//imported!"util.io".writeln("CALLING FTYPE CALLBACKS FOR: ",fd," ",fd.ftype," ",ftypeBefore," ",fd.ftypeCallbacks.length);
+		foreach(callback;fd.ftypeCallbacks)
+			callback(fd.ftype);
 	}
-	foreach(callback;fd.ftypeCallbacks)
-		callback(fd.ftype);
-	fd.ftypeCallbacks=[];
+	if(fd.ftypeFinal)
+		fd.ftypeCallbacks=[];
 	return true;
 }
 
 bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
+	if(!sc) return false;
 	if(auto fd=cast(FunctionDef)meaning){
 		if(!fd.ftypeFinal){
 			auto cfd=sc.getFunction();
@@ -5461,7 +5459,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	auto ftypeBefore=fd.ftype;
 	auto numCapturesBefore=fd.capturedDecls.filter!(d=>d.isLinear).walkLength; // TODO: really needed?
 	fd.inferringReturnType|=!fd.ret;
-	//imported!"util.io".writeln("STARTING: ",fd," ",fd.ret," ",fd.rret," ",fd.inferringReturnType);
+	//imported!"util.io".writeln("STARTING: ",fd," ",fd.ftype," ",fd.ret," ",fd.rret," ",fd.inferringReturnType);
+	if(!fd.ret){
+		fd.ret=bottom;
+		setFtype(fd,true);
+	}
 	if(fd.inferringReturnType){
 		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
 	}
@@ -5475,7 +5477,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(bdy){
 		propErr(bdy,fd);
 		if(!definitelyReturns(bdy)){
-			if(!fd.ret || fd.ret == unit){
+			if(!fd.ret || fd.ret == unit || fd.inferringReturnType&&fd.ret==bottom){
 				auto tpl=new TupleExp([]);
 				tpl.loc=fd.loc;
 				auto rete=new ReturnExp(tpl);
@@ -5553,7 +5555,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 		if(fd.sealed) fd.unseal();
-		fd.retNames=[];
 		if(fd.origRret) fd.rret=fd.origRret.copy();
 		assert(!!fd.origBody_);
 		fd.body_=fd.origBody_.copy();
@@ -5613,7 +5614,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	}
 	static void finalize()(FunctionDef fd){
 		if(fd.sstate==SemState.error) return;
-		//imported!"util.io".writeln("FINALIZING: ",fd," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
+		//ximported!"util.io".writeln("FINALIZING: ",fd," ",fd.ftype," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
 		if(fd.ftypeFinal){
 			fd.sstate=SemState.completed;
 			resetFunctionDefsToUpdate(fd);
@@ -5622,10 +5623,12 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	static void notify(FunctionDef fd,FunctionDef ufd){
 		assert(fd.numUpdatesPending>0);
 		if(--fd.numUpdatesPending==0){
-			fd.ftypeFinal=true;
-			fd.inferringReturnType=false;
-			fd.inferAnnotation=false;
-			finalize(fd);
+			if(fd.sstate!=SemState.started){ // semantic analysis is still active
+				fd.ftypeFinal=true;
+				fd.inferringReturnType=false;
+				fd.inferAnnotation=false;
+				finalize(fd);
+			}
 		}
 	}
 	if(fd.sstate!=SemState.error&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate.length)||numCapturesAfter!=numCapturesBefore)){
@@ -5641,6 +5644,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
+			//imported!"util.io".writeln("REANALYZING: ",ufd," ",ufd.ftype," BECAUSE OF ",fd," ",fd.ftype," ",ftypeBefore," ",functionDefsToUpdate.length);
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
 			assert(nufd is ufd);
 		}
@@ -5661,17 +5665,17 @@ DatDecl datDeclSemantic(DatDecl dat,Scope sc){
 	return dat;
 }
 
-void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future,bool force){
+void determineType(ref Expression e,ExpSemContext context,void delegate(Expression) future,bool force,Location loc){
 	if(e.type) return future(e.type);
 	void handleFunctionDef(FunctionDef fd)in{
 		assert(fd&&fd.scope_);
 	}do{
 		setFtype(fd,force);
-		if(fd.ftypeFinal){
-			if(auto ty=fd.ftype)
-				return future(ty);
+		if(fd.ftype) return future(fd.ftype);
+		if(!fd.ftypeFinal){
+			fd.ftypeCallbacks~=future;
+			//imported!"util.io".writeln("CALLBACK ADDED TO: ",fd," ",fd.ftype," ",fd.ftypeFinal," ",e.loc);
 		}
-		fd.ftypeCallbacks~=future;
 	}
 	if(auto le=cast(LambdaExp)e){
 		assert(!!le.fd);
@@ -5693,6 +5697,7 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 
 ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	if(ret.sstate==SemState.completed) return ret;
+	if(ret.sstate==SemState.started) return ret;
 	ret.sstate=SemState.started;
 	auto fd=sc.getFunction();
 	if(!fd){
@@ -5702,7 +5707,30 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	}
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	static if(language==silq) auto bottom=Dependency(); // variable is a workaround for DMD regression
-	if(!fd.ret){
+
+	bool widenReturnType(Expression type){
+		if(fd.ret&&isSubtype(type,fd.ret))
+			return true;
+		if(!fd.inferringReturnType){
+			//imported!"util.io".writeln("NOT INFERRING: ",fd);
+			return false;
+		}
+		if(!fd.ret){
+			fd.ret=type;
+			setFtype(fd,true);
+			return true;
+		}
+		if(auto nret=joinTypes(fd.ret,type)){
+			//imported!"util.io".writeln("WIDENTYPE: ",fd," ",fd.ret," ",type," ",nret);
+			if(fd.sealed) fd.unseal();
+			fd.ret=nret;
+			fd.ftype=null;
+			setFtype(fd,true);
+			return true;
+		}
+		return false;
+	}
+	if(fd.inferringReturnType){
 		determineType(ret.e,context,(ty){
 			static if(language==silq){
 				if(ty.hasClassicalComponent()&&sc.controlDependency!=bottom){
@@ -5710,9 +5738,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 						ty=qty;
 				}
 			}
-			fd.ret=ty;
-			setFtype(fd,true);
-		},false);
+			//imported!"util.io".writeln("WIDENING: ",fd," ",fd.ftype," ",ty);
+			widenReturnType(ty);
+			//imported!"util.io".writeln("WIDENED: ",fd," ",fd.ftype);
+		},false,ret.e.loc);
 	}
 	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
@@ -5748,25 +5777,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 	}
 	if(fd.ret){
 		assert(!!ret.e.type);
-		if(!isSubtype(ret.e.type,fd.ret)){
-			bool ok=false;
-			if(fd.inferringReturnType){
-				if(auto nret=joinTypes(fd.ret,ret.e.type)){
-					fd.ret=nret;
-					fd.ftype=null;
-					fd.retNames=[];
-					setFtype(fd,true);
-					if(fd.ftype){
-						if(fd.sealed) fd.unseal();
-						ok=true;
-					}
-				}
-			}
-			if(!ok){
-				sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
-				ret.sstate=SemState.error;
-				return ret;
-			}
+		if(!widenReturnType(ret.e.type)){
+			sc.error(format("%s is incompatible with return type %s",ret.e.type,fd.ret),ret.e.loc);
+			ret.sstate=SemState.error;
+			return ret;
 		}
 	}else{
 		ret.sstate=SemState.error;
