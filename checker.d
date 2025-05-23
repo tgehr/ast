@@ -291,6 +291,9 @@ class Checker {
 	bool implStmt(ast_exp.ReturnExp e) {
 		expectMoved(e.e, "return value");
 		visExpr(e.e);
+		auto fd=nscope.getFunction();
+		assert(!!fd && fd.ret);
+		expectConvertible(e.e, fd.ret, ast_exp.TypeAnnotationType.annotation);
 		foreach(decl; e.forgottenVars) {
 			getVar(decl, false, "forgottenVars", e);
 		}

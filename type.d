@@ -1247,7 +1247,7 @@ class ProductTy: Type{
 	override Expression combineTypesImpl(Expression rhs,bool meet){
 		auto r=cast(ProductTy)rhs;
 		if(!r) return null;
-		auto nannotation=meet?min(annotation,r.annotation):max(annotation,r.annotation);
+		auto nannotation=meet?max(annotation,r.annotation):min(annotation,r.annotation);
 		auto nisClassical=meet?isClassical_||r.isClassical_:isClassical_&&r.isClassical_;
 		auto ndom=combineTypes(dom,r.dom,!meet);
 		if(!ndom) return null;
