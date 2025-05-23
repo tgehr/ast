@@ -3853,7 +3853,9 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				lit.loc=ce.e.loc;
 				auto garg=new AssertExp(lit); // TODO: detect and error out if this makes it past type checking?
 				garg.loc=ce.e.loc;
-				ce.e=new CallExp(ce.e,garg,true,false);
+				auto ne=new CallExp(ce.e,garg,true,false);
+				ne.loc=ce.e.loc;
+				ce.e=ne;
 				return callSemantic(ce,context);
 			}
 			if(!aty) aty=ce.arg;
@@ -3945,6 +3947,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto nfunTy=new BinaryExp!(Tok!"→")(ce.arg.type,bottom,Annotation.qfree,false);
 			nfunTy.loc=ce.e.loc;
 			auto nfun=new TypeAnnotationExp(ce.e,nfunTy,TypeAnnotationType.annotation);
+			nfun.loc=ce.e.loc;
 			ce.e=nfun;
 			return callSemantic(ce,context);
 		}
