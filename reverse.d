@@ -319,16 +319,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	static if(createFresh) Expression nlhs;
 	Expression lhs(){ // TODO: solve better
 		static if(createFresh){
-			Expression.CopyArgs cargs={ coerceAll: true };
-			if(!nlhs) nlhs=olhs.copy(cargs);
+			if(!nlhs) nlhs=olhs.copy();
 			return nlhs;
 		}else return olhs;
 	}
 	static if(createFresh) Expression nrhs;
 	Expression rhs(){ // TODO: solve better
 		static if(createFresh){
-			Expression.CopyArgs cargs={ coerceAll: true };
-			if(!nrhs) nrhs=orhs.copy(cargs);
+			if(!nrhs) nrhs=orhs.copy();
 			return nrhs;
 		}else return orhs;
 	}
