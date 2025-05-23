@@ -917,13 +917,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	assert(loop.sstate==SemState.completed);
 }out(r){
 	//imported!"util.io".writeln("LOWERED: ",cast()r);
+	//imported!"util.io".writeln("ORIGINAL: ",loop);
 }do{
-	if(auto ret=mayReturn(loop.bdy)){
-		sc.error("early returns are not yet supported by loop lowering pass",ret.loc);
-		sc.note("encountered during lowering of this loop",loop.loc);
-		loop.sstate=SemState.error;
-		return loop;
-	}
 	enum returnOnlyMoved=false; // (experimental)
 	auto loopParams_=state.nextStateSnapshot.loopParams(loop.bdy.blscope_);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
@@ -1074,6 +1069,12 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	nbdy.s~=thene;
 	Expression bdy;
 	if(!isTrue(ncond)){
+		if(auto ret=mayReturn(loop.bdy)){ // TODO
+			sc.error("early returns are not yet supported by loop lowering pass",ret.loc);
+			sc.note("encountered during lowering of this loop",loop.loc);
+			loop.sstate=SemState.error;
+			return loop;
+		}
 		//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
 		auto othwe=new DefineExp(retName.copy(cargsDefault),returnTpl);
 		othwe.loc=loop.loc;
@@ -1082,7 +1083,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto ite=new IteExp(ncond,nbdy,othw);
 		ite.loc=loop.loc;
 		bdy=ite;
-	}else bdy=thene;
+	}else bdy=nbdy;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
 	auto ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
@@ -1114,22 +1115,28 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
-	Expression def;
-	if(defTpl.e.length){
-		def=new DefineExp(defTpl,ce2);
+	Expression[] stmts=[fd];
+	if(isTrue(ncond)){
+		auto fret=new ReturnExp(ce2);
+		fret.loc=loop.loc;
+		stmts~=fret;
+	}else if(defTpl.e.length){
+		auto def=new DefineExp(defTpl,ce2);
 		def.loc=loop.loc;
-	}else def=ce2;
-	Expression[] stmts=[fd,def];
-	static if(!returnOnlyMoved){
-		if(constTmpNames[loopParams.length..$].length){
-			auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[2]).array));
-			assgnTpl1.loc=loop.loc;
-			auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
-			assgnTpl2.loc=loop.loc;
-			auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
-			assgn.loc=loop.loc;
-			stmts~=assgn;
+		stmts~=def;
+		static if(!returnOnlyMoved){
+			if(constTmpNames[loopParams.length..$].length){
+				auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[2]).array));
+				assgnTpl1.loc=loop.loc;
+				auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
+				assgnTpl2.loc=loop.loc;
+				auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
+				assgn.loc=loop.loc;
+				stmts~=assgn;
+			}
 		}
+	}else{
+		stmts~=ce2;
 	}
 	static if(is(T==ForExp)){
 		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~stmts;
