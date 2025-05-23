@@ -336,7 +336,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res;
 	}
 	if(validDefLhs!flags(olhs,sc)){
-		if(auto tpl=cast(TupleExp)lhs) if(!tpl.e.length&&(cast(CallExp)rhs||cast(ForgetExp)rhs)) return rhs;
+		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
 		return res=new DefineExp(lhs,rhs);
 	}
 	Expression forget(){ return res=new ForgetExp(rhs,lhs); }
@@ -366,7 +366,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		d2.loc=loc;
 		return res=new CompoundExp([d1,d2]);
 	}
-	if(isLiftedBuiltIn(lhs)) return forget();
+	if(isLiftedBuiltIn(olhs)) return forget();
 	if(auto tae=cast(TypeAnnotationExp)olhs){
 		static if(reverseMode){
 			if(olhs.type){
