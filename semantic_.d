@@ -915,9 +915,6 @@ FixedPointIterState startFixedPointIteration(Scope sc){
 
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	assert(loop.sstate==SemState.completed);
-}out(r){
-	//imported!"util.io".writeln("LOWERED: ",cast()r);
-	//imported!"util.io".writeln("ORIGINAL: ",loop);
 }do{
 	enum returnOnlyMoved=false; // (experimental)
 	auto loopParams_=state.nextStateSnapshot.loopParams(loop.bdy.blscope_);
