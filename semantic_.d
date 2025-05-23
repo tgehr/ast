@@ -1151,7 +1151,12 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	if(result.sstate==SemState.error){
 		sc.note("loop not yet supported by loop lowering pass",result.loc);
 	}
-	//imported!"util.io".writeln(result);
+	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
+		import util.io:stderr;
+		stderr.writeln(loop);
+		stderr.writeln("-loop-lowering→");
+		stderr.writeln(result);
+	}
 	return result;
 }
 

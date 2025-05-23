@@ -6,7 +6,6 @@ import astopt;
 import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 import util.tuple:Q=Tuple,q=tuple;
-import util.io;
 
 Expression constantExp(size_t l){
 	Token tok;
@@ -887,6 +886,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fd.body_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
+		import util.io:stderr;
 		stderr.writeln(fd);
 		stderr.writeln("-reverse→");
 		stderr.writeln(result);
