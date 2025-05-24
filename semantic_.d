@@ -823,21 +823,22 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 
 static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc){
-	if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
-		if(ret.e.sstate==SemState.initial){
-			auto id=new Identifier(freshName());
-			id.loc=ret.e.loc;
-			auto id2=id.copy();
-			auto def=new DefineExp(id2,ret.e);
-			def.loc=ret.loc;
-			ret.e=id;
-			with_.bdy.s[$-1]=def;
-			auto r=new CompoundExp([with_,ret]);
-			r.loc=with_.loc;
-			return statementSemantic(r,sc);
+	if(with_.bdy.s.length){
+		if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
+			if(ret.e.sstate==SemState.initial){
+				auto id=new Identifier(freshName());
+				id.loc=ret.e.loc;
+				auto id2=id.copy();
+				auto def=new DefineExp(id2,ret.e);
+				def.loc=ret.loc;
+				ret.e=id;
+				with_.bdy.s[$-1]=def;
+				auto r=new CompoundExp([with_,ret]);
+				r.loc=with_.loc;
+				return statementSemantic(r,sc);
+			}
 		}
 	}
-	// TODO: disallow early returns
 	if(with_.isIndices){
 		foreach(e;with_.trans.s){
 			auto de=cast(DefineExp)e;
@@ -852,9 +853,19 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	}
 	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
+	if(auto ret=mayReturn(with_.trans)){
+		sc.error("cannot return from within `with` transformation",ret.loc);
+		ret.sstate=SemState.error;
+		with_.trans.sstate=SemState.error;
+	}
 	propErr(with_.trans,with_);
 	with_.bdy=compoundExpSemantic(with_.bdy,sc);
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
+	if(auto ret=mayReturn(with_.bdy)){
+		sc.error("early return in `with` body must be last statement",ret.loc);
+		ret.sstate=SemState.error;
+		with_.bdy.sstate=SemState.error;
+	}
 	propErr(with_.trans,with_);
 	if(with_.itrans){
 		if(with_.itrans.sstate!=SemState.completed&&with_.itrans.sstate!=SemState.error){
@@ -5983,6 +5994,9 @@ ReturnExp mayReturn(Expression e){
 		if(!isZero(re.num)){
 			if(auto ret=mayReturn(re.bdy)) return ret;
 		}
+	}
+	if(auto we=cast(WithExp)e){
+		if(auto ret=mayReturn(we.bdy)) return ret;
 	}
 	return null;
 }
