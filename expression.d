@@ -241,6 +241,10 @@ class TypeAnnotationExp: Expression{
 	override bool isTotal(){
 		return annotationType<TypeAnnotationType.coercion && e.isTotal() && type.isTotal();
 	}
+	override Maybe!ℤ asIntegerConstant(bool eval=false) {
+		if (annotationType >= TypeAnnotationType.coercion) return none!ℤ();
+		return this.e.asIntegerConstant(eval);
+	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
 		return (type?type:t).freeVarsImpl(dg);
