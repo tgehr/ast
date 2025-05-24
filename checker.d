@@ -295,6 +295,7 @@ class Checker {
 		auto fd=nscope.getFunction();
 		assert(!!fd && fd.ret);
 		expectConvertible(e.e, fd.ret, ast_exp.TypeAnnotationType.annotation);
+		// TODO: check that quantum-controlled ReturnExp does not return a classical value
 		foreach(decl; e.forgottenVars) {
 			getVar(decl, false, "forgottenVars", e);
 		}

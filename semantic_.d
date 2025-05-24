@@ -5841,21 +5841,26 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 		ret.sstate=SemState.error;
 	}
 	static if(language==silq){
-		if(ret.e.type&&ret.e.type.hasClassicalComponent()&&sc.controlDependency!=bottom){
-			bool ok=false;
-			if(auto qtype=ret.e.type.getQuantum()){
-				if(isType(qtype)){
-					auto nrete=new TypeAnnotationExp(ret.e,qtype,TypeAnnotationType.annotation);
-					nrete.loc=ret.e.loc;
-					ret.e=nrete;
-					ret.e=expressionSemantic(ret.e,context);
-					ok=true;
+		auto convertTy=fd.ret?fd.ret:ret.e.type;
+		if(sc.controlDependency!=bottom){
+			bool ok=true;
+			if(convertTy&&convertTy.hasClassicalComponent()){
+				ok=false;
+				if(auto qtype=convertTy.getQuantum()){
+					if(isType(qtype)){
+						auto nrete=new TypeAnnotationExp(ret.e,qtype,TypeAnnotationType.annotation);
+						nrete.loc=ret.e.loc;
+						ret.e=nrete;
+						ret.e=expressionSemantic(ret.e,context);
+						ok=true;
+					}
+				}
+				if(!ok){
+					sc.error("cannot return quantum-controlled classical value",ret.e.loc);
+					ret.sstate=SemState.error;
 				}
 			}
-			if(!ok){
-				sc.error("cannot return quantum-controlled classical value",ret.e.loc);
-				ret.sstate=SemState.error;
-			}
+			if(ok) subscribeToTypeUpdates(fd,sc,ret.loc);
 		}
 	}
 	if(ret.sstate==SemState.error)
