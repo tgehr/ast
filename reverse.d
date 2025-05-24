@@ -829,6 +829,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto body_=new CompoundExp([]);
 	body_.loc=fd.body_.loc;
 	auto result=new FunctionDef(null,params,isTuple,cod,body_);
+	if(fd.hasAttribute("artificial")) result.attributes~="artificial";
 	result.isSquare=fd.isSquare;
 	result.annotation=fd.annotation;
 	result.scope_=sc;
