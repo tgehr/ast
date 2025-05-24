@@ -5431,7 +5431,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 			if(!cfd){
 				sc.error("invalid forward reference",loc);
 				if(fd&&!fd.rret)
-					sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
+					sc.note("possibly caused by missing return type annotation",fd.loc);
 				return false;
 			}else{
 				if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
