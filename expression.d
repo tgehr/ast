@@ -236,10 +236,15 @@ class TypeAnnotationExp: Expression{
 		return _brk(e.toString()~op[annotationType]~(type?type.toString():t.toString()));
 	}
 	override bool isConstant(){
-		return e.isConstant();
+		return e.isConstant() && (type ? type.isConstant() : t.isConstant());
 	}
 	override bool isTotal(){
-		return annotationType<TypeAnnotationType.coercion && e.isTotal() && type.isTotal();
+		return annotationType<TypeAnnotationType.coercion && e.isTotal() && (type ? type : t).isTotal();
+	}
+	override Maybe!ℤ asIntegerConstant(bool eval=false) {
+		if (annotationType >= TypeAnnotationType.coercion || !type || !isSubtype(type, ℤt(true)))
+			return none!ℤ();
+		return this.e.asIntegerConstant(eval);
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
