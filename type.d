@@ -1855,6 +1855,7 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 	assert(isType(e)||isQNumeric(e));
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
+	if(isQNumeric(e)) return qnumericTy;
 	auto nlit=num.asIntegerConstant();
 	if(nlit){
 		if(nlit.get()==0) return utypeTy;
