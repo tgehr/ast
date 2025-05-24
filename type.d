@@ -844,8 +844,6 @@ class VectorTy: Type, ITupleTy{
 		return null;
 	}
 	override Expression getClassical(){
-		if(auto nlit=num.asIntegerConstant())
-			if(nlit.get()==0) return this;
 		auto nnext=next.getClassical();
 		if(!nnext) return null;
 		return vectorTy(nnext,num);
