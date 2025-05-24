@@ -347,12 +347,18 @@ abstract class Scope{
 			return r;
 		return null;
 	}
+	final bool canSplit(Declaration decl)in{
+		assert(decl.scope_&&this.isNestedIn(decl.scope_));
+	}do{
+		auto vd=cast(VarDecl)decl;
+		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
+		return true;
+	}
 	final Declaration split(Declaration decl)in{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return decl;
-		auto vd=cast(VarDecl)decl;
-		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return decl;
+		if(!canSplit(decl)) return decl;
 		Expression type;
 		auto result=consume(decl);
 		if(!result) return decl;
@@ -545,29 +551,29 @@ abstract class Scope{
 	void message(lazy string msg, Location loc){handler.message(msg,loc);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
+		resetConst(); // TODO: ok?
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
-				if(d.isLinear()||d.scope_ is this){
-					if(auto p=cast(Parameter)d) if(p.isConst) continue;
-					d=split(d);
-					if(d.scope_ !is this || !canForgetAppend(loc,d)){
-						errors=true;
-						import ast.semantic_: unrealizable;
-						if(d.sstate!=SemState.error){
-							bool show=true;
-							if(d.sstate==SemState.error) show=false;
-							if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
-							if(show){
-								if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-								else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-							}
+				if(auto vd=cast(VarDecl)d) vd.typeConstBlocker=null; // TODO: ok?
+				if(!canSplit(d)) continue;
+				d=split(d);
+				if(d.scope_ !is this || !canForgetAppend(loc,d)){
+					errors=true;
+					import ast.semantic_: unrealizable;
+					if(d.sstate!=SemState.error){
+						bool show=true;
+						if(d.sstate==SemState.error) show=false;
+						if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
+						if(show){
+							if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 						}
-						d.sstate=SemState.error;
-					}else{
-						consume(d);
-						clearConsumed();
 					}
+					d.sstate=SemState.error;
+				}else{
+					consume(d);
+					clearConsumed();
 				}
 			}
 			foreach(n,d;rnsymtab) assert(!d.isLinear()||canForget(d));
