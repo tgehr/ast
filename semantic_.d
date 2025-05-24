@@ -2884,7 +2884,11 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
 		            if(a.write.sstate==SemState.error||b.write.sstate==SemState.error)
 			            continue;
 		            if(!guaranteedDifferentLocations(a.write,b.write,loc,sc,InType.no)){
-			            sc.error("potential aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+			            if(guaranteedSameLocations(a.write,b.write,loc,sc,InType.no)){
+				            sc.error("aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+			            }else{
+				            sc.error("potential aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+			            }
 			            sc.note("other index is here",a.write.loc);
 			            a.write.sstate=SemState.error;
 			            b.write.sstate=SemState.error;
