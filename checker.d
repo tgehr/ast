@@ -136,6 +136,7 @@ class Checker {
 	}
 
 	void visExpr(ast_exp.Expression e) {
+		assert(e.type && ast_ty.isType(e.type));
 		if(cast(ast_ty.Type) e) {
 			if(auto te = cast(ast_ty.VectorTy) e) {
 				return this.implTy(te);
