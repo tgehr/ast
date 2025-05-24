@@ -4161,8 +4161,6 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
 	if(ite.sstate!=SemState.error){
-		if(!ite.then.s[0].type) ite.then.s[0].type = ite.othw.s[0].type;
-		if(!ite.othw.s[0].type) ite.othw.s[0].type = ite.then.s[0].type;
 		auto t1=ite.then.s[0].type;
 		auto t2=ite.othw.s[0].type;
 		ite.type=joinTypes(t1,t2);
