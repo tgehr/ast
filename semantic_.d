@@ -5390,8 +5390,6 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype&&fd.ftypeFinal) return true;
-	auto ftypeBefore=fd.ftype;
-	bool temporary=false;
 	if(fd.isNested&&!force&&!fd.sealed)
 		return false;
 	if(fd.sstate!=SemState.error&&(!fd.fscope_||fd.params.any!(p=>!p.vtype)))
@@ -5410,9 +5408,9 @@ bool setFtype(FunctionDef fd,bool force){
 	}
 	assert(fd.isTuple||pty.length==1);
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
+	auto ftypeBefore=fd.ftype;
 	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
-	if(fd.inferringReturnType||fd.inferAnnotation) fd.unseal();
 	if(fd.retNames.length!=fd.numReturns)
 		fd.retNames = new string[](fd.numReturns);
 	if(ftypeBefore!=fd.ftype){
