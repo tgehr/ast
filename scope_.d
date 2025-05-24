@@ -352,6 +352,7 @@ abstract class Scope{
 	}do{
 		auto vd=cast(VarDecl)decl;
 		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
+		if(auto p=cast(Parameter)decl) if(!p.vtype||p.vtype.isClassical) return false; // TODO: ok?
 		return true;
 	}
 	final Declaration split(Declaration decl)in{
@@ -556,10 +557,17 @@ abstract class Scope{
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
 				if(auto vd=cast(VarDecl)d) vd.typeConstBlocker=null; // TODO: ok?
+				if(auto read=isConst(d)){
+					if(d.sstate!=SemState.error){
+						error(format("cannot forget 'const' variable '%s'",d), d.loc);
+						note("variable was made 'const' here", read.loc);
+						d.sstate=SemState.error;
+					}
+					errors=true;
+				}
 				if(!canSplit(d)) continue;
 				d=split(d);
 				if(d.scope_ !is this || !canForgetAppend(loc,d)){
-					errors=true;
 					import ast.semantic_: unrealizable;
 					if(d.sstate!=SemState.error){
 						bool show=true;
@@ -569,14 +577,15 @@ abstract class Scope{
 							if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
 							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 						}
+						d.sstate=SemState.error;
 					}
-					d.sstate=SemState.error;
+					errors=true;
 				}else{
 					consume(d);
 					clearConsumed();
 				}
 			}
-			foreach(n,d;rnsymtab) assert(!d.isLinear()||canForget(d));
+			foreach(n,d;rnsymtab) assert(!canSplit(d)||d.sstate==SemState.error);
 		}
 		return errors;
 	}
