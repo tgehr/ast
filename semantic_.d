@@ -5362,11 +5362,11 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
 	if(expr.sstate==SemState.completed||expr.sstate==SemState.error) return expr;
 	assert(expr.sstate==SemState.initial||cast(Identifier)expr&&expr.sstate==SemState.started);
-	Scope.ConstBlockContext constSave;
-	if(!context.constResult) constSave=sc.saveConst();
+	auto constSave=sc.saveConst(); // TODO: make this faster?
 	scope(success){
 		static if(language==silq){
-			if(!context.constResult) sc.resetConst(constSave);
+			if(!context.constResult||!expr.type||expr.type.isClassical())
+				sc.resetConst(constSave); // TODO: tie to forgettability
 			if(expr.sstate!=SemState.error){
 				assert(!!expr.type,text(expr," ",expr.type));
 				if(auto id=cast(Identifier)expr){
