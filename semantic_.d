@@ -943,7 +943,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto loopParams=[q(loopVarId,loopVarType,true,loop.num.loc)];
 	}else static assert(0);
 	Expression.CopyArgs cargsDefault;
-	auto nbdy=loop.bdy.copy(cargsDefault);
 	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
 	Identifier[] ids(Q!(Id,Expression,bool,Location)[] prms,bool checkDefined=false){
 		return prms.map!((p){
@@ -1072,19 +1071,84 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	//auto thene=new ReturnExp(ce); // avoid non-toplevel return
 	auto retName=new Identifier(freshName());
 	retName.loc=loop.loc;
-	auto thene=new DefineExp(retName,ce);
-	thene.loc=ce.loc;
-	nbdy.s~=thene;
+	auto nbdy=loop.bdy.copy(cargsDefault);
+	if(!definitelyReturns(loop.bdy)){
+		auto thene=new DefineExp(retName,ce);
+		thene.loc=ce.loc;
+		nbdy.s~=thene;
+	}
+	bool hasEarlyReturns=false;
+	Expression inj(Expression e,bool isRet){ // TODO: use sum type
+		auto wrap=new VectorExp([e]);
+		wrap.loc=e.loc;
+		auto dummy=new VectorExp([]);
+		dummy.loc=e.loc;
+		auto res=new TupleExp(isRet?[wrap,dummy]:[dummy,wrap]);
+		res.loc=e.loc;
+		return res;
+	}
+	void match(ref Expression[] stmts,Expression e,Expression rlhs,CompoundExp ret,Expression olhs,CompoundExp other){
+		auto lhs=new TupleExp([new Identifier(freshName),new Identifier(freshName)]);
+		lhs.e.each!(id=>id.loc=e.loc);
+		auto mdef=new DefineExp(lhs,e);
+		mdef.loc=e.loc;
+		stmts~=mdef;
+		auto zero=LiteralExp.makeInteger(0);
+		zero.loc=e.loc;
+		auto lenId=new Identifier("length");
+		lenId.loc=e.loc;
+		auto len=new FieldExp(lhs.e[0].copy(),lenId);
+		len.loc=e.loc;
+		auto isret=new BinaryExp!(Tok!"≠")(len,zero);
+		isret.loc=e.loc;
+		auto rwrap=new VectorExp([rlhs]);
+		rwrap.loc=rlhs.loc;
+		auto remp=new VectorExp([]);
+		remp.loc=rlhs.loc;
+		auto runpl=new TupleExp([rwrap,remp]);
+		runpl.loc=rlhs.loc;
+		Expression runp=new DefineExp(runpl,lhs.copy());
+		runp.loc=rlhs.loc;
+		auto oemp=new VectorExp([]);
+		oemp.loc=olhs.loc;
+		auto owrap=new VectorExp([olhs]);
+		owrap.loc=olhs.loc;
+		auto ounpl=new TupleExp([oemp,owrap]);
+		ounpl.loc=olhs.loc;
+		Expression ounp=new DefineExp(ounpl,lhs.copy());
+		ounp.loc=olhs.loc;
+		ret.s=[runp]~ret.s;
+		other.s=[ounp]~other.s;
+		auto ite=new IteExp(isret,ret,other);
+		ite.loc=e.loc;
+		stmts~=ite;
+	}
+	void adjustEarlyReturns(Expression e){
+		if(auto ret=cast(ReturnExp)e){
+			hasEarlyReturns=true;
+			ret.e=inj(ret.e,true);
+		}else if(auto ce=cast(CompoundExp)e){
+			foreach(s;ce.s)
+				adjustEarlyReturns(s);
+		}else if(auto ite=cast(IteExp)e){
+			adjustEarlyReturns(ite.then);
+			adjustEarlyReturns(ite.othw);
+		}else if(auto fe=cast(ForExp)e)
+			adjustEarlyReturns(fe.bdy);
+		else if(auto we=cast(WhileExp)e)
+			adjustEarlyReturns(we.bdy);
+		else if(auto re=cast(RepeatExp)e)
+			adjustEarlyReturns(re.bdy);
+		else if(auto we=cast(WithExp)e)
+			adjustEarlyReturns(we.bdy);
+	}
 	Expression bdy;
 	if(!isTrue(ncond)){
-		if(auto ret=mayReturn(loop.bdy)){ // TODO
-			sc.error("early returns are not yet supported by loop lowering pass",ret.loc);
-			sc.note("encountered during lowering of this loop",loop.loc);
-			loop.sstate=SemState.error;
-			return loop;
-		}
+		adjustEarlyReturns(nbdy);
 		//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
-		auto othwe=new DefineExp(retName.copy(cargsDefault),returnTpl);
+		Expression retexp=returnTpl;
+		if(hasEarlyReturns) retexp=inj(retexp,false);
+		auto othwe=new DefineExp(retName.copy(cargsDefault),retexp);
 		othwe.loc=loop.loc;
 		auto othw=new CompoundExp([othwe]);
 		othw.loc=othwe.loc;
@@ -1096,7 +1160,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	fdn.loc=loop.loc;
 	auto ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
 	ret.loc=loop.loc;
-	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~[bdy,ret]);
+	auto cmpbdy=cast(CompoundExp)bdy;
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s~ret:[bdy,ret]));
 	fbdy.loc=bdy.loc;
 	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
 	fd.annotation=pure_;
@@ -1124,12 +1189,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		defTpl.loc=loop.loc;
 	}
 	Expression[] stmts=[fd];
-	if(isTrue(ncond)){
-		auto fret=new ReturnExp(ce2);
-		fret.loc=loop.loc;
-		stmts~=fret;
-	}else if(defTpl.e.length){
-		auto def=new DefineExp(defTpl,ce2);
+	void defineLocals(ref Expression[] stmts,Expression locals){
+		auto def=new DefineExp(defTpl,locals);
 		def.loc=loop.loc;
 		stmts~=def;
 		static if(!returnOnlyMoved){
@@ -1143,6 +1204,25 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 				stmts~=assgn;
 			}
 		}
+	}
+	if(hasEarlyReturns){
+		auto retId2=new Identifier(freshName());
+		retId2.loc=ce2.loc;
+		auto fret=new ReturnExp(retId2.copy());
+		fret.loc=ce2.loc;
+		auto then=new CompoundExp([fret]);
+		auto locals=new Identifier(freshName());
+		locals.loc=ce2.loc;
+		Expression[] defLocals;
+		defineLocals(defLocals,locals.copy());
+		auto othw=new CompoundExp(defLocals);
+		match(stmts,ce2,retId2,then,locals,othw);
+	}else if(isTrue(ncond)){
+		auto fret=new ReturnExp(ce2);
+		fret.loc=loop.loc;
+		stmts~=fret;
+	}else if(defTpl.e.length){
+		defineLocals(stmts,ce2);
 	}else{
 		stmts~=ce2;
 	}
