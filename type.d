@@ -720,9 +720,7 @@ class ArrayTy: Type{
 		return arrayTy(nnext);
 	}
 	override Expression getQuantum(){
-		auto nnext=next.getQuantum();
-		if(!nnext) return null;
-		return arrayTy(nnext);
+		return null; // length is classical
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(next);
