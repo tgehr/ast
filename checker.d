@@ -156,6 +156,9 @@ class Checker {
 			if(cast(ast_ty.TypeTy) e || cast(ast_ty.QTypeTy) e || cast(ast_ty.CTypeTy) e || cast(ast_ty.UTypeTy) e || cast(ast_ty.ETypeTy) e) {
 				return;
 			}
+			if(cast(ast_ty.QNumericTy) e) {
+				return;
+			}
 			if(cast(ast_ty.BoolTy) e || cast(ast_ty.ℕTy) e || cast(ast_ty.ℤTy) e || cast(ast_ty.ℚTy) e || cast(ast_ty.ℝTy) e || cast(ast_ty.ℂTy) e) {
 				return;
 			}
