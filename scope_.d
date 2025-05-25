@@ -350,6 +350,7 @@ abstract class Scope{
 	final bool canSplit(Declaration decl)in{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
+		if(decl.scope_ is this) return true;
 		auto vd=cast(VarDecl)decl;
 		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
 		if(auto p=cast(Parameter)decl) if(!p.vtype||p.vtype.isClassical) return false; // TODO: ok?
@@ -556,7 +557,7 @@ abstract class Scope{
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
-				if(auto vd=cast(VarDecl)d) vd.typeConstBlocker=null; // TODO: ok?
+				if(d.scope_ !is this && !d.isLinear()) continue;
 				if(auto read=isConst(d)){
 					if(d.sstate!=SemState.error){
 						error(format("cannot forget 'const' variable '%s'",d), d.loc);
@@ -585,7 +586,7 @@ abstract class Scope{
 					clearConsumed();
 				}
 			}
-			foreach(n,d;rnsymtab) assert(!canSplit(d)||d.sstate==SemState.error);
+			foreach(n,d;rnsymtab) assert(d.scope_!is this&&!d.isLinear()||!canSplit(d)||d.sstate==SemState.error);
 		}
 		return errors;
 	}
