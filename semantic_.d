@@ -4387,7 +4387,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 		}
 		id.meaning=meaning;
-	}
+	}else if(sc) sc.recordAccess(id,meaning);
 	id.id=meaning.getId;
 	propErr(meaning,id);
 	id.type=id.typeFromMeaning;
