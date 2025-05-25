@@ -3345,7 +3345,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be),false))
+			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be),true))
 				be.sstate=SemState.error;
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);
