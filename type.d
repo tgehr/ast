@@ -1219,16 +1219,23 @@ class ProductTy: Type{
 	auto isConstForReverse(){
 		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical&&!argTy(i).isQuantum);
 	}
-	auto isConstForSubtyping(){
+	private auto isConstForSubtyping(){
 		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical);
 	}
+
+	bool isConstCompatible(ProductTy rhs){
+		return zip(zip(this.isConst,this.isConstForSubtyping),
+		           zip(rhs.isConst,rhs.isConstForSubtyping))
+			.all!(x=>x[0][0]!=x[0][1]||x[1][0]!=x[1][1]||x[0][0]==x[1][0]);
+	}
+
 	override bool isSubtypeImpl(Expression rhs){
 		auto r=cast(ProductTy)rhs;
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
 		r=r.setTuple(isTuple);
 		if(!r) return false;
-		if(!equal(this.isConstForSubtyping,r.isConstForSubtyping)||isSquare!=r.isSquare||nargs!=r.nargs)
+		if(!isConstCompatible(r)||isSquare!=r.isSquare||nargs!=r.nargs)
 			return false;
 		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
 			return false;

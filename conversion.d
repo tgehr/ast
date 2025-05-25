@@ -341,7 +341,7 @@ class FunctionConversion: Conversion{
 		assert(isNoOpConversion(to.dom,dom.from)&&isNoOpConversion(dom.to,from.dom));
 		auto subst=functionConversionSubstitution(names,from,to);
 		assert(isNoOpConversion(cod.from,from.cod.substitute(subst[0]))&&isNoOpConversion(to.cod.substitute(subst[1]),cod.to),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
-		assert(equal(from.isConstForSubtyping,to.isConstForSubtyping)); // TODO: explicit isConst conversion for classical parameters?
+		assert(from.isConstCompatible(to)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
 		assert(from.annotation>=to.annotation);
 		assert(from.isClassical==to.isClassical);
@@ -390,7 +390,7 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 			else return typeExplicitConversion!witness(ft1,nft2);
 		}
 	}
-	if(!equal(ft1.isConstForSubtyping,ft2.isConstForSubtyping)) return typeof(return).init;
+	if(!ft1.isConstCompatible(ft2)) return typeof(return).init;
 	if(ft1.names.length!=ft2.names.length) return typeof(return).init;
 	Id[] names;
 	if(ft1.names!=ft2.names){
