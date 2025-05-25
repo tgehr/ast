@@ -1503,9 +1503,9 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 CompoundExp compoundExpSemantic(CompoundExp ce,Scope sc,Annotation restriction_=Annotation.none){
 	if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
 	foreach(ref e;ce.s){
-		//writeln("before: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
+		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
 		e=statementSemantic(e,ce.blscope_);
-		//writeln("after: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
+		//imported!"util.io".	writeln("AFTER: ",e," ",typeid(e)," ",e.sstate," ",ce.blscope_.getStateSnapshot());
 		propErr(e,ce);
 	}
 	ce.type=definitelyReturns(ce)?bottom:unit;
@@ -1758,7 +1758,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		if(e.sstate==SemState.error)
 			return e;
 		if(auto id=cast(Identifier)next){
-			if(idx.byRef) id.byRef=true;
+			id.byRef=true;
 			id.indexedDirectly=true;
 			id.scope_=context.sc;
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc);
@@ -1842,7 +1842,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	bool checkReplaceable(IndexExp e){
 		if(auto id=cast(Identifier)unwrap(e.e)){
 			if(id.meaning){
-				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true);
+				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true,true);
 				if(!r) id.meaning.sstate=SemState.error;
 				return r;
 			}
@@ -2308,6 +2308,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto id=getIdFromIndex(idx2[0]);
 	assert(!!id);
+	id.byRef=true;
 	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);
 	if(id.meaning) id.meaning=sc.split(id.meaning);
 	propErr(id,be.e2);
@@ -2952,18 +2953,18 @@ bool checkNonConstVar(string action,string continuous)(Declaration meaning,Locat
 		if(vd.typeConstBlocker) typeConstBlockNote(vd,sc);
 		else if(auto read=sc.isConst(vd))
 			sc.note("variable was made 'const' here", read.loc);
-	}else if(meaning&&!vd) sc.error(continuous~" non-variables not supported",loc);
+	}else if(meaning&&!vd) sc.error(continuous~" non-variables not supported",loc); // (once this works, remember to support typeConstBlocker)
 		else if(meaning) sc.error("cannot assign",loc);
 	return false;
 }
 
-bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssign=false){
+bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible,bool isReplacement){
 	if(!meaning||meaning.sstate==SemState.error) return false;
 	if(!checkNonConstVar!("reassign","reassigning")(meaning,loc,sc))
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
-		if(!quantumAssign&&!vd.vtype.isClassical()&&!sc.canForget(meaning)){
+		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canForget(meaning)){
 			sc.error("cannot reassign quantum variable", loc);
 			return false;
 		}
@@ -2972,6 +2973,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 		sc.error("cannot reassign type variables", loc);
 		return false;
 	}
+	if(!isReplacement)
 	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
@@ -2980,8 +2982,14 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool quantumAssig
 			if(crepls.length){
 				sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),loc);
 				if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
-			}else sc.error("cannot assign to variable in closure context (capturing by value)",loc);
-			return false;
+				return false;
+			}else{
+				// TODO: could in principle be allowed (but variable should be removed from outer scope)
+				sc.error("cannot assign to variable in closure context",loc);
+				sc.note("declared here",meaning.loc);
+				return false;
+			}
+
 		}
 	}
 	return true;
@@ -3064,7 +3072,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	checkIndexReplacement(ae,sc);
 	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,ae.loc,sc))
+			if(!checkAssignable(id.meaning,ae.loc,sc,false,false))
 				ae.sstate=SemState.error;
 		}else if(auto tpl=cast(TupleExp)lhs){
 			if(indexed){
@@ -3179,8 +3187,13 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 						case Stage.consumeLhs:
 							if(decl !in consumed){
 								if(!indexed) id.constLookup=false;
-								sc.unconsume(decl);
-								consumed[decl]=sc.consume(decl);
+								if(decl.scope_ is sc){
+									sc.unconsume(decl);
+									consumed[decl]=sc.consume(decl);
+								}else{
+									consumed[decl]=decl;
+									assert(ae.sstate==SemState.error);
+								}
 								static if(language==silq)
 									sc.clearConsumed();
 							}
@@ -3332,7 +3345,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be)))
+			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be),false))
 				be.sstate=SemState.error;
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);

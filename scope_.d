@@ -353,7 +353,6 @@ abstract class Scope{
 		if(decl.scope_ is this) return true;
 		auto vd=cast(VarDecl)decl;
 		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
-		if(auto p=cast(Parameter)decl) if(!p.vtype||p.vtype.isClassical) return false; // TODO: ok?
 		return true;
 	}
 	final Declaration split(Declaration decl)in{
@@ -1254,10 +1253,10 @@ class CapturingScope(T): NestedScope{
 		if(kind==Lookup.probing) return null;
 		if(!meaning) return null;
 		auto type=id.typeFromMeaning(meaning);
-		if(type&&type.isClassical()&&id.byRef){
+		/+if(type&&type.isClassical()&&id.byRef){
 			origin.error("cannot consume classical variable from outer scope", id.loc);
 			id.sstate=SemState.error;
-		}
+		}+/
 		if(!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
 		if(id.sstate==SemState.error) return null;
 		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
