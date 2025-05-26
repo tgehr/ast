@@ -435,8 +435,10 @@ abstract class Scope{
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
-			rnsymtab.remove(odecl.rename.id);
-			rnsymtab[ndecl.getId]=ndecl;
+			if(odecl.rename){
+				rnsymtab.remove(odecl.rename.id);
+				rnsymtab[ndecl.getId]=ndecl;
+			}
 			static if(language==silq)
 				replaceDecl(odecl,ndecl);
 		}
@@ -932,16 +934,26 @@ abstract class Scope{
 					return false;
 			}
 			import ast.semantic_: typeForDecl;
-			foreach(name,decl;rhs.symtab)
-				if(name !in symtab)
-					return false;
-			foreach(name,decl;symtab){
+			bool checkDecl(Declaration decl,Declaration rdecl){
+				if(!rdecl) return false;
 				import ast.semantic_: typeForDecl;
-				if(auto rdecl=name in rhs.symtab){
-					if(typeForDecl(decl)!=typeForDecl(*rdecl))
-						return false;
-				}else return false;
+				if(typeForDecl(decl)==typeForDecl(rdecl))
+					return true;
+				return false;
 			}
+			bool compareTables(Declaration[Id] symtab,Declaration[Id] rsymtab){
+				foreach(name,decl;rhs.symtab)
+					if(name !in symtab)
+						return false;
+				foreach(name,decl;symtab)
+					if(!checkDecl(decl,rsymtab.get(name,null)))
+						return false;
+				return true;
+			}
+			if(!compareTables(symtab,rhs.symtab))
+				return false;
+			/+if(!compareTables(rnsymtab,rhs.rnsymtab)) // TODO: why not?
+				return false;+/
 			return true;
 		}
 		string toString(){
@@ -992,12 +1004,13 @@ abstract class Scope{
 			Declaration[] toRemove;
 		}
 		Declaration[Id] symtab;
+		Declaration[Id] rnsymtab;
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
-		Declaration[Id] nsymtab;
-		foreach(_,decl;symtab) nsymtab[decl.name.id]=decl;
+		Declaration[Id] nsymtab=symtab.dup;
+		Declaration[Id] nrnsymtab=rnsymtab.dup;
 		static if(language==silq)
 			DeclProps declProps;
 		Declaration[] prevCapturedDecls;
@@ -1008,9 +1021,9 @@ abstract class Scope{
 				prevCapturedDecls=fd.capturedDecls;
 		}
 		static if(language==silq){
-			return ScopeState(dependencies.dup,declProps,toRemove,nsymtab,prevCapturedDecls,restoreable);
+			return ScopeState(dependencies.dup,declProps,toRemove,nsymtab,nrnsymtab,prevCapturedDecls,restoreable);
 		}else{
-			return ScopeState(nsymtab,prevCaptures,restoreable);
+			return ScopeState(nsymtab,nrnsymtab,prevCaptures,restoreable);
 		}
 	}
 	private Declaration getSplit(Declaration decl,bool clearSplitInto=false){
@@ -1023,7 +1036,7 @@ abstract class Scope{
 			return decl;
 		foreach(ndecl;decl.splitInto){
 			if(this.isNestedIn(ndecl.scope_))
-					return getSplit(ndecl);
+				return getSplit(ndecl);
 		}
 		assert(0);
 	}
@@ -1033,11 +1046,22 @@ abstract class Scope{
 			assert(state.prevCapturedDecls.length<=fd.capturedDecls.length);
 			assert(state.prevCapturedDecls==fd.capturedDecls[0..state.prevCapturedDecls.length]);
 			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$]){
-				if(decl.getId !in state.symtab)
-					state.symtab[decl.getId]=decl;
+				if(decl.name.id !in state.symtab)
+					state.symtab[decl.name.id]=decl;
+				if(decl.rename && decl.rename.id !in state.rnsymtab)
+					state.rnsymtab[decl.rename.id]=decl;
 			}
 			state.prevCapturedDecls=fd.capturedDecls;
 		}
+	}
+
+	Declaration updateDecl(Declaration decl){
+		auto split=getSplit(decl,true);
+		static if(language==silq){
+			if(decl !is split)
+				replaceDecl(decl,split);
+		}
+		return split;
 	}
 
 	void restoreStateSnapshot(ref ScopeState state)in{
@@ -1050,16 +1074,9 @@ abstract class Scope{
 			toRemove=state.toRemove;
 		}
 		symtab.clear();
-		foreach(_,decl;state.symtab){
-			auto split=getSplit(decl,true);
-			symtab[decl.name.id]=split;
-			static if(language==silq){
-				if(decl !is split)
-					replaceDecl(decl,split);
-			}
-		}
+		foreach(_,decl;state.symtab) symtab[decl.name.id]=updateDecl(decl);
 		rnsymtab.clear();
-		foreach(_,decl;symtab) rnsymtab[decl.rename.id]=decl; // TODO: ok?
+		foreach(_,decl;state.rnsymtab) rnsymtab[decl.rename.id]=decl;
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
