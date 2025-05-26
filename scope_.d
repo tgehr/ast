@@ -992,15 +992,25 @@ abstract class Scope{
 			Declaration[] toRemove;
 		}
 		Declaration[Id] symtab;
+		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		Declaration[Id] nsymtab;
 		foreach(_,decl;symtab) nsymtab[decl.name.id]=decl;
+		static if(language==silq)
+			DeclProps declProps;
+		Declaration[] prevCapturedDecls;
+		if(restoreable){
+			static if(language==silq)
+				declProps=saveDeclProps();
+			if(auto fd=getFunction())
+				prevCapturedDecls=fd.capturedDecls;
+		}
 		static if(language==silq){
-			return ScopeState(dependencies.dup,restoreable?saveDeclProps:DeclProps.init,toRemove,nsymtab,restoreable);
+			return ScopeState(dependencies.dup,declProps,toRemove,nsymtab,prevCapturedDecls,restoreable);
 		}else{
-			return ScopeState(nsymtab,restoreable);
+			return ScopeState(nsymtab,prevCaptures,restoreable);
 		}
 	}
 	private Declaration getSplit(Declaration decl,bool clearSplitInto=false){
@@ -1017,9 +1027,23 @@ abstract class Scope{
 		}
 		assert(0);
 	}
+
+	void updateStateSnapshot(ref ScopeState state){
+		if(auto fd=getFunction()){
+			assert(state.prevCapturedDecls.length<=fd.capturedDecls.length);
+			assert(state.prevCapturedDecls==fd.capturedDecls[0..state.prevCapturedDecls.length]);
+			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$]){
+				if(decl.getId !in state.symtab)
+					state.symtab[decl.getId]=decl;
+			}
+			state.prevCapturedDecls=fd.capturedDecls;
+		}
+	}
+
 	void restoreStateSnapshot(ref ScopeState state)in{
 		assert(state.restoreable);
 	}do{
+		updateStateSnapshot(state);
 		static if(language==silq){
 			dependencies=state.dependencies;
 			resetDeclProps(state.declProps);

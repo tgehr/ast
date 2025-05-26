@@ -912,7 +912,11 @@ struct FixedPointIterState{
 		forgetScope=new BlockScope(sc);
 		return loopScope;
 	}
-	void endIteration(Scope sc){ nextStateSnapshot=sc.getStateSnapshot(true); }
+	void endIteration(Scope sc){
+		sc.updateStateSnapshot(origStateSnapshot);
+		sc.updateStateSnapshot(prevStateSnapshot);
+		nextStateSnapshot=sc.getStateSnapshot(true);
+	}
 	bool converged(){ return nextStateSnapshot==prevStateSnapshot; }
 
 	void fixSplitMergeGraph(Scope sc){
