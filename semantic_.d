@@ -1534,28 +1534,32 @@ VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 }
 
 static if(language==silq){
-Dependency getDependency(Expression e,Scope sc)in{
-	assert(e.isQfree());
-}do{
+Dependency getDependencyImpl(Expression e,Scope sc){
 	auto result=Dependency(false);
-	foreach(id;e.freeIdentifiers){
-		if(id.type&&!id.type.isClassical){
-			if(id.meaning){
-				auto decl=id.meaning;
-				while(decl&&decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!=sc.getFunction())
-					decl=decl.splitFrom;
-				if(!sc.dependencyTracked(decl))
-					sc.addDefaultDependency(decl); // TODO: ideally can be removed
-				result.dependencies.insert(decl);
-				if(!id.constLookup||id.byRef){
-					/+auto vd=cast(VarDecl)id.meaning;
-					 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
-					result.replace(decl,sc.getDependency(decl));
-				}
-			}
-		}
+	if(!e.isQfree||e.type&&e.type.isClassical()) return result;
+	foreach(c;e.components)
+		result.joinWith(getDependency(c,sc));
+	return result;
+}
+Dependency getDependencyImpl(Identifier id,Scope sc){
+	auto result=Dependency(false);
+	if(!id.meaning||id.type&&id.type.isClassical()) return result;
+	auto decl=id.meaning;
+	while(decl&&decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!=sc.getFunction())
+		decl=decl.splitFrom;
+	if(!sc.dependencyTracked(decl))
+		sc.addDefaultDependency(decl); // TODO: ideally can be removed
+	result.dependencies.insert(decl);
+	if(!id.constLookup||id.byRef){
+		/+auto vd=cast(VarDecl)id.meaning;
+		 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
+		result.replace(decl,sc.getDependency(decl));
 	}
 	return result;
+}
+Dependency getDependency(Expression e,Scope sc){
+	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
+	return getDependencyImpl(e,sc);
 }
 
 bool consumes(Expression e){
