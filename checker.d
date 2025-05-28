@@ -520,7 +520,12 @@ class Checker {
 		}
 		auto sube = cast(ast_exp.Identifier) e.e;
 		assert(!!sube, format("TODO: LHS index expression [[ %s ]] on %s bottom not identifier", e, e.loc));
-		getVar(sube.meaning, true, "LHS", e);
+		auto decl = sube.meaning;
+		if(decl.getId !in vars || vars[decl.getId] is null) {
+			defineVar(decl, "LHS", e);
+		} else {
+			getVar(decl, true, "LHS", e);
+		}
 	}
 
 	void implLhs(ast_exp.Expression e) {
@@ -626,6 +631,7 @@ class Checker {
 		foreach(decl; fd.capturedDecls) {
 			auto ty = typeForDecl(decl);
 			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty) || imported!"astopt".allowUnsafeCaptureConst && decl.isConst();
+			if(keep && fd.captures[decl].any!(id => id.byRef)) keep = false;
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}

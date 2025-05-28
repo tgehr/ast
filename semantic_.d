@@ -1846,7 +1846,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	bool checkReplaceable(IndexExp e){
 		if(auto id=cast(Identifier)unwrap(e.e)){
 			if(id.meaning){
-				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true,true);
+				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true);
 				if(!r) id.meaning.sstate=SemState.error;
 				return r;
 			}
@@ -2730,9 +2730,7 @@ struct ArrayConsumer{
 			id.meaning=null;
 			//assert(id.sstate!=SemState.completed);
 			id.sstate=SemState.initial;
-			id.byRef=true;
 			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
-			id.byRef=false;
 			auto dep=getDependency(e.e,context.sc);
 			if(e.e.sstate!=SemState.completed)
 				return;
@@ -2962,7 +2960,7 @@ bool checkNonConstVar(string action,string continuous)(Declaration meaning,Locat
 	return false;
 }
 
-bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible,bool isReplacement){
+bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible){
 	if(!meaning||meaning.sstate==SemState.error) return false;
 	if(!checkNonConstVar!("reassign","reassigning")(meaning,loc,sc))
 		return false;
@@ -2977,7 +2975,6 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 		sc.error("cannot reassign type variables", loc);
 		return false;
 	}
-	if(!isReplacement)
 	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
@@ -2988,7 +2985,6 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 				if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
 				return false;
 			}else{
-				// TODO: could in principle be allowed (but variable should be removed from outer scope)
 				sc.error("cannot assign to variable in closure context",loc);
 				sc.note("declared here",meaning.loc);
 				return false;
@@ -3076,7 +3072,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	checkIndexReplacement(ae,sc);
 	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,ae.loc,sc,false,false))
+			if(!checkAssignable(id.meaning,ae.loc,sc,false))
 				ae.sstate=SemState.error;
 		}else if(auto tpl=cast(TupleExp)lhs){
 			if(indexed){
@@ -3301,6 +3297,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		// TODO: assignments to fields
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
+			id.byRef=true;
 			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
 			auto meaning=sc.lookup(id,false,true,Lookup.probingWithCapture);
 			if(nerr!=sc.handler.nerrors){
@@ -3339,7 +3336,6 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				if(!sc.lookup(id,false,false,Lookup.probing))
 					sc.unconsume(id.meaning); // TODO: ok?
 			}
-			id.byRef=false; // TODO: why does checker not like this?
 		}
 	}
 	if(be.sstate==SemState.error){
@@ -3349,7 +3345,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be),true))
+			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be)))
 				be.sstate=SemState.error;
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);

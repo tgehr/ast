@@ -221,7 +221,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			return ae;
 		}
 		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"~←"].canFind(op)){
-			if(e.e1.type.isClassical()) return toAssign();
+			if(e.e1.type.isClassical()&&op!=Tok!"~←") return toAssign();
 			auto id1=cast(Identifier)e.e1;
 			if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
 			static if(op==Tok!"+←") enum name="__add_assign", ob=OB.default_;

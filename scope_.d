@@ -900,7 +900,7 @@ abstract class Scope{
 
 	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost){
 		if(!meaning) return false;
-		if(!meaning.isLinear()) return true;
+		if(!meaning.isLinear()&&!id.byRef) return true;
 		auto type=id.typeFromMeaning(meaning);
 		if(!type) return false;
 		return insertCaptureImpl(id,meaning,type,outermost);
@@ -1404,7 +1404,7 @@ class CapturingScope(T): NestedScope{
 			}
 		}
 		if(!id.lazyCapture){
-			if(!isConstLookup&&meaning.isLinear()){
+			if(!isConstLookup&&(meaning.isLinear()||id.byRef)){
 				symtabInsert(meaning);
 				meaning=consume(meaning);
 				origin.insertCapture(id,meaning,this);
