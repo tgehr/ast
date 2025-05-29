@@ -2835,7 +2835,7 @@ void checkIndexReplacement(Expression be,Scope sc){
 		}
 		foreach(i;0..crepls.length){
 			if(!crepls[i].read){
-				sc.error("reassigned component must be consumed in right-hand side", indicesToReplace[i].loc);
+				sc.error("replaced component must be consumed in right-hand side", indicesToReplace[i].loc);
 				indicesToReplace[i].sstate=SemState.error;
 				be.sstate=SemState.error;
 				if(auto meaning=sc.peekSymtab(crepls[i].name))
@@ -4698,7 +4698,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 			if(next) return check(next,index,index.type,index.loc);
 			if(isEmpty(index.type)) return bottom;
-			sc.error(format("index for type %s should be integer constant",tt),index.loc); // TODO: allow dynamic indexing if known to be safe?
+			sc.error(format("index for type %s should be integer constant",tt),index.loc);
 			idx.sstate=SemState.error;
 			return null;
 		}
