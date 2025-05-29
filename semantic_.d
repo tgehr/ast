@@ -15,11 +15,6 @@ Id freshName(){ // TODO: improve mechanism for generating temporaries
 	return Id.intern(text("__tmp",counter++));
 }
 
-Expression moveExp(Expression e){
-	// TODO: implement
-	return e;
-}
-
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	auto sym=getPreludeSymbol(isSigned?"int":"uint",loc,isc);
 	auto ce=new CallExp(sym,bits,true,isClassical);
@@ -849,7 +844,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(!!idx);
 			id.byRef=true;
-			idx.byRef=true;
+			setDefLhsByRef(idx);
 		}
 	}
 	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
@@ -1537,7 +1532,7 @@ VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 static if(language==silq){
 Dependency getDependencyImpl(Expression e,Scope sc){
 	auto result=Dependency(false);
-	if(!e.isQfree||e.type&&e.type.isClassical()) return result;
+	if(e.type&&e.type.isClassical()) return result;
 	foreach(c;e.components)
 		result.joinWith(getDependency(c,sc));
 	return result;
@@ -1558,8 +1553,24 @@ Dependency getDependencyImpl(Identifier id,Scope sc){
 	}
 	return result;
 }
+
+Dependency getDependencyImpl(CallExp ce,Scope sc){
+	auto result=Dependency(false);
+	if(ce.type&&ce.type.isClassical()) return result;
+	if(auto ft=cast(ProductTy)ce.e.type){
+		if(ft.annotation<Annotation.qfree){
+			result.isTop=true;
+			return result;
+		}
+	}
+	foreach(c;ce.components)
+		result.joinWith(getDependency(c,sc));
+	return result;
+}
+
 Dependency getDependency(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
+	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
 	return getDependencyImpl(e,sc);
 }
 
@@ -1570,12 +1581,42 @@ bool consumes(Expression e){
 			return true;
 	return false;
 }
+
+bool isLiftedImpl(Expression e,Scope sc){
+	if(e.type&&e.type.isClassical()) return true;
+	foreach(c;e.components)
+		if(!isLifted(c,sc))
+			return false;
+	return true;
+}
+
+bool isLiftedImpl(Identifier id,Scope sc){
+	return id.constLookup||!id.type||id.type.isClassical;
+}
+
+bool isLiftedImpl(CallExp ce,Scope sc){
+	if(ce.type&&ce.type.isClassical()) return true;
+	if(auto ft=cast(ProductTy)ce.e.type){
+		if(ft.annotation<Annotation.qfree){
+			return false;
+		}
+	}
+	foreach(c;ce.components)
+		if(!isLifted(c,sc))
+			return false;
+	return true;
+}
+
 bool isLifted(Expression e,Scope sc){
-	if(e.isQfree()){
+	/+if(e.isQfree()){
 		if(!consumes(e)) return true;
 		if(astopt.allowUnsafeCaptureConst && !e.getDependency(sc).isTop) return true;
 	}
-	return false;
+	return false;+/
+	if(astopt.allowUnsafeCaptureConst&&!e.getDependency(sc).isTop) return true;
+	if(auto id=cast(Identifier)e) return isLiftedImpl(id,sc);
+	if(auto id=cast(CallExp)e) return isLiftedImpl(id,sc);
+	return isLiftedImpl(e,sc);
 }
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
@@ -2317,11 +2358,10 @@ Expression swapSemantic(DefineExp be,Scope sc){
 		return null;
 	}
 	be.isSwap=true;
-	foreach(idx;chain(idx1[],idx2[])) idx.byRef=true;
+	foreach(idx;chain(idx1[],idx2[])) setDefLhsByRef(idx);
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto id=getIdFromIndex(idx2[0]);
-	assert(!!id);
-	id.byRef=true;
+	assert(!!id&&id.byRef);
 	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);
 	if(id.meaning) id.meaning=sc.split(id.meaning);
 	propErr(id,be.e2);
@@ -2363,9 +2403,6 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			id.byRef=true;
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
-			idx.byRef=true;
-			if(auto cid=getIdFromIndex(idx))
-				cid.byRef=true;
 			auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
 			read.loc=crepl.write.loc;
 			reads~=read;
@@ -2387,8 +2424,6 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
-			if(auto cid=getIdFromIndex(idx))
-				cid.byRef=true;
 			auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
 			write.loc=crepl.write.loc;
 			writes~=write;
@@ -2630,6 +2665,19 @@ Identifier getIdFromIndex(IndexExp e){
 Identifier getIdFromDefLhs(Expression e){
 	if(auto idx=cast(IndexExp)unwrap(e)) return getIdFromDefLhs(idx.e);
 	return cast(Identifier)unwrap(e);
+}
+
+void setDefLhsByRef(Expression e){
+	e.byRef=true;
+	if(auto tae=cast(TypeAnnotationExp)e)
+		setDefLhsByRef(tae.e);
+	if(auto idx=cast(IndexExp)e)
+		setDefLhsByRef(idx.e);
+}
+
+Expression moveExp(Expression e){
+	setDefLhsByRef(e);
+	return e;
 }
 
 bool isBasicIndexType(Expression ty){
@@ -3766,7 +3814,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
 					}
-					if(constResult&&!ce.isLifted(sc)&&!ce.type.isClassical()){
+					if(constResult&&!ce.isLifted(sc)){
 						sc.error("non-'lifted' quantum expression must be consumed", ce.loc);
 						ce.sstate=SemState.error;
 					}
@@ -4678,8 +4726,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		}
 		if(!context.constResult){
 			crepls[replaceIndexLoc].read=idx; // matched
-			cid.byRef=true;
-			idx.byRef=true;
+			setDefLhsByRef(idx);
+			assert(cid.byRef);
 		}
 		auto id=new Identifier(crepls[replaceIndexLoc].name);
 		id.loc=idx.loc;
@@ -5482,8 +5530,9 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 					}
 				}else{
 					expr.constLookup=context.constResult;
-					if(expr.constLookup&&!expr.isLifted(sc)&&!expr.type.isClassical()){
+					if(expr.constLookup&&!expr.byRef&&!expr.isLifted(sc)){
 						sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+						imported!"util.io".writeln(expr," ",expr.byRef);
 						expr.sstate=SemState.error;
 					}
 				}
