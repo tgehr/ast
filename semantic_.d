@@ -2411,17 +2411,22 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 		auto prologue=new CompoundExp(reads);
 		prologue.loc=loc;
 		prologue=statementSemanticImpl(prologue,sc);
-		if(prologue.sstate!=SemState.error) prologue.sstate=SemState.completed;
+		if(prologue.sstate==SemState.error){
+			foreach(i,ref crepl;crepls){
+				propErr(reads[i],crepl.write);
+			}
+		}else prologue.sstate=SemState.completed;
 		prologues~=prologue;
 		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 		prologue.loc=loc;
 		Expression[] writes;
-		foreach_reverse(ref crepl;crepls){
+		foreach_reverse(i,ref crepl;crepls){
 			if(!crepl.write) continue;
 			auto id=new Identifier(crepl.name);
 			id.loc=loc;
 			id.byRef=true;
 			auto idx=crepl.write.copy();
+			propErr(reads[i],idx);
 			idx.loc=crepl.write.loc;
 			idx.byRef=true;
 			auto write=new BinaryExp!(Tok!":=")(moveExp(idx),id);
@@ -4593,10 +4598,11 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq){
 		bool replaceIndex=false;
 		size_t replaceIndexLoc=size_t.max;
+		auto cid=getIdFromIndex(idx);
+		auto crepls=cid&&cid.meaning?sc.componentReplacements(cid.meaning):[];
 	}
 	static if(language==silq)
-	if(auto cid=getIdFromIndex(idx)) if(cid.meaning){
-		auto crepls=sc.componentReplacements(cid.meaning);
+	if(cid&&cid.meaning){
 		foreach(i,crepl;crepls){
 			static assert(is(typeof(crepl):T*,T));
 			if(crepl.write&&!crepl.read&&guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
@@ -4619,12 +4625,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						assert(cid.type==rid.type);
 						assert(cid.meaning is rid.meaning);
 						if(!guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)){
-							if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
-								sc.error("lookup of index refers to consumed value",idx.loc);
-							}else sc.error("lookup of index may refer to consumed value",idx.loc);
-							if(crepl.read) // should always be non-null
-								sc.note("consumed here",crepl.read.loc);
-							else sc.note("reassigned here",crepl.write.loc);
+							if(crepl.write.sstate!=SemState.error&&idx.sstate!=SemState.error){
+								if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
+									sc.error("lookup of index refers to consumed value",idx.loc);
+								}else sc.error("lookup of index may refer to consumed value",idx.loc);
+								if(crepl.read) // should always be non-null
+									sc.note("consumed here",crepl.read.loc);
+								else sc.note("reassigned here",crepl.write.loc);
+							}
 							idx.sstate=SemState.error;
 							break;
 						}
@@ -4633,6 +4641,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			}
 		}
 	}
+	static if(language==silq)
+		if(replaceIndex)
+			propErr(crepls[replaceIndexLoc].write,idx);
 	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
 		if(isBasicIndexType(indexTy)){
 			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
@@ -4670,19 +4681,41 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		idx.sstate=SemState.error;
 		return null;
 	}
+	bool checkBounds(Expression index,ℤ len){
+		if(auto lit=index.eval().asIntegerConstant()){
+			auto c=lit.get();
+			if(c<0||c>=len){
+				if(idx.sstate!=SemState.error)
+					sc.error(format("index for type '%s' is out of bounds [0..%s)",idx.e.type,len),index.loc);
+				idx.sstate=SemState.error;
+				return false;
+			}
+		}
+		if(auto tpl=cast(TupleExp)index)
+			return tpl.e.all!(e=>checkBounds(e,len));
+		return true;
+	}
 	if(auto at=cast(ArrayTy)idx.e.type){
 		idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
 	}else if(auto vt=cast(VectorTy)idx.e.type){
+		if(auto mlen=vt.num.asIntegerConstant()){
+			auto len=mlen.get();
+			checkBounds(idx.a,len);
+		}
 		idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
 	}else if(auto idxInt=isFixedIntTy(idx.e.type)){
+		if(auto mlen=idxInt.bits.asIntegerConstant()){
+			auto len=mlen.get();
+			checkBounds(idx.a,len);
+		}
 		idx.type=check(Bool(idxInt.isClassical), idx.a, idx.a.type, idx.a.loc);
 	}else if(auto tt=cast(TupleTy)idx.e.type){
 		Expression checkTpl(Expression index){
 			if(auto lit=index.eval().asIntegerConstant()){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
-					// TODO: technically this violates monotonicity of type checking w.r.t subtyping
-					sc.error(format("index for type %s is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+					if(idx.sstate!=SemState.error)
+						sc.error(format("index for type '%s' is out of bounds [0..%s)",tt,tt.types.length),index.loc);
 					idx.sstate=SemState.error;
 					return null;
 				}else{
@@ -4715,9 +4748,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	}
 	static if(language==silq)
 	if(replaceIndex){
-		auto cid=getIdFromIndex(idx);
 		assert(cid&&cid.meaning);
-		auto crepls=sc.componentReplacements(cid.meaning);
 		assert(replaceIndexLoc<crepls.length);
 		if(context.constResult&&!sc.canForget(cid.meaning)){ // TODO: ok?
 			sc.error("replaced component must be consumed",idx.loc);
