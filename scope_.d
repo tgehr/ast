@@ -571,7 +571,6 @@ abstract class Scope{
 	void message(lazy string msg, Location loc){handler.message(msg,loc);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
-		resetConst(); // TODO: ok?
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
@@ -605,7 +604,6 @@ abstract class Scope{
 					clearConsumed();
 				}
 			}
-			foreach(n,d;rnsymtab) assert(d.scope_!is this&&!d.isLinear()||!canSplit(d)||d.sstate==SemState.error);
 		}
 		return errors;
 	}
@@ -666,7 +664,7 @@ abstract class Scope{
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
 				foreach(odecl;dep.dependencies)
-					assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl));
+					assert(dependencyTracked(odecl)||odecl.sstate==SemState.error,text(dependencies," ",decl," ",dep," ",odecl));
 				dependencies.dependencies[decl]=dep;
 			}
 		}
