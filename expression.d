@@ -1084,7 +1084,7 @@ class CallExp: Expression{
 	override Annotation getAnnotation(){
 		auto fty=cast(FunTy)e.type;
 		if(!fty) return Annotation.none;
-		return min(fty.annotation,arg.getAnnotation());
+		return min(e.getAnnotation(),fty.annotation,arg.getAnnotation());
 	}
 
 	final private Expression isDup(){
