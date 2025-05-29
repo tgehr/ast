@@ -396,7 +396,7 @@ abstract class Scope{
 	}do{
 		if(dependencyTracked(splitFrom))
 			dependencies.replace(splitFrom,splitInto);
-		if(auto declProps=updateDeclProps(splitFrom)){
+		if(auto declProps=declProps.tryGet(splitFrom)){
 			foreach(id;declProps.accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
 				if(id.meaning !is splitFrom) continue;
 				id.meaning=splitInto;
