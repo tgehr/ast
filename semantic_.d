@@ -1728,12 +1728,14 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 				if(vd.vtype){
 					if(auto nt=joinTypes(vd.vtype,context.type)){
 						vd.vtype=nt;
+						context.sc.updateType(vd);
 					}else{
 						context.sc.error(format("incompatible types '%s' and '%s' for variable '%s'",vd.vtype,context.type),id.loc);
 						id.sstate=SemState.error;
 					}
 				}else vd.vtype=context.type;
 			}else id.sstate=SemState.error;
+			id.type=id.typeFromMeaning;
 			if(context.initializer){
 				assert(!vd.initializer);
 				vd.initializer=context.initializer;
@@ -1742,10 +1744,9 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 		if(id.meaning){
 			propErr(id,id.meaning);
 			propErr(id.meaning,id);
-		}
-		if(context.type){
+		}else if(context.type){
 			id.type=context.type;
-		}else{
+		}else if(!id.type){
 			context.sc.error(format("cannot determine type for '%s",id),id.loc);
 			id.sstate=SemState.error;
 		}
@@ -1834,8 +1835,11 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				bool ok=true;
 				if(auto id=getIdFromIndex(idx)){
 					if(auto nt=updatedType(id,idx,context.type)){
-						if(auto vd=cast(VarDecl)id.meaning)
+						if(auto vd=cast(VarDecl)id.meaning){
 							vd.vtype=nt;
+							id.type=id.typeFromMeaning;
+							context.sc.updateType(vd);
+						}
 					}else ok=false;
 				}else if(!joinTypes(context.type,result.type)){
 					ok=false;

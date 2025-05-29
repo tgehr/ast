@@ -426,6 +426,15 @@ abstract class Scope{
 		}
 	}
 
+	final void updateType(Declaration decl){
+		if(auto prop=declProps.tryGet(decl)){
+			foreach(id;prop.accesses){
+				if(auto ty=id.typeFromMeaning)
+					id.type=ty;
+			}
+		}
+	}
+
 	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
 		assert(odecl is ndecl||!remove);
 	}do{

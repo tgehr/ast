@@ -482,6 +482,7 @@ class Checker {
 		assert(!e.constLookup);
 		auto var = e.meaning;
 		assert(cast(ast_decl.VarDecl) var, "LHS of assignment not VarDecl");
+		assert(e.type == typeForDecl(var), format("LHS identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, e.type, typeForDecl(var)));
 		defineVar(var, "LHS", e);
 	}
 
@@ -521,6 +522,7 @@ class Checker {
 		auto sube = cast(ast_exp.Identifier) e.e;
 		assert(!!sube, format("TODO: LHS index expression [[ %s ]] on %s bottom not identifier", e, e.loc));
 		auto decl = sube.meaning;
+		assert(sube.type == typeForDecl(decl), format("LHS indexed identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, sube.type, typeForDecl(decl)));
 		if(decl.getId !in vars || vars[decl.getId] is null) {
 			defineVar(decl, "LHS", e);
 		} else {
