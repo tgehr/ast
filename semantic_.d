@@ -4795,12 +4795,13 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		return sl;
 	auto at=cast(ArrayTy)sl.e.type;
 	auto vt=cast(VectorTy)sl.e.type;
+	auto tt=cast(TupleTy)sl.e.type;
 	auto lval=sl.l.eval(), rval=sl.r.eval();
 	auto mlc=lval.asIntegerConstant();
 	auto mrc=rval.asIntegerConstant();
 	auto next=at?at.next:vt?vt.next:null;
 	if(!next&&(!mlc||!mrc)){
-		if(auto tt=cast(TupleTy)sl.e.type){
+		if(tt){
 			next=bottom;
 			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 		}
@@ -4808,22 +4809,60 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	if(next){
 		auto se=new NSubExp(rval,lval);
 		se.type=nSubType(sl.r.type,sl.l.type);
+		assert(!!se.type);
 		se.sstate=SemState.completed;
 		sl.type=vectorTy(next,se.eval());
-	}else if(auto tt=cast(TupleTy)sl.e.type){
+		import util.maybe:Maybe,just;
+		auto mnum=vt?vt.num.eval().asIntegerConstant():tt?just(ℤ(tt.length)):Maybe!ℤ();
+		if(mlc&&mlc.get()<0){
+			sc.error(format("slice lower bound for type '%s' cannot be negative",sl.e.type),sl.loc);
+			sl.sstate=SemState.error;
+		}
+		if(mlc&&mrc){
+			if(mlc.get()>mrc.get()){
+				sc.error("slice lower bound exceeds slice upper bound",sl.loc);
+				sl.sstate=SemState.error;
+			}
+		}else{
+			auto gse=new SubExp(rval,lval);
+			gse.type=subtractionType(sl.r.type,sl.l.type);
+			assert(!!gse.type);
+			gse.sstate=SemState.completed;
+			if(auto mgse=gse.eval().asIntegerConstant()){
+				if(mgse.get()<0){
+					sc.error("slice lower bound exceeds slice upper bound",sl.loc);
+					sl.sstate=SemState.error;
+				}
+			}
+			if(mlc&&mnum){
+				if(mlc.get()>mnum.get()){
+					sc.error(format("slice lower bound for type '%s' exceeds length of %s",sl.e.type,mnum.get()),sl.l.loc);
+					sl.sstate=SemState.error;
+				}
+			}
+			if(mrc&&mrc.get()<0){
+				sc.error(format("slice upper bound for type '%s' cannot be negative",sl.e.type),sl.r.loc);
+				sl.sstate=SemState.error;
+			}
+		}
+		if(mrc&&mnum&&mrc.get()>mnum.get()){
+			sc.error(format("slice upper bound for type '%s' exceeds length of %s",sl.e.type,mnum.get()),sl.r.loc);
+			sl.sstate=SemState.error;
+		}
+	}else if(tt){
 		if(!mlc){
-			sc.error(format("slice lower bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
+			sc.error(format("slice lower bound for type '%s' should be integer constant",cast(Expression)tt),sl.l.loc);
 			sl.sstate=SemState.error;
 		}
 		if(!mrc){
-			sc.error(format("slice upper bound for type %s should be integer constant",cast(Expression)tt),sl.loc);
+			sc.error(format("slice upper bound for type '%s' should be integer constant",cast(Expression)tt),sl.r.loc);
 			sl.sstate=SemState.error;
 		}
 		if(sl.sstate==SemState.error)
 			return sl;
 		auto lc=mlc.get(), rc=mrc.get();
 		if(lc<0){
-			sc.error(format("slice lower bound for type %s cannot be negative",tt),sl.loc);
+			sc.error(format("slice lower bound for type '%s' cannot be negative",tt),sl.l.loc);
 			sl.sstate=SemState.error;
 		}
 		if(lc>rc){
@@ -4831,7 +4870,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 			sl.sstate=SemState.error;
 		}
 		if(rc>tt.length){
-			sc.error(format("slice upper bound for type %s exceeds %s",tt,tt.length),sl.loc);
+			sc.error(format("slice upper bound for type '%s' exceeds length of %s",tt,tt.length),sl.r.loc);
 			sl.sstate=SemState.error;
 		}
 		if(sl.sstate!=SemState.error){

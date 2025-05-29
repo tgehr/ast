@@ -1386,6 +1386,10 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
 						if(ae1.e1==ne2) return ae1.e2.evalImpl(ntype);
 						if(ae1.e2==ne2) return ae1.e1.evalImpl(ntype);
+						if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
+							if(ae1.e1==ae2.e1)
+								return make(new BinaryExp!op(ae1.e2,ae2.e2));
+						}
 					}
 					static foreach(sub;[Tok!"-",Tok!"sub"]){
 						if(auto se1=cast(BinaryExp!sub)ne1){
