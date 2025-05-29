@@ -381,6 +381,16 @@ abstract class Scope{
 		splitInto.splitFrom=splitFrom;
 		splitVars~=splitInto;
 	}
+	final void resetSplits(Declaration decl){
+		void rec(Declaration cdecl){
+			foreach(split;cdecl.splitInto){
+				replaceDecl(split,decl);
+				rec(split);
+			}
+			cdecl.splitInto=[];
+		}
+		rec(decl);
+	}
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		assert(splitFrom !is splitInto);
 	}do{
@@ -392,6 +402,7 @@ abstract class Scope{
 				id.meaning=splitInto;
 				recordAccess(id,splitInto);
 			}
+			declProps.accesses=[];
 			foreach(capturer;declProps.capturers){
 				void doIt(T)(T capturer){
 					if(splitFrom !in capturer.captures) return;
@@ -405,12 +416,13 @@ abstract class Scope{
 					}
 					foreach(id;capturer.captures[splitInto])
 						if(id.meaning is splitFrom) id.meaning=splitInto;
+					recordCapturer(capturer,splitInto);
 				}
 				if(auto fd=cast(FunctionDef)capturer) doIt(fd);
 				else if(auto dat=cast(DatDecl)capturer) doIt(dat);
 				else assert(0,text(typeid(capturer)));
 			}
-			declProps.accesses=[];
+			declProps.capturers=[];
 		}
 	}
 
@@ -558,7 +570,7 @@ abstract class Scope{
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
-				if(d.scope_ !is this && !d.isLinear()) continue;
+				//if(d.scope_ !is this && !d.isLinear()) continue;
 				if(auto read=isConst(d)){
 					if(d.sstate!=SemState.error){
 						error(format("cannot forget 'const' variable '%s'",d), d.loc);
@@ -568,6 +580,7 @@ abstract class Scope{
 					errors=true;
 				}
 				if(!canSplit(d)) continue;
+				if(d.scope_.getFunction() !is getFunction()) continue;
 				d=split(d);
 				if(d.scope_ !is this || !canForgetAppend(loc,d)){
 					import ast.semantic_: unrealizable;
@@ -1029,16 +1042,16 @@ abstract class Scope{
 	private Declaration getSplit(Declaration decl,bool clearSplitInto=false){
 		if(decl.scope_ is this){
 			if(clearSplitInto)
-				decl.splitInto=[];
+				resetSplits(decl);
 			return decl;
 		}
 		if(decl.splitInto.length==0)
 			return decl;
 		foreach(ndecl;decl.splitInto){
 			if(this.isNestedIn(ndecl.scope_))
-				return getSplit(ndecl);
+				return getSplit(ndecl,clearSplitInto);
 		}
-		assert(0);
+		assert(0,text(decl));
 	}
 
 	void updateStateSnapshot(ref ScopeState state){

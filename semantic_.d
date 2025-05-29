@@ -194,6 +194,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		if(fd.rret){
 			fd.ret=typeSemantic(fd.rret,fsc);
 			propErr(fd.rret,fd);
+			typeConstBlock(fd.ret,fd,sc);
 			setFtype(fd,true);
 			if(!fd.body_){
 				switch(fd.getName){
@@ -2611,14 +2612,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}else if(de) de.setError();
 	auto r=de?de:be;
-	if(be.e2.type && be.e2.type.sstate==SemState.completed){
-		foreach(id;be.e2.type.freeIdentifiers){
-			assert(!!id.meaning);
-			auto blocker=r;
-			//if(auto sde=cast(SingleDefExp)blocker) if(sde.decl) blocker=sde.decl;
-			typeConstBlock(id.meaning,blocker,sc);
-		}
-	}
+	typeConstBlock(be.e2.type,r,sc);
 	be.type=isBottom?bottom:unit;
 	if(r.sstate!=SemState.error) r.sstate=SemState.completed;
 	return lowerIndexReplacement(prologues,epilogues,r,sc);
@@ -2914,11 +2908,19 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
     return result;
 }
 
-void typeConstBlock(Declaration decl,Expression blocker,Scope sc){
-	if(!isAssignable(decl,sc)) return;
+void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc){
 	if(auto vd=cast(VarDecl)decl)
 		vd.typeConstBlocker=blocker;
 	assert(!isAssignable(decl,sc));
+}
+
+void typeConstBlock(Expression type,Expression blocker,Scope sc){
+	if(!type||type.sstate!=SemState.completed)
+		return;
+	foreach(id;type.freeIdentifiers){
+		assert(!!id.meaning);
+		typeConstBlockDecl(id.meaning,blocker,sc);
+	}
 }
 
 bool isAssignable(Declaration meaning,Scope sc){
@@ -5612,11 +5614,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
 				fd.sstate=SemState.error;
 			}
-			typeConstBlock(id.meaning,fd,sc);
+			typeConstBlockDecl(id.meaning,fd,sc);
 		}
 	}
 	if(bdy){
-		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(null)) fd.sstate=SemState.error;
+		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(fd.scope_)) fd.sstate=SemState.error;
 	}else{
 		fsc.forceClose();
 	}
