@@ -505,6 +505,11 @@ abstract class Scope{
 						note("variable was made 'const' here", read.loc);
 						id.sstate=SemState.error;
 						doConsume=false;
+					}else if(meaning.isConst){
+						error(format("cannot consume 'const' variable '%s'",id), id.loc);
+						note("declared 'const' here", meaning.loc);
+						id.sstate=SemState.error;
+						doConsume=false;
 					}
 				}
 				if(doConsume&&meaning.scope_){
@@ -1324,7 +1329,8 @@ class CapturingScope(T): NestedScope{
 					auto recapture=new Identifier(capture.name.id);
 					recapture.loc=id.loc;
 					import ast.semantic_:lookupMeaning,typeForDecl;
-					lookupMeaning(recapture,kind,origin);
+					bool isConsuming=capture.scope_.isNestedIn(this);
+					lookupMeaning(recapture,isConsuming?Lookup.consuming:Lookup.constant,origin);
 					bool callErrorShown=false;
 					void callError(){
 						if(callErrorShown) return;
