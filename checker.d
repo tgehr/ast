@@ -153,7 +153,7 @@ class Checker {
 			if(auto te = cast(ast_ty.VariadicTy) e) {
 				return this.implTy(te);
 			}
-			if(cast(ast_ty.TypeTy) e || cast(ast_ty.QTypeTy) e || cast(ast_ty.CTypeTy) e || cast(ast_ty.UTypeTy) e || cast(ast_ty.ETypeTy) e) {
+			if(cast(ast_ty.TypeTy) e) {
 				return;
 			}
 			if(cast(ast_ty.QNumericTy) e) {

@@ -25,10 +25,6 @@ import std.functional, std.range;
 import ast.expression, ast.declaration, util;
 import ast.modules: isInPrelude;
 
-bool isSameType(Expression lhs,Expression rhs){
-	return lhs.eval() == rhs.eval(); // TODO: evaluation context?
-}
-
 enum NumericType{
 	none,
 	Bool,
@@ -1583,186 +1579,111 @@ bool hasFreeIdentifier(Expression self,Id name){
 	return false;
 }
 
-static if(language==silq)
-class ETypeTy: Type{
-	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
-	override ETypeTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		return "etype";
-	}
-	override bool opEquals(Object o){
-		return !!cast(ETypeTy)o;
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-	override bool isSubtypeImpl(Expression r){
-		return util.among(r,this,utypeTy,ctypeTy,qtypeTy,typeTy);
-	}
-	override Expression combineTypesImpl(Expression r,bool meet){
-		if(meet){
-			if(isSubtypeImpl(r)) return this;
-			return null;
-		}else{
-			if(isSubtypeImpl(r)) return r;
-			return null;
-		}
-	}
-}
-static if(language==silq){
-	private ETypeTy theETypeTy;
-	ETypeTy etypeTy(){ return theETypeTy?theETypeTy:(theETypeTy=new ETypeTy()); }
-}else alias etypeTy=typeTy;
 
-static if(language==silq)
-class UTypeTy: Type{
-	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
-	override UTypeTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		return "utype";
-	}
-	override bool opEquals(Object o){
-		return !!cast(UTypeTy)o;
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-	override bool isSubtypeImpl(Expression r){
-		return util.among(r,this,ctypeTy,qtypeTy,typeTy);
-	}
-	override Expression combineTypesImpl(Expression r,bool meet){
-		if(meet){
-			if(isSubtypeImpl(r)) return this;
-			return null;
-		}else{
-			if(isSubtypeImpl(r)) return r;
-			return null;
-		}
-	}
-}
 static if(language==silq){
-	private UTypeTy theUTypeTy;
-	UTypeTy utypeTy(){ return theUTypeTy?theUTypeTy:(theUTypeTy=new UTypeTy()); }
-}else alias utypeTy=typeTy;
-
-static if(language==silq)
-class CTypeTy: Type{
-	this(){ this.type=this; super(); } // TODO: types capturing quantum values?
-	override CTypeTy copyImpl(CopyArgs args){
-		return this;
+	private enum TypeType {
+		etype,
+		utype,
+		ctype,
+		qtype,
+		mtype,
 	}
-	override string toString(){
-		return "ctype";
-	}
-	override bool opEquals(Object o){
-		return !!cast(CTypeTy)o;
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-	override bool isSubtypeImpl(Expression r){
-		return util.among(r,this,typeTy);
-	}
-	override Expression combineTypesImpl(Expression r,bool meet){
-		if(meet){
-			if(r==qtypeTy) return utypeTy;
-			if(r==typeTy) return this;
-			return null;
-		}else{
-			if(r==qtypeTy||r==typeTy) return typeTy;
-			return null;
-		}
-	}
+	private immutable TypeType[5][5] typeJoin = [
+		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+		[TypeType.utype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+		[TypeType.ctype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
+		[TypeType.qtype, TypeType.qtype, TypeType.mtype, TypeType.qtype, TypeType.mtype],
+		[TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype],
+	];
+	private immutable TypeType[5][5] typeMeet = [
+		[TypeType.etype, TypeType.etype, TypeType.etype, TypeType.etype, TypeType.etype],
+		[TypeType.etype, TypeType.utype, TypeType.utype, TypeType.utype, TypeType.utype],
+		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.utype, TypeType.ctype],
+		[TypeType.etype, TypeType.utype, TypeType.utype, TypeType.qtype, TypeType.qtype],
+		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+	];
 }
-static if(language==silq){
-	private CTypeTy theCTypeTy;
-	CTypeTy ctypeTy(){ return theCTypeTy?theCTypeTy:(theCTypeTy=new CTypeTy()); }
-}else alias ctypeTy=typeTy;
-
-static if(language==silq)
-class QTypeTy: Type{
-	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
-	override QTypeTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		return "qtype";
-	}
-	override bool opEquals(Object o){
-		return !!cast(QTypeTy)o;
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-	override bool isSubtypeImpl(Expression r){
-		return r==this||r==typeTy;
-	}
-	override Expression combineTypesImpl(Expression r,bool meet){
-		if(meet){
-			if(r==ctypeTy) return utypeTy;
-			if(r==typeTy) return this;
-			return null;
-		}else{
-			if(r==ctypeTy||r==typeTy) return typeTy;
-			return null;
-		}
-	}
-}
-static if(language==silq){
-	private QTypeTy theQTypeTy;
-	QTypeTy qtypeTy(){ return theQTypeTy?theQTypeTy:(theQTypeTy=new QTypeTy()); }
-}else alias qtypeTy=typeTy;
-
 
 class TypeTy: Type{
-	this(){
-		static if(language==silq){
+	static if(language==silq){
+		private TypeType tyty;
+		private this(TypeType tyty){
+			assert(theTypeTys[tyty] is null, "types are singletons");
+			this.tyty = tyty;
 			// TODO: types capturing quantum values?
-			this.type=ctypeTy; // this.type=this?
-		}else this.type=this;
-		super();
+			this.type=(tyty == TypeType.ctype ? this : ctypeTy());
+			super();
+		}
+		override string toString(){
+			final switch(tyty) {
+				case TypeType.etype: return "etype";
+				case TypeType.utype: return "utype";
+				case TypeType.ctype: return "ctype";
+				case TypeType.qtype: return "qtype";
+				case TypeType.mtype: return "*";
+			}
+		}
+		override bool isSubtypeImpl(Expression r){
+			assert(r !is this);
+			auto ty=cast(TypeTy)r;
+			if(!ty) return false;
+			return typeJoin[this.tyty][ty.tyty] == ty.tyty;
+		}
+		override Expression combineTypesImpl(Expression r,bool meet){
+			assert(r !is this);
+			auto ty=cast(TypeTy)r;
+			if(!ty) return null;
+			return typeTyImpl(meet ? typeMeet[this.tyty][ty.tyty] : typeJoin[this.tyty][ty.tyty]);
+		}
+	} else {
+		private this() {
+			this.type=this;
+			super();
+		}
+		override string toString(){
+			return "*";
+		}
+		override bool isSubtypeImpl(Expression r){
+			assert(r !is this);
+			return false;
+		}
+		override Expression combineTypesImpl(Expression r,bool meet){
+			assert(r !is this);
+			return null;
+		}
 	}
 	override TypeTy copyImpl(CopyArgs args){
 		return this;
 	}
-	override string toString(){
-		return "*";
-	}
 	override bool opEquals(Object o){
-		return !!cast(TypeTy)o;
+		return o is this;
 	}
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
 	}
-	override bool isSubtypeImpl(Expression r){
-		return r==typeTy;
-	}
-	override Expression combineTypesImpl(Expression r,bool meet){
-		if(meet){
-			if(r.isSubtypeImpl(this)) return r;
-			return null;
-		}else{
-			if(r.isSubtypeImpl(this)) return this;
-			return null;
-		}
-	}
 }
-private TypeTy theTypeTy;
-TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
+
+
+static if(language==silq){
+	private TypeTy[5] theTypeTys;
+	private TypeTy typeTyImpl(TypeType tyty) {
+		return theTypeTys[tyty] ? theTypeTys[tyty] : (theTypeTys[tyty] = new TypeTy(tyty));
+	}
+	TypeTy etypeTy(){ return typeTyImpl(TypeType.etype); }
+	TypeTy utypeTy(){ return typeTyImpl(TypeType.utype); }
+	TypeTy ctypeTy(){ return typeTyImpl(TypeType.ctype); }
+	TypeTy qtypeTy(){ return typeTyImpl(TypeType.qtype); }
+	TypeTy typeTy(){ return typeTyImpl(TypeType.mtype); }
+}else{
+	private TypeTy theTypeTy;
+	TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
+	alias etypeTy=typeTy;
+	alias utypeTy=typeTy;
+	alias ctypeTy=typeTy;
+	alias qtypeTy=typeTy;
+}
 
 bool isTypeTy(Expression e){ return isSubtype(e,typeTy); }
 bool isType(Expression e){ return e&&isTypeTy(e.type); }
