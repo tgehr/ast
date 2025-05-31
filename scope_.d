@@ -903,6 +903,7 @@ abstract class Scope{
 		static if(language==silq){
 			foreach(sc;scopes){
 				foreach(sym;sc.symtab.dup){
+					if(sym.sstate==SemState.error&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
 					if(cast(DeadDecl)sym){
 						addDeadMerge(sym).mergedFrom~=sym;
 						assert(sym.name.id !in symtab);
