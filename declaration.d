@@ -163,7 +163,7 @@ class FunctionDef: Declaration{
 	Declaration[] capturedDecls;
 	bool sealed=false;
 	void addCapture(Declaration meaning,Identifier id)in{
-		assert(!!meaning||!sealed||!meaning.isLinear);
+		assert(!!meaning&&(!meaning.isLinear||context&&context.vtype==contextTy(false)));
 	}do{
 		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
@@ -393,4 +393,30 @@ class ImportExp: Declaration{
 	override @property string kind(){ return "import declaration"; }
 	override string toString(){ return "import "~e.map!(to!string).join(","); }
 	override bool isLinear(){ return false; }
+}
+
+
+// special declarations used during semantic analysis
+
+abstract class DeadDecl: Declaration{
+	this(Identifier name){
+		super(name);
+	}
+	override DeadDecl copyImpl(CopyArgs cargs){
+		return this; // TODO: ok?
+	}
+}
+
+class ConsumedDecl: DeadDecl{
+	Identifier use;
+	this(Identifier name){
+		super(name);
+	}
+}
+
+class DeadMerge: DeadDecl{
+	bool quantumControl;
+	this(Identifier name){
+		super(name);
+	}
 }

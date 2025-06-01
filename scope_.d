@@ -118,14 +118,18 @@ abstract class Scope{
 	bool allowsLinear(){
 		return true;
 	}
+	bool canInsert(Identifier name){
+		auto decl=symtabLookup(name,false,null);
+		return !decl;
+	}
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
-		if(auto d=symtabLookup(decl.name,false)){
+		if(auto d=symtabLookup(decl.name,false,null)){
 			if(decl.sstate!=SemState.error) redefinitionError(decl, d);
 			decl.sstate=SemState.error;
 			return false;
 		}
 		rename(decl);
-		if(decl.rename) assert(decl.rename.id !in rnsymtab);
+		assert(!decl.rename||decl.rename.id !in rnsymtab||cast(DeadDecl)rnsymtab[decl.rename.id]);
 		symtabInsert(decl);
 		decl.scope_=this;
 		return true;
@@ -137,12 +141,18 @@ abstract class Scope{
 		symtab[decl.name.id]=decl;
 		if(decl.rename) rnsymtab[decl.rename.id]=decl;
 	}
+	void symtabRemove(Declaration decl){
+		symtab.remove(decl.name.id);
+		if(decl.rename) rnsymtab.remove(decl.rename.id);
+	}
 
 	void redefinitionError(Declaration decl, Declaration prev) in{
-		assert(!!decl);
+		assert(decl&&prev);
+		assert(!cast(DeadDecl)decl&&!cast(DeadDecl)prev);
 	}do{
 		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
 		note("previous definition was here",prev.name.loc);
+		decl.sstate=SemState.error;
 	}
 
 	static if(language==silq){
@@ -342,6 +352,7 @@ abstract class Scope{
 	}
 	final Declaration consume(Declaration decl){
 		if(decl.name.id !in symtab) return null;
+		if(cast(DeadDecl)decl) return null;
 		Expression type;
 		if(auto r=consumeImpl(decl,decl,type,true)) // TODO: separate splitting and consuming
 			return r;
@@ -456,10 +467,8 @@ abstract class Scope{
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
-			if(odecl.rename){
-				rnsymtab.remove(odecl.rename.id);
-				rnsymtab[ndecl.getId]=ndecl;
-			}
+			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
+			if(ndecl.rename) rnsymtab[ndecl.rename.id]=ndecl;
 			static if(language==silq)
 				replaceDecl(odecl,ndecl);
 		}
@@ -480,10 +489,14 @@ abstract class Scope{
 		}
 	}
 
-	protected final Declaration symtabLookup(Identifier ident,bool rnsym){
+	protected final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
 		if(allowMerge) return null;
 		auto r=symtab.get(ident.id, null);
 		if(rnsym&&!r) r=rnsymtab.get(ident.id,null);
+		if(auto dd=cast(DeadDecl)r){
+			if(failures) *failures~=dd;
+			r=null;
+		}
 		return r;
 	}
 	final Declaration peekSymtab(Id name){
@@ -536,16 +549,16 @@ abstract class Scope{
 		return meaning;
 	}
 
-	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind){
-		auto meaning=lookupImpl(ident,rnsym,lookupImports,kind,this);
+	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,DeadDecl[]* failures){
+		auto meaning=lookupImpl(ident,rnsym,lookupImports,kind,this,failures);
 		return postprocessLookup(ident,meaning,kind);
 	}
-	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		return lookupHereImpl(ident,rnsym);
+	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		return lookupHereImpl(ident,rnsym,failures);
 	}
 	Identifier getRenamed(Identifier cname){
 		for(;;){ // TODO: quite hacky
-			auto d=lookup(cname,true,true,Lookup.probing);
+			auto d=lookup(cname,true,true,Lookup.probing,null);
 			import ast.semantic_: isBuiltIn;
 			if(!d&&!isBuiltIn(cname)) break;
 			auto loc=cname.loc;
@@ -558,12 +571,12 @@ abstract class Scope{
 		auto cname=decl.rename?decl.rename:decl.name;
 		decl.rename=getRenamed(cname);
 	}
-	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind){
-		auto meaning=lookupHereImpl(ident,rnsym);
+	final Declaration lookupHere(Identifier ident,bool rnsym,Lookup kind,DeadDecl[]* failures){
+		auto meaning=lookupHereImpl(ident,rnsym,failures);
 		return postprocessLookup(ident,meaning,kind);
 	}
-	final Declaration lookupHereImpl(Identifier ident,bool rnsym){
-		auto r=symtabLookup(ident,rnsym);
+	final Declaration lookupHereImpl(Identifier ident,bool rnsym,DeadDecl[]* failures){
+		auto r=symtabLookup(ident,rnsym,failures);
 		if(auto fd=cast(FunctionDef)r){
 			import ast.semantic_:isInDataScope;
 			if(auto asc=isInDataScope(fd.scope_))
@@ -583,6 +596,7 @@ abstract class Scope{
 		bool errors=false;
 		static if(language==silq){
 			foreach(n,d;symtab.dup){
+				if(cast(DeadDecl)d) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				if(auto read=isConst(d)){
 					if(d.sstate!=SemState.error){
@@ -595,7 +609,7 @@ abstract class Scope{
 				if(!canSplit(d)) continue;
 				if(d.scope_.getFunction() !is getFunction()) continue;
 				d=split(d);
-				if(d.scope_ !is this || !canForgetAppend(loc,d)){
+				if(d.scope_ !is this || d.sstate==SemState.error || !canForgetAppend(loc,d)){
 					import ast.semantic_: unrealizable;
 					if(d.sstate!=SemState.error){
 						bool show=true;
@@ -706,8 +720,9 @@ abstract class Scope{
 
 		Declaration[] forgottenVars;
 		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
-			assert(decl.scope_ is this);
+			assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 		}do{
+			if(cast(DeadDecl)decl) return true;
 			if(canForget(decl)){
 				cause.forgottenVars~=decl;
 				return true;
@@ -759,11 +774,24 @@ abstract class Scope{
 		dependencies=scopes[0].dependencies.dup;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
+		DeadMerge[Id] deadMerges;
+		DeadMerge addDeadMerge(Declaration sym){
+			if(auto dm=sym.name.id in deadMerges)
+				return *dm;
+			auto dm=new DeadMerge(sym.name);
+			dm.loc=sym.loc;
+			dm.sstate=SemState.completed;
+			deadMerges[sym.name.id]=dm;
+			return dm;
+		}
 		foreach(psym;symtab.dup){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
 			void removeOSym(Scope sc,Declaration osym){
+				if(sc!is this)
+					if(auto dm=osym.name.id in deadMerges)
+						dm.mergedFrom~=osym;
 				sc.symtab.remove(osym.name.id);
 				if(osym.rename) sc.rnsymtab.remove(osym.rename.id);
 				static if(language==silq){
@@ -783,6 +811,7 @@ abstract class Scope{
 				sym=nsym;
 			}
 			void removeSym(){
+				addDeadMerge(sym);
 				removeOSym(this,sym);
 				removeOSym(scopes[0],psym);
 				symExists=false;
@@ -801,6 +830,10 @@ abstract class Scope{
 				sym=var;
 				needMerge=true;
 			}
+			if(cast(DeadDecl)sym){
+				removeSym();
+				continue;
+			}
 			foreach(sc;scopes[1..$]){
 				if(sym.name.id !in sc.symtab){
 					static if(language==silq){
@@ -813,6 +846,11 @@ abstract class Scope{
 					removeSym();
 				}else{
 					auto osym=sc.symtab[sym.name.id];
+					if(cast(DeadDecl)osym){
+						removeSym();
+						removeOSym(sc,osym);
+						continue;
+					}
 					if(sym!=osym){
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
@@ -826,10 +864,12 @@ abstract class Scope{
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								static if(language==silq){
 									splitSym(), sc.split(osym);
-									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
-										error(format("variable '%s' is not consumed", sym.getName), sym.loc);
-										if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
-										errors=true;
+									if(sym.sstate==SemState.completed&&osym.sstate==SemState.completed){
+										if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
+											error(format("variable '%s' is not consumed", sym.getName), sym.loc);
+											if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
+											errors=true;
+										}
 									}
 								}
 								removeSym();
@@ -863,6 +903,11 @@ abstract class Scope{
 		static if(language==silq){
 			foreach(sc;scopes){
 				foreach(sym;sc.symtab.dup){
+					if(cast(DeadDecl)sym){
+						addDeadMerge(sym).mergedFrom~=sym;
+						assert(sym.name.id !in symtab);
+						continue;
+					}
 					if(sym.name.id !in symtab){
 						sym=sc.split(sym);
 						if(!sc.canForgetAppend(sym)){
@@ -887,6 +932,9 @@ abstract class Scope{
 				sc.resetDeclProps();
 			}
 		}
+		foreach(_,dm;deadMerges){
+			insert(dm);
+		}
 		foreach(sc;scopes){
 			static if(language==silq) sc.dependencies.clear();
 			sc.symtab.clear();
@@ -897,7 +945,9 @@ abstract class Scope{
 		return errors;
 	}
 
-	final Declaration addVariable(Declaration decl,Expression type,bool isFirstDef=false){
+	final Declaration addVariable(Declaration decl,Expression type,bool isFirstDef=false)in{
+		assert(decl&&!cast(DeadDecl)decl);
+	}do{
 		auto id=new Identifier(decl.name.id);
 		id.loc=decl.name.loc;
 		auto var=new VarDecl(id);
@@ -906,7 +956,7 @@ abstract class Scope{
 			var.rename=new Identifier(decl.rename.id);
 			var.rename.loc=decl.rename.loc;
 		}
-		if(auto d=symtabLookup(var.name,false)){
+		if(auto d=symtabLookup(var.name,false,null)){
 			if(isFirstDef) redefinitionError(d,var);
 			else redefinitionError(var,d);
 			return null;
@@ -967,12 +1017,16 @@ abstract class Scope{
 				return false;
 			}
 			bool compareTables(Declaration[Id] symtab,Declaration[Id] rsymtab){
-				foreach(name,decl;rhs.symtab)
+				foreach(name,decl;rhs.symtab){
+					if(cast(DeadDecl)decl) continue;
 					if(name !in symtab)
 						return false;
-				foreach(name,decl;symtab)
+				}
+				foreach(name,decl;symtab){
+					if(cast(DeadDecl)decl) continue;
 					if(!checkDecl(decl,rsymtab.get(name,null)))
 						return false;
+				}
 				return true;
 			}
 			if(!compareTables(symtab,rhs.symtab))
@@ -1176,11 +1230,15 @@ class TopScope: Scope{
 		// TODO: store a location for better error messages
 		// TODO: allow symbol lookup by full path
 	}
-	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		if(auto d=super.lookupImpl(ident,rnsym,lookupImports,kind,origin)) return d;
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		if(auto decl=super.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)) return decl;
 		if(lookupImports){
 			Declaration[] ds;
-			foreach(sc;imports) if(auto d=sc.lookupImpl(ident,rnsym,false,kind,origin)) ds~=d;
+			foreach(sc;imports){
+				if(auto d=sc.lookupImpl(ident,rnsym,false,kind,origin,failures)){
+					ds~=d;
+				}
+			}
 			if(ds.length==1||ds.length>=1&&rnsym) return ds[0];
 			if(ds.length>1){
 				error(format("multiple imports of %s",ident.name),ident.loc);
@@ -1272,9 +1330,9 @@ class NestedScope: Scope{
 		return remove?consume(result):result;
 	}
 
-	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		if(auto decl=lookupHereImpl(ident,rnsym)) return decl;
-		return parent.lookupImpl(ident,rnsym,lookupImports,kind,origin);
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		return parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures);
 	}
 
 	override Annotation restriction(ref FunctionDef reason){ return parent.restriction(reason); }
@@ -1443,12 +1501,12 @@ class CapturingScope(T): NestedScope{
 		}
 		return meaning;
 	}
-	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin){
-		if(auto decl=lookupHereImpl(ident,rnsym)) return decl;
-		if(auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin)){
-			if(auto r=addCapture(ident,decl,kind,origin))
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		if(auto pdecl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)){
+			if(auto r=addCapture(ident,pdecl,kind,origin))
 				return r;
-			return decl;
+			return pdecl;
 		}
 		return null;
 	}

@@ -16,7 +16,7 @@ Identifier getOperatorSymbol(string name,Location loc,Scope isc){
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
-	res.meaning=sc.lookup(res,false,false,Lookup.constant);
+	res.meaning=sc.lookup(res,false,false,Lookup.constant,null);
 	if(!res.meaning){
 		res.sstate=SemState.error;
 	}else{

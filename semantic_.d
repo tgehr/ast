@@ -254,7 +254,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			nid.loc=id.loc;
 			auto vd=new VarDecl(nid);
 			vd.loc=id.loc;
-			if(be.sstate!=SemState.error||!sc.lookupHere(nid,false,Lookup.probing))
+			if(be.sstate!=SemState.error||sc.canInsert(nid))
 				success&=sc.insert(vd);
 			id.meaning=vd;
 			id.id=vd.getId;
@@ -588,8 +588,10 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	auto res=new Identifier(name);
 	res.loc=loc;
 	res.scope_=isc;
-	res.meaning=getPreludeScope(isc.handler, loc).lookup(res,false,false,Lookup.constant);
+	res.meaning=getPreludeScope(isc.handler, loc).lookup(res,false,false,Lookup.constant,null);
+	if(cast(DeadDecl)res.meaning) res.meaning=null;
 	if(!res.meaning){
+		isc.error(format("symbol '%s' not defined in prelude",name),loc);
 		res.sstate=SemState.error;
 	}else{
 		res.type=res.typeFromMeaning;
@@ -951,7 +953,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 			return id;
 		}).filter!((id){
 			if(!checkDefined) return true;
-			return !!sc.lookupHere(id,false,Lookup.probing);
+			return !sc.canInsert(id);
 		}).array;
 	}
 	auto fi=freshName();
@@ -3034,7 +3036,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 			return false;
 		}
 	}
-	if(isTypeTy(vd.vtype)){
+	if(isTypeTy(vd.vtype)&&!isEmpty(vd.vtype)){
 		sc.error("cannot reassign type variables", loc);
 		return false;
 	}
@@ -3361,22 +3363,13 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
 			id.byRef=true;
-			int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-			auto meaning=sc.lookup(id,false,true,Lookup.probingWithCapture);
-			if(nerr!=sc.handler.nerrors){
-				sc.note("looked up here",id.loc);
-				return be;
-			}
-			if(meaning){
-				meaning=sc.split(meaning);
-				id.meaning=meaning;
-				id.id=meaning.getId;
+			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);//sc.lookup(id,false,true,Lookup.probingWithCapture);
+			if(id.meaning){
+				id.meaning=sc.split(id.meaning);
+				id.id=id.meaning.getId;
 				id.type=id.typeFromMeaning;
 				id.scope_=sc;
 				id.sstate=SemState.completed;
-			}else{
-				sc.error(format("undefined identifier %s",id.name),id.loc);
-				id.sstate=SemState.error;
 			}
 			semanticDone=true;
 		}
@@ -3395,8 +3388,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		be.e1=expressionSemantic(be.e1,context.nestConsumed);
 		propErr(be.e1,be);
 		if(auto id=cast(Identifier)be.e1){
-			if(id.meaning&&be.sstate!=SemState.error){
-				if(!sc.lookup(id,false,false,Lookup.probing))
+			if(id.meaning){
+				if(sc.canInsert(id.meaning.name))
 					sc.unconsume(id.meaning); // TODO: ok?
 			}
 		}
@@ -4331,7 +4324,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		auto id=cast(Identifier)var;
 		if(!id) return false;
 		static if(language==silq){
-			if(auto meaning=sc.lookup(id,false,true,Lookup.probing)){
+			if(auto meaning=sc.lookup(id,false,true,Lookup.probing,null)){
 				if(!sc.dependencyTracked(meaning)) return false;
 				return sc.canForget(meaning);
 			}else return false;
@@ -4397,7 +4390,11 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisting=false){
 	if(!ignoreExisting&&id.meaning) return id.meaning;
 	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-	id.meaning=sc.lookup(id,false,true,lookup);
+	DeadDecl[] failures;
+	id.meaning=sc.lookup(id,false,true,lookup,&failures);
+	if(!id.meaning&&failures.length){
+		// TODO: provide additional information
+	}
 	if(nerr!=sc.handler.nerrors&&id.sstate!=SemState.error){ // TODO: still needed?
 		sc.note("looked up here",id.loc);
 		id.sstate=SemState.error;
@@ -4417,7 +4414,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	assert(id.sstate!=SemState.started);
 	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
-	auto meaning=id.meaning;
 	bool implicitDup=false;
 	Expression dupIfNeeded(Identifier result){
 		static if(language==silq){
@@ -4431,15 +4427,15 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		}
 		return result;
 	}
-	if(!meaning){
+	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc);
 		auto nonLinear=id.meaning&&(!id.byRef&&!id.meaning.isLinear()||id.meaning.isConst);
 		if(id.meaning)
 			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
 		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
-		meaning=lookupMeaning(id,lookup,sc,true);
+		id.meaning=lookupMeaning(id,lookup,sc,true);
 		if(id.sstate==SemState.error) return id;
-		if(!meaning){
+		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
 				if(!id.calledDirectly&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
 					sc.error("special operator must be called directly",id.loc);
@@ -4452,23 +4448,22 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return dupIfNeeded(id);
 		}else{
 			static if(language==silq){
-				if(!id.indexedDirectly&&meaning.sstate!=SemState.error){
-					auto crepls=sc.componentReplacements(meaning);
+				if(!id.indexedDirectly&&id.meaning.sstate!=SemState.error){
+					auto crepls=sc.componentReplacements(id.meaning);
 					if(crepls.length){
-						sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),id.loc);
+						sc.error(format("cannot access aggregate '%s' while its components are being replaced",id.meaning.getName),id.loc);
 						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
 						id.sstate=SemState.error;
 					}
 				}
 			}
 		}
-		id.meaning=meaning;
-	}else if(sc) sc.recordAccess(id,meaning);
-	id.id=meaning.getId;
-	propErr(meaning,id);
+	}else if(sc) sc.recordAccess(id,id.meaning);
+	id.id=id.meaning.getId;
+	propErr(id.meaning,id);
 	id.type=id.typeFromMeaning;
 	if(!id.type&&id.sstate!=SemState.error){
-		auto fd=cast(FunctionDef)meaning;
+		auto fd=cast(FunctionDef)id.meaning;
 		if(fd){
 			fd.ret=bottom;
 			setFtype(fd,true);
@@ -4482,11 +4477,11 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		}
 	}
 	if(id.type){
-		if(!subscribeToTypeUpdates(meaning,sc,id.loc))
+		if(!subscribeToTypeUpdates(id.meaning,sc,id.loc))
 			id.sstate=SemState.error;
 	}
 	if(!isType(id)){
-		if(auto dsc=isInDataScope(meaning.scope_)){
+		if(auto dsc=isInDataScope(id.meaning.scope_)){
 			if(auto decl=sc.getDatDecl()){
 				if(decl is dsc.decl){
 					auto this_=new Identifier("this");
@@ -4527,7 +4522,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	}
 	if(aggrd){
 		if(aggrd.body_.ascope_){
-			auto meaning=aggrd.body_.ascope_.lookupHere(fe.f,false,Lookup.consuming);
+			auto meaning=aggrd.body_.ascope_.lookupHere(fe.f,false,Lookup.consuming,null);
 			if(!meaning) return noMember();
 			fe.f.meaning=meaning;
 			fe.f.id=meaning.getId;
@@ -4572,8 +4567,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
 	if(idx.byRef){
 		if(auto cid=getIdFromIndex(idx)){
-			cid.meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc);
-			if(cid.meaning) cid.meaning=sc.split(cid.meaning);
+			auto meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc);
+			if(meaning) cid.meaning=sc.split(meaning);
 		}
 	}
 	idx.e=expressionSemantic(idx.e,context.nestConst);
@@ -5807,7 +5802,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				ocapture=ocapture.splitFrom;
 			}
 			ocapture.splitInto=ocapture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
-			if(capture.isLinear&&!fd.scope_.lookupHere(capture.name,false,Lookup.probing)){
+			if(capture.isLinear&&fd.scope_.canInsert(capture.name)){
 				assert(ocapture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
 				ocapture.scope_=null;
@@ -6141,6 +6136,7 @@ Expression typeForDecl(Declaration decl){
 		assert(!!fd);
 		return fd.ftype;
 	}
+	if(cast(DeadDecl)decl) return null;
 	return unit; // TODO
 }
 

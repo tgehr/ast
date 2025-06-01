@@ -715,9 +715,8 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	if(fd.reversed) return fd.reversed;
 	auto sc=fd.scope_, ft=fd.ftype;
 	auto asc=sc;
-	foreach(meaning,ids;fd.captures){ // TODO: this is a bit hacky
-		assert(ids.length&&ids.front.meaning is meaning);
-		if(meaning&&meaning.scope_&&!meaning.scope_.lookup(ids.front,true,true,Lookup.probing)){
+	foreach(meaning;fd.capturedDecls){ // TODO: this is a bit hacky
+		if(meaning&&meaning.scope_&&meaning.scope_.canInsert(meaning.name)){
 			auto scope_=meaning.scope_;
 			meaning.scope_=null;
 			meaning.rename=null;
@@ -727,7 +726,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}
 	/+if(fd.name){
 		auto scope_=fd.scope_; // TODO: this is a bit hacky
-		if(!scope_.lookup(fd.name,true,true,Lookup.probing)){
+		if(scope_.canInsert(fd.name)){
 			fd.scope_=null;
 			fd.rename=null;
 			if(!scope_.insert(fd,true))
