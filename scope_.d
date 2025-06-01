@@ -1435,7 +1435,8 @@ class CapturingScope(T): NestedScope{
 						if(!recapture.meaning.isDerivedFrom(capture)){
 							callError();
 							origin.note(format("capture '%s' was modified",capture),capture.loc);
-							// TODO: show location of modification
+							// TODO: show first modification instead?
+							origin.note("last modification is here",recapture.meaning.loc);
 						}
 					}
 					if(recapture.sstate==SemState.error)

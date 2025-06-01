@@ -1278,6 +1278,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	bool converged=false;
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc);
+	int numTries=-1;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		Expression.CopyArgs cargs={preserveSemantic: true};
@@ -1317,6 +1318,12 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		}else sc.merge(false,fesc,state.forgetScope);
 		state.endIteration(sc);
 		converged|=bdy.sstate==SemState.error||state.converged;
+		if(!converged && ++numTries>astopt.inferenceLimit){
+			sc.error("cannot determine types for variables in for loop",fe.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",fe.loc);
+			fe.sstate=SemState.error;
+			break;
+		}
 	}
 	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
@@ -1336,6 +1343,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	bool converged=false;
 	bool condSucceeded=false;
 	Expression ncond=null;
+	int numTries=-1;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		auto prevStateSnapshot=sc.getStateSnapshot();
@@ -1366,6 +1374,13 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 		}else sc.merge(false,bdy.blscope_,state.forgetScope);
 		state.endIteration(sc);
 		converged|=bdy.sstate==SemState.error||state.converged;
+		if(!converged && ++numTries>astopt.inferenceLimit){
+			sc.error("cannot determine types for variables in while loop",we.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",we.loc);
+			we.sstate=SemState.error;
+			break;
+		}
+
 	}
 	state.fixSplitMergeGraph(sc);
 	auto fcond=we.cond.copy(cargs);
@@ -1394,6 +1409,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 	Expression.CopyArgs cargs={preserveSemantic: true};
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc);
+	int numTries=-1;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
@@ -1416,6 +1432,12 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 		}else sc.merge(false,bdy.blscope_,state.forgetScope);
 		state.endIteration(sc);
 		converged|=bdy.sstate==SemState.error||state.converged;
+		if(!converged && ++numTries>astopt.inferenceLimit){
+			sc.error("cannot determine types for variables in repeat loop",re.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",re.loc);
+			re.sstate=SemState.error;
+			break;
+		}
 	}
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
@@ -5749,6 +5771,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(fd.unsealed||fd.numUpdatesPending!=0){
 		fd.sealed=false;
 		fd.unsealed=false;
+		if(++fd.numInferenceRepetitions>astopt.inferenceLimit){ // TODO: make configurable
+			sc.error("unable to determine return type for function",fd.loc);
+			sc.note("you may need to manually annotate the return type, increase the '--inference-limit=...', or write a different function",fd.loc);
+			fd.sstate=SemState.error;
+		}
 	}else{
 		fd.ftypeFinal=true;
 		fd.inferringReturnType=false;

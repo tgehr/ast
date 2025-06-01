@@ -186,6 +186,7 @@ class FunctionDef: Declaration{
 	size_t numUpdatesPending=0;
 	Expression origRret=null;
 	CompoundExp origBody_=null;
+	int numInferenceRepetitions=0;
 	bool unsealed=false; // need to redo analysis of dependent declarations
 	void unseal()in{
 		assert(sealed);
