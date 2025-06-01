@@ -5602,7 +5602,6 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 					expr.constLookup=context.constResult;
 					if(expr.constLookup&&!expr.byRef&&!expr.isLifted(sc)){
 						sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
-						imported!"util.io".writeln(expr," ",expr.byRef);
 						expr.sstate=SemState.error;
 					}
 				}
