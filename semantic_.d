@@ -1814,10 +1814,11 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			id.byRef=true;
 			id.indexedDirectly=true;
 			id.scope_=context.sc;
-			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc);
+			DeadDecl[] failures;
+			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc,false,&failures);
 			propErr(next,e);
 			if(id.meaning){
-				id.meaning=context.sc.split(id.meaning);
+				id.meaning=context.sc.split(id.meaning,id);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
 				if(auto ft=cast(FunTy)id.type){
@@ -1827,8 +1828,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 					else return callSemantic!isPresemantic(ce,context);
 				}
 			}else{
-				context.sc.error(format("undefined identifier %s",id.name),id.loc);
-				id.sstate=SemState.error;
+				undefinedIdentifierError(id,failures,context.sc);
 				e.e.sstate=SemState.error;
 				idx.sstate=SemState.error;
 				return idx;
@@ -2364,8 +2364,8 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	auto id=getIdFromIndex(idx2[0]);
 	assert(!!id&&id.byRef);
-	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);
-	if(id.meaning) id.meaning=sc.split(id.meaning);
+	id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc,false,null);
+	if(id.meaning) id.meaning=sc.split(id.meaning,id);
 	propErr(id,be.e2);
 	be.e2=expressionSemantic(be.e2,econtext);
 	propErr(be.e2,be);
@@ -3254,7 +3254,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								if(!indexed) id.constLookup=false;
 								if(decl.scope_ is sc){
 									sc.unconsume(decl);
-									consumed[decl]=sc.consume(decl);
+									consumed[decl]=sc.consume(decl,id);
 								}else{
 									consumed[decl]=decl;
 									assert(ae.sstate==SemState.error);
@@ -3363,9 +3363,9 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
 			id.byRef=true;
-			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc);//sc.lookup(id,false,true,Lookup.probingWithCapture);
+			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc,false,null);
 			if(id.meaning){
-				id.meaning=sc.split(id.meaning);
+				id.meaning=sc.split(id.meaning,id);
 				id.id=id.meaning.getId;
 				id.type=id.typeFromMeaning;
 				id.scope_=sc;
@@ -3449,7 +3449,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	if(id&&id.meaning&&id.meaning.name){
 		void consume(){
 			id.constLookup=false;
-			sc.consume(id.meaning);
+			sc.consume(id.meaning,id);
 			static if(language==silq)
 				sc.clearConsumed();
 		}
@@ -3492,10 +3492,10 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		sc.resetLocalComponentReplacements();
 		epilogues=[]; // (avoids error messages)
 		if(id&&id.meaning&&id.meaning.getName.startsWith("__"))
-			sc.consume(id.meaning);
+			sc.consume(id.meaning,id);
 		foreach(repl;be.replacements)
 			if(repl.new_.getName.startsWith("__"))
-			   sc.consume(repl.new_);
+				sc.consume(repl.new_,null);
 	}
 	if(be.sstate!=SemState.error) be.sstate=SemState.completed;
 	return lowerIndexReplacement(prologues,epilogues,be,sc);
@@ -4387,19 +4387,25 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	return fe;
 }
 
-Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisting=false){
+Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisting,DeadDecl[]* failures){
 	if(!ignoreExisting&&id.meaning) return id.meaning;
 	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
-	DeadDecl[] failures;
-	id.meaning=sc.lookup(id,false,true,lookup,&failures);
-	if(!id.meaning&&failures.length){
-		// TODO: provide additional information
-	}
+	id.meaning=sc.lookup(id,false,true,lookup,failures);
 	if(nerr!=sc.handler.nerrors&&id.sstate!=SemState.error){ // TODO: still needed?
 		sc.note("looked up here",id.loc);
 		id.sstate=SemState.error;
 	}
 	return id.meaning;
+}
+
+void undefinedIdentifierError(Identifier id,DeadDecl[] failures,Scope sc,bool showError=true){
+	if(showError) sc.error(format("undefined identifier %s",id.name),id.loc);
+	id.sstate=SemState.error;
+	if(!failures.length) return;
+	auto failure=failures[0]; // TODO: consider the other ones too?
+	if(failures.length==1){
+		failure.explain(sc);
+	}
 }
 
 Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
@@ -4428,12 +4434,13 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		return result;
 	}
 	if(!id.meaning){
-		id.meaning=lookupMeaning(id,Lookup.probing,sc);
+		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
 		auto nonLinear=id.meaning&&(!id.byRef&&!id.meaning.isLinear()||id.meaning.isConst);
 		if(id.meaning)
 			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
 		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
-		id.meaning=lookupMeaning(id,lookup,sc,true);
+		DeadDecl[] failures;
+		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
 		if(id.sstate==SemState.error) return id;
 		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
@@ -4443,8 +4450,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				}
 				return r;
 			}
-			sc.error(format("undefined identifier %s",id.name),id.loc);
-			id.sstate=SemState.error;
+			undefinedIdentifierError(id,failures,context.sc);
 			return dupIfNeeded(id);
 		}else{
 			static if(language==silq){
@@ -4567,8 +4573,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
 	if(idx.byRef){
 		if(auto cid=getIdFromIndex(idx)){
-			auto meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc);
-			if(meaning) cid.meaning=sc.split(meaning);
+			auto meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc,false,null);
+			if(meaning) cid.meaning=sc.split(meaning,cid);
 		}
 	}
 	idx.e=expressionSemantic(idx.e,context.nestConst);
@@ -5812,7 +5818,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			auto loc=fd.captures[capture][0].loc;
 			auto id=new Identifier(capture.getName);
 			id.loc=loc;
-			id.meaning=capture.isLinear?fd.fscope_.split(ocapture):ocapture;
+			id.meaning=capture.isLinear?fd.fscope_.split(ocapture,id):ocapture;
 			id.type=id.typeFromMeaning;
 			id.constLookup=false;
 			id.sstate=id.type?SemState.completed:SemState.error;

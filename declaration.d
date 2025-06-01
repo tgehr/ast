@@ -405,18 +405,96 @@ abstract class DeadDecl: Declaration{
 	override DeadDecl copyImpl(CopyArgs cargs){
 		return this; // TODO: ok?
 	}
+	abstract void explain(Scope sc);
 }
 
 class ConsumedDecl: DeadDecl{
 	Identifier use;
-	this(Identifier name){
-		super(name);
+	this(Declaration decl,Identifier use)in{
+		assert(!!use);
+	}do{
+		super(decl.name);
+		this.use=use;
+	}
+	override void explain(Scope sc){
+		import std.format:format;
+		sc.note(format("previous declaration '%s' consumed here",use.meaning),use.loc);
 	}
 }
 
 class DeadMerge: DeadDecl{
 	bool quantumControl;
+	size_t numBranches=2;
 	this(Identifier name){
 		super(name);
+	}
+	override void explain(Scope sc){
+		import std.format:format;
+		import ast.semantic_:typeForDecl;
+		assert(mergedFrom.length!=0);
+		auto deadDecls=mergedFrom.map!(d=>cast(DeadDecl)d).filter!(d=>!!d).array;
+		if(deadDecls.length){
+			foreach(dd;deadDecls)
+				dd.explain(sc); // TODO: good?
+			return;
+		}
+		if(mergedFrom.length==1){
+			sc.note("declared on only one path",mergedFrom[0].loc);
+		}else if(mergedFrom.length<numBranches){
+			foreach(d;mergedFrom){
+				auto type=typeForDecl(d);
+				sc.note("declared on this path",d.loc);
+			}
+			auto d=mergedFrom[$-1];
+			sc.note("however, not declared on all paths",d.loc);
+		}if(mergedFrom.length==numBranches){
+			Expression common=bottom;
+			foreach(d;mergedFrom){
+				auto type=typeForDecl(d);
+				if(type) common=common?joinTypes(common,type):null;
+			}
+			if(quantumControl){
+				bool ok=false;
+				foreach(d;mergedFrom){
+					auto type=typeForDecl(d);
+					if(!type) continue;
+					if(!type.getQuantum){
+						sc.note(format("declaration under quantum 'if' has type '%s' which cannot be promoted to quantum",type),d.loc);
+						if(type.isSubtype(ℤt(true))){
+							sc.note("did you mean to use `int[n]` or `uint[n]`, with explicit bit width `n`?",d.loc);
+						}else if(cast(ArrayTy)type){
+							sc.note("quantum-dependent tuple length not yet supported",d.loc);
+						}else if(cast(FunTy)type){
+							sc.note("quantum-dependent closures not yet supported",d.loc);
+						}
+						ok=true;
+						break; // TODO: good?
+					}
+				}
+				if(ok) return;
+				if(common&&!common.getQuantum){
+					foreach(d;mergedFrom){
+						auto type=typeForDecl(d);
+						sc.note(format("declared with type '%s' here",type),d.loc);
+					}
+					auto d=mergedFrom[$-1];
+					sc.note(format("declarations under quantum 'if' have common type '%s' which cannot be promoted to quantum",common),d.loc);
+					if(cast(ArrayTy)common){
+						sc.note("quantum-dependent tuple length not yet supported",d.loc);
+					}else if(cast(FunTy)type){
+						sc.note("quantum-dependent closures not yet supported",d.loc);
+					}
+					return;
+				}
+			}
+			if(!common){
+				foreach(d;mergedFrom){
+					auto type=typeForDecl(d);
+					sc.note(format("declared with type '%s' here",type),d.loc);
+				}
+				auto d=mergedFrom[$-1];
+				sc.note("declarations on different paths have incompatible types",d.loc);
+			}
+		}
 	}
 }

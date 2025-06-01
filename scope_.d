@@ -350,12 +350,19 @@ abstract class Scope{
 		final void resetConst(){ }
 		final void resetComponentReplacement(){ }
 	}
-	final Declaration consume(Declaration decl){
+	final Declaration consume(Declaration decl,Identifier use){
 		if(decl.name.id !in symtab) return null;
 		if(cast(DeadDecl)decl) return null;
 		Expression type;
-		if(auto r=consumeImpl(decl,decl,type,true)) // TODO: separate splitting and consuming
+		if(auto r=consumeImpl(decl,decl,type,true,use)){ // TODO: separate splitting and consuming
+			if(use){
+				auto cd=new ConsumedDecl(decl,use);
+				cd.sstate=SemState.completed;
+				if(canInsert(cd.name))
+					symtabInsert(cd);
+			}
 			return r;
+		}
 		return null;
 	}
 	final bool canSplit(Declaration decl)in{
@@ -366,13 +373,13 @@ abstract class Scope{
 		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
 		return true;
 	}
-	final Declaration split(Declaration decl)in{
+	final Declaration split(Declaration decl,Identifier use)in{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return decl;
 		if(!canSplit(decl)) return decl;
 		Expression type;
-		auto result=consume(decl);
+		auto result=consume(decl,use);
 		if(!result) return decl;
 		unconsume(result);
 		return result;
@@ -446,7 +453,7 @@ abstract class Scope{
 		}
 	}
 
-	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
+	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
@@ -536,7 +543,7 @@ abstract class Scope{
 				}
 				if(doConsume&&meaning.scope_){
 					assert(!meaning.isConst);
-					if(auto nmeaning=consume(meaning))
+					if(auto nmeaning=consume(meaning,id))
 						meaning=nmeaning;
 				}
 			}
@@ -603,12 +610,12 @@ abstract class Scope{
 						error(format("cannot forget 'const' variable '%s'",d), d.loc);
 						note("variable was made 'const' here", read.loc);
 						d.sstate=SemState.error;
+						errors=true;
 					}
-					errors=true;
 				}
 				if(!canSplit(d)) continue;
 				if(d.scope_.getFunction() !is getFunction()) continue;
-				d=split(d);
+				d=split(d,null);
 				if(d.scope_ !is this || d.sstate==SemState.error || !canForgetAppend(loc,d)){
 					import ast.semantic_: unrealizable;
 					if(d.sstate!=SemState.error){
@@ -620,10 +627,10 @@ abstract class Scope{
 							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 						}
 						d.sstate=SemState.error;
+						errors=true;
 					}
-					errors=true;
 				}else{
-					consume(d);
+					consume(d,null);
 					clearConsumed();
 				}
 			}
@@ -643,7 +650,7 @@ abstract class Scope{
 		foreach(n,d;symtab.dup){
 			if(d.isLinear()||d.scope_ is this){
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
-				consume(d);
+				consume(d,null);
 				static if(language==silq){
 					clearConsumed();
 				}
@@ -779,6 +786,8 @@ abstract class Scope{
 			if(auto dm=sym.name.id in deadMerges)
 				return *dm;
 			auto dm=new DeadMerge(sym.name);
+			dm.quantumControl=quantumControl;
+			dm.numBranches=scopes.length;
 			dm.loc=sym.loc;
 			dm.sstate=SemState.completed;
 			deadMerges[sym.name.id]=dm;
@@ -802,7 +811,7 @@ abstract class Scope{
 				}
 			}
 			void splitSym(){
-				auto nsym=scopes[0].split(sym);
+				auto nsym=scopes[0].split(sym,null);
 				if(nsym is sym) return;
 				symtab.remove(sym.name.id);
 				if(sym.rename) rnsymtab.remove(sym.rename.id);
@@ -831,11 +840,12 @@ abstract class Scope{
 				needMerge=true;
 			}
 			if(cast(DeadDecl)sym){
-				removeSym();
+				removeOSym(this,sym);
 				continue;
 			}
 			foreach(sc;scopes[1..$]){
-				if(sym.name.id !in sc.symtab){
+				auto osym=sc.symtab.get(sym.name.id,null);
+				if(!osym||cast(DeadDecl)osym){
 					static if(language==silq){
 						splitSym();
 						if(!scopes[0].canForgetAppend(sym)){
@@ -845,12 +855,6 @@ abstract class Scope{
 					}
 					removeSym();
 				}else{
-					auto osym=sc.symtab[sym.name.id];
-					if(cast(DeadDecl)osym){
-						removeSym();
-						removeOSym(sc,osym);
-						continue;
-					}
 					if(sym!=osym){
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
@@ -863,7 +867,7 @@ abstract class Scope{
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								static if(language==silq){
-									splitSym(), sc.split(osym);
+									splitSym(), sc.split(osym,null);
 									if(sym.sstate==SemState.completed&&osym.sstate==SemState.completed){
 										if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
 											error(format("variable '%s' is not consumed", sym.getName), sym.loc);
@@ -910,7 +914,7 @@ abstract class Scope{
 						continue;
 					}
 					if(sym.name.id !in symtab){
-						sym=sc.split(sym);
+						sym=sc.split(sym,null);
 						if(!sc.canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 							errors=true;
@@ -1260,23 +1264,23 @@ class NestedScope: Scope{
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
 
-	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove)in{
+	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
 		assert(odecl is ndecl||!remove);
 	}do{
-		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove);
+		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use);
 		if(symtab.get(odecl.name.id,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=Dependency(true);
 		if(remove){
 			assert(odecl is ndecl);
-			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true)){
+			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true,use)){
 				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
 				foreach(sc;parent.activeNestedScopes){
 					if(this is sc) continue;
-					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false)){
+					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
 								if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
@@ -1328,7 +1332,7 @@ class NestedScope: Scope{
 				replaceDecl(odecl,result);
 			return result;
 		}
-		return remove?consume(result):result;
+		return remove?consume(result,use):result;
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
@@ -1396,7 +1400,8 @@ class CapturingScope(T): NestedScope{
 					recapture.loc=id.loc;
 					import ast.semantic_:lookupMeaning,typeForDecl;
 					bool isConsuming=capture.scope_.isNestedIn(this);
-					lookupMeaning(recapture,isConsuming?Lookup.consuming:Lookup.constant,origin);
+					DeadDecl[] failures;
+					lookupMeaning(recapture,isConsuming?Lookup.consuming:Lookup.constant,origin,false,&failures);
 					bool callErrorShown=false;
 					void callError(){
 						if(callErrorShown) return;
@@ -1407,6 +1412,10 @@ class CapturingScope(T): NestedScope{
 					if(!recapture.meaning){
 						callError();
 						origin.note(format("capture '%s' is missing",capture.name),capture.loc);
+						if(failures.length){
+							if(auto cd=cast(ConsumedDecl)failures[0]) cd.explain(origin);
+							else origin.note("captures cannot be modified on a path leading to a recursive call",id.loc);
+						}
 						recapture.sstate=SemState.error;
 					}
 					recapture.type=recapture.typeFromMeaning;
@@ -1491,7 +1500,7 @@ class CapturingScope(T): NestedScope{
 		if(!id.lazyCapture){
 			if(!isConstLookup&&(meaning.isLinear()||id.byRef)){
 				symtabInsert(meaning);
-				meaning=consume(meaning);
+				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this);
 			}
 			if(id.sstate!=SemState.error){
