@@ -1434,7 +1434,8 @@ class CapturingScope(T): NestedScope{
 						}+/
 						if(!recapture.meaning.isDerivedFrom(capture)){
 							callError();
-							origin.note(format("capture '%s' was modified",capture.name),capture.loc);
+							origin.note(format("capture '%s' was modified",capture),capture.loc);
+							// TODO: show location of modification
 						}
 					}
 					if(recapture.sstate==SemState.error)
