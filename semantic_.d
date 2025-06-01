@@ -4404,7 +4404,7 @@ void undefinedIdentifierError(Identifier id,DeadDecl[] failures,Scope sc,bool sh
 	if(!failures.length) return;
 	auto failure=failures[0]; // TODO: consider the other ones too?
 	if(failures.length==1){
-		failure.explain(sc);
+		failure.explain("previous declaration",sc);
 	}
 }
 

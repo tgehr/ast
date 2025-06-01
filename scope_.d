@@ -1411,9 +1411,9 @@ class CapturingScope(T): NestedScope{
 					}
 					if(!recapture.meaning){
 						callError();
-						origin.note(format("capture '%s' is missing",capture.name),capture.loc);
+						origin.note(format("capture '%s' is missing",capture),capture.loc);
 						if(failures.length){
-							if(auto cd=cast(ConsumedDecl)failures[0]) cd.explain(origin);
+							if(auto cd=cast(ConsumedDecl)failures[0]) cd.explain("capture",origin);
 							else origin.note("captures cannot be modified on a path leading to a recursive call",id.loc);
 						}
 						recapture.sstate=SemState.error;

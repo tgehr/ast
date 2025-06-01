@@ -405,7 +405,7 @@ abstract class DeadDecl: Declaration{
 	override DeadDecl copyImpl(CopyArgs cargs){
 		return this; // TODO: ok?
 	}
-	abstract void explain(Scope sc);
+	abstract void explain(string kind,Scope sc);
 }
 
 class ConsumedDecl: DeadDecl{
@@ -416,9 +416,9 @@ class ConsumedDecl: DeadDecl{
 		super(decl.name);
 		this.use=use;
 	}
-	override void explain(Scope sc){
+	override void explain(string kind,Scope sc){
 		import std.format:format;
-		sc.note(format("previous declaration '%s' consumed here",use.meaning),use.loc);
+		sc.note(format("%s '%s' consumed here",kind,use.meaning),use.loc);
 	}
 }
 
@@ -428,14 +428,14 @@ class DeadMerge: DeadDecl{
 	this(Identifier name){
 		super(name);
 	}
-	override void explain(Scope sc){
+	override void explain(string kind,Scope sc){
 		import std.format:format;
 		import ast.semantic_:typeForDecl;
 		assert(mergedFrom.length!=0);
 		auto deadDecls=mergedFrom.map!(d=>cast(DeadDecl)d).filter!(d=>!!d).array;
 		if(deadDecls.length){
 			foreach(dd;deadDecls)
-				dd.explain(sc); // TODO: good?
+				dd.explain(kind,sc); // TODO: good?
 			return;
 		}
 		if(mergedFrom.length==1){
