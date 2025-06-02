@@ -7,6 +7,10 @@ import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 import util.tuple:Q=Tuple,q=tuple;
 
+bool isEmptyTupleTy(Expression ty){
+	return isSubtype(ty,unit)&&isSubtype(unit,ty); // TODO: improve?
+}
+
 Expression constantExp(size_t l){
 	Token tok;
 	tok.type=Tok!"0";
@@ -125,7 +129,7 @@ ReverseCallRewriter reverseCallRewriter(FunTy ft_,Location loc){
 		constType=constTuple?tupleTy(constIndices.map!(i=>ft.argTy(i)).array):ft.argTy(constIndices.front);
 		movedType=movedTuple?tupleTy(movedIndices.map!(i=>ft.argTy(i)).array):ft.argTy(movedIndices.front);
 		returnType=ft.cod;
-		returnTuple=returnType==unit;
+		returnTuple=isEmptyTupleTy(returnType);
 		return r;
 	}
 }
@@ -767,7 +771,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		isTuple=false;
 		isConst=[false];
 		pnames=[rpname];
-	}else if(simplify&&r.returnType==unit){
+	}else if(simplify&&isEmptyTupleTy(r.returnType)){
 		dom=r.constType;
 		cod=r.movedType;
 		isTuple=r.constTuple;
@@ -820,7 +824,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		return param;
 	}).array;
 	Expression retRhs;
-	if(simplify&&r.returnType==unit) retRhs=new TupleExp([]);
+	if(simplify&&isEmptyTupleTy(r.returnType)) retRhs=new TupleExp([]);
 	else retRhs=new Identifier(rpname);
 	retRhs.loc=ret.loc;
 	retRhs.type=r.returnType;
@@ -837,8 +841,8 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	if(fd.annotation>=Annotation.qfree && r.movedIndices.empty){
 		Expression argExp;
 		bool needCall=true;
-		if(r.constType==unit) argExp=new TupleExp([]);
-		else if(simplify&&r.returnType==unit){
+		if(isEmptyTupleTy(r.constType)) argExp=new TupleExp([]);
+		else if(simplify&&isEmptyTupleTy(r.returnType)){
 			needCall=false;
 		}else{
 			assert(cpname);
@@ -855,10 +859,10 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 			call.loc=fd.loc;
 		}
 		auto fe=New!ForgetExp(retRhs,call);
-		fe.loc=argExp.loc;
+		fe.loc=fd.loc;
 		body_.s=[fe];
 	}else{
-		bool retDefNecessary=!(r.returnType==unit&&cast(TupleExp)ret.e||retDefReplaced);
+		bool retDefNecessary=!(isEmptyTupleTy(r.returnType)&&cast(TupleExp)ret.e||retDefReplaced);
 		auto retDef=retDefNecessary?lowerDefine!flags(ret.e,retRhs,ret.loc,result.fscope_,unchecked):null;
 		auto movedNames=r.movedIndices.map!(i=>fd.params[i].name.name).array;
 		Expression[] movedTypes;
@@ -869,7 +873,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		}else movedTypes=[r.movedType];
 		auto makeMoved(size_t i){
 			Expression r;
-			if(movedTypes[i]==unit) r=new TupleExp([]); // TODO: use last-use analysis instead
+			if(isEmptyTupleTy(movedTypes[i])) r=new TupleExp([]); // TODO: use last-use analysis instead
 			else r=new Identifier(movedNames[i]);
 			r.loc=ret.loc;
 			r.type=movedTypes[i];
