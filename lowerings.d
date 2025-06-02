@@ -34,7 +34,7 @@ string getSuffix(Expression type){
 	if(auto intTy=isFixedIntTy(type)){
 		return intTy.isSigned ? type.isClassical()?"S":"s" : type.isClassical?"U":"u";
 	}
-	final switch(whichNumeric(type))with(NumericType){
+	final switch(isNumericTy(type))with(NumericType){
 		case none: enforce(0, text("unsupported lowering type: ",type)); assert(0);
 		case Bool: return type.isClassical()?"B":"b";
 		case ℕt: return type.isClassical()?"N":"n";
@@ -61,10 +61,16 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 	if(types.length==1) return getSuffix(types[0].eval());
 	if(types.length==2){
 		auto t0=types[0].eval(),t1=types[1].eval();
+		auto num0=isNumericTy(t0), num1=isNumericTy(t1);
 		final switch(behavior)with(OperatorBehavior){
-			case default_,comparison,mul,div:
-				if(isNumeric(t0)&&isNumeric(t1)&&(behavior==default_?!(cast(BoolTy)t0&&cast(BoolTy)t1):t0!=Bool(false)&&t1!=Bool(false))){
-					return getSuffix(whichNumeric(t0)>whichNumeric(t1)?t0:t1);
+			case default_:
+				if(num0 && num1 && !(num0 == NumericType.Bool && num1 == NumericType.Bool)){
+					return getSuffix(num0>num1?t0:t1);
+				}
+				break;
+			case comparison, mul, div:
+				if(num0 && num1 && t0 != Bool(false) && t1 != Bool(false)){
+					return getSuffix(num0>num1?t0:t1);
 				}
 				break;
 			case nsub:
