@@ -129,6 +129,13 @@ AssignOp getAssignOp(string op) pure {
 	assert(0);
 }
 
+enum StmtResult {
+	Diverges = 0, // abort or infinite loop
+	MayPass = 1,
+	MayReturn = 2,
+	PassOrReturn = 3,
+}
+
 class Checker {
 	this(ast_scope.NestedScope nscope, Checker parent = null) {
 		this.nscope = nscope;
@@ -183,7 +190,7 @@ class Checker {
 	}
 
 	// Check statement, return true iff it definitely returns
-	bool visStmt(ast_exp.Expression e) {
+	StmtResult visStmt(ast_exp.Expression e) {
 		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
 		static foreach(op; assignOps) {
 			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
@@ -210,8 +217,8 @@ class Checker {
 		assert(e.blscope_ is nscope);
 		assert(e.s.length > 0);
 		foreach(stmt; e.s[0..$-1]) {
-			bool r = visStmt(stmt);
-			assert(!cast(ast_exp.ReturnExp)stmt, "early return in compound expression ("~causeType~")"); // TODO: check is incomplete
+			StmtResult r = visStmt(stmt);
+			assert(!(r & StmtResult.MayReturn), "early return in compound expression ("~causeType~")");
 		}
 		assert(!cast(ast_exp.ReturnExp)e.s[$-1], "early return in compound expression ("~causeType~")"); // TODO: check is incomplete
 		if(!ast_sem.definitelyReturns(e.s[$-1])){
@@ -234,7 +241,7 @@ class Checker {
 		}
 	}
 
-	bool implStmt(ast_exp.CompoundExp e) {
+	StmtResult implStmt(ast_exp.CompoundExp e) {
 		if(!e.blscope_) {
 			return visCompoundStmt(e);
 		}
@@ -249,9 +256,9 @@ class Checker {
 			sc.defineVar(decl, "splitVars", e);
 		}
 
-		bool r = sc.visCompoundStmt(e);
+		StmtResult r = sc.visCompoundStmt(e);
 
-		if(!r) {
+		if(r & StmtResult.MayPass) {
 			foreach(decl; sc.nscope.mergedVars) {
 				assert(decl.scope_ is sc.nscope);
 				auto outer = decl.mergedInto;
@@ -266,10 +273,12 @@ class Checker {
 		return r;
 	}
 
-	bool visCompoundStmt(ast_exp.CompoundExp e) {
-		bool r = false;
+	StmtResult visCompoundStmt(ast_exp.CompoundExp e) {
+		StmtResult r = StmtResult.MayPass;
 		foreach(i, sube; e.s) {
-			r |= visStmt(sube);
+			StmtResult sub = visStmt(sube);
+			if(sub & StmtResult.MayReturn) r |= StmtResult.MayReturn;
+			if(!(sub & StmtResult.MayPass)) return r & ~StmtResult.MayPass;
 		}
 		if(e.blscope_) {
 			foreach(decl; e.blscope_.forgottenVars) {
@@ -279,20 +288,20 @@ class Checker {
 		return r;
 	}
 
-	bool implStmt(ast_exp.FunctionDef e) {
+	StmtResult implStmt(ast_exp.FunctionDef e) {
 		getFunc(e, false, e);
 		defineVar(e, "function definition", e);
-		return false;
+		return StmtResult.MayPass;
 	}
 
-	bool implStmt(ast_exp.CommaExp e) {
-		if(visStmt(e.e1)) {
+	StmtResult implStmt(ast_exp.CommaExp e) {
+		if(visStmt(e.e1) & StmtResult.MayReturn) {
 			assert(0, "return in lhs of CommaExp");
 		}
 		return visStmt(e.e2);
 	}
 
-	bool implStmt(ast_exp.ReturnExp e) {
+	StmtResult implStmt(ast_exp.ReturnExp e) {
 		expectMoved(e.e, "return value");
 		visExpr(e.e);
 		auto fd=nscope.getFunction();
@@ -303,96 +312,104 @@ class Checker {
 			getVar(decl, false, "forgottenVars", e);
 		}
 		checkEmpty();
-		return true;
+		return StmtResult.MayReturn;
 	}
 
-	bool implStmt(ast_exp.AssertExp e) {
+	StmtResult implStmt(ast_exp.AssertExp e) {
 		expectConst(e.e, "assert condition");
 		visExpr(e.e);
-		return ast_sem.isFalse(e.e);
+		if(ast_sem.isFalse(e.e)) return StmtResult.Diverges;
+		return StmtResult.MayPass;
 	}
 
-	bool implStmt(ast_exp.IteExp e) {
+	StmtResult implStmt(ast_exp.IteExp e) {
 		visExpr(e.cond);
 
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
 		visExpr(e.type);
 
-		bool retTrue = ifTrue.visCompoundStmt(e.then);
-		bool retFalse = ifFalse.visCompoundStmt(e.othw);
+		StmtResult retTrue = ifTrue.visCompoundStmt(e.then);
+		StmtResult retFalse = ifFalse.visCompoundStmt(e.othw);
 
-		if(retTrue) {
+		if(!(retTrue & StmtResult.MayPass)) {
 			assert(!ifTrue.nscope.mergedVars);
 		}
-		if(retFalse) {
+		if(!(retFalse & StmtResult.MayPass)) {
 			assert(!ifFalse.nscope.mergedVars);
 		}
-		if(retTrue && !retFalse) {
+		if(!(retTrue & StmtResult.MayPass) && (retFalse & StmtResult.MayPass)) {
 			visMerge(ifFalse, e);
 		}
-		if(!retTrue && retFalse) {
+		if((retTrue & StmtResult.MayPass) && !(retFalse & StmtResult.MayPass)) {
 			visMerge(ifTrue, e);
 		}
-		if(!retTrue && !retFalse) {
+		if((retTrue & StmtResult.MayPass) && (retFalse & StmtResult.MayPass)) {
 			visMerge(ifTrue, ifFalse, e);
 		}
-		if(!retTrue) ifTrue.checkEmpty();
-		if(!retFalse) ifFalse.checkEmpty();
-		return retTrue && retFalse;
+		if(retTrue & StmtResult.MayPass) ifTrue.checkEmpty();
+		if(retFalse & StmtResult.MayPass) ifFalse.checkEmpty();
+		return retTrue | retFalse;
 	}
 
-	bool implStmt(ast_exp.WithExp e) {
+	StmtResult implStmt(ast_exp.WithExp e) {
 		Checker trans, bdy, itrans;
 
 		if(e.trans.blscope_) {
 			visSplit(trans, e.trans.blscope_, e);
-			auto retTrans = trans.visCompoundStmt(e.trans);
-			assert(!retTrans);
-			visMerge(trans, e);
 		} else {
-			auto retTrans = visCompoundStmt(e.trans);
-			assert(!retTrans);
+			trans = this;
+		}
+		auto retTrans = trans.visCompoundStmt(e.trans);
+		assert(!(retTrans & StmtResult.MayReturn));
+		if(!(retTrans & StmtResult.MayPass)) return retTrans;
+		if(trans !is this) {
+			visMerge(trans, e);
 		}
 
 		if(e.bdy.blscope_) {
 			visSplit(bdy, e.bdy.blscope_, e);
-			auto retBdy = bdy.visCompoundStmt(e.bdy);
-			assert(!retBdy);
-			visMerge(bdy, e);
 		} else {
-			auto retBdy = visCompoundStmt(e.bdy);
-			assert(!retBdy);
+			bdy = this;
+		}
+		auto retBdy = bdy.visCompoundStmt(e.bdy);
+		assert(!(retBdy & StmtResult.MayReturn));
+		if(!(retBdy & StmtResult.MayPass)) return retBdy;
+		if(bdy !is this) {
+			visMerge(bdy, e);
 		}
 
 		assert(!!e.itrans);
 		if(e.itrans.blscope_) {
 			visSplit(itrans, e.itrans.blscope_, e);
-			auto retItrans = itrans.visCompoundStmt(e.itrans);
-			assert(!retItrans);
-			visMerge(itrans, e);
 		} else {
-			auto retItrans = visCompoundStmt(e.itrans);
-			assert(!retItrans);
+			itrans = this;
+		}
+		auto retItrans = itrans.visCompoundStmt(e.itrans);
+		assert(!(retItrans & StmtResult.MayReturn));
+		if(itrans !is this) {
+			visMerge(itrans, e);
 		}
 
-		return false;
+		return retItrans;
 	}
 
-	bool implStmt(ast_exp.WhileExp e) {
+	StmtResult implStmt(ast_exp.WhileExp e) {
 		expectConst(e.cond, "while condition");
-		visLoop(e.bdy, null, e.cond);
-		return ast_sem.isTrue(e.cond);
+		auto retBdy = visLoop(e.bdy, null, e.cond);
+		if(ast_sem.isTrue(e.cond)) return StmtResult.Diverges;
+		return retBdy;
 	}
 
-	bool implStmt(ast_exp.RepeatExp e) {
+	StmtResult implStmt(ast_exp.RepeatExp e) {
 		expectConst(e.num, "repeat count");
 		visExpr(e.num);
 		auto retBdy = visLoop(e.bdy, null);
-		return retBdy && ast_sem.isPositive(e.num);
+		if(!ast_sem.isPositive(e.num)) retBdy |= StmtResult.MayPass;
+		return retBdy;
 	}
 
-	bool implStmt(ast_exp.ForExp e) {
+	StmtResult implStmt(ast_exp.ForExp e) {
 		expectConst(e.left, "for-left");
 		visExpr(e.left);
 		expectConst(e.right, "for-right");
@@ -401,11 +418,11 @@ class Checker {
 			expectConst(e.step, "for-step");
 			visExpr(e.step);
 		}
-		visLoop(e.bdy, e.var);
-		return false;
+		auto retBdy = visLoop(e.bdy, e.var);
+		return retBdy | StmtResult.MayPass;
 	}
 
-	bool visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar, ast_exp.Expression condition = null) { // (result: loop body definitely returns)
+	StmtResult visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar, ast_exp.Expression condition = null) { // (result: loop body definitely returns)
 		auto sc = bdy.blscope_;
 		assert(sc.parent is nscope);
 
@@ -437,7 +454,8 @@ class Checker {
 			sub.visExpr(condition); // TODO: treat `while cond { ... }` like `if cond { do { ... } until cond; }` instead.
 		}
 
-		bool r = sub.visCompoundStmt(bdy);
+		StmtResult r = sub.visCompoundStmt(bdy);
+		if(!(r & StmtResult.MayPass)) return r;
 
 		foreach(inner1; sc.mergedVars) {
 			auto id = inner1.getId;
@@ -458,7 +476,7 @@ class Checker {
 		return r;
 	}
 
-	bool implStmt(ast_exp.BinaryExp!(Tok!":=") e){
+	StmtResult implStmt(ast_exp.BinaryExp!(Tok!":=") e){
 		auto lhs = e.e1;
 		auto rhs = e.e2;
 		if(auto idx = cast(ast_exp.IndexExp)rhs) {
@@ -469,7 +487,8 @@ class Checker {
 		}
 		visExpr(rhs);
 		visLhs(lhs);
-		return ast_ty.isEmpty(e.type);
+		if(ast_ty.isEmpty(e.type)) return StmtResult.Diverges;
+		return StmtResult.MayPass;
 	}
 
 	void visLhs(ast_exp.Expression e) {
@@ -535,7 +554,7 @@ class Checker {
 	}
 
 	static foreach(op;assignOps)
-	bool implStmt(ast_exp.BinaryExp!(Tok!(op.aop)) e) {
+	StmtResult implStmt(ast_exp.BinaryExp!(Tok!(op.aop)) e) {
 		static immutable string binop = op.binop;
 
 		visExpr(e.e2);
@@ -555,13 +574,14 @@ class Checker {
 			visLhs(e.e1);
 			strictScope = true;
 		}
-		return false;
+		return StmtResult.MayPass;
 	}
 
-	bool implStmt(ast_exp.Expression e) {
+	StmtResult implStmt(ast_exp.Expression e) {
 		expectConst(e, "expression statement");
 		visExpr(e);
-		return ast_ty.isEmpty(e.type);
+		if(ast_ty.isEmpty(e.type)) return StmtResult.Diverges;
+		return StmtResult.MayPass;
 	}
 
 	void implTy(ast_ty.VectorTy e) {
@@ -1046,7 +1066,7 @@ void checkFunction(ast_decl.FunctionDef fd) {
 	}
 	sc.visExpr(fd.ret);
 	if(fd.body_) {
-		bool r = sc.visStmt(fd.body_);
-		assert(r, format("ERROR: Function doesn't definitely return: << %s >>", fd));
+		StmtResult r = sc.visStmt(fd.body_);
+		assert(!(r & StmtResult.MayPass), format("ERROR: Function doesn't definitely return: << %s >>", fd));
 	}
 }

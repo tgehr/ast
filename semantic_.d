@@ -938,8 +938,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto loopVarId=loop.var.id;
 		assert(loop.left.type && loop.right.type);
 		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
-		if(loopVarType is Bool(true)) loopVarType = ℕt(true);
-		auto loopParams=[q(loopVarId,loopVarType,true,loop.var.loc)];
+		auto loopParamType = loopVarType;
+		if(loopParamType is Bool(true)) loopParamType = ℕt(true);
+		auto loopParams=[q(loopVarId,loopParamType,true,loop.var.loc)];
 	}else static if(is(T==RepeatExp)){
 		auto loopVarId=freshName();
 		Expression loopVarType=ℕt(true);
