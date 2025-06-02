@@ -159,7 +159,7 @@ class Checker {
 			if(cast(ast_ty.QNumericTy) e) {
 				return;
 			}
-			if(cast(ast_ty.BoolTy) e || cast(ast_ty.ℕTy) e || cast(ast_ty.ℤTy) e || cast(ast_ty.ℚTy) e || cast(ast_ty.ℝTy) e || cast(ast_ty.ℂTy) e) {
+			if(cast(ast_ty.NumericTy) e) {
 				return;
 			}
 			if(cast(ast_ty.BottomTy) e) {
@@ -773,7 +773,7 @@ class Checker {
 
 	void implExpr(ast_exp.IteExp e) {
 		expectConst(e.cond, "if-condition");
-		assert(cast(ast_ty.BoolTy) e.cond.type);
+		assert(ast_ty.isNumericTy(e.cond.type) == ast_ty.NumericType.Bool);
 		visExpr(e.cond);
 
 		if(e.then.blscope_ is null && e.othw.blscope_ is null) {
@@ -936,8 +936,8 @@ class Checker {
 		expectConst(e.e2, "BinaryExp!\""~op~"\" RHS");
 		import std.algorithm : canFind;
 		static if(cmpops.canFind(op)) {
-			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumeric(e.e1.type))
-			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumeric(e.e2.type)))
+			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumericTy(e.e1.type))
+			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumericTy(e.e2.type)))
 				if(visLoweringExpr(e)) return;
 		}else if(visLoweringExpr(e)) return;
 		visExpr(e.e1);

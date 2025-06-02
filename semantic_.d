@@ -938,7 +938,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto loopVarId=loop.var.id;
 		assert(loop.left.type && loop.right.type);
 		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
-		auto loopParams=[q(loopVarId,cast(BoolTy)loopVarType?ℕt(true):loopVarType,true,loop.var.loc)];
+		if(loopVarType is Bool(true)) loopVarType = ℕt(true);
+		auto loopParams=[q(loopVarId,loopVarType,true,loop.var.loc)];
 	}else static if(is(T==RepeatExp)){
 		auto loopVarId=freshName();
 		Expression loopVarType=ℕt(true);
@@ -3117,7 +3118,7 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 			return arrayTy(nnext);
 		}
 		if(isFixedIntTy(idx.e.type)){
-			if(!cast(BoolTy)rhsty) return null;
+			if(isNumericTy(rhsty) != NumericType.Bool) return null;
 			auto rtype=idx.e.type;
 			if(!rhsty.isClassical||!idx.a.type.isClassical) rtype=rtype.getQuantum();
 			return rtype;
@@ -5003,7 +5004,7 @@ Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
 	if(int2 && !int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
 	if(int1 || int2)
 		return joinTypes(t1,t2);
-	if(!(isNumeric(t1)||isEmpty(t1))||!(isNumeric(t2)||isEmpty(t2))) return null;
+	if(!(isNumericTy(t1)||isEmpty(t1))||!(isNumericTy(t2)||isEmpty(t2))) return null;
 	auto r=joinTypes(t1,t2);
 	if((isEmpty(t1)||isEmpty(t2))&&isSubtype(r,ℤt(false))) return bottom; // 1+(_:⊥) may become 1+(0:int[n])
 	static if(!preserveBool){
@@ -5025,19 +5026,19 @@ Expression divisionType(Expression t1, Expression t2){
 Expression iDivType(Expression t1, Expression t2){
 	auto r=arithmeticType!true(t1,t2);
 	if((isEmpty(t1)||isEmpty(t2))&&!isFixedIntTy(r)) return bottom;
-	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
-	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
-	if(isFixed1&&isNumeric2&&!isSubtype(t2,ℤt(false))) return null; // TODO: int/uint div ℚ/ℝ seems useful
-	if(isFixed2&&isNumeric1&&!isSubtype(t1,ℤt(false))) return null; // TODO?
-	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
-	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
+	auto isFixed1=isFixedIntTy(t1), num1=isNumericTy(t1);
+	auto isFixed2=isFixedIntTy(t2), num2=isNumericTy(t2);
+	if(isFixed1&&num2&&!isSubtype(t2,ℤt(false))) return null; // TODO: int/uint div ℚ/ℝ seems useful
+	if(isFixed2&&num1&&!isSubtype(t1,ℤt(false))) return null; // TODO?
+	auto isSigned1=isFixed1&&isFixed1.isSigned||num1&&!isSubtype(t1,ℕt(t1.isClassical()));
+	auto isSigned2=isFixed2&&isFixed2.isSigned||num2&&!isSubtype(t2,ℕt(t2.isClassical()));
 	if(isFixed2&&isSigned1&&!isSigned2) return null;
 	if(isFixedIntTy(r)) return r;
 	if(isFixed1||isFixed2) return null;
-	if(cast(ℂTy)t1||cast(ℂTy)t2) return null;
-	bool classical=t1.isClassical()&&t2.isClassical();
-	if(cast(BoolTy)t1&&cast(BoolTy)t2) return Bool(classical);
-	return (cast(BoolTy)t1||cast(ℕTy)t1)&&(cast(BoolTy)t2||cast(ℕTy)t2)?ℕt(classical):ℤt(classical);
+	if(!num1 || !num2) return null;
+	if(num1 == NumericType.ℂ || num2 == NumericType.ℂ) return null;
+	bool classical = t1.isClassical() && t2.isClassical();
+	return numericTy(min(max(num1, num2), NumericType.ℤt), classical);
 }
 Expression nSubType(Expression t1, Expression t2){
 	if(!isEmpty(t1)&&!isEmpty(t2)){
@@ -5068,8 +5069,8 @@ Expression moduloType(Expression t1, Expression t2){
 	}
 	auto r=arithmeticType!true(t1,t2);
 	if(!r) return null;
-	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumeric(t1);
-	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumeric(t2);
+	auto isFixed1=isFixedIntTy(t1), isNumeric1=isNumericTy(t1);
+	auto isFixed2=isFixedIntTy(t2), isNumeric2=isNumericTy(t2);
 	auto isSigned1=isFixed1&&isFixed1.isSigned||isNumeric1&&!isSubtype(t1,ℕt(t1.isClassical()));
 	auto isSigned2=isFixed2&&isFixed2.isSigned||isNumeric2&&!isSubtype(t2,ℕt(t2.isClassical()));
 	if(isFixed1&&!isSigned1&&isSigned2) return null;
@@ -5079,36 +5080,48 @@ Expression moduloType(Expression t1, Expression t2){
 }
 Expression powerType(Expression t1, Expression t2){
 	bool classical=t1.isClassical()&&t2.isClassical();
-	if(!(isNumeric(t1)||isEmpty(t1))||!(isNumeric(t2)||isEmpty(t2))) return null;
+	auto num1 = isNumericTy(t1);
+	auto num2 = isNumericTy(t2);
+	if(!(num1||isEmpty(t1))||!(num2||isEmpty(t2))) return null;
 	if(isEmpty(t1)) return bottom;
-	if(cast(BoolTy)t1&&isSubtype(t2,ℕt(classical))) return Bool(classical);
-	if(cast(ℕTy)t1&&isSubtype(t2,ℕt(classical))) return ℕt(classical);
-	if(cast(ℤTy)t1&&isSubtype(t2,ℕt(classical))) return ℤt(classical);
-	if(cast(ℂTy)t1||cast(ℂTy)t2) return ℂ(classical);
-	if(util.among(t1,Bool(true),ℕt(true),ℤt(true),ℚt(true))&&isSubtype(t2,ℤt(false))) return ℚt(t2.isClassical);
-	if(util.among(t1,Bool(false),ℕt(false),ℤt(false),ℚt(false))&&isSubtype(t2,ℤt(false))) return ℚt(false);
+	if(num1 == NumericType.Bool && num2 && num2 <= NumericType.ℕt) return Bool(classical);
+	if(num1 == NumericType.ℕt && num2 && num2 <= NumericType.ℕt) return ℕt(classical);
+	if(num1 == NumericType.ℤt && num2 && num2 <= NumericType.ℕt) return ℤt(classical);
+	if(num1 == NumericType.ℂ || num2 == NumericType.ℂ) return ℂ(classical);
+	if(num1 && num2 && num1 <= NumericType.ℚt && num2 <= NumericType.ℤt) return ℚt(classical);
 	return ℝ(classical); // TODO: good?
 }
 Expression minusType(Expression t){
 	if(isFixedIntTy(t)) return t;
-	if(!(isNumeric(t)||isEmpty(t))) return null;
-	if(cast(BoolTy)t||cast(ℕTy)t) return ℤt(t.isClassical());
-	return t;
+	if(isEmpty(t)) return t;
+	auto num = isNumericTy(t);
+	if(!num) return null;
+	return numericTy(max(num, NumericType.ℤt), t.isClassical());
 }
 Expression bitNotType(Expression t){
 	if(isFixedIntTy(t)) return t;
-	if(!(isNumeric(t)||isEmpty(t))) return null;
-	if(cast(ℕTy)t) return ℤt(t.isClassical());
-	return t;
+	if(isEmpty(t)) return t;
+	auto num = isNumericTy(t);
+	if(!num) return null;
+	if(num == NumericType.ℕt) num =  NumericType.ℤt;
+	return numericTy(num, t.isClassical());
 }
 Expression notType(Expression t){
-	if(!t||!(cast(BoolTy)t||isEmpty(t))) return null;
-	return t;
+	assert(t);
+	if(isEmpty(t)) return t;
+	auto num = isNumericTy(t);
+	if(num == NumericType.Bool) return t;
+	return null;
 }
+
 Expression logicType(Expression t1,Expression t2){
-	if(!(cast(BoolTy)t1||isEmpty(t1))||!(cast(BoolTy)t2||isEmpty(t2))) return null;
-	return Bool(t1.isClassical()&&t2.isClassical());
+	auto num1 = isNumericTy(t1);
+	auto num2 = isNumericTy(t2);
+	if(!(num1 == NumericType.Bool || isEmpty(t1))) return null;
+	if(!(num2 == NumericType.Bool || isEmpty(t2))) return null;
+	return Bool(t1.isClassical() && t2.isClassical());
 }
+
 Expression bitwiseType(Expression t1,Expression t2){
 	auto r=arithmeticType!true(t1,t2);
 	if(isEmpty(r)) return r;
@@ -5117,21 +5130,26 @@ Expression bitwiseType(Expression t1,Expression t2){
 	return r;
 }
 
-Expression bitAndType(Expression t1,Expression t2){
-	auto isClassical=t1.isClassical()&&t2.isClassical();
-	if(cast(BoolTy)t1&&isSubtype(t2,ℤt(true))||isSubtype(t1,ℤt(true))&&cast(BoolTy)t2)
+Expression bitAndType(Expression t1, Expression t2){
+	auto num1 = isNumericTy(t1);
+	auto num2 = isNumericTy(t2);
+	auto isClassical = t1.isClassical() && t2.isClassical();
+	if(num1 == NumericType.Bool && num2 && num2 <= NumericType.ℤt)
 		return Bool(isClassical);
-	auto r=bitwiseType(t1,t2);
+	if(num2 == NumericType.Bool && num1 && num1 <= NumericType.ℤt)
+		return Bool(isClassical);
+	auto r = bitwiseType(t1,t2);
 	if(!r) return null;
-	if(isNumeric(r)&&(cast(ℕTy)t1||cast(ℕTy)t2))
+	if(isNumericTy(r) && (num1 == NumericType.ℕt || num2 == NumericType.ℕt))
 		return ℕt(r.isClassical());
 	return r;
 }
+
 Expression cmpType(Expression t1,Expression t2){
 	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
 	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
-		if(!(joinTypes(t1,t2)||isNumeric(t1)||isNumeric(t2)))
+		if(!(joinTypes(t1,t2)||isNumericTy(t1)||isNumericTy(t2)))
 			return null;
 	}else{
 		auto a1=cast(ArrayTy)t1,a2=cast(ArrayTy)t2;
@@ -5174,7 +5192,9 @@ Expression cmpType(Expression t1,Expression t2){
 			}
 			return r;
 		}
-		if(!isNumeric(t1)||!isNumeric(t2)||cast(ℂTy)t1||cast(ℂTy)t2) return null;
+		auto num1 = isNumericTy(t1);
+		auto num2 = isNumericTy(t2);
+		if(!num1 || num1 >= NumericType.ℂ || !num2 || num2 >= NumericType.ℂ) return null;
 	}
 	return Bool(t1.isClassical()&&t2.isClassical());
 }

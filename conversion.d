@@ -112,8 +112,8 @@ class QuantumPromotion: Conversion{
 
 class NumericConversion: Conversion{
 	this(Expression from,Expression to)in{
-		auto wf=whichNumeric(from);
-		auto wt=whichNumeric(to);
+		auto wf=isNumericTy(from);
+		auto wt=isNumericTy(to);
 		assert(wf&&wt&&wf<wt);
 	}do{
 		super(from,to);
@@ -123,8 +123,8 @@ class NumericConversion: Conversion{
 class NumericCoercion: Conversion{
 	bool needsCheck;
 	this(Expression from,Expression to,bool needsCheck)in{
-		auto wf=whichNumeric(from);
-		auto wt=whichNumeric(to);
+		auto wf=isNumericTy(from);
+		auto wt=isNumericTy(to);
 		assert(wf&&wt&&wt<wf);
 	}do{
 		this.needsCheck=needsCheck;
@@ -135,8 +135,8 @@ class NumericCoercion: Conversion{
 pragma(inline,true)
 Ret!witness numericToNumeric(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
 	if(!from.isClassical()&&to.isClassical()) return typeof(return).init;
-	auto wf=whichNumeric(from);
-	auto wt=whichNumeric(to);
+	auto wf=isNumericTy(from);
+	auto wt=isNumericTy(to);
 	if(wf&&wt){
 		if(wf<=wt){
 			static if(witness) {
@@ -434,8 +434,8 @@ Ret!witness annotationPun(bool witness)(Expression from,Expression to,TypeAnnota
 }
 
 class ℤtoFixedConversion: Conversion{
-	this(ℤTy from,Expression to)in{
-		assert(from.isClassical);
+	this(NumericTy from,Expression to)in{
+		assert(from is numericTy(NumericType.ℤt, true));
 		auto toInt=isFixedIntTy(to);
 		assert(toInt);
 		assert(toInt.isClassical);
@@ -457,18 +457,18 @@ Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotatio
 }
 
 class UintToℕConversion: Conversion{
-	this(Expression from,ℕTy to)in{
+	this(Expression from, NumericTy to)in{
 		assert(isUint(from));
-		assert(to.isClassical());
+		assert(to is numericTy(NumericType.ℕt, true));
 	}do{
 		super(from,to);
 	}
 }
 
 class IntToℤConversion: Conversion{
-	this(Expression from,ℤTy to)in{
+	this(Expression from, NumericTy to)in{
 		assert(isInt(from));
-		assert(to.isClassical());
+		assert(to is numericTy(NumericType.ℤt, true));
 	}do{
 		super(from,to);
 	}

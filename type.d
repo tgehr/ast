@@ -35,25 +35,10 @@ enum NumericType{
 	ℂ,
 }
 
-NumericType whichNumeric(Expression t){ // TODO: more general solution
-	if(t) t=t.eval();
-	import std.traits: EnumMembers;
-	static foreach(type;[EnumMembers!NumericType].filter!(x=>x!=NumericType.none))
-		if(mixin(text("cast(",to!string(type).endsWith("t")?to!string(type)[0..$-1]:to!string(type),"Ty)t"))) return type;
-	return NumericType.none;
-}
-
-bool isNumeric(Expression t){
-	return whichNumeric(t)!=NumericType.none;
-}
-
-Expression getNumeric(int which,bool classical){
-	final switch(which){
-		import std.traits: EnumMembers;
-		static foreach(type;[EnumMembers!NumericType].filter!(x=>x!=NumericType.none))
-			case mixin(text("NumericType.",type)): return mixin(text(type))(classical);
-		case NumericType.none: return null;
-	}
+NumericType isNumericTy(Expression t){
+	auto ty = cast(NumericTy)t;
+	if(!ty) return NumericType.none;
+	return ty.nty;
 }
 
 struct FixedIntTy {
@@ -112,11 +97,15 @@ bool isSubtype(Expression lhs,Expression rhs){
 	if(!lhs||!rhs) return false;
 	if(lhs is rhs) return true;
 	auto l=lhs.eval(), r=rhs.eval();
-	if(l.isClassical()&&!r.isClassical()) return isSubtype(l,r.getClassical());
-	if(!l.isClassical()&&r.isClassical()) return false;
-	auto wl=whichNumeric(l), wr=whichNumeric(r);
-	if(wl==NumericType.none||wr==NumericType.none) return l.isSubtypeImpl(r);
-	return wl<=wr;
+	if(l is r) return true;
+	if(l.isClassical()&&!r.isClassical()) {
+		r = r.getClassical();
+		if(!r) return false;
+		if(l is r) return true;
+	} else if(!l.isClassical()&&r.isClassical()) {
+		return false;
+	}
+	return l.isSubtypeImpl(r);
 }
 
 Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
@@ -124,15 +113,10 @@ Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumer
 	if(!rhs||isEmpty(rhs)) return lhs;
 	if(lhs == rhs) return lhs;
 	auto l=lhs.eval(), r=rhs.eval();
-	auto wl=whichNumeric(l), wr=whichNumeric(r);
-	if(wl==NumericType.none&&wr==NumericType.none) return l.combineTypesImpl(r,meet);
-	if(wl==NumericType.none||wr==NumericType.none){
-		if(isEmpty(lhs)) return meet?lhs:rhs;
-		if(isEmpty(rhs)) return meet?rhs:lhs;
-		return null;
-	}
-	auto result=getNumeric(meet?min(wl,wr):max(wl,wr),meet?lhs.isClassical()||rhs.isClassical():lhs.isClassical()&&rhs.isClassical());
-	if(!allowQNumeric&&isQNumeric(result)) return null;
+	if(isEmpty(lhs)) return meet?lhs:rhs;
+	if(isEmpty(rhs)) return meet?rhs:lhs;
+	auto result = l.combineTypesImpl(r,meet);
+	if(!allowQNumeric && isQNumeric(result)) return null;
 	return result;
 }
 
@@ -160,31 +144,69 @@ class ErrorTy: Type{
 	mixin VariableFree;
 }
 
-class BoolTy: Type{
-	private bool classical;
-	private this(bool classical){
-		this.classical=classical;
-		this.type=typeOfBoolTy(classical);
-		super();
+class NumericTy: Type{
+	private NumericType nty;
+	static if(language==silq) {
+		private bool classical;
+		private this(NumericType nty, bool classical){
+			assert(nty);
+			assert(!theNumeric[nty][classical]);
+			this.nty = nty;
+			this.classical = classical;
+			this.type = classical ? ctypeTy() : nty == NumericType.Bool ? qtypeTy() : qnumericTy();
+			super();
+		}
+	} else {
+		private enum classical=true;
+		private this(NumericType nty) {
+			assert(!theNumeric[nty]);
+			this.nty = nty;
+			this.type = typeTy();
+			super();
+		}
 	}
-	override BoolTy copyImpl(CopyArgs args){
+	override NumericTy getClassical(){
+		if(this.classical) return this;
+		return numericTy(this.nty, true);
+	}
+	override NumericTy getQuantum(){
+		if(!this.classical) return this;
+		return numericTy(this.nty, false);
+	}
+	override Expression combineTypesImpl(Expression r, bool meet){
+		auto ty = cast(NumericTy)r;
+		if(!ty) return null;
+		if(meet) return numericTy(min(nty, ty.nty), classical || ty.classical);
+		return numericTy(max(nty, ty.nty), classical && ty.classical);
+	}
+	override bool isSubtypeImpl(Expression r){
+		auto ty = cast(NumericTy)r;
+		if(!ty) return false;
+		assert(ty !is this);
+		return nty <= ty.nty && classical >= ty.classical;
+	}
+	override NumericTy copyImpl(CopyArgs args){
 		return this;
 	}
 	override string toString(){
-		static if(language==silq) return classical?"!𝔹":"𝔹";
-		else return "𝔹";
+		size_t i = 1;
+		static if(language==silq) {
+			i = !classical;
+		}
+		final switch(nty) {
+			case NumericType.none: assert(0);
+			case NumericType.Bool: return "!𝔹"[i..$];
+			case NumericType.ℕt: return "!ℕ"[i..$];
+			case NumericType.ℤt: return "!ℤ"[i..$];
+			case NumericType.ℚt: return "!ℚ"[i..$];
+			case NumericType.ℝ: return "!ℝ"[i..$];
+			case NumericType.ℂ: return "!ℂ"[i..$];
+		}
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
-		auto r=cast(BoolTy)o;
-		return r && classical==r.classical;
-	}
-	override BoolTy getClassical(){
-		return Bool(true);
-	}
-	override BoolTy getQuantum(){
-		return Bool(false);
+		return o is this;
 	}
 	override Expression evalImpl(Expression ntype){ return this; }
 	mixin VariableFree;
@@ -192,204 +214,41 @@ class BoolTy: Type{
 		return 0;
 	}
 }
-static if(language==silq) private BoolTy[2] theBool;
-else private BoolTy theBool;
+static if(language==silq) private NumericTy[2][7] theNumeric;
+else private NumericTy[7] theNumeric;
 
-BoolTy Bool(bool classical=true){
-	static if(language==silq) return theBool[classical]?theBool[classical]:(theBool[classical]=new BoolTy(classical));
-	else return theBool?theBool:(theBool=new BoolTy(true));
+NumericTy Bool(bool classical=true){
+	return numericTy(NumericType.Bool, classical);
 }
 
-class ℕTy: Type{
-	static if(language==silq) private bool classical;
-	else private enum classical=true;
-	private this(bool classical){
-		static if(language==silq) this.classical=classical;
-		this.type=typeOfNumericTy(classical);
-		super();
-	}
-	override ℕTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		static if(language==silq) return classical?"!ℕ":"ℕ";
-		else return "ℕ";
-	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto r=cast(ℕTy)o;
-		return r&&classical==r.classical;
-	}
-	override ℕTy getClassical(){
-		return ℕt(true);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-static if(language==silq) private ℕTy[2] theℕ;
-else private ℕTy theℕ;
-
-ℕTy ℕt(bool classical=true){
-	static if(language==silq) return theℕ[classical]?theℕ[classical]:(theℕ[classical]=new ℕTy(classical));
-	else return theℕ?theℕ:(theℕ=new ℕTy(true));
+NumericTy ℕt(bool classical=true){
+	return numericTy(NumericType.ℕt, classical);
 }
 
-class ℤTy: Type{
-	static if(language==silq) private bool classical;
-	else private enum classical=true;
-	private this(bool classical){
-		static if(language==silq) this.classical=classical;
-		this.type=typeOfNumericTy(classical);
-		super();
-	}
-	override ℤTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		static if(language==silq) return classical?"!ℤ":"ℤ";
-		else return "ℤ";
-	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto r=cast(ℤTy)o;
-		return r&&classical==r.classical;
-	}
-	override ℤTy getClassical(){
-		return ℤt(true);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-static if(language==silq) private ℤTy[2] theℤ;
-else private ℤTy theℤ;
-
-ℤTy ℤt(bool classical=true){
-	static if(language==silq) return theℤ[classical]?theℤ[classical]:(theℤ[classical]=new ℤTy(classical));
-	else return theℤ?theℤ:(theℤ=new ℤTy(true));
+NumericTy ℤt(bool classical=true){
+	return numericTy(NumericType.ℤt, classical);
 }
 
-class ℚTy: Type{
-	static if(language==silq) private bool classical;
-	else private enum classical=true;
-	private this(bool classical){
-		static if(language==silq) this.classical=classical;
-		this.type=typeOfNumericTy(classical);
-		super();
-	}
-	override ℚTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		static if(language==silq) return classical?"!ℚ":"ℚ";
-		else return "ℚ";
-	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto r=cast(ℚTy)o;
-		return r&&classical==r.classical;
-	}
-	override ℚTy getClassical(){
-		return ℚt(true);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-static if(language==silq) private ℚTy[2] theℚ;
-else private ℚTy theℚ;
-
-ℚTy ℚt(bool classical=true){
-	static if(language==silq) return theℚ[classical]?theℚ[classical]:(theℚ[classical]=new ℚTy(classical));
-	else return theℚ?theℚ:(theℚ=new ℚTy(true));
+NumericTy ℚt(bool classical=true){
+	return numericTy(NumericType.ℚt, classical);
 }
 
-class ℝTy: Type{
-	static if(language==silq) private bool classical;
-	else private enum classical=true;
-	private this(bool classical){
-		static if(language==silq) this.classical=classical;
-		this.type=typeOfNumericTy(classical);
-		super();
-	}
-	override ℝTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		static if(language==silq) return classical?"!ℝ":"ℝ";
-		else return "ℝ";
-	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto r=cast(ℝTy)o;
-		return r&&classical==r.classical;
-	}
-	override ℝTy getClassical(){
-		return ℝ(true);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-static if(language==silq) private ℝTy[2] theℝ;
-else private ℝTy theℝ;
-
-ℝTy ℝ(bool classical=true){
-	static if(language==silq) return theℝ[classical]?theℝ[classical]:(theℝ[classical]=new ℝTy(classical));
-	else return theℝ?theℝ:(theℝ=new ℝTy(true));
+NumericTy ℝ(bool classical=true){
+	return numericTy(NumericType.ℝ, classical);
 }
 
-class ℂTy: Type{
-	static if(language==silq) private bool classical;
-	else private enum classical=true;
-	private this(bool classical){
-		static if(language==silq) this.classical=classical;
-		this.type=typeOfNumericTy(classical);
-		super();
-	}
-	override ℂTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){
-		static if(language==silq) return classical?"!ℂ":"ℂ";
-		else return "ℂ";
-	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto r=cast(ℂTy)o;
-		return r&&classical==r.classical;
-	}
-	override ℂTy getClassical(){
-		return ℂ(true);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-static if(language==silq) private ℂTy[2] theℂ;
-else private ℂTy theℂ;
-
-ℂTy ℂ(bool classical=true){
-	static if(language==silq) return theℂ[classical]?theℂ[classical]:(theℂ[classical]=new ℂTy(classical));
-	else return theℂ?theℂ:(theℂ=new ℂTy(true));
+NumericTy ℂ(bool classical=true){
+	return numericTy(NumericType.ℂ, classical);
 }
 
+NumericTy numericTy(NumericType which, bool classical){
+	if(!which) return null;
+	static if(language==silq){
+		return theNumeric[which][classical] ? theNumeric[which][classical] : (theNumeric[which][classical] = new NumericTy(which, classical));
+	} else {
+		return theNumeric[which] ? theNumeric[which] : (theNumeric[which] = new NumericTy(which));
+	}
+}
 
 
 class AggregateTy: Type{

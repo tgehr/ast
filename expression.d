@@ -1202,7 +1202,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				if(!rhsLiteral||rhsLiteral.isZero())
 					return false;
 			}else static if(op!=Tok!":="&&op!=Tok!"←"&&op!=Tok!"="&&op!=Tok!"≠"&&op!=Tok!"<"&&op!=Tok!"≤"&&op!=Tok!">"&&op!=Tok!"≥"){
-				if(whichNumeric(type)>=NumericType.ℝ){
+				if(isNumericTy(type) >= NumericType.ℝ){
 					// floats can overflow and we disallow inf/nan
 					// TODO: ℝ,ℂ not necessarily implemented using floats
 					return false;
