@@ -112,7 +112,7 @@ static immutable string[] unops = [
 
 static immutable AssignOp[] assignOps = [
 	AssignOp(binopAssign, null, false),
-	AssignOp(binopCat ~ binopAssign, binopAssign, false),
+	AssignOp(binopCat ~ binopAssign, binopCat, false),
 ] ~ (binops ~ boolops).map!(op => AssignOp(op ~ binopAssign, op, op == binopAdd || op == binopSub || op == binopNSub || op == binopBitXor)).array;
 
 bool isBinop(string op) pure {
@@ -143,7 +143,7 @@ class Checker {
 	}
 
 	void visExpr(ast_exp.Expression e) {
-		assert(e.type && ast_ty.isType(e.type));
+		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
 		if(cast(ast_ty.Type) e) {
 			if(auto te = cast(ast_ty.VectorTy) e) {
 				return this.implTy(te);
@@ -194,7 +194,6 @@ class Checker {
 		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
 		static foreach(op; assignOps) {
 			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
-				if(auto ns = lowerStmt(et)) return visStmt(ns);
 				return implStmt(et);
 			}
 		}
@@ -556,6 +555,9 @@ class Checker {
 	static foreach(op;assignOps)
 	StmtResult implStmt(ast_exp.BinaryExp!(Tok!(op.aop)) e) {
 		static immutable string binop = op.binop;
+		static if(binop != binopCat) {
+			if(auto ns = lowerStmt(e)) return visStmt(ns);
+		}
 
 		visExpr(e.e2);
 
@@ -945,7 +947,7 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
-		if(visLoweringExpr(e)) return;
+		// if(visLoweringExpr(e)) return;
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
