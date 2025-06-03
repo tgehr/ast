@@ -350,20 +350,19 @@ abstract class Scope{
 		final void resetConst(){ }
 		final void resetComponentReplacement(){ }
 	}
+	final void recordConsumption(Declaration decl,Identifier use){
+		if(allowMerge) return;
+		if(!use) return;
+		auto cd=new ConsumedDecl(decl,use);
+		cd.sstate=SemState.completed;
+		if(canInsert(cd.name))
+			symtabInsert(cd);
+	}
 	final Declaration consume(Declaration decl,Identifier use){
 		if(decl.name.id !in symtab) return null;
 		if(cast(DeadDecl)decl) return null;
 		Expression type;
-		if(auto r=consumeImpl(decl,decl,type,true,use)){ // TODO: separate splitting and consuming
-			if(use){
-				auto cd=new ConsumedDecl(decl,use);
-				cd.sstate=SemState.completed;
-				if(canInsert(cd.name))
-					symtabInsert(cd);
-			}
-			return r;
-		}
-		return null;
+		return consumeImpl(decl,decl,type,true,use); // TODO: separate splitting and consuming
 	}
 	final bool canSplit(Declaration decl)in{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
@@ -471,6 +470,7 @@ abstract class Scope{
 					toRemove~=ndecl;
 				}
 			}
+			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
