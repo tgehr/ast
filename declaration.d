@@ -48,9 +48,8 @@ abstract class Declaration: Expression{
 		if(this is origin) return true;
 		if(splitFrom&&splitFrom.isDerivedFrom(origin))
 			return true;
-		foreach(d;mergedFrom)
-			if(d.isSplitFrom(origin))
-				return true;
+		if(mergedFrom.length&&mergedFrom.all!(d=>d.isDerivedFrom(origin)))
+		   return true;
 		return false;
 	}
 }
@@ -415,11 +414,15 @@ class ConsumedDecl: DeadDecl{
 		assert(!!use);
 	}do{
 		super(decl.name);
+		this.type=decl.type;
 		this.use=use;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
 		sc.note(format("%s '%s' consumed here",kind,use.meaning),use.loc);
+	}
+	override string toString(){
+		return text("consumed(",super.toString(),",",use.loc,")");
 	}
 }
 
@@ -497,5 +500,8 @@ class DeadMerge: DeadDecl{
 				sc.note("declarations on different paths have incompatible types",d.loc);
 			}
 		}
+	}
+	override string toString(){
+		return text("deadMerge(",super.toString(),")");
 	}
 }
