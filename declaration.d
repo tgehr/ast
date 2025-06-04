@@ -265,7 +265,7 @@ class DatDecl: Declaration{
 		return new DatDecl(name?name.copy(args):null,hasParams,params.map!(p=>p.copy(args)).array,isTuple,isQuantum,body_.copy(args));
 	}
 	override string toString(){
-		return "dat "~getName~(hasParams?text("[",params.map!(to!string).joiner(","),"]"):"")~body_.toString();
+		return "dat "~getName~(hasParams?text("[",params.map!(to!string).joiner(","),"]"):"")~(body_?body_.toString():";");
 	}
 
 	override bool isCompound(){ return true; }
