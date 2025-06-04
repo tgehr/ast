@@ -129,7 +129,7 @@ abstract class Scope{
 			return false;
 		}
 		rename(decl);
-		assert(!decl.rename||decl.rename.id !in rnsymtab||cast(DeadDecl)rnsymtab[decl.rename.id]);
+		assert(decl.getId !in rnsymtab||cast(DeadDecl)rnsymtab[decl.getId]);
 		symtabInsert(decl);
 		decl.scope_=this;
 		return true;
@@ -139,11 +139,11 @@ abstract class Scope{
 		assert(!toRemove.canFind(decl));
 	}do{
 		symtab[decl.name.id]=decl;
-		if(decl.rename) rnsymtab[decl.rename.id]=decl;
+		rnsymtab[decl.getId]=decl;
 	}
 	void symtabRemove(Declaration decl){
 		symtab.remove(decl.name.id);
-		if(decl.rename) rnsymtab.remove(decl.rename.id);
+		rnsymtab.remove(decl.getId);
 	}
 
 	void redefinitionError(Declaration decl, Declaration prev) in{
@@ -354,6 +354,10 @@ abstract class Scope{
 		if(allowMerge) return;
 		if(!use) return;
 		auto cd=new ConsumedDecl(decl,use);
+		if(decl.rename){
+			cd.rename=new Identifier(decl.rename.id);
+			cd.rename.loc=decl.rename.loc;
+		}
 		cd.sstate=SemState.completed;
 		if(canInsert(cd.name))
 			symtabInsert(cd);
@@ -459,7 +463,7 @@ abstract class Scope{
 		if(symtab.get(odecl.name.id,null) !is odecl) return null;
 		if(remove){
 			symtab.remove(odecl.name.id);
-			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
+			rnsymtab.remove(odecl.getId);
 			static if(language==silq){
 				static if(language==silq){
 					if(odecl !is ndecl)
@@ -474,8 +478,8 @@ abstract class Scope{
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
 			symtab[odecl.name.id]=ndecl;
-			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
-			if(ndecl.rename) rnsymtab[ndecl.rename.id]=ndecl;
+			rnsymtab.remove(odecl.getId);
+			rnsymtab[ndecl.getId]=ndecl;
 			static if(language==silq)
 				replaceDecl(odecl,ndecl);
 		}
@@ -786,6 +790,10 @@ abstract class Scope{
 			if(auto dm=sym.name.id in deadMerges)
 				return *dm;
 			auto dm=new DeadMerge(sym.name);
+			if(sym.rename){
+				dm.rename=new Identifier(sym.rename.id);
+				dm.rename.loc=sym.rename.loc;
+			}
 			dm.quantumControl=quantumControl;
 			dm.numBranches=scopes.length;
 			dm.loc=sym.loc;
@@ -802,7 +810,7 @@ abstract class Scope{
 					if(auto dm=osym.name.id in deadMerges)
 						dm.mergedFrom~=osym;
 				sc.symtab.remove(osym.name.id);
-				if(osym.rename) sc.rnsymtab.remove(osym.rename.id);
+				sc.rnsymtab.remove(osym.getId);
 				static if(language==silq){
 					if(sc.dependencyTracked(osym)){
 						sc.dependencies.pushUp(osym,true);
@@ -814,9 +822,9 @@ abstract class Scope{
 				auto nsym=scopes[0].split(sym,null);
 				if(nsym is sym) return;
 				symtab.remove(sym.name.id);
-				if(sym.rename) rnsymtab.remove(sym.rename.id);
-				symtab[sym.name.id]=nsym;
-				if(nsym.rename) rnsymtab[sym.rename.id]=sym;
+				rnsymtab.remove(sym.getId);
+				symtab[nsym.name.id]=nsym;
+				rnsymtab[nsym.getId]=nsym;
 				sym=nsym;
 			}
 			void removeSym(){
@@ -827,7 +835,7 @@ abstract class Scope{
 			}
 			void promoteSym(Expression ntype){
 				symtab.remove(sym.name.id);
-				if(sym.rename) rnsymtab.remove(sym.rename.id);
+				rnsymtab.remove(sym.getId);
 				auto var=addVariable(sym,ntype,true);
 				if(!dependencyTracked(sym))
 					addDefaultDependency(sym); // TODO: ideally can be removed
@@ -844,7 +852,7 @@ abstract class Scope{
 				continue;
 			}
 			foreach(sc;scopes[1..$]){
-				auto osym=sc.symtab.get(sym.name.id,null);
+				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
 					static if(language==silq){
 						splitSym();
@@ -887,8 +895,8 @@ abstract class Scope{
 				if(auto ntype=typeForDecl(sym)){
 					if(sym.scope_ is scopes[0]) promoteSym(ntype);
 					foreach(sc;scopes){
-						assert(sym.name.id in sc.symtab);
-						auto osym=sc.symtab[sym.name.id];
+						assert(sym.getId in sc.rnsymtab);
+						auto osym=sc.rnsymtab[sym.getId];
 						sc.mergeVar(osym,sym);
 						static if(language==silq){
 							if(!sc.dependencyTracked(osym))
@@ -906,14 +914,14 @@ abstract class Scope{
 		}
 		static if(language==silq){
 			foreach(sc;scopes){
-				foreach(sym;sc.symtab.dup){
+				foreach(sym;sc.rnsymtab.dup){
 					if(sym.sstate==SemState.error&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
 					if(cast(DeadDecl)sym){
 						addDeadMerge(sym).mergedFrom~=sym;
-						assert(sym.name.id !in symtab);
+						assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
 						continue;
 					}
-					if(sym.name.id !in symtab){
+					if(sym.getId !in rnsymtab){
 						sym=sc.split(sym,null);
 						if(!sc.canForgetAppend(sym)){
 							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
@@ -928,7 +936,7 @@ abstract class Scope{
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
 			foreach(k,v;dependencies.dependencies.dup){
-				if(k.name.id !in symtab && k.getId !in rnsymtab)
+				if(k.getId !in rnsymtab)
 					if(dependencyTracked(k))
 						dependencies.dependencies.remove(k);
 			}
@@ -1130,10 +1138,11 @@ abstract class Scope{
 			assert(state.prevCapturedDecls.length<=fd.capturedDecls.length);
 			assert(state.prevCapturedDecls==fd.capturedDecls[0..state.prevCapturedDecls.length]);
 			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$]){
-				if(decl.name.id !in state.symtab)
-					state.symtab[decl.name.id]=decl;
-				if(decl.rename && decl.rename.id !in state.rnsymtab)
+				if(decl.getId !in state.rnsymtab||cast(DeadDecl)state.rnsymtab[decl.getId]){
+					if(decl.name.id !in state.symtab||cast(DeadDecl)state.symtab[decl.name.id])
+						state.symtab[decl.name.id]=decl;
 					state.rnsymtab[decl.rename.id]=decl;
+				}
 			}
 			state.prevCapturedDecls=fd.capturedDecls;
 		}
@@ -1160,7 +1169,7 @@ abstract class Scope{
 		symtab.clear();
 		foreach(_,decl;state.symtab) symtab[decl.name.id]=updateDecl(decl);
 		rnsymtab.clear();
-		foreach(_,decl;state.rnsymtab) rnsymtab[decl.rename.id]=decl;
+		foreach(_,decl;state.rnsymtab) rnsymtab[decl.getId]=updateDecl(decl);
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
@@ -1297,7 +1306,7 @@ class NestedScope: Scope{
 		Declaration result=ndecl;
 		if(type){
 			symtab.remove(odecl.name.id);
-			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
+			rnsymtab.remove(odecl.getId);
 			if(dependencyTracked(odecl)){
 				// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
 				dependencies.pushUp(odecl,true); // consume declaration normally on split
@@ -1321,7 +1330,7 @@ class NestedScope: Scope{
 			}
 		}else if(remove){
 			symtab.remove(odecl.name.id);
-			if(odecl.rename) rnsymtab.remove(odecl.rename.id);
+			rnsymtab.remove(odecl.getId);
 			static if(language==silq){
 				if(dependencyTracked(odecl)){
 					dependencies.pushUp(odecl,true);
