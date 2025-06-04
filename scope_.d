@@ -1278,7 +1278,7 @@ class NestedScope: Scope{
 		assert(odecl is ndecl||!remove);
 	}do{
 		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use);
-		if(symtab.get(odecl.name.id,null) !is odecl) return null;
+		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=Dependency(true);
