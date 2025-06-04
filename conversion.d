@@ -363,7 +363,7 @@ Expression[Id][2] functionConversionSubstitution(Id[] names,ProductTy from,Produ
 			auto tae=new TypeAnnotationExp(varTy(names[i],(k?from:to).argTy(i)),from.argTy(i),TypeAnnotationType.coercion);
 			tae.brackets++;
 			tae.type=from.argTy(i);
-			tae.sstate=SemState.completed;
+			tae.setSemCompleted();
 			subst[k][names[i]]=tae;
 		}
 	}

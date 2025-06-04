@@ -9,7 +9,10 @@ import ast.lexer, ast.type, ast.expression, ast.scope_, util;
 abstract class Declaration: Expression{
 	Identifier name;
 	Scope scope_;
-	this(Identifier name){ this.name=name; }
+	this(Identifier name){
+		this.name=name;
+		this.type=unit;
+	}
 	override @property string kind(){ return "declaration"; }
 	final @property Id getId(){ auto r=rename?rename:name; return r?r.id:Id(); }
 	final @property string getName(){ auto r=rename?rename:name; return r?r.name:""; }
@@ -299,7 +302,7 @@ class DatDecl: Declaration{
 
 	FunctionDef fd;
 	FunctionDef toFunctionDef()in{ // TODO: parse DatDecl with params as function with a local DatDecl inside in the first place?
-		assert(hasParams&&sstate==SemState.completed);
+		assert(hasParams&&isSemCompleted());
 	}do{
 		if(fd) return fd;
 		auto fparams=params.map!((dparam){
@@ -316,13 +319,13 @@ class DatDecl: Declaration{
 		id.meaning=this;
 		import ast.semantic_:typeForDecl;
 		id.type=typeForDecl(this);
-		id.sstate=SemState.completed;
+		id.setSemCompleted();
 		auto ids=fparams.map!((fparam){
 			auto id=new Identifier(fparam.getId);
 			id.loc=fparam.loc;
 			id.meaning=fparam;
 			id.type=fparam.vtype;
-			id.sstate=SemState.completed;
+			id.setSemCompleted();
 			return id;
 		}).array;
 		Expression arg=ids[0];
@@ -330,7 +333,7 @@ class DatDecl: Declaration{
 			arg=new TupleExp(ids.map!((Expression id)=>id).array);
 			arg.loc=ids.length?ids[0].loc.to(ids[$-1].loc):this.loc;
 			arg.type=tupleTy(ids.map!(id=>id.type).array);
-			arg.sstate=SemState.completed;
+			arg.setSemCompleted();
 		}
 		CallExp call=new CallExp(id,arg,true,false);
 		call.loc=id.loc.to(arg.loc);
@@ -338,7 +341,7 @@ class DatDecl: Declaration{
 		auto ncall=callSemantic(call,expSemContext(null,ConstResult.no,InType.no));
 		auto ret=new ReturnExp(ncall);
 		ret.type=unit;
-		ret.sstate=SemState.completed;
+		ret.setSemCompleted();
 		auto bdy=new CompoundExp([ret]);
 		bdy.type=unit;
 		fd=new FunctionDef(null, fparams, isTuple, null, bdy);
@@ -353,7 +356,7 @@ class DatDecl: Declaration{
 		assert(isType(fd.ret));
 		fd.hasReturn=true;
 		fd.retNames=["r"];
-		fd.sstate=SemState.completed;
+		fd.setSemCompleted();
 		return fd;
 	}
 }

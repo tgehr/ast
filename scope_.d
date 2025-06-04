@@ -86,7 +86,7 @@ struct Dependencies{
 		return Dependencies(result);
 	}
 	bool canForget(Declaration decl)in{
-		assert(decl in dependencies||decl.sstate==SemState.error,text(decl," ",dependencies));
+		assert(decl in dependencies||decl.isSemError(),text(decl," ",dependencies));
 	}do{
 		if(decl !in dependencies) return true;
 		return !dependencies[decl].isTop;
@@ -124,8 +124,8 @@ abstract class Scope{
 	}
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
 		if(auto d=symtabLookup(decl.name,false,null)){
-			if(decl.sstate!=SemState.error) redefinitionError(decl, d);
-			decl.sstate=SemState.error;
+			if(!decl.isSemError()) redefinitionError(decl, d);
+			decl.setSemError();
 			return false;
 		}
 		rename(decl);
@@ -158,7 +158,7 @@ abstract class Scope{
 	}do{
 		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
 		note("previous definition was here",prev.name.loc);
-		decl.sstate=SemState.error;
+		decl.setSemError();;
 	}
 
 	static if(language==silq){
@@ -173,7 +173,7 @@ abstract class Scope{
 				ComponentReplacement[] componentReplacements;
 				void nameIndex(IndexExp index,Id name){
 					auto r=ComponentReplacement(index,name,IndexExp.init);
-					if(index.sstate==SemState.error) swap(r.write,r.read);
+					if(index.isSemError()) swap(r.write,r.read);
 					componentReplacements~=r;
 				}
 			}
@@ -290,7 +290,7 @@ abstract class Scope{
 				if(!tt.dep.isTop) continue;
 				import ast.semantic_:nonLiftedError;
 				nonLiftedError(tt.expr,this);
-				tt.expr.sstate=SemState.error;
+				tt.expr.setSemError();
 				success=false;
 			}
 			return success;
@@ -397,7 +397,7 @@ abstract class Scope{
 			cd.rename.loc=decl.rename.loc;
 		}
 		cd.scope_=decl.scope_;
-		cd.sstate=SemState.completed;
+		cd.setSemCompleted();
 		if(canInsert(cd.name))
 			symtabInsert(cd);
 	}
@@ -427,7 +427,7 @@ abstract class Scope{
 		return result;
 	}
 	final void unconsume(Declaration decl)in{
-		assert(decl.scope_ is null||decl.scope_ is this||decl.sstate==SemState.error,text(decl," ",decl.loc));
+		assert(decl.scope_ is null||decl.scope_ is this||decl.isSemError(),text(decl," ",decl.loc));
 	}do{
 		toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array;
 		symtabInsert(decl);
@@ -571,12 +571,12 @@ abstract class Scope{
 					if(auto read=isConst(meaning)){
 						error(format("cannot consume 'const' variable '%s'",id), id.loc);
 						note("variable was made 'const' here", read.loc);
-						id.sstate=SemState.error;
+						id.setSemError();
 						doConsume=false;
 					}else if(meaning.isConst){
 						error(format("cannot consume 'const' variable '%s'",id), id.loc);
 						note("declared 'const' here", meaning.loc);
-						id.sstate=SemState.error;
+						id.setSemError();
 						doConsume=false;
 					}
 				}
@@ -639,35 +639,34 @@ abstract class Scope{
 	void message(lazy string msg, Location loc){handler.message(msg,loc);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
+		import ast.semantic_: unrealizable;
 		bool errors=false;
 		static if(language==silq){
 			foreach(_,d;rnsymtab.dup){
 				if(cast(DeadDecl)d) continue;
+				if(d.isSemError()) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				if(auto read=isConst(d)){
-					if(d.sstate!=SemState.error){
+					if(!d.isSemError()){
 						error(format("cannot forget 'const' variable '%s'",d), d.loc);
 						note("variable was made 'const' here", read.loc);
-						d.sstate=SemState.error;
+						d.setSemForceError();
 						errors=true;
 					}
 				}
 				if(!canSplit(d)) continue;
 				if(d.scope_.getFunction() !is getFunction()) continue;
 				d=split(d,null);
-				if(d.scope_ !is this || d.sstate==SemState.error || !canForgetAppend(loc,d)){
-					import ast.semantic_: unrealizable;
-					if(d.sstate!=SemState.error){
-						bool show=true;
-						if(d.sstate==SemState.error) show=false;
-						if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) show=false;
-						if(show){
-							if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-						}
-						d.sstate=SemState.error;
-						errors=true;
-					}
+				assert(d.scope_ is this);
+				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
+					d.setSemForceError();
+					continue;
+				}
+				if(!canForgetAppend(loc,d)){
+					if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+					else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+					d.setSemForceError();
+					errors=true;
 				}else{
 					consume(d,null);
 					clearConsumed();
@@ -710,8 +709,8 @@ abstract class Scope{
 		void addDefaultDependency(Declaration decl)in{
 			assert(!dependencyTracked(decl));
 		}do{
-			//imported!"util.io".writeln("ADDING DEFAULT: ",decl," ",Dependency(decl.sstate==SemState.completed&&decl.isLinear));
-			addDependency(decl,Dependency(decl.sstate==SemState.completed&&decl.isLinear));
+			//imported!"util.io".writeln("ADDING DEFAULT: ",decl," ",Dependency(decl.isSemCompleted()&&decl.isLinear));
+			addDependency(decl,Dependency(decl.isSemCompleted()&&decl.isLinear));
 			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
 			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
 			//assert(decl.getName!="rrr");
@@ -734,7 +733,7 @@ abstract class Scope{
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
 				foreach(odecl;dep.dependencies)
-					assert(dependencyTracked(odecl)||odecl.sstate==SemState.error,text(dependencies," ",decl," ",dep," ",odecl));
+					assert(dependencyTracked(odecl)||odecl.isSemError(),text(dependencies," ",decl," ",dep," ",odecl));
 				dependencies.dependencies[decl]=dep;
 			}
 		}
@@ -743,13 +742,13 @@ abstract class Scope{
 			return !!(decl in dependencies.dependencies);
 		}
 		final Dependency getDependency(Identifier id)in{
-			assert(id.sstate==SemState.completed||id.sstate==SemState.error);
+			assert(id.isSemCompleted()||id.isSemError());
 			assert(!!id.meaning);
 		}do{
 			return getDependency(id.meaning);
 		}
 		final Dependency getDependency(Declaration decl,bool pushed=false)in{
-			assert(decl.sstate==SemState.completed||decl.sstate==SemState.error,text(decl," ",decl.sstate));
+			assert(decl.isSemCompleted()||decl.isSemError(),text(decl," ",decl.sstate));
 		}do{
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];
@@ -765,8 +764,8 @@ abstract class Scope{
 		}
 
 		bool canForget(Declaration decl){
-			if(decl.sstate==SemState.error) return true;
-			assert(decl.sstate==SemState.completed,text(decl," ",decl.sstate));
+			if(decl.isSemError()) return true;
+			assert(decl.isSemCompleted(),text(decl," ",decl.sstate));
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
@@ -843,7 +842,7 @@ abstract class Scope{
 			dm.quantumControl=quantumControl;
 			dm.numBranches=scopes.length;
 			dm.loc=sym.loc;
-			dm.sstate=SemState.completed;
+			dm.setSemCompleted();
 			deadMerges[sym.name.id]=dm;
 			return dm;
 		}
@@ -916,7 +915,7 @@ abstract class Scope{
 							if(!nt||quantumControl&&nt.hasClassicalComponent()){
 								static if(language==silq){
 									splitSym(), sc.split(osym,null);
-									if(sym.sstate==SemState.completed&&osym.sstate==SemState.completed){
+									if(sym.isSemCompleted()&&osym.isSemCompleted()){
 										if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
 											error(format("variable '%s' is not consumed", sym.getName), sym.loc);
 											if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
@@ -955,7 +954,7 @@ abstract class Scope{
 		static if(language==silq){
 			foreach(sc;scopes){
 				foreach(sym;sc.rnsymtab.dup){
-					if(sym.sstate==SemState.error&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
+					if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
 					if(cast(DeadDecl)sym){
 						addDeadMerge(sym).mergedFrom~=sym;
 						assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
@@ -1233,7 +1232,7 @@ abstract class Scope{
 			return getSplit(decl);
 		}
 		foreach(ref outer;loopScope.consumedOuter){
-			if(outer.sstate==SemState.error) continue;
+			if(outer.isSemError()) continue;
 			assert(outer.scope_ is this);
 			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
 			auto nonZeroIters=outer.splitInto[1];
@@ -1437,10 +1436,10 @@ class CapturingScope(T): NestedScope{
 		auto type=id.typeFromMeaning(meaning);
 		/+if(type&&type.isClassical()&&id.byRef){
 			origin.error("cannot consume classical variable from outer scope", id.loc);
-			id.sstate=SemState.error;
+			id.setSemError();
 		}+/
 		if(!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
-		if(id.sstate==SemState.error) return null;
+		if(id.isSemError()) return null;
 		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
@@ -1459,7 +1458,7 @@ class CapturingScope(T): NestedScope{
 						if(callErrorShown) return;
 						callErrorShown=true;
 						origin.error(format("cannot recursively call function '%s' at this location",decl.name),id.loc);
-						id.sstate=SemState.error;
+						id.setSemError();
 					}
 					if(!recapture.meaning){
 						callError();
@@ -1468,21 +1467,21 @@ class CapturingScope(T): NestedScope{
 							if(auto cd=cast(ConsumedDecl)failures[0]) cd.explain("capture",origin);
 							else origin.note("captures cannot be modified on a path leading to a recursive call",id.loc);
 						}
-						recapture.sstate=SemState.error;
+						recapture.setSemError();
 					}
 					recapture.type=recapture.typeFromMeaning;
-					assert(recapture.type||recapture.sstate==SemState.error);
-					if(recapture.sstate!=SemState.error){
-						recapture.sstate=SemState.completed;
+					assert(recapture.type||recapture.isSemError());
+					if(!recapture.isSemError()){
+						recapture.setSemCompleted();
 						/+import ast.semantic_:typeForDecl;
 						auto oldType=typeForDecl(capture);
 						if(!isSubtype(recapture.type,oldType)){
-							if(recapture.sstate!=SemState.error){
+							if(!recapture.isSemError()){
 								callError();
 								origin.note(format("capture '%s' changed type from '%s' to '%s'",capture.name,oldType,recapture.type),capture.loc);
 								if(recapture.meaning)
 									origin.note("capture is redeclared here",recapture.meaning.loc);
-								recapture.sstate=SemState.error;
+								recapture.setSemError();
 							}
 						}+/
 						if(!recapture.meaning.isDerivedFrom(capture)){
@@ -1492,13 +1491,13 @@ class CapturingScope(T): NestedScope{
 							origin.note("last modification is here",recapture.meaning.loc);
 						}
 					}
-					if(recapture.sstate==SemState.error)
-						id.sstate=SemState.error;
+					if(recapture.isSemError())
+						id.setSemError();
 				}
 			}else if(decl.sealed&&meaning.isLinear()&&meaning !in decl.captures){
-				/+if(id.sstate!=SemState.error){
+				/+if(!id.isSemError()){
 					origin.error("capturing additional quantum variables after a recursive call is not supported yet", id.loc);
-					id.sstate=SemState.error;
+					id.setSemError();
 				}+/
 				decl.unseal();
 			}
@@ -1524,12 +1523,12 @@ class CapturingScope(T): NestedScope{
 					}
 					if(auto read=origin.isConst(meaning))
 						origin.note("variable was made 'const' here", read.loc);
-					id.sstate=SemState.error;
+					id.setSemError();
 					return null;
 				}else{
 					if(kind==Lookup.constant){
 						origin.error("cannot capture quantum variable as constant", id.loc);
-						id.sstate=SemState.error;
+						id.setSemError();
 					}
 				}
 			}
@@ -1538,9 +1537,9 @@ class CapturingScope(T): NestedScope{
 				if(fd&&fd.context&&fd.context.vtype==contextTy(true)){
 					if(fd.ftype&&fd.ftypeFinal){
 						assert(fd.ftype.isClassical_);
-						if(id.sstate!=SemState.error){
+						if(!id.isSemError()){
 							origin.error("cannot capture quantum variable in classical function", id.loc);
-							id.sstate=SemState.error;
+							id.setSemError();
 						}
 					}else{
 						if(fd.sealed) fd.unseal();
@@ -1558,7 +1557,7 @@ class CapturingScope(T): NestedScope{
 				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this);
 			}
-			if(id.sstate!=SemState.error){
+			if(!id.isSemError()){
 				parent.recordAccess(id,meaning);
 				parent.recordCapturer(decl,meaning);
 				decl.addCapture(meaning,id);

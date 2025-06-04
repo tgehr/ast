@@ -17,7 +17,7 @@ Expression constantExp(size_t l){
 	tok.str=to!string(l);
 	auto r=new LiteralExp(tok);
 	r.type=l<=1?Bool(true):ℕt(true);
-	r.sstate=SemState.completed;
+	r.setSemCompleted();
 	return r;
 }
 
@@ -51,10 +51,10 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 			propErr(b,res);
 			if(a.type&&b.type){
 				res.type=arithmeticType!false(a.type,b.type);
-				if(!res.type) res.sstate=SemState.error;
+				if(!res.type) res.setSemError();
 			}
-			if(res.type&&a.sstate==SemState.completed&&b.sstate==SemState.completed)
-				res.sstate=SemState.completed;
+			if(res.type&&a.isSemCompleted()&&b.isSemCompleted())
+				res.setSemCompleted();
 			return res;
 		}
 	}
@@ -72,10 +72,10 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 				propErr(sl.l,res);
 				if(sl.r.type&&sl.l.type){
 					res.type=nSubType(sl.r,sl.l);
-					if(!res.type) res.sstate=SemState.error;
+					if(!res.type) res.setSemError();
 				}
-				if(res.type&&sl.r.sstate==SemState.completed&&sl.l.sstate==SemState.completed)
-					res.sstate=SemState.completed;
+				if(res.type&&sl.r.isSemCompleted()&&sl.l.isSemCompleted())
+					res.setSemCompleted();
 				return res;
 			}
 		}
@@ -337,7 +337,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	Expression error(){
 		res=new DefineExp(lhs,rhs);
-		res.sstate=SemState.error;
+		res.setSemError();
 		return res;
 	}
 	if(validDefLhs!flags(olhs,sc)){
@@ -686,7 +686,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		enum simplify=false, outerWanted=false;
 		auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
 		auto reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
-		if(ce.e.sstate==SemState.error) return error();
+		if(ce.e.isSemError()) return error();
 		if(!reversed){
 			reversed=new CallExp(rev,ce.e,false,false);
 			reversed.loc=ce.e.loc;
@@ -706,7 +706,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 // rev(x:=CNOT(a,b);) ⇒ CNOT(a,b):=x; ⇒ a:=reverse(CNOT)(x,b);
 
 Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked){
-	if(e.sstate==SemState.error) return e;
+	if(e.isSemError()) return e;
 	if(validDefLhs!flags(e.e1,sc)) return null;
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked);
 }
@@ -726,7 +726,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 			meaning.scope_=null;
 			meaning.rename=null;
 			if(!scope_.insert(meaning,true))
-				fd.sstate=SemState.error;
+				fd.setSemError();
 		}
 	}
 	/+if(fd.name){
@@ -735,7 +735,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 			fd.scope_=null;
 			fd.rename=null;
 			if(!scope_.insert(fd,true))
-				fd.sstate=SemState.error;
+				fd.setSemError();
 		}
 	}+/
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
@@ -895,8 +895,8 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		stderr.writeln(result);
 	}
 	result=functionDefSemantic(result,sc);
-	if(result.sstate==SemState.passive) result.sstate=SemState.completed; // TODO: ok?
-	enforce(result.sstate==SemState.completed,text("semantic errors while reversing function"));
+	if(result.sstate==SemState.passive) result.setSemCompleted(); // TODO: ok?
+	enforce(result.isSemCompleted(),text("semantic errors while reversing function"));
 	if(equal(fd.ftype.isConst,only(true,false))) result.reversed=fd; // TODO: fix condition
 	fd.reversed=result;
 	return result;
@@ -1050,7 +1050,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 	if(!e) return e;
 	Expression error(){
 		auto res=e.copy();
-		res.sstate=SemState.error;
+		res.setSemError();
 		return res;
 	}
 	if(auto ce=cast(CallExp)e){
@@ -1077,7 +1077,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		static if(language==silq){
 			if(ce.blscope_&&ce.blscope_.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("reversal of implicit forget not supported yet",ce.loc);
-				res.sstate=SemState.error;
+				res.setSemError();
 			}
 		}
 		return res;
