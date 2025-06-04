@@ -23,12 +23,50 @@ abstract class Node{
 
 	// semantic information
 	SemState sstate;
+
+	final bool isSemStarted() const {
+		return sstate >= SemState.started;
+	}
+	final bool isSemFinal() const {
+		return sstate >= SemState.completed;
+	}
+	final bool isSemCompleted() const {
+		return sstate >= SemState.completed && sstate < SemState.error;
+	}
+	final bool isSemError() const {
+		return sstate == SemState.error;
+	}
+	void setSemForceError() {
+		sstate = SemState.error;
+	}
+	void setSemForceCompleted() {
+		assert(!isSemError());
+		sstate = SemState.completed;
+	}
+	void setSemError() {
+		if(isSemError()) return;
+		assert(!isSemFinal(), "expression marked as error after being analyzed");
+		sstate = SemState.error;
+	}
+	void setSemCompleted() {
+		if(isSemError()) return;
+		// assert(!isSemFinal(), "expression already analyzed");
+		sstate = SemState.completed;
+	}
 }
 
 
 abstract class Expression: Node{
 	Expression type;
 	int brackets=0;
+
+	override void setSemCompleted() {
+		if(!isSemError()) {
+			assert(type, format("completed semantic analysis of expression without type: %s %s", typeid(this).name, this));
+			assert(type is this || type.isSemCompleted(), format("type not analyzed: %s", this.type));
+		}
+		super.setSemCompleted();
+	}
 
 	struct CopyArgs{
 		bool preserveSemantic=false;
@@ -70,12 +108,13 @@ abstract class Expression: Node{
 
 	final Expression eval(){
 		auto ntype=!type?null:type is this?this:type.eval();
+		assert(!isSemError(), format("eval on invalid expression: %s", this));
 		auto r=evalImpl(ntype);
 		if(!r.type) r.type=ntype;
 		else if(r is this) return r;
 		else assert(isSubtype(r.type,ntype),text(this," ",typeid(this)," ",r," ",r.type," ",ntype));
 		if(!r.loc.line) r.loc=loc;
-		r.sstate=SemState.completed;
+		if(type) r.setSemCompleted();
 		return r;
 	}
 	abstract Expression evalImpl(Expression ntype);
@@ -85,9 +124,11 @@ abstract class Expression: Node{
 	}
 	final Expression substitute(Expression[Id] subst){
 		auto r=substituteImpl(subst);
-		if(type&&!r.type){
-			if(type == this) r.type=r;
-			else r.type=type.substitute(subst);
+		if(r is this) return r;
+		if(type) {
+			assert(type !is this);
+			if(!r.type) r.type = type;
+			r.setSemCompleted();
 		}
 		return r;
 	}
@@ -105,7 +146,7 @@ abstract class Expression: Node{
 			assert(!!self);
 		}do{
 			if(auto r=self.freeVarsImpl(dg)) return r;
-			if(self.type != self)
+			if(self.type && self.type != self)
 				foreach(v;self.type.freeVars())
 					if(auto r=dg(v)) return r;
 			return 0;
@@ -286,7 +327,7 @@ class TypeAnnotationExp: Expression{
 UnaryExp!(Tok!"&") isAddressExp(Expression self){return cast(UnaryExp!(Tok!"&"))self;}
 
 class ErrorExp: Expression{
-	this(){}//{sstate = SemState.error;}
+	this(){}//{setSemError();}
 	override string toString(){return _brk("__error");}
 	override ErrorExp copyImpl(CopyArgs args){
 		return new ErrorExp();
@@ -310,7 +351,7 @@ class LiteralExp: Expression{
 		tok.str=text(i);
 		auto r=new LiteralExp(tok);
 		r.type=i>=0?(i<=1?Bool(true):ℕt(true)):ℤt(true);
-		r.sstate=SemState.completed;
+		r.setSemCompleted();
 		return r;
 	}
 	static LiteralExp makeString(string s, Location loc=Location.init){
@@ -320,7 +361,7 @@ class LiteralExp: Expression{
 		auto r=new LiteralExp(tok);
 		r.type=stringTy();
 		r.loc=loc;
-		r.sstate=SemState.completed;
+		r.setSemCompleted();
 		return r;
 	}
 	bool isInteger(){
@@ -573,7 +614,7 @@ class Identifier: Expression{
 			r.classical=true;
 			r.type=getClassicalTy(type);
 			r.meaning=meaning;
-			r.sstate=SemState.completed;
+			r.setSemCompleted();
 			return r;
 		}else return this;
 	}
@@ -590,7 +631,7 @@ class Identifier: Expression{
 					r.meaning=meaning;
 					r.type=r.typeFromMeaning;
 					assert(isQuantumTy(r.type));
-					r.sstate=SemState.completed;
+					r.setSemCompleted();
 					return r;
 				}
 			}
@@ -640,8 +681,8 @@ class Identifier: Expression{
 	Expression getInitializer(){
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
-		if(vd.sstate==SemState.error||!vd.initializer) return null;
-		assert(vd.sstate==SemState.completed);
+		if(vd.isSemError()||!vd.initializer) return null;
+		assert(vd.isSemCompleted());
 		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype) || isQNumeric(vd.vtype)){
 			return classical?vd.initializer.getClassical():vd.initializer;
 		} else {
@@ -967,9 +1008,9 @@ class CallExp: Expression{
 		if(ne==e&&narg==arg) return this;
 		auto r=new CallExp(ne,narg,isSquare,isClassical_);
 		r.loc=loc;
-		if(sstate==SemState.completed){
+		if(isSemCompleted()){
 			r.type=type.substitute(subst);
-			r.sstate=SemState.completed;
+			r.setSemCompleted();
 		}
 		return r;
 	}
@@ -1217,10 +1258,10 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	//override string toString(){return e1.toString() ~ " "~ e2.toString~TokChars!op;} // RPN
 	static if(op==Tok!":="){
 		override @property string kind(){ return "variable declaration"; }
-		void setError(){
+		override void setSemError(){
 			foreach(decl;&varDecls)
-				if(decl) decl.sstate=SemState.error;
-			sstate=SemState.error;
+				if(decl) decl.setSemError();
+			super.setSemError();
 		}
 
 		int varDecls(scope int delegate(VarDecl) dg){
@@ -1297,12 +1338,12 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			auto make(Expression exp){
 				exp.type=ntype;
 				exp.loc=ne1.loc.to(ne2.loc);
-				exp.sstate=SemState.completed;
+				if(ntype) exp.setSemCompleted();
 				return exp.evalImpl(ntype);
 			}
 			Expression create(Expression exp,Expression type){
 				exp.type=type;
-				exp.sstate=SemState.completed;
+				exp.setSemCompleted();
 				exp.loc=ne1.loc.to(ne2.loc);
 				return exp;
 			}
@@ -1332,7 +1373,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 							auto nle=LiteralExp.makeInteger(ℤ(le1.lit.str)-ℤ(le2.lit.str)); // TODO: replace literal exp internal representation
 							nle.loc=le1.loc.to(le2.loc);
 							nle.type=ntype;
-							nle.sstate=SemState.completed;
+							nle.setSemCompleted();
 							return make(new BinaryExp!sub1(se1.e1,nle));
 						}
 						if(se1.e2==ne2) return se1.e1.evalImpl(ntype);
@@ -1349,7 +1390,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					auto nb0=new BinaryExp!op(ne1,ae2.e1);
 					nb0.type=ntype;
 					nb0.loc=nb0.e1.loc.to(nb0.e2.loc);
-					nb0.sstate=SemState.completed;
+					nb0.setSemCompleted();
 					auto nb1=new BinaryExp!op(nb0,ae2.e2);
 					nb1.type=ntype;
 					nb1.loc=nb1.e1.loc.to(nb1.e2.loc);
@@ -1414,7 +1455,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 						auto nb0=new BinaryExp!op(ne1,se2.e1);
 						nb0.type=ntype;
 						nb0.loc=nb0.e1.loc.to(nb0.e2.loc);
-						nb0.sstate=SemState.completed;
+						nb0.setSemCompleted();
 						auto nb1=new BinaryExp!(Tok!"+")(nb0,se2.e2);
 						nb1.type=ntype;
 						nb1.loc=nb1.e1.loc.to(nb1.e2.loc);
@@ -1457,7 +1498,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 							auto a=new BinaryExp!op(le1,one);
 							a.loc=le1.loc;
 							a.type=le1.type;
-							a.sstate=SemState.completed;
+							a.setSemCompleted();
 							return make(new BinaryExp!(Tok!"·")(a,me1.e2));
 						}
 						if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
@@ -1467,7 +1508,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 									a.loc=ne1.loc.to(ne2.loc);
 									if(le1.type==le2.type) a.type=le1.type;
 									else a.type=ntype;
-									a.sstate=SemState.completed;
+									a.setSemCompleted();
 									return make(new BinaryExp!(Tok!"·")(a,me1.e2));
 								}
 							}
@@ -1482,7 +1523,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 							auto a=new BinaryExp!op(one,le2);
 							a.loc=le2.loc;
 							a.type=le2.type;
-							a.sstate=SemState.completed;
+							a.setSemCompleted();
 							return make(new BinaryExp!(Tok!"·")(a,ne1));
 						}
 					}
@@ -1506,7 +1547,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			auto r=new BinaryExp!op(ne1,ne2);
 			r.type=ntype;
 			r.loc=ne1.loc.to(ne2.loc);
-			r.sstate=SemState.completed;
+			if(ntype) r.setSemCompleted();
 			return r;
 		}else return this;
 	}

@@ -2,6 +2,7 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.type;
 import astopt;
+import std.format: format;
 
 static if(language==silq){
 	enum Annotation{
@@ -128,20 +129,10 @@ Expression meetTypes(Expression lhs,Expression rhs){
 }
 
 abstract class Type: Expression{
-	this(){ if(!this.type) this.type=typeTy; sstate=SemState.completed; }
 	override @property string kind(){ return "type"; }
 	override string toString(){ return "T"; }
 	abstract override bool opEquals(Object r);
 	override Annotation getAnnotation(){ return pure_; }
-}
-
-class ErrorTy: Type{
-	this(){}//{sstate = SemState.error;}
-	override ErrorTy copyImpl(CopyArgs args){
-		return this;
-	}
-	override string toString(){return "__error";}
-	mixin VariableFree;
 }
 
 class NumericTy: Type{
@@ -154,7 +145,7 @@ class NumericTy: Type{
 			this.nty = nty;
 			this.classical = classical;
 			this.type = classical ? ctypeTy() : nty == NumericType.Bool ? qtypeTy() : qnumericTy();
-			super();
+			setSemCompleted();
 		}
 	} else {
 		private enum classical=true;
@@ -270,6 +261,8 @@ class AggregateTy: Type{
 				else this.quantumTy=quantumTy?quantumTy:New!AggregateTy(decl,false,this,null);
 			}
 		}
+		this.type=typeTy(); // TODO
+		setSemCompleted();
 	}
 	override AggregateTy copyImpl(CopyArgs args){
 		return this;
@@ -305,6 +298,8 @@ class ContextTy: Type{
 	else private enum classical=true;
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
+		this.type = classical ? ctypeTy() : typeTy();
+		setSemCompleted();
 	}
 	override ContextTy copyImpl(CopyArgs args){
 		return this;
@@ -337,7 +332,10 @@ ContextTy contextTy(bool classical=true){
 
 
 class BottomTy: Type{
-	this(){ type=etypeTy; }
+	this(){
+		type = etypeTy;
+		setSemCompleted();
+	}
 	override BottomTy copyImpl(CopyArgs args){
 		return this;
 	}
@@ -389,7 +387,7 @@ class TupleTy: Type,ITupleTy{
 	}do{
 		this.types=types;
 		this.type=typeOfTupleTy(types);
-		super();
+		setSemCompleted();
 	}
 	override TupleTy copyImpl(CopyArgs args){
 		return this;
@@ -505,7 +503,7 @@ class ArrayTy: Type{
 	}do{
 		this.next=next;
 		this.type=typeOfArrayTy(next);
-		super();
+		setSemCompleted();
 	}
 	override ArrayTy copyImpl(CopyArgs args){
 		return this;
@@ -615,7 +613,7 @@ class VectorTy: Type, ITupleTy{
 		this.next=next;
 		this.num=num;
 		this.type=typeOfVectorTy(next,num);
-		super();
+		setSemCompleted();
 	}
 	override string toString(){
 		bool p=cast(FunTy)next||next.isTupleTy&&next!is unit;
@@ -732,6 +730,7 @@ class StringTy: Type{
 	else enum classical=true;
 	private this(bool classical){
 		this.type=typeOfStringTy(classical);
+		setSemCompleted();
 	}
 	override StringTy copyImpl(CopyArgs args){
 		return this;
@@ -826,7 +825,7 @@ class ProductTy: Type{
 		this.cod=cod;
 		this.annotation=annotation;
 		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
-		super();
+		setSemCompleted();
 		static if(language==silq){
 			this.isClassical_=isClassical_;
 			if(isClassical_) classicalTy=this;
@@ -834,6 +833,11 @@ class ProductTy: Type{
 		}
 		assert(isClassical(this)==this.isClassical_);
 		// TODO: report DMD bug, New!ProductTy does not work
+	}
+	override void setSemCompleted() {
+		assert(dom && dom.isSemCompleted(), format("completed semantic analysis of product type without domain: %s", this));
+		assert(cod && cod.isSemCompleted(), format("completed semantic analysis of product type without codomain: %s", this));
+		super.setSemCompleted();
 	}
 	override ProductTy copyImpl(CopyArgs args){
 		return this;
@@ -846,7 +850,7 @@ class ProductTy: Type{
 		return r;
 	}
 	override string toString(){
-		auto c=cod.toString();
+		auto c=cod ? cod.toString() : "<missing codomain>";
 		auto del=isSquare?"[]":"()";
 		string getParamKind(bool const_){
 			string paramKind=null;
@@ -857,7 +861,7 @@ class ProductTy: Type{
 			return paramKind;
 		}
 		string r;
-		if(!cod.hasAnyFreeVar(names)){
+		if(cod && !cod.hasAnyFreeVar(names)){
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
 				auto paramKind=getParamKind(const_);
@@ -885,7 +889,6 @@ class ProductTy: Type{
 			if(isSquare) d=del[0]~d~del[1];
 			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
-			assert(names.length);
 			string args;
 			if(isTuple){
 				args=zip(isConst,names,iota(tdom.length).map!((i)=>tdom[i])).map!((x){
@@ -914,7 +917,11 @@ class ProductTy: Type{
 		return dom;
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
-		if(auto r=dom.freeVarsImpl(dg)) return r;
+		if(dom) {
+			if(auto r=dom.freeVarsImpl(dg)) return r;
+		} else {
+			assert(!isSemCompleted());
+		}
 		return cod.freeVarsImpl(v=>names.canFind(v.id)?0:dg(v));
 	}
 	private ProductTy relabel(Id oname,Id nname)in{
@@ -1033,7 +1040,7 @@ class ProductTy: Type{
 		if(isTuple){
 			auto tgarg=new TupleExp(gargs);
 			tgarg.type=tupleTy(gargs.map!(garg=>garg.type).array);
-			tgarg.sstate=SemState.completed;
+			tgarg.setSemCompleted();
 			garg=tgarg;
 		}else garg=gargs[0];
 		cod=cast(ProductTy)tryApply(garg,true);
@@ -1050,7 +1057,7 @@ class ProductTy: Type{
 			foreach(i,n;names){
 				auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
 				exp.type=targTy[i];
-				exp.sstate=SemState.completed;
+				exp.setSemCompleted();
 				subst[n]=exp.eval();
 			}
 		}else{
@@ -1125,7 +1132,7 @@ class ProductTy: Type{
 			if(tpl.length!=names.length) return null;
 			auto vars=new TupleExp(iota(names.length).map!(i=>cast(Expression)varTy(names[i],tpl[i])).array);
 			vars.type=ndom;
-			vars.sstate=SemState.completed;
+			vars.setSemCompleted();
 			auto lCod=tryApply(vars,isSquare);
 			auto rCod=r.tryApply(vars,isSquare);
 			assert(lCod&&rCod);
@@ -1179,7 +1186,7 @@ class ProductTy: Type{
 			assert(!isTuple&&names.length==1);
 			auto vars=new TupleExp(iota(nnames.length).map!(i=>cast(Expression)varTy(nnames[i],tpl[i])).array);
 			vars.type=dom;
-			vars.sstate=SemState.completed;
+			vars.setSemCompleted();
 			narg=vars;
 		}else{
 			assert(isTuple&&nnames.length==1);
@@ -1205,7 +1212,8 @@ class ProductTy: Type{
 }
 
 ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
-	assert(dom&&cod);
+	assert(dom && dom.isSemCompleted(), format("function domain not analyzed: %s", dom));
+	assert(cod && cod.isSemCompleted());
 	if(isTuple){
 		auto tdom=dom.isTupleTy();
 		assert(tdom&&names.length==tdom.length&&isConst.length==tdom.length);
@@ -1298,12 +1306,12 @@ class VariadicTy: Type{
 		if(auto ve=cast(VectorExp)next){
 			this.next=new TupleExp(ve.e);
 			this.next.type=tupleTy(ve.e.map!(e=>e.type).array);
-			this.next.sstate=SemState.completed;
+			this.next.setSemCompleted();
 		}else this.next=next;
-		this.type=typeOfVariadicTy(next);
 		this.isClassical_=isClassical_;
+		this.type=typeOfVariadicTy(next);
 		if(isClassical_) this.type=getClassicalTy(this.type);
-		super();
+		setSemCompleted();
 	}
 	override VariadicTy copyImpl(CopyArgs args){
 		return this;
@@ -1330,7 +1338,7 @@ class VariadicTy: Type{
 			auto types=iota(tt.length).map!(i=>tt[i]).array;
 			auto tpl=new TupleExp(types);
 			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
-			tpl.sstate=SemState.completed;
+			tpl.setSemCompleted();
 			return next.unifyImpl(tpl,subst,meet);
 		}
 		return false;
@@ -1368,7 +1376,7 @@ class VariadicTy: Type{
 		if(auto tt=r.isTupleTy()){
 			auto tpl=new TupleExp(iota(tt.length).map!(i=>tt[i]).array);
 			tpl.type=tupleTy(iota(tt.length).map!(i=>tt[i].type).array);
-			tpl.sstate=SemState.completed;
+			tpl.setSemCompleted();
 			return next==tpl; // TODO: improve
 		}
 		return false;
@@ -1403,7 +1411,7 @@ Identifier varTy(Id name,Expression type,bool classical=false)in{
 		auto r=new Identifier(name);
 		static if(language==silq) r.classical=classical;
 		r.type=type;
-		r.sstate=SemState.completed;
+		r.setSemCompleted();
 		return r;
 	})(name,type,classical);
 }
@@ -1471,7 +1479,7 @@ class TypeTy: Type{
 			this.tyty = tyty;
 			// TODO: types capturing quantum values?
 			this.type=(tyty == TypeType.ctype ? this : ctypeTy());
-			super();
+			setSemCompleted();
 		}
 		override string toString(){
 			final switch(tyty) {
@@ -1580,7 +1588,10 @@ Expression typeOfBoolTy(bool classical){
 
 static if(language==silq)
 class QNumericTy: Type{
-	this(){ this.type=ctypeTy; super(); } // TODO: types capturing quantum values?
+	this(){
+		this.type=ctypeTy;
+		setSemCompleted();
+	}
 	override QNumericTy copyImpl(CopyArgs args){
 		return this;
 	}
