@@ -570,11 +570,12 @@ struct Parser{
 			//case Tok!"i": return New!CallExp(New!BinaryExp!(Tok!".")(left,New!Identifier(self.name)),parseExpression(45));// infix
 			//case Tok!"?": mixin(rule!(TernaryExp,"_",Existing,"left",Expression,":",OrOrExp));
 			case Tok!"[":
+				auto iloc=tok.loc;
 				nextToken();
 				if(ttype==Tok!"]"){
-					loc=loc.to(tok.loc);
+					iloc=iloc.to(tok.loc);
 					auto empty=New!TupleExp(Expression[].init);
-					empty.loc=ptok.loc.to(tok.loc);
+					empty.loc=iloc;
 					nextToken();
 					mixin(rule!(IndexExp,Existing,q{left,empty}));
 				}
@@ -586,8 +587,8 @@ struct Parser{
 					return res=new SliceExp(left,l,r);
 				}
 				auto tpl=parseParenthesized2!"[]"(l);
-				loc=loc.to(ptok.loc);
-				tpl.loc=loc;
+				iloc=iloc.to(ptok.loc);
+				tpl.loc=iloc;
 				res=New!IndexExp(left,tpl);
 				return res;
 			case Tok!"(":
