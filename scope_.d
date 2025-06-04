@@ -694,6 +694,7 @@ abstract class Scope{
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
 			//imported!"util.io".writeln("ADDING: ",this,"(",cast(void*)this,") ",deps);
 			foreach(i,ref dep;deps){
+				assert(!!dep[0]);
 				if(dep[0] in dependencies.dependencies){
 					//writeln(dep[0]," ",toRemove," ",dependencies)
 					dep[1].joinWith(dependencies.dependencies[dep[0]]);
@@ -1054,7 +1055,7 @@ abstract class Scope{
 				r~=text("dependencies: ",dependencies,"\n");
 			import ast.semantic_: typeForDecl;
 			import std.array: join;
-			r~=text("{",symtab.values.map!(decl=>text(decl.getName,": ",typeForDecl(decl))).join(", "),"}");
+			r~=text("{",symtab.values.map!text.join(", "),"}");
 			return r;
 		}
 		private Identifier isConst(Declaration decl)in{
