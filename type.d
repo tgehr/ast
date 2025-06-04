@@ -530,7 +530,7 @@ class ArrayTy: Type{
 		return false;
 	}
 	override ArrayTy evalImpl(Expression ntype){
-		assert(isTypeTy(ntype));
+		assert(isTypeTy(ntype) || isQNumericTy(ntype));
 		return arrayTy(next.eval());
 	}
 	override bool opEquals(Object o){
@@ -641,7 +641,7 @@ class VectorTy: Type, ITupleTy{
 		return false;
 	}
 	override VectorTy evalImpl(Expression ntype){
-		assert(isTypeTy(ntype));
+		assert(isTypeTy(ntype) || isQNumericTy(ntype));
 		return vectorTy(next.eval(),num.eval());
 	}
 	override bool opEquals(Object o){
@@ -766,73 +766,31 @@ string annotationToString(Annotation annotation){
 	}
 }
 
-class RawProductTy: Expression{
-	Parameter[] params;
-	Expression cod;
-	bool isSquare,isTuple;
-	Annotation annotation;
-	this(Parameter[] params,Expression cod,bool isSquare,bool isTuple,Annotation annotation){
-		this.params=params; this.cod=cod;
-		this.isSquare=isSquare; this.isTuple=isTuple;
-		this.annotation=annotation;
-	}
-	override RawProductTy copyImpl(CopyArgs args){
-		return new RawProductTy(params.map!(p=>p.copy(args)).array,cod.copy(args),isSquare,isTuple,annotation);
-	}
-	override string toString(){
-		return "<unanalyzed Π type>"; // TODO: format nicely.
-	}
-
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-
 class ProductTy: Type{
+	Parameter[] params;
 	bool[] isConst;
 	Id[] names;
-	Expression dom, cod;
+	Expression dom, cod; // `dom` set by semantic analysis
 	bool isSquare,isTuple;
 	Annotation annotation;
 	static if(language==silq){
 		private ProductTy classicalTy;
 		bool isClassical_;
 	}else enum isClassical_=true;
-	private this(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical_)in{
+	this(Parameter[] params, Expression cod, bool isSquare, bool isTuple, Annotation annotation, bool isClassical_)in{
+		assert(cod);
 		// TODO: assert that all names are distinct
-		if(isTuple){
-			auto tdom=dom.isTupleTy;
-			assert(!!tdom);
-			assert(names.length==tdom.length);
-			assert(isConst.length==tdom.length);
-		}else{
-			assert(names.length==1);
-			assert(isConst.length==1);
-		}
-		assert(isType(cod)||isQNumeric(cod),text(cod));
 	}do{
-		this.isConst=isConst; // TODO: don't track this in PSI
-		this.names=names; this.dom=dom;
-		this.isSquare=isSquare; this.isTuple=isTuple;
-		Expression[Id] subst;
-		foreach(i;0..names.length)
-			if(names[i])
-				subst[names[i]]=varTy(names[i],argTy(i));
-		assert(!cod.hasFreeVar(Id()));
-		cod=cod.substitute(subst); // TODO: only do this if necessary?
-		this.cod=cod;
-		this.annotation=annotation;
-		this.type=typeOfProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
-		setSemCompleted();
+		this.params = params;
+		this.isConst = params.map!(p => p.isConst).array;
+		this.names = params.map!(p => p.name ? p.name.id : Id()).array;
+		this.isSquare = isSquare;
+		this.isTuple = isTuple;
+		this.cod = cod;
+		this.annotation = annotation;
 		static if(language==silq){
 			this.isClassical_=isClassical_;
-			if(isClassical_) classicalTy=this;
-			else classicalTy=new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,true);
 		}
-		assert(isClassical(this)==this.isClassical_);
-		// TODO: report DMD bug, New!ProductTy does not work
 	}
 	override void setSemCompleted() {
 		assert(dom && dom.isSemCompleted(), format("completed semantic analysis of product type without domain: %s", this));
@@ -840,10 +798,16 @@ class ProductTy: Type{
 		super.setSemCompleted();
 	}
 	override ProductTy copyImpl(CopyArgs args){
-		return this;
+		if(dom) return this; // TODO
+		auto r = new ProductTy(params.map!(p=>p.copy(args)).array, cod.copy(args), isSquare, isTuple, annotation, isClassical_);
+		if(args.preserveSemantic) {
+			r.dom = dom;
+		}
+		return r;
 	}
 	/+private+/ @property ITupleTy tdom()in{ // TODO: make private
 		assert(isTuple);
+		assert(dom);
 	}do{
 		auto r=dom.isTupleTy;
 		assert(!!r);
@@ -865,41 +829,30 @@ class ProductTy: Type{
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
 				auto paramKind=getParamKind(const_);
-				if(cast(FunTy)a) return del[0]~(paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"")~del[1];
+				if(cast(ProductTy)a) return del[0]~(paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"")~del[1];
 				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
 				return paramKind~a.toString();
 			}
-			if(isSquare&&all(isConst)||!isSquare&&all!(x=>!x)(isConst)){
-				d=dom.toString();
-			}else if(auto tpl=dom.isTupleTy()){
-				if(isTuple){
-					assert(!!tpl.length);
-					auto paramKind=getParamKind(isConst[0]);
-					if(tpl.length!=1){
-						assert(tpl.length==isConst.length);
-						d=zip(isConst,iota(tpl.length).map!(i=>tpl[i])).map!((a){
-							auto paramKind=getParamKind(a[0]);
-							return (a[1].isTupleTy()&&a[1]!is unit?"("~paramKind~a[1].toString()~")":addp(a[0],a[1]));
-						}).join(" × ");
-					}else d="("~paramKind~tpl[0].toString()~")¹";
-				}else d=addp(isConst[0],dom,del);
-			}else d=addp(isConst[0],dom,del);
+			d=params.map!((p){
+				auto paramKind=getParamKind(p.isConst);
+				auto pty = p.vtype ? p.vtype : p.dtype;
+				auto ptup = pty.isTupleTy();
+				return (ptup && ptup.length > 1) ? "("~paramKind~pty.toString()~")" : addp(p.isConst, pty);
+			}).join(" × ");
+			if(isTuple && params.length == 1) {
+				d="("~d~")¹";
+			}
 			static if(language==silq) auto arrow=(isClassical_?"!":"")~"→";
 			else enum arrow="→";
 			if(isSquare) d=del[0]~d~del[1];
 			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
 			string args;
-			if(isTuple){
-				args=zip(isConst,names,iota(tdom.length).map!((i)=>tdom[i])).map!((x){
-					auto paramKind=getParamKind(x[0]);
-					return paramKind~x[1].str~":"~x[2].toString();
-				}).join(",");
-				if(nargs==1) args~=",";
-			}else{
-				auto paramKind=getParamKind(isConst[0]);
-				args=paramKind~names[0].str~":"~dom.toString();
-			}
+			args=params.map!((p){
+				auto paramKind=getParamKind(p.isConst);
+				auto pty = p.vtype ? p.vtype : p.dtype;
+				return paramKind~(p.name ? p.name.toString() : "_")~":"~pty.toString();
+			}).join(",");
 			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
 			r=pi~del[0]~args~del[1]~annotationToString(annotation)~". "~c;
@@ -909,12 +862,21 @@ class ProductTy: Type{
 	override bool isConstant(){ return dom.isConstant() && cod.isConstant(); }
 	override bool isTotal(){ return dom.isTotal() && cod.isTotal(); }
 	@property size_t nargs(){
-		if(isTuple) return tdom.length;
-		return 1;
+		return params.length;
 	}
-	Expression argTy(size_t i)in{assert(i<nargs);}do{
-		if(isTuple) return tdom[i];
-		return dom;
+	Expression argTy(size_t i){
+		return params[i].vtype;
+	}
+	bool argConst(size_t i){
+		return params[i].isConst;
+	}
+	bool argConstForReverse(size_t i){
+		if(argConst(i)) return true;
+		auto ty = argTy(i);
+		return ty.isClassical() && !ty.isQuantum();
+	}
+	bool argConstForSubtyping(size_t i){
+		return argConst(i) || argTy(i).isClassical;
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(dom) {
@@ -1079,10 +1041,10 @@ class ProductTy: Type{
 		return this.isSubtypeImpl(r)&&r.isSubtypeImpl(this);
 	}
 	auto isConstForReverse(){
-		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical&&!argTy(i).isQuantum);
+		return iota(nargs).map!(i=>argConstForReverse(i));
 	}
 	private auto isConstForSubtyping(){
-		return iota(nargs).map!(i=>isConst[i]||argTy(i).isClassical);
+		return iota(nargs).map!(i=>argConstForSubtyping(i));
 	}
 
 	bool isConstCompatible(ProductTy rhs){
@@ -1197,16 +1159,22 @@ class ProductTy: Type{
 		return productTy(nIsConst,nnames,dom,ncod,isSquare,tuple,annotation,isClassical(this));
 	}
 	override ProductTy getClassical(){
-		static if(language==silq) return classicalTy;
-		else return this;
+		static if(language==silq) {
+			if(classicalTy) return classicalTy;
+			if(isClassical_) return classicalTy=this;
+			return classicalTy=productTy(isConst, names, dom, cod, isSquare, isTuple, annotation, true);
+		} else {
+			return this;
+		}
 	}
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0; // TODO: ok?
 	}
 	override Expression evalImpl(Expression ntype){
 		assert(isTypeTy(ntype));
-		auto ndom=dom.eval(),ncod=cod.eval();
-		if(ndom==dom&&ncod==cod) return this;
+		auto ndom=dom.eval();
+		auto ncod=cod.eval();
+		if(ndom is dom && ncod is cod) return this;
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
 	}
 }
@@ -1219,7 +1187,35 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 		assert(tdom&&names.length==tdom.length&&isConst.length==tdom.length);
 	}else assert(names.length==1&&isConst.length==1);
 }do{
-	return memoize!((bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)=>new ProductTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical))(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical);
+	return memoize!((bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
+		Expression[] types;
+		if(isTuple) {
+			auto tdom = dom.isTupleTy;
+			assert(tdom);
+			types = iota(tdom.length).map!(i => tdom[i]).array;
+		} else {
+			types = [dom];
+		}
+		assert(types.length == names.length);
+		auto params = new Parameter[names.length];
+		foreach(i, name; names) {
+			auto id = name ? new Identifier(name) : null;
+			auto p = new Parameter(isConst[i], id, types[i]);
+			params[i] = p;
+			p.vtype = p.dtype;
+			if(id) {
+				id.meaning = p;
+				id.type = p.vtype;
+				id.setSemCompleted();
+			}
+			p.setSemCompleted();
+		}
+		auto r = new ProductTy(params, cod, isSquare, isTuple, annotation, isClassical);
+		r.dom = dom;
+		r.type = typeOfProductTy(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
+		r.setSemCompleted();
+		return r;
+	})(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
 }
 
 alias FunTy=ProductTy;
@@ -1249,25 +1245,7 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClas
 	return funTy(dom,cod,isSquare,isTuple,pure_,isClassical);
 }
 
-class RawVariadicTy: Expression{
-	Expression next;
-	this(Expression next){ this.next=next; }
-	override RawVariadicTy copyImpl(CopyArgs args){
-		return new RawVariadicTy(next.copy(args));
-	}
-	override string toString(){
-		auto ns=next.toString();
-		import std.uni:isAlpha;
-		return _brk((ns[0].isAlpha?"∏ ":"∏")~ns);
-	}
-	override Expression evalImpl(Expression ntype){ return this; }
-	mixin VariableFree;
-	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0;
-	}
-}
-
-Expression typeOfVariadicTy(Expression next)in{
+Expression typeOfVariadicTy(Expression next, bool isClassical)in{
 	assert(next&&next.type,text(next));
 	if(auto tpl=cast(TupleTy)next.type)
 		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
@@ -1280,10 +1258,10 @@ Expression typeOfVariadicTy(Expression next)in{
 		Expression r=utypeTy;
 		foreach(t;tpl.types)
 			r=joinTypes(r,t);
-		return r;
+		return isClassical ? r.getClassicalTy() : r;
 	}
 	auto enext=elementType(next.type);
-	return enext;
+	return isClassical ? enext.getClassicalTy() : enext;
 }
 
 class VariadicTy: Type{
@@ -1294,27 +1272,12 @@ class VariadicTy: Type{
 		if(cast(VariadicTy)r) return null;
 		return r.isTupleTy();
 	}
-	private this(Expression next,bool isClassical_)in{
-		assert(next&&next.type);
-		if(auto tpl=cast(TupleTy)next.type)
-			assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
-		else{
-			auto et=elementType(next.type);
-			assert(isType(et)||isQNumeric(et));
-		}
-	}do{
-		if(auto ve=cast(VectorExp)next){
-			this.next=new TupleExp(ve.e);
-			this.next.type=tupleTy(ve.e.map!(e=>e.type).array);
-			this.next.setSemCompleted();
-		}else this.next=next;
+	this(Expression next,bool isClassical_){
+		this.next=next;
 		this.isClassical_=isClassical_;
-		this.type=typeOfVariadicTy(next);
-		if(isClassical_) this.type=getClassicalTy(this.type);
-		setSemCompleted();
 	}
 	override VariadicTy copyImpl(CopyArgs args){
-		return this;
+		return new VariadicTy(next.copy(args), isClassical_);
 	}
 	override string toString(){
 		auto ns="("~next.toString()~")";
@@ -1385,7 +1348,8 @@ class VariadicTy: Type{
 		return this==r?this:null; // TODO
 	}
 	override Expression getClassical(){
-		return variadicTy(next,true);
+		if(isClassical_) return this;
+		return variadicTy(next, true);
 	}
 	override Expression getQuantum(){
 		return null; // TODO
@@ -1396,12 +1360,23 @@ class VariadicTy: Type{
 }
 
 VariadicTy variadicTy(Expression next,bool isClassical)in{
-	assert(next&&next.type);
+	assert(next&&next.isSemCompleted());
 	if(auto tpl=cast(TupleTy)next.type)
 		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
 	else assert(isType(elementType(next.type))||isQNumeric(elementType(next.type)));
 }do{
-	return memoize!((Expression next,bool isClassical)=>new VariadicTy(next,isClassical))(next,isClassical);
+	if(auto ve=cast(VectorExp)next){
+		next=new TupleExp(ve.e);
+		next.type=tupleTy(ve.e.map!(e=>e.type).array);
+		next.setSemCompleted();
+	}
+	return memoize!((Expression next,bool isClassical){
+		auto r = new VariadicTy(next, isClassical);
+		r.type = typeOfVariadicTy(next, isClassical);
+		r.setSemCompleted();
+		assert(!r.isClassical_ || r.type.isClassical);
+		return r;
+	})(next,isClassical);
 }
 
 Identifier varTy(Id name,Expression type,bool classical=false)in{

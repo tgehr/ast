@@ -2310,14 +2310,18 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 
 	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
 
+	if(auto fa=cast(ProductTy)e) return f(fa,forward!args);
+	// if(auto ty=cast(ArrayTy)e) return f(ty,forward!args);
+	// if(auto ty=cast(TupleTy)e) return f(ty,forward!args);
+	// if(auto ty=cast(VectorTy)e) return f(ty,forward!args);
+	if(auto va=cast(VariadicTy)e) return f(va,forward!args);
+
 	static if(unanalyzed){
 		// expression types that only occur in unanalyzed expressions
 		if(auto we=cast(WildcardExp)e) return f(we,forward!args);
 		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
-		if(auto fa=cast(RawProductTy)e) return f(fa,forward!args);
-		if(auto va=cast(RawVariadicTy)e) return f(va,forward!args);
 	}
 
 	return default_(e,forward!args);
