@@ -462,8 +462,7 @@ abstract class Scope{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
 		if(symtab.get(odecl.name.id,null) !is odecl) return null;
 		if(remove){
-			symtab.remove(odecl.name.id);
-			rnsymtab.remove(odecl.getId);
+			symtabRemove(odecl);
 			static if(language==silq){
 				static if(language==silq){
 					if(odecl !is ndecl)
@@ -477,9 +476,8 @@ abstract class Scope{
 			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
 			assert(odecl.name.id == ndecl.name.id);
-			symtab[odecl.name.id]=ndecl;
-			rnsymtab.remove(odecl.getId);
-			rnsymtab[ndecl.getId]=ndecl;
+			symtabRemove(odecl);
+			symtabInsert(ndecl);
 			static if(language==silq)
 				replaceDecl(odecl,ndecl);
 		}
@@ -809,8 +807,7 @@ abstract class Scope{
 				if(sc!is this)
 					if(auto dm=osym.name.id in deadMerges)
 						dm.mergedFrom~=osym;
-				sc.symtab.remove(osym.name.id);
-				sc.rnsymtab.remove(osym.getId);
+				sc.symtabRemove(osym);
 				static if(language==silq){
 					if(sc.dependencyTracked(osym)){
 						sc.dependencies.pushUp(osym,true);
@@ -821,10 +818,8 @@ abstract class Scope{
 			void splitSym(){
 				auto nsym=scopes[0].split(sym,null);
 				if(nsym is sym) return;
-				symtab.remove(sym.name.id);
-				rnsymtab.remove(sym.getId);
-				symtab[nsym.name.id]=nsym;
-				rnsymtab[nsym.getId]=nsym;
+				symtabRemove(sym);
+				symtabInsert(nsym);
 				sym=nsym;
 			}
 			void removeSym(){
@@ -834,8 +829,7 @@ abstract class Scope{
 				symExists=false;
 			}
 			void promoteSym(Expression ntype){
-				symtab.remove(sym.name.id);
-				rnsymtab.remove(sym.getId);
+				symtabRemove(sym);
 				auto var=addVariable(sym,ntype,true);
 				if(!dependencyTracked(sym))
 					addDefaultDependency(sym); // TODO: ideally can be removed
@@ -1305,8 +1299,7 @@ class NestedScope: Scope{
 		}else consumedOuter~=ndecl;
 		Declaration result=ndecl;
 		if(type){
-			symtab.remove(odecl.name.id);
-			rnsymtab.remove(odecl.getId);
+			symtabRemove(odecl);
 			if(dependencyTracked(odecl)){
 				// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
 				dependencies.pushUp(odecl,true); // consume declaration normally on split
@@ -1329,8 +1322,7 @@ class NestedScope: Scope{
 				}
 			}
 		}else if(remove){
-			symtab.remove(odecl.name.id);
-			rnsymtab.remove(odecl.getId);
+			symtabRemove(odecl);
 			static if(language==silq){
 				if(dependencyTracked(odecl)){
 					dependencies.pushUp(odecl,true);
