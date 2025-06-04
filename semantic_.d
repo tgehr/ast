@@ -2867,7 +2867,7 @@ void checkIndexReplacement(Expression be,Scope sc){
 				sc.error("replaced component must be consumed in right-hand side", indicesToReplace[i].loc);
 				indicesToReplace[i].sstate=SemState.error;
 				be.sstate=SemState.error;
-				if(auto meaning=sc.peekSymtab(crepls[i].name))
+				if(auto meaning=sc.peekSymtab(crepls[i].name,true))
 					meaning.sstate=SemState.error;
 			}
 		}

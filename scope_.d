@@ -129,7 +129,6 @@ abstract class Scope{
 			return false;
 		}
 		rename(decl);
-		assert(decl.getId !in rnsymtab||cast(DeadDecl)rnsymtab[decl.getId]);
 		symtabInsert(decl);
 		decl.scope_=this;
 		return true;
@@ -137,12 +136,18 @@ abstract class Scope{
 
 	void symtabInsert(Declaration decl)in{
 		assert(!toRemove.canFind(decl));
+		assert(!!decl);
+		assert(decl.getId !in rnsymtab||cast(DeadDecl)rnsymtab[decl.getId]);
 	}do{
-		symtab[decl.name.id]=decl;
+		if(decl.name.id !in symtab||cast(DeadDecl)symtab[decl.name.id])
+			symtab[decl.name.id]=decl;
 		rnsymtab[decl.getId]=decl;
 	}
-	void symtabRemove(Declaration decl){
-		symtab.remove(decl.name.id);
+	void symtabRemove(Declaration decl)in{
+		assert(decl.getId in rnsymtab);
+	}do{
+		if(symtab.get(decl.name.id,null) is decl)
+			symtab.remove(decl.name.id);
 		rnsymtab.remove(decl.getId);
 	}
 
@@ -358,12 +363,13 @@ abstract class Scope{
 			cd.rename=new Identifier(decl.rename.id);
 			cd.rename.loc=decl.rename.loc;
 		}
+		cd.scope_=decl.scope_;
 		cd.sstate=SemState.completed;
 		if(canInsert(cd.name))
 			symtabInsert(cd);
 	}
 	final Declaration consume(Declaration decl,Identifier use){
-		if(decl.name.id !in symtab) return null;
+		if(rnsymtab.get(decl.getId,null) !is decl) return null;
 		if(cast(DeadDecl)decl) return null;
 		Expression type;
 		return consumeImpl(decl,decl,type,true,use); // TODO: separate splitting and consuming
@@ -460,7 +466,7 @@ abstract class Scope{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
-		if(symtab.get(odecl.name.id,null) !is odecl) return null;
+		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		if(remove){
 			symtabRemove(odecl);
 			static if(language==silq){
@@ -500,16 +506,15 @@ abstract class Scope{
 
 	protected final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
 		if(allowMerge) return null;
-		auto r=symtab.get(ident.id, null);
-		if(rnsym&&!r) r=rnsymtab.get(ident.id,null);
+		auto r=rnsym?rnsymtab.get(ident.id,null):symtab.get(ident.id,null);
 		if(auto dd=cast(DeadDecl)r){
 			if(failures) *failures~=dd;
 			r=null;
 		}
 		return r;
 	}
-	final Declaration peekSymtab(Id name){
-		return symtab.get(name,rnsymtab.get(name,null));
+	final Declaration peekSymtab(Id name,bool rnsym){
+		return rnsym?rnsymtab.get(name,null):symtab.get(name,null);
 	}
 
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
@@ -604,7 +609,7 @@ abstract class Scope{
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
 		bool errors=false;
 		static if(language==silq){
-			foreach(n,d;symtab.dup){
+			foreach(_,d;rnsymtab.dup){
 				if(cast(DeadDecl)d) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				if(auto read=isConst(d)){
@@ -649,7 +654,7 @@ abstract class Scope{
 			clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
-		foreach(n,d;symtab.dup){
+		foreach(_,d;rnsymtab.dup){
 			if(d.isLinear()||d.scope_ is this){
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
@@ -792,6 +797,7 @@ abstract class Scope{
 				dm.rename=new Identifier(sym.rename.id);
 				dm.rename.loc=sym.rename.loc;
 			}
+			dm.scope_=this;
 			dm.quantumControl=quantumControl;
 			dm.numBranches=scopes.length;
 			dm.loc=sym.loc;
@@ -799,12 +805,12 @@ abstract class Scope{
 			deadMerges[sym.name.id]=dm;
 			return dm;
 		}
-		foreach(psym;symtab.dup){
+		foreach(psym;rnsymtab.dup){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
 			void removeOSym(Scope sc,Declaration osym){
-				if(sc!is this)
+				if(sc !is this)
 					if(auto dm=osym.name.id in deadMerges)
 						dm.mergedFrom~=osym;
 				sc.symtabRemove(osym);
@@ -940,7 +946,7 @@ abstract class Scope{
 			}
 		}
 		foreach(_,dm;deadMerges){
-			insert(dm);
+			symtabInsert(dm);
 		}
 		foreach(sc;scopes){
 			static if(language==silq) sc.dependencies.clear();
@@ -993,7 +999,7 @@ abstract class Scope{
 	abstract FunctionDef getFunction();
 	abstract DatDecl getDatDecl();
 	final int all(T)(int delegate(T) dg){
-		foreach(k,v;symtab){
+		foreach(_,v;rnsymtab){
 			auto t=cast(T)v;
 			if(!t) continue;
 			if(auto r=dg(t)) return r;
@@ -1352,8 +1358,11 @@ class NestedScope: Scope{
 
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
 		if(this is outermost) return true;
-		foreach(sc;parent.activeNestedScopes)
-			sc.symtabInsert(meaning);
+		foreach(sc;parent.activeNestedScopes){
+			//sc.symtabInsert(meaning); // TODO
+			sc.symtab[meaning.name.id]=meaning;
+			sc.rnsymtab[meaning.getId]=meaning;
+		}
 		return parent.insertCaptureImpl(id,meaning,type,outermost);
 	}
 
