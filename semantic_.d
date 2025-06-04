@@ -1607,12 +1607,16 @@ Dependency getDependency(Expression e,Scope sc){
 	return getDependencyImpl(e,sc);
 }
 
-bool consumes(Expression e){
-	if(!e.constLookup&&cast(Identifier)e&&!(cast(Identifier)e).implicitDup) return true;
+Identifier consumes(Expression e){
+	if(!e.constLookup){
+		if(auto id=cast(Identifier)e)
+			if(!id.implicitDup)
+				return id;
+	}
 	foreach(c;e.components)
-		if(c.consumes())
-			return true;
-	return false;
+		if(auto id=c.consumes())
+			return id;
+	return null;
 }
 
 bool isLiftedImpl(Expression e,Scope sc){
@@ -1893,10 +1897,12 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(e.a.type&&!isBasicIndexType(e.a.type)){
 				sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
 				idx.sstate=SemState.error;
-			}
-			if(!e.a.isLifted(sc)){
-				sc.error("index for component replacement must be 'lifted'",e.a.loc);
-				static if(language==silq) sc.clearConsumed();
+			}else if(!e.a.isQfree()){
+				sc.error("index for component replacement must be 'qfree'",e.a.loc);
+				idx.sstate=SemState.error;
+			}else if(auto id=consumes(e.a)){
+				sc.error("index for component replacement cannot consume variables",e.a.loc); // TODO: support
+				sc.note(format("consumes '%s'",id.meaning?id.meaning:id),id.loc);
 				idx.sstate=SemState.error;
 			}
 		}
