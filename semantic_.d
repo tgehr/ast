@@ -1503,8 +1503,9 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	scope(success) if(e.sstate!=SemState.error) e.sstate=SemState.completed;
 	static if(language==silq){
 		scope(exit){
+			if(!sc.resetConst())
+				e.sstate=SemState.error;
 			sc.clearConsumed();
-			sc.resetConst();
 		}
 	}
 	if(isDefineOrAssign(e)) return defineOrAssignSemantic(e,sc);
@@ -5602,10 +5603,16 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	return expr;
 }
 
+void nonLiftedError(Expression expr,Scope sc){
+	sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+	expr.sstate=SemState.error;
+}
+
 bool checkLifted(Expression expr,ExpSemContext context){
 	if(!expr.constLookup||expr.byRef) return true;
 	if(expr.isLifted(context.sc)) return true;
-	context.sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+	if(context.sc.trackTemporary(expr)) return true;
+	nonLiftedError(expr,context.sc);
 	expr.sstate=SemState.error;
 	return false;
 }
@@ -5617,8 +5624,10 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	auto constSave=sc.saveConst(); // TODO: make this faster?
 	scope(success){
 		static if(language==silq){
-			if(!context.constResult||!expr.type||expr.type.isClassical())
-				sc.resetConst(constSave); // TODO: tie to forgettability
+			if(!context.constResult||!expr.type||expr.type.isClassical()){
+				if(!sc.resetConst(constSave))
+					expr.sstate=SemState.error;
+			}
 			if(expr.sstate!=SemState.error){
 				assert(!!expr.type,text(expr," ",expr.type));
 				if(auto id=cast(Identifier)expr){

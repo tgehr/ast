@@ -270,6 +270,31 @@ abstract class Scope{
 		final void blockConst(Declaration decl,Identifier constBlock){
 			updateDeclProps(decl).constBlock=constBlock;
 		}
+		static struct TrackedTemporary{
+			Expression expr;
+			Dependency dep;
+			TrackedTemporary dup(){
+				return TrackedTemporary(expr,dep.dup);
+			}
+		}
+		final bool trackTemporary(Expression expr){
+			import ast.semantic_:getDependency;
+			auto dep=getDependency(expr,this);
+			if(dep.isTop) return false;
+			trackedTemporaries~=TrackedTemporary(expr,dep);
+			return true;
+		}
+		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries){
+			bool success=true;
+			foreach(tt;trackedTemporaries){
+				if(!tt.dep.isTop) continue;
+				import ast.semantic_:nonLiftedError;
+				nonLiftedError(tt.expr,this);
+				tt.expr.sstate=SemState.error;
+				success=false;
+			}
+			return success;
+		}
 		final Identifier isConst(Declaration decl){
 			foreach(ref prop;nestedDeclProp(decl))
 				if(auto r=prop.constBlock)
@@ -278,22 +303,29 @@ abstract class Scope{
 		}
 		static struct ConstBlockContext{
 			private Identifier[Declaration] constBlock;
+			private size_t numTrackedTemporaries;
 		}
 		final ConstBlockContext saveConst(){
 			Identifier[Declaration] constBlock;
 			foreach(decl,ref prop;declProps.props) constBlock[decl]=prop.constBlock;
-			return ConstBlockContext(constBlock);
+			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
-		final void resetConst(ConstBlockContext context){
+		final bool resetConst(ConstBlockContext context){
 			foreach(decl,constBlock;context.constBlock)
 				updateDeclProps(decl).constBlock=constBlock;
 			foreach(decl,ref prop;declProps.props)
 				if(decl !in context.constBlock)
 					prop.constBlock=null;
+			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$]);
+			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
+			return success;
 		}
-		final void resetConst(){
+		final bool resetConst(){
 			foreach(decl,ref prop;declProps.props)
 				prop.constBlock=null;
+			auto success=checkTrackedTemporaries(trackedTemporaries);
+			trackedTemporaries=[];
+			return success;
 		}
 		final void resetLocalComponentReplacements(){
 			foreach(decl,ref prop;declProps.props)
@@ -490,6 +522,7 @@ abstract class Scope{
 	}
 	static if(language==silq){
 		private Declaration[] toRemove;
+		private TrackedTemporary[] trackedTemporaries;
 		final void pushUp(ref Dependency dependency,Declaration removed){
 			if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
 			dependency.replace(removed,dependencies.dependencies[removed]);
@@ -726,6 +759,8 @@ abstract class Scope{
 		}
 		final void pushDependencies(Declaration decl,bool keep){
 			dependencies.pushUp(decl,keep);
+			foreach(ref tt;trackedTemporaries)
+				this.pushUp(tt.dep,decl);
 			if(keep) toRemove~=decl;
 		}
 
@@ -1100,6 +1135,7 @@ abstract class Scope{
 			Dependencies dependencies;
 			DeclProps declProps;
 			Declaration[] toRemove;
+			TrackedTemporary[] trackedTemporaries;
 		}
 		Declaration[Id] symtab;
 		Declaration[Id] rnsymtab;
@@ -1109,17 +1145,21 @@ abstract class Scope{
 	ScopeState getStateSnapshot(bool restoreable=false){
 		Declaration[Id] nsymtab=symtab.dup;
 		Declaration[Id] nrnsymtab=rnsymtab.dup;
-		static if(language==silq)
+		static if(language==silq){
 			DeclProps declProps;
+			TrackedTemporary[] trackedTemporaries;
+		}
 		Declaration[] prevCapturedDecls;
 		if(restoreable){
-			static if(language==silq)
+			static if(language==silq){
 				declProps=saveDeclProps();
+				trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
+			}
 			if(auto fd=getFunction())
 				prevCapturedDecls=fd.capturedDecls;
 		}
 		static if(language==silq){
-			return ScopeState(dependencies.dup,declProps,toRemove.dup,nsymtab,nrnsymtab,prevCapturedDecls,restoreable);
+			return ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,prevCapturedDecls,restoreable);
 		}else{
 			return ScopeState(nsymtab,nrnsymtab,prevCaptures,restoreable);
 		}
