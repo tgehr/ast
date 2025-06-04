@@ -1031,7 +1031,7 @@ abstract class Scope{
 				return false;
 			}
 			bool compareTables(Declaration[Id] symtab,Declaration[Id] rsymtab){
-				foreach(name,decl;rhs.symtab){
+				foreach(name,decl;rsymtab){
 					if(cast(DeadDecl)decl) continue;
 					if(name !in symtab)
 						return false;
@@ -1045,8 +1045,8 @@ abstract class Scope{
 			}
 			if(!compareTables(symtab,rhs.symtab))
 				return false;
-			/+if(!compareTables(rnsymtab,rhs.rnsymtab)) // TODO: why not?
-				return false;+/
+			if(!compareTables(rnsymtab,rhs.rnsymtab))
+				return false;
 			return true;
 		}
 		string toString(){
@@ -1073,7 +1073,7 @@ abstract class Scope{
 		}
 		Q!(Id,Expression,bool,Location)[][2] loopParams(Scope loopScope){ // (name,type,mayChange,loc)
 			typeof(return) r;
-			foreach(id,decl;symtab){
+			foreach(id,decl;rnsymtab){
 				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
 				if(!type) continue;
@@ -1200,7 +1200,7 @@ abstract class Scope{
 			assert(zeroIters.splitFrom is outer);
 			assert(!zeroIters.scope_||zeroIters.scope_ is forgetScope);
 			Declaration newOuter=null;
-			if(outer.name.id !in origStateSnapshot.symtab){
+			if(outer.getId !in origStateSnapshot.rnsymtab){
 				// declaration captured from outer scope
 				auto fd=getFunction();
 				assert(!!fd);
@@ -1210,12 +1210,12 @@ abstract class Scope{
 						break;
 					}
 				}
-			}else newOuter=adaptOuter(origStateSnapshot.symtab[outer.name.id]);
+			}else newOuter=adaptOuter(origStateSnapshot.rnsymtab[outer.getId]);
 			assert(!!newOuter);
 			assert(newOuter.splitInto.length==2);
 			assert(!newOuter.scope_||newOuter.scope_ is this);
-			assert(outer.name.id in prevStateSnapshot.symtab);
-			auto prevOuter=adaptOuter(prevStateSnapshot.symtab[nonZeroIters.name.id]);
+			assert(outer.getId in prevStateSnapshot.rnsymtab);
+			auto prevOuter=adaptOuter(prevStateSnapshot.rnsymtab[nonZeroIters.getId]);
 			assert(prevOuter.splitInto.length==2);
 			foreach(k;0..2){
 				newOuter.splitInto[k]=prevOuter.splitInto[k];
