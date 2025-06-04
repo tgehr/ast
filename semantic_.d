@@ -3834,10 +3834,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
 					}
-					if(constResult&&!ce.isLifted(sc)){
-						sc.error("non-'lifted' quantum expression must be consumed", ce.loc);
-						ce.sstate=SemState.error;
-					}
+					ce.constLookup=constResult;
+					checkLifted(ce,context);
 				}
 			}
 		}
@@ -5604,6 +5602,14 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	return expr;
 }
 
+bool checkLifted(Expression expr,ExpSemContext context){
+	if(!expr.constLookup||expr.byRef) return true;
+	if(expr.isLifted(context.sc)) return true;
+	context.sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+	expr.sstate=SemState.error;
+	return false;
+}
+
 Expression expressionSemantic(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
 	if(expr.sstate==SemState.completed||expr.sstate==SemState.error) return expr;
@@ -5623,10 +5629,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 					}
 				}else{
 					expr.constLookup=context.constResult;
-					if(expr.constLookup&&!expr.byRef&&!expr.isLifted(sc)){
-						sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
-						expr.sstate=SemState.error;
-					}
+					if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
 				}
 				if(expr.sstate!=SemState.error) expr.sstate=SemState.completed;
 			}else expr.constLookup=context.constResult;
