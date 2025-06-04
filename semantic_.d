@@ -4352,6 +4352,7 @@ Expression expressionSemanticImpl(PlaceholderExp pl,ExpSemContext context){
 Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	bool checkImplicitForget(Expression var){
+		if(var.implicitDup) return true;
 		if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
 		auto id=cast(Identifier)var;
 		if(!id) return false;
@@ -4364,6 +4365,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	}
 	auto canForgetImplicitly=checkImplicitForget(fe.var);
 	void setByRef(Expression var){
+		if(var.implicitDup) return;
 		if(auto tpl=cast(TupleExp)var)
 			tpl.e.each!setByRef;
 		if(auto id=cast(Identifier)var)
@@ -4373,12 +4375,13 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	fe.var=expressionSemantic(fe.var,context.nestConsumed);
 	propErr(fe.var,fe);
 	void classicalForget(Expression var){
+		if(var.implicitDup) return;
 		if(auto tpl=cast(TupleExp)var){
 			tpl.e.each!classicalForget;
 			return;
 		}
 		auto id=cast(Identifier)var;
-		if(!id||id.implicitDup) return;
+		if(!id) return;
 		auto meaning=id.meaning;
 		if(!meaning) return;
 		if(!checkNonConstVar!("forget","forgetting")(meaning,id.loc,sc)){
@@ -4460,11 +4463,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	Expression dupIfNeeded(Identifier result){
 		assert(!implicitDup||!context.constResult);
-		if(id.calledDirectly||id.indexedDirectly){
+		if(id.calledDirectly||id.indexedDirectly)
 			result.constLookup|=implicitDup;
-			implicitDup=false;
-		}
-		result.implicitDup=implicitDup;
+		if(result.constLookup) result.implicitDup=false;
+		else result.implicitDup|=implicitDup;
 		return result;
 	}
 	if(!id.meaning){
