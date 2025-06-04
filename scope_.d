@@ -144,7 +144,8 @@ abstract class Scope{
 		rnsymtab[decl.getId]=decl;
 	}
 	void symtabRemove(Declaration decl)in{
-		assert(decl.getId in rnsymtab);
+		assert(!!decl);
+		assert(rnsymtab.get(decl.getId,null) is decl);
 	}do{
 		if(symtab.get(decl.name.id,null) is decl)
 			symtab.remove(decl.name.id);
@@ -397,8 +398,8 @@ abstract class Scope{
 		assert(decl.scope_ is null||decl.scope_ is this||decl.sstate==SemState.error,text(decl," ",decl.loc));
 	}do{
 		toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array;
-		decl.scope_=null;
-		insert(decl);
+		symtabInsert(decl);
+		decl.scope_=this;
 	}
 	Declaration[] consumedOuter;
 	Declaration[] splitVars;
@@ -970,7 +971,7 @@ abstract class Scope{
 			var.rename=new Identifier(decl.rename.id);
 			var.rename.loc=decl.rename.loc;
 		}
-		if(auto d=symtabLookup(var.name,false,null)){
+		if(auto d=symtabLookup(var.rename,true,null)){
 			if(isFirstDef) redefinitionError(d,var);
 			else redefinitionError(var,d);
 			return null;
