@@ -457,7 +457,8 @@ class Identifier: Expression{
 	}
 	override Identifier copyImpl(CopyArgs args){
 		Identifier r;
-		if(meaning&&meaning.name&&meaning.name.name.length) r=new Identifier(meaning.name.id); // TODO: this is a hack
+		if(meaning&&meaning.name&&meaning.name.name.length&&!args.preserveSemantic&&!args.preserveMeanings)
+			r=new Identifier(meaning.name.id); // TODO: this is a hack
 		else r=new Identifier(id);
 		if(args.preserveSemantic){
 			r.meaning=meaning;
