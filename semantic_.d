@@ -2301,11 +2301,20 @@ Expression defineLhsSemanticImpl(BinaryExp!(Tok!"×") pr,DefineLhsContext contex
 Expression defineLhsSemanticImpl(BinaryExp!(Tok!"→") ex,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(ex,context);
 }
-Expression defineLhsSemanticImpl(RawProductTy fa,DefineLhsContext context){
-	return defineLhsSemanticImplDefault(fa,context);
+Expression defineLhsSemanticImpl(TupleTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
 }
-Expression defineLhsSemanticImpl(RawVariadicTy va,DefineLhsContext context){
-	return defineLhsSemanticImplDefault(va,context);
+Expression defineLhsSemanticImpl(ArrayTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(VectorTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(ProductTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(VariadicTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
 }
 
 
@@ -5240,16 +5249,14 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 				return ℤt(true);
 	}
 	static if(language==silq) if(isType(une.e)||isQNumeric(une.e)){
-		if(auto ty=isQNumeric(une.e)?une.e:typeSemantic(une.e,sc)){
-			if(ty.isSemCompleted()){
-				if(auto r=ty.getClassical()){
-					return typeSemantic(r,sc);
-				}else{
-					// TODO: have explicit ClassicalTy
-					sc.error(format("cannot make type %s classical",une.e),une.loc);
-					une.setSemError();
-					return une;
-				}
+		if(auto ty=typeSemantic(une.e,sc,true)){
+			if(auto r=ty.getClassical()){
+				return typeSemantic(r,sc);
+			}else{
+				// TODO: have explicit ClassicalTy
+				sc.error(format("cannot make type %s classical",une.e),une.loc);
+				une.setSemError();
+				return une;
 			}
 		}
 	}
@@ -5564,26 +5571,28 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context
 	return funTy(t1[0],t1[1],t2,false,!!t1[1].isTupleTy()&&t1[0].length!=1,ex.annotation,false);
 }
 
-Expression expressionSemanticImpl(RawProductTy fa,ExpSemContext context){
+Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	auto sc=context.sc;
-	fa.type=typeTy; // TODO: ok?
 	auto fsc=new RawProductScope(sc,fa.annotation);
 	scope(exit) fsc.forceClose();
 	declareParameters(fa,fa.isSquare,fa.params,fsc); // parameter variables
-	auto cod=typeSemantic(fa.cod,fsc);
-	propErr(fa.cod,fa);
 	if(fa.isSemError()) return fa;
-	auto const_=fa.params.map!(p=>p.isConst).array;
-	auto names=fa.params.map!(p=>p.getId).array;
 	auto types=fa.params.map!(p=>p.vtype).array;
 	assert(fa.isTuple||types.length==1);
-	auto dom=fa.isTuple?tupleTy(types):types[0];
-	return productTy(const_,names,dom,cod,fa.isSquare,fa.isTuple,fa.annotation,false);
+	fa.dom=fa.isTuple?tupleTy(types):types[0];
+	assert(fa.dom);
+	fa.cod = expressionSemantic(fa.cod, expSemContext(fsc, ConstResult.yes, InType.yes));
+	auto cod = typeSemantic(fa.cod, fsc);
+	if(cod) fa.cod = cod;
+	propErr(fa.cod, fa);
+	fa.type=typeOfProductTy(fa.isConst,fa.names,fa.dom,fa.cod,fa.isSquare,fa.isTuple,fa.annotation,fa.isClassical_);
+	return fa;
 }
 
-Expression expressionSemanticImpl(RawVariadicTy va,ExpSemContext context){
+Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){
 	auto sc=context.sc;
-	auto next=expressionSemantic(va.next,expSemContext(context.sc,ConstResult.yes,InType.yes));
+	auto next = expressionSemantic(va.next,expSemContext(context.sc,ConstResult.yes,InType.yes));
+	va.next = next;
 	if(auto tpl=cast(TupleTy)next.type){
 		if(!tpl.types.all!(t=>isType(t)||isQNumeric(t))){
 			sc.error("argument to variadic type must be a tuple of types",va.loc);
@@ -5606,7 +5615,9 @@ Expression expressionSemanticImpl(RawVariadicTy va,ExpSemContext context){
 		va.setSemError();
 		return va;
 	}
-	return variadicTy(next,false);
+	va.type = typeOfVariadicTy(next, va.isClassical_);
+	assert(!va.isClassical_ || va.type.isClassical);
+	return va;
 }
 
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){

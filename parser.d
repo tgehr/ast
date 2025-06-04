@@ -522,12 +522,12 @@ struct Parser{
 						cod = parseType();
 					}else cod=parseProduct();
 					auto isTuple=params[1]||params[0].length!=1;
-					return res=New!RawProductTy(cast(Parameter[])params[0],cod,isSquare,isTuple,annotation);
+					return res=New!ProductTy(cast(Parameter[])params[0],cod,isSquare,isTuple,annotation,false);
 				}
 				return parseProduct();
 			case Tok!"∏",Tok!"cprod":
 				nextToken();
-				return res=New!RawVariadicTy(parseExpression(nbp,false));
+				return res=New!VariadicTy(parseExpression(nbp,false), false);
 			case Tok!"-":
 				nextToken();
 				return res=New!(UnaryExp!(Tok!"-"))(parseExpression(nbp,false));
