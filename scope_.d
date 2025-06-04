@@ -1406,12 +1406,11 @@ class CapturingScope(T): NestedScope{
 				id.lazyCapture=true;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
-					auto recapture=new Identifier(capture.name.id);
+					auto recapture=new Identifier(capture.getId);
 					recapture.loc=id.loc;
-					import ast.semantic_:lookupMeaning,typeForDecl;
 					bool isConsuming=capture.scope_.isNestedIn(this);
 					DeadDecl[] failures;
-					lookupMeaning(recapture,isConsuming?Lookup.consuming:Lookup.constant,origin,false,&failures);
+					recapture.meaning=origin.lookup(recapture,true,false,isConsuming?Lookup.consuming:Lookup.constant,&failures);
 					bool callErrorShown=false;
 					void callError(){
 						if(callErrorShown) return;
@@ -1432,8 +1431,9 @@ class CapturingScope(T): NestedScope{
 					assert(recapture.type||recapture.sstate==SemState.error);
 					if(recapture.sstate!=SemState.error){
 						recapture.sstate=SemState.completed;
+						/+import ast.semantic_:typeForDecl;
 						auto oldType=typeForDecl(capture);
-						/+if(!isSubtype(recapture.type,oldType)){
+						if(!isSubtype(recapture.type,oldType)){
 							if(recapture.sstate!=SemState.error){
 								callError();
 								origin.note(format("capture '%s' changed type from '%s' to '%s'",capture.name,oldType,recapture.type),capture.loc);
