@@ -625,7 +625,7 @@ class Checker {
 		auto decl = e.meaning;
 		assert(!!decl);
 		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
-		return getVar(decl, e.constLookup, "identifier", e);
+		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {

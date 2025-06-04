@@ -47,11 +47,12 @@ abstract class Expression: Node{
 		}
 		r.brackets=brackets;
 		r.byRef=byRef;
+		r.implicitDup=implicitDup;
 		return r;
 	}
 
 	override string toString(){return _brk("{}()");}
-	protected string _brk(string s){return std.array.replicate("(",brackets)~s~std.array.replicate(")",brackets);}
+	protected string _brk(string s){return std.array.replicate("(",brackets)~(implicitDup?"dup(":"")~s~(implicitDup?")":"")~std.array.replicate(")",brackets);}
 
 	override @property string kind(){return "expression";}
 	bool isCompound(){ return false; }
@@ -202,6 +203,7 @@ abstract class Expression: Node{
 	// semantic information
 	bool constLookup=true;
 	bool byRef=false;
+	bool implicitDup=false;
 }
 
 mixin template VariableFree(){

@@ -262,13 +262,16 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			return vd;
 		}
 		if(auto id=cast(Identifier)be.e1){
+			if(id.implicitDup) return be;
 			auto vd=makeVar(id);
 			propErr(vd,be);
 			return be;
 		}else if(auto tpl=cast(TupleExp)be.e1){
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
-				if(auto id=cast(Identifier)exp) vds~=makeVar(id);
+				if(auto id=cast(Identifier)exp)
+					if(!id.implicitDup)
+						vds~=makeVar(id);
 				else goto LbadDefLhs;
 			}
 			foreach(vd;vds) if(vd) propErr(vd,be);
@@ -291,7 +294,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[i]);
 				VarDecl[] vds;
 				foreach(exp;movedIndices.map!(i=>tpl.e[i])){
-					if(auto id=cast(Identifier)exp) vds~=makeVar(id);
+					if(auto id=cast(Identifier)exp)
+						if(!id.implicitDup)
+							vds~=makeVar(id);
 					else goto LbadDefLhs;
 				}
 				foreach(vd;vds) if(vd) propErr(vd,be);
@@ -299,6 +304,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			}
 			if(!allMoved) goto LbadDefLhs;
 			if(auto id=cast(Identifier)ce.arg){
+				if(id.implicitDup) return be;
 				auto vd=makeVar(id);
 				propErr(vd,be);
 				return be;
@@ -308,9 +314,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}else if(auto ce=cast(CatExp)be.e1){
 			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
 				goto LbadDefLhs;
-			if(auto id=cast(Identifier)unwrap(ce.e1)) propErr(makeVar(id),be);
+			if(auto id=cast(Identifier)unwrap(ce.e1)) if(!id.implicitDup) propErr(makeVar(id),be);
 			else if(!cast(IndexExp)unwrap(be.e1)) goto LbadDefLhs;
-			if(auto id=cast(Identifier)unwrap(ce.e2)) propErr(makeVar(id),be);
+			if(auto id=cast(Identifier)unwrap(ce.e2)) if(!id.implicitDup) propErr(makeVar(id),be);
 			else if(!cast(IndexExp)unwrap(be.e2)) goto LbadDefLhs;
 			return be;
 		}else LbadDefLhs:{
@@ -1573,7 +1579,7 @@ Dependency getDependencyImpl(Identifier id,Scope sc){
 	if(!sc.dependencyTracked(decl))
 		sc.addDefaultDependency(decl); // TODO: ideally can be removed
 	result.dependencies.insert(decl);
-	if(!id.constLookup||id.byRef){
+	if(!id.constLookup&&!id.implicitDup||id.byRef){
 		/+auto vd=cast(VarDecl)id.meaning;
 		 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
 		result.replace(decl,sc.getDependency(decl));
@@ -1602,7 +1608,7 @@ Dependency getDependency(Expression e,Scope sc){
 }
 
 bool consumes(Expression e){
-	if(!e.constLookup&&cast(Identifier)e&&(!e.type||!e.type.isClassical())) return true;
+	if(!e.constLookup&&cast(Identifier)e&&!(cast(Identifier)e).implicitDup) return true;
 	foreach(c;e.components)
 		if(c.consumes())
 			return true;
@@ -1618,7 +1624,7 @@ bool isLiftedImpl(Expression e,Scope sc){
 }
 
 bool isLiftedImpl(Identifier id,Scope sc){
-	return id.constLookup||!id.type||id.type.isClassical;
+	return id.constLookup||id.implicitDup;
 }
 
 bool isLiftedImpl(CallExp ce,Scope sc){
@@ -1647,6 +1653,7 @@ bool isLifted(Expression e,Scope sc){
 }
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
+	if(e.implicitDup) return true;
 	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
 		return true;
 	if(cast(LiteralExp)e) return true;
@@ -1757,7 +1764,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 		result.sstate=SemState.error;
 		foreach(e;result.subexpressions()){
 			if(auto id=cast(Identifier)e){
-				if(!id.constLookup){
+				if(!id.constLookup&&!id.implicitDup){
 					if(id.meaning&&id.meaning.sstate!=SemState.completed)
 						id.meaning.sstate=SemState.error;
 				}
@@ -2340,10 +2347,12 @@ Expression defineLhsSemanticImplDefault(Expression e,DefineLhsContext context){
 }
 
 alias defineLhsSemanticImpl(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImpl;
+alias defineLhsSemanticImplLifted(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImplLifted;
 alias defineLhsSemanticImplDefault(bool isPresemantic)=defineLhsSemanticImpls!isPresemantic.defineLhsSemanticImplDefault;
 
 
 Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsContext context){
+	if(lhs.implicitDup) return defineLhsSemanticImplLifted!isPresemantic(lhs,context);
 	Expression r;
 	static if(!isPresemantic) scope(success){
 		assert(!!r);
@@ -4369,7 +4378,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 			return;
 		}
 		auto id=cast(Identifier)var;
-		if(!id) return;
+		if(!id||id.implicitDup) return;
 		auto meaning=id.meaning;
 		if(!meaning) return;
 		if(!checkNonConstVar!("forget","forgetting")(meaning,id.loc,sc)){
@@ -4444,23 +4453,24 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
 	bool implicitDup=false;
+	void setImplicitDup()in{
+		assert(!!id.meaning);
+	}do{
+		implicitDup=!context.constResult&&(!id.byRef&&!id.meaning.isLinear()); // TODO: last-use analysis
+	}
 	Expression dupIfNeeded(Identifier result){
-		static if(language==silq){
-			if(implicitDup){
-				result.constLookup=true;
-				if(result.calledDirectly||result.indexedDirectly) return result;
-				if(result.sstate!=SemState.error) result.sstate=SemState.completed;
-				auto nresult=expressionSemantic(dupExp(result,result.loc,context.sc),context);
-				return nresult;
-			}
+		assert(!implicitDup||!context.constResult);
+		if(id.calledDirectly||id.indexedDirectly){
+			result.constLookup|=implicitDup;
+			implicitDup=false;
 		}
+		result.implicitDup=implicitDup;
 		return result;
 	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
 		auto nonLinear=id.meaning&&(!id.byRef&&!id.meaning.isLinear()||id.meaning.isConst);
-		if(id.meaning)
-			implicitDup=!id.byRef&&!context.constResult&&!id.meaning.isLinear(); // TODO: last-use analysis
+		if(id.meaning) setImplicitDup();
 		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
 		DeadDecl[] failures;
 		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
@@ -4487,7 +4497,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				}
 			}
 		}
-	}else if(sc) sc.recordAccess(id,id.meaning);
+	}else{
+		setImplicitDup();
+		if(sc) sc.recordAccess(id,id.meaning);
+	}
 	id.id=id.meaning.getId;
 	propErr(id.meaning,id);
 	id.type=id.typeFromMeaning;
@@ -4790,9 +4803,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		return expressionSemantic(id,context);
 	}
 	static if(language==silq)
-	if(!idx.byRef&&!context.constResult){ // implicitly duplicate index
-		return expressionSemantic(dupExp(idx,idx.loc,context.sc),context);
-	}
+	if(!idx.byRef&&!context.constResult)
+		idx.implicitDup=true;
 	return idx;
 }
 
@@ -5652,7 +5664,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			if(expr.sstate!=SemState.error){
 				assert(!!expr.type,text(expr," ",expr.type));
 				if(auto id=cast(Identifier)expr){
-					auto consumesIdentifier=!id.constLookup&&id.meaning;
+					auto consumesIdentifier=!id.constLookup&&!id.implicitDup&&id.meaning;
 					if(context.inType&&consumesIdentifier){
 						sc.error("cannot consume variables within types",expr.loc);
 						expr.sstate=SemState.error;

@@ -92,6 +92,7 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	bool validDefEntry(Expression e){
+		if(e.implicitDup) return false;
 		return cast(Identifier)e||cast(IndexExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
@@ -754,7 +755,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Id cpname,rpname;
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
-		if(validDefLhs!flags(id,sc)){
+		if(!id.implicitDup&&validDefLhs!flags(id,sc)){
 			retDefReplaced=true;
 			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
 		}
