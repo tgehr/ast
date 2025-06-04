@@ -1361,9 +1361,9 @@ class NestedScope: Scope{
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
 		if(this is outermost) return true;
 		foreach(sc;parent.activeNestedScopes){
-			//sc.symtabInsert(meaning); // TODO
-			sc.symtab[meaning.name.id]=meaning;
-			sc.rnsymtab[meaning.getId]=meaning;
+			if(meaning.getId in sc.rnsymtab) // TODO: make sure captures are inserted only once, remove this
+				symtabRemove(sc.rnsymtab[meaning.getId]);
+			sc.symtabInsert(meaning);
 		}
 		return parent.insertCaptureImpl(id,meaning,type,outermost);
 	}
