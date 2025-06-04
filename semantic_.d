@@ -4398,10 +4398,6 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		}
 		fe.val=expressionSemantic(fe.val,context.nestConst);
 		propErr(fe.val,fe);
-		static if(language==silq) if(fe.sstate!=SemState.error&&!fe.val.isLifted(sc)){
-			sc.error("forget expression must be 'lifted'",fe.val.loc);
-			fe.sstate=SemState.error;
-		}
 		if(fe.sstate!=SemState.error&&fe.var.type&&fe.val.type)
 			assert(fe.var.type==fe.val.type);
 		static if(language!=silq){
@@ -5639,11 +5635,11 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 }
 
 void nonLiftedError(Expression expr,Scope sc){
-	sc.error("non-'lifted' quantum expression must be consumed",expr.loc);
+	sc.error("quantum control expression must be 'lifted'",expr.loc);
 	expr.sstate=SemState.error;
 }
 
-bool checkLifted(Expression expr,ExpSemContext context){
+bool checkLifted(alias error=nonLiftedError)(Expression expr,ExpSemContext context){
 	if(!expr.constLookup||expr.byRef) return true;
 	if(expr.isLifted(context.sc)) return true;
 	if(context.sc.trackTemporary(expr)) return true;
