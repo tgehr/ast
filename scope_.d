@@ -1142,7 +1142,7 @@ abstract class Scope{
 				if(decl.getId !in state.rnsymtab||cast(DeadDecl)state.rnsymtab[decl.getId]){
 					if(decl.name.id !in state.symtab||cast(DeadDecl)state.symtab[decl.name.id])
 						state.symtab[decl.name.id]=decl;
-					state.rnsymtab[decl.rename.id]=decl;
+					state.rnsymtab[decl.getId]=decl;
 				}
 			}
 			state.prevCapturedDecls=fd.capturedDecls;
