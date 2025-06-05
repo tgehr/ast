@@ -16,11 +16,13 @@ Id freshName(){ // TODO: improve mechanism for generating temporaries
 }
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
+	assert(bits.isSemCompleted());
 	auto sym=getPreludeSymbol(isSigned?"int":"uint",loc,isc);
+	if(!sym.isSemCompleted()) return null;
 	auto ce=new CallExp(sym,bits,true,isClassical);
 	ce.loc=loc;
 	ce.type=isClassical?ctypeTy:qtypeTy;
-	if(sym.isSemCompleted()) ce.setSemCompleted();
+	ce.setSemCompleted();
 	return ce;
 }
 
@@ -3938,8 +3940,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}
 					}
 				}
-				if(!tpl.isSemError()&&(isRhs||tpl.e.all!(e=>!!e.type))) // TODO: ensure type is always set
+				if(tpl.e.all!(e => !!e.type)) {
 					tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+				}
+				if(tpl.e.all!(e => e.isSemCompleted())) {
+					tpl.setSemCompleted();
+				}
+				assert(!isRhs || tpl.isSemFinal());
 			}else{
 				static if(isRhs){
 					auto isConst=(ft.isConst.length?ft.isConst[0]:true);
