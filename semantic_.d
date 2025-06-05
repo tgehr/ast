@@ -105,20 +105,21 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 		auto id=new Identifier(dsc.decl.name.name);
 		id.loc=dsc.decl.loc;
 		id.meaning=dsc.decl;
-		id=cast(Identifier)expressionSemantic(id,expSemContext(sc,ConstResult.yes,InType.yes));
+		id=cast(Identifier)expressionSemantic(id, ExpSemContext.forType(sc));
 		assert(!!id);
 		Expression ctxty=id;
 		if(dsc.decl.hasParams){
 			auto args=dsc.decl.params.map!((p){
 				auto id=new Identifier(p.name.name);
 				id.meaning=p;
-				auto r=expressionSemantic(id,expSemContext(sc,ConstResult.yes,InType.yes));
+				auto r = expressionSemantic(id, ExpSemContext.forType(sc));
 				assert(r.isSemCompleted());
 				return r;
 			}).array;
 			assert(dsc.decl.isTuple||args.length==1);
-			ctxty=callSemantic(new CallExp(ctxty,dsc.decl.isTuple?new TupleExp(args):args[0],true,false),expSemContext(sc,ConstResult.yes,InType.yes));
-			ctxty.setSemCompleted();
+			auto ce = new CallExp(ctxty, dsc.decl.isTuple ? new TupleExp(args) : args[0], true, false);
+			ctxty = callSemantic(ce, ExpSemContext.forType(sc));
+			assert(ctxty.isSemCompleted());
 			assert(isType(ctxty));
 		}
 		if(dsc.decl.name.name==fd.name.name){
@@ -4204,6 +4205,9 @@ struct ExpSemContext{
 	Scope sc;
 	ConstResult constResult;
 	InType inType;
+	static ExpSemContext forType(Scope sc) {
+		return ExpSemContext(sc, ConstResult.yes, InType.yes);
+	}
 }
 auto expSemContext(Scope sc,ConstResult constResult,InType inType){
 	return ExpSemContext(sc,constResult,inType);
@@ -4216,6 +4220,9 @@ auto nestConst(ref ExpSemContext context){
 }
 auto nestConsumed(ref ExpSemContext context){
 	return context.nest(ConstResult.no);
+}
+auto nestType(ref ExpSemContext context){
+	return ExpSemContext.forType(context.sc);
 }
 
 Expression conditionSemantic(bool allowQuantum=false)(Expression parent, Expression e,Scope sc,InType inType){
@@ -5588,7 +5595,7 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	assert(fa.isTuple||types.length==1);
 	fa.dom=fa.isTuple?tupleTy(types):types[0];
 	assert(fa.dom);
-	fa.cod = expressionSemantic(fa.cod, expSemContext(fsc, ConstResult.yes, InType.yes));
+	fa.cod = expressionSemantic(fa.cod, ExpSemContext.forType(fsc));
 	auto cod = typeSemantic(fa.cod, fsc);
 	if(cod) fa.cod = cod;
 	propErr(fa.cod, fa);
@@ -5598,7 +5605,7 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 
 Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){
 	auto sc=context.sc;
-	auto next = expressionSemantic(va.next,expSemContext(context.sc,ConstResult.yes,InType.yes));
+	auto next = expressionSemantic(va.next, context.nestType());
 	va.next = next;
 	if(auto tpl=cast(TupleTy)next.type){
 		if(!tpl.types.all!(t=>isType(t)||isQNumeric(t))){
