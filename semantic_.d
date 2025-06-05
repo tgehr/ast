@@ -269,10 +269,10 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}else if(auto tpl=cast(TupleExp)be.e1){
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
-				if(auto id=cast(Identifier)exp)
+				if(auto id=cast(Identifier)exp){
 					if(!id.implicitDup)
 						vds~=makeVar(id);
-				else goto LbadDefLhs;
+				}else goto LbadDefLhs;
 			}
 			foreach(vd;vds) if(vd) propErr(vd,be);
 			return be;
@@ -294,10 +294,10 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[i]);
 				VarDecl[] vds;
 				foreach(exp;movedIndices.map!(i=>tpl.e[i])){
-					if(auto id=cast(Identifier)exp)
+					if(auto id=cast(Identifier)exp){
 						if(!id.implicitDup)
 							vds~=makeVar(id);
-					else goto LbadDefLhs;
+					}else goto LbadDefLhs;
 				}
 				foreach(vd;vds) if(vd) propErr(vd,be);
 				return be;
@@ -314,10 +314,13 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		}else if(auto ce=cast(CatExp)be.e1){
 			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
 				goto LbadDefLhs;
-			if(auto id=cast(Identifier)unwrap(ce.e1)) if(!id.implicitDup) propErr(makeVar(id),be);
-			else if(!cast(IndexExp)unwrap(be.e1)) goto LbadDefLhs;
-			if(auto id=cast(Identifier)unwrap(ce.e2)) if(!id.implicitDup) propErr(makeVar(id),be);
-			else if(!cast(IndexExp)unwrap(be.e2)) goto LbadDefLhs;
+			if(auto id=cast(Identifier)unwrap(ce.e1)){
+				if(!id.implicitDup)
+					propErr(makeVar(id),be);
+			}else if(!cast(IndexExp)unwrap(be.e1)) goto LbadDefLhs;
+			if(auto id=cast(Identifier)unwrap(ce.e2)){
+				if(!id.implicitDup) propErr(makeVar(id),be);
+			}else if(!cast(IndexExp)unwrap(be.e2)) goto LbadDefLhs;
 			return be;
 		}else LbadDefLhs:{
 			if(be.sstate!=SemState.error){
