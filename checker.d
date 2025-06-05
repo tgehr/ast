@@ -143,6 +143,7 @@ class Checker {
 	}
 
 	void visExpr(ast_exp.Expression e) {
+		assert(e.isSemCompleted());
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
 		if(cast(ast_ty.Type) e) {
 			if(auto te = cast(ast_ty.VectorTy) e) {
@@ -177,6 +178,10 @@ class Checker {
 		ast_exp.dispatchExp!((auto ref e){
 			this.implExpr(e);
 		})(e);
+	}
+
+	void visType(ast_exp.Expression e) {
+		visExpr(e);
 	}
 
 	ast_exp.Expression visLoweringExpr(E)(E from) {
@@ -326,7 +331,7 @@ class Checker {
 
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
-		visExpr(e.type);
+		visType(e.type);
 
 		StmtResult retTrue = ifTrue.visCompoundStmt(e.then);
 		StmtResult retFalse = ifFalse.visCompoundStmt(e.othw);
@@ -492,7 +497,7 @@ class Checker {
 
 	void visLhs(ast_exp.Expression e) {
 		// expectMoved(e, "definition LHS");
-		visExpr(e.type);
+		visType(e.type);
 		return ast_exp.dispatchExp!((auto ref e) => this.implLhs(e))(e);
 	}
 
@@ -673,8 +678,9 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.TypeAnnotationExp e) {
-		visExpr(e.type);
 		visExpr(e.e);
+		visExpr(e.t);
+		visType(e.type);
 		expectConvertible(e.e, e.type, e.annotationType);
 	}
 
@@ -807,7 +813,7 @@ class Checker {
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
 
-		visExpr(e.type);
+		visType(e.type);
 		ifTrue.visCompoundValue(e.then, "if-true", e.constLookup);
 		ifFalse.visCompoundValue(e.othw, "if-false", e.constLookup);
 
@@ -836,12 +842,7 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.CallExp e) {
-		if(ast_ty.isFixedIntTy(e)) {
-			expectConst(e.arg, "int-bits");
-			visExpr(e.arg);
-			return;
-		}
-		assert(!e.isClassical_, format("TODO: isClassical_ call on non-type << %s >> on %s", e, e.loc));
+		assert(!e.isClassical_ || ast_ty.isType(e), format("TODO: isClassical_ call on non-type << %s >> on %s", e, e.loc));
 		visCall(e.e, e.arg, false);
 	}
 
@@ -1063,9 +1064,11 @@ void checkFunction(ast_decl.FunctionDef fd) {
 	}
 	sc.strictScope = true;
 	foreach(decl; fd.params) {
+		sc.visExpr(decl.dtype);
 		sc.visExpr(decl.vtype);
 		sc.defineVar(decl, "param", decl.name);
 	}
+	if(fd.rret) sc.visExpr(fd.rret);
 	sc.visExpr(fd.ret);
 	if(fd.body_) {
 		StmtResult r = sc.visStmt(fd.body_);
