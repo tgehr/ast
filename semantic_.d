@@ -4239,9 +4239,22 @@ Expression conditionSemantic(bool allowQuantum=false)(Expression parent, Express
 	return e;
 }
 
+CompoundExp branchBlockSemantic(CompoundExp branch, ExpSemContext context, bool quantumControl){
+	auto sc = context.sc;
+	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
+
+	assert(branch.s.length == 1);
+	branch.s[0] = branchSemantic(branch.s[0], ExpSemContext(branch.blscope_, context.constResult, context.inType), quantumControl);
+	static if(language==silq) branch.blscope_.clearConsumed();
+
+	branch.type=branch.s[0].type;
+	propErr(branch.s[0], branch);
+	branch.setSemCompleted();
+	return branch;
+}
+
 Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumControl){ // TODO: actually introduce a bottom type?
-	auto sc=context.sc, inType=context.inType;
-	if(inType) return expressionSemantic(branch,context);
+	auto sc=context.sc;
 	branch=expressionSemantic(branch,context);
 	if(quantumControl){
 		if(branch.type&&branch.type.hasClassicalComponent()){
@@ -4274,26 +4287,22 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		enum quantumControl=false;
 		enum restriction_=Annotation.none;
 	}
-	// initialize scopes, to allow captures to be inserted
-	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_);
-	if(ite.othw&&!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
-	ite.then.s[0]=branchSemantic(ite.then.s[0],ExpSemContext(ite.then.blscope_,context.constResult,inType),quantumControl);
-	static if(language==silq) ite.then.blscope_.clearConsumed();
-	propErr(ite.then.s[0],ite.then);
+	// initialize both scopes first, to allow captures to be inserted
+	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_);
+	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_);
+	ite.then=branchBlockSemantic(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
 		ite.setSemError();
 		return ite;
 	}
-	ite.othw.s[0]=branchSemantic(ite.othw.s[0],ExpSemContext(ite.othw.blscope_,context.constResult,inType),quantumControl);
-	static if(language==silq) ite.othw.blscope_.clearConsumed();
-	propErr(ite.othw.s[0],ite.othw);
+	ite.othw=branchBlockSemantic(ite.othw, context, quantumControl);
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
 	if(!ite.isSemError()){
-		auto t1=ite.then.s[0].type;
-		auto t2=ite.othw.s[0].type;
+		auto t1=ite.then.type;
+		auto t2=ite.othw.type;
 		ite.type=joinTypes(t1,t2);
 		if(t1 && t2 && !ite.type){
 			sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
