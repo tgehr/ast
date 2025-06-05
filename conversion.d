@@ -242,7 +242,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 		}else if(next.all) return true;
 	}
 	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-	if(vec1&&vec2&&vec1.num.eval()==vec2.num.eval()){
+	if(vec1&&vec2&&vec1.num==vec2.num){
 		if(auto next=typeExplicitConversion!witness(vec1.next,vec2.next,annotationType)){
 			static if(witness){
 				enum checkLength=false;
@@ -258,18 +258,18 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			}else return true;
 		}
 	}
-	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num.eval()){ // TODO: redundant?
+	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num){ // TODO: redundant?
 		auto next=iota(tpl1.length).map!(i=>typeExplicitConversion!witness(tpl1[i],vec2.next,annotationType));
 		static if(witness){
 			auto elements=next.array;
-			if(elements.all!(x=>!!x)) return new TupleConversion(from,to.eval(),elements);
+			if(elements.all!(x=>!!x)) return new TupleConversion(from,to,elements);
 		}else if(next.all) return true;
 	}
-	if(vec1&&tpl2&&vec1.num.eval()==LiteralExp.makeInteger(tpl2.length)){ // TODO: redundant?
+	if(vec1&&tpl2&&vec1.num==LiteralExp.makeInteger(tpl2.length)){ // TODO: redundant?
 		auto next=iota(tpl2.length).map!(i=>typeExplicitConversion!witness(vec1.next,tpl2[i],annotationType));
 		static if(witness){
 			auto elements=next.array;
-			if(elements.all!(x=>!!x)) return new TupleConversion(from.eval(),to,elements);
+			if(elements.all!(x=>!!x)) return new TupleConversion(from,to,elements);
 		}else if(next.all) return true;
 	}
 	if(annotationType==TypeAnnotationType.coercion){
@@ -364,7 +364,7 @@ Expression[Id][2] functionConversionSubstitution(Id[] names,ProductTy from,Produ
 			tae.brackets++;
 			tae.type=from.argTy(i);
 			tae.setSemCompleted();
-			subst[k][names[i]]=tae;
+			subst[k][names[i]]=tae.eval();
 		}
 	}
 	return subst;
@@ -391,7 +391,7 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 		}
 	}
 	if(!ft1.isConstCompatible(ft2)) return typeof(return).init;
-	if(ft1.names.length!=ft2.names.length) return typeof(return).init;
+	if(ft1.nargs!=ft2.nargs) return typeof(return).init;
 	Id[] names;
 	if(ft1.names!=ft2.names){
 		names=ft1.freshNames(ft2);
@@ -566,7 +566,6 @@ class ParameterizedSubtypeConversion: Conversion{
 +/
 
 Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
-	to=to.eval();
 	static if(witness){
 		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
@@ -619,7 +618,10 @@ bool annotateLiteral(Expression expr, Expression type){
 	return true;
 }
 Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression type,TypeAnnotationType annotationType){
-	type=type.eval();
+	assert(expr.type);
+	assert(expr.type.isSemEvaluated());
+	assert(type);
+	assert(type.isSemEvaluated());
 	if(annotationType==TypeAnnotationType.punning) return typeExplicitConversion!witness(expr.type,type,annotationType);
 	if(annotateLiteral(expr,type)){
 		static if(witness) return refl(type);

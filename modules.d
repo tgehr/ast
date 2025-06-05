@@ -50,8 +50,34 @@ string readBuiltin(string[] paths)(int index){
 
 Scope getPreludeScope(ErrorHandler err, Location loc){
 	import ast.semantic_: semantic;
+	import ast.expression;
+	import ast.type;
 	if(preludeScope) return preludeScope;
 	preludeScope = new TopScope(err);
+	foreach(name, value; [
+		"𝔹": Bool(false),
+		"⊥": bottom(),
+		"𝟙": unit(),
+		"*": typeTy(),
+		"ctype": ctypeTy(),
+		"etype": etypeTy(),
+		"qtype": qtypeTy(),
+		"utype": utypeTy(),
+		"qnumeric": qnumericTy(),
+		"ℕ": ℕt(false),
+		"ℤ": ℤt(false),
+		"ℚ": ℚt(false),
+		"ℝ": ℝ(false),
+		"ℂ": ℂ(false),
+	]) {
+		auto id = new Identifier(name);
+		auto vd = new VarDecl(id);
+		id.meaning = vd;
+		vd.initializer = value;
+		id.type = vd.dtype = vd.vtype = value.type;
+		id.sstate = vd.sstate = SemState.completed;
+		preludeScope.insert(vd);
+	}
 	preludeSrc = new Source(".prelude", readBuiltin!preludePaths(preludeIndex));
 	int nerr = err.nerrors;
 	auto exprs = parseSource(preludeSrc, err);

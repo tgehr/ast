@@ -148,8 +148,8 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 			fun=new CallExp(fun,sqarg,true,isClassical);
 			fun.loc=loc;
 		}
-		if(args[0].constLookup) args[0]=dupExp(args[0],args[0].loc,context.sc);
-		if(args[1].constLookup) args[1]=dupExp(args[1],args[1].loc,context.sc);
+		if(args[0].constLookup) args[0]=dupExp(args[0],args[0].loc,context);
+		if(args[1].constLookup) args[1]=dupExp(args[1],args[1].loc,context);
 	}
 	auto ce=new CallExp(fun,arg,isSquare,isClassical);
 	ce.loc=loc;
@@ -196,7 +196,7 @@ Expression getLowering(AndExp ae,ExpSemContext context){
 	false_.loc=ae.loc;
 	false_.sstate=SemState.initial;
 	auto ne2=ae.e2;
-	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context.sc);
+	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context);
 	else ne2=ne2.copy();
 	return expressionSemantic(new IteExp(ae.e1,toCompound(ne2),toCompound(false_)),context);
 }
@@ -205,7 +205,7 @@ Expression getLowering(OrExp oe,ExpSemContext context){
 	true_.loc=oe.loc;
 	true_.sstate=SemState.initial;
 	auto ne2=oe.e2;
-	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context.sc);
+	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context);
 	else ne2=ne2.copy();
 	return expressionSemantic(new IteExp(oe.e1,toCompound(true_),toCompound(ne2)),context);
 }

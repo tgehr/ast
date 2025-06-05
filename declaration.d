@@ -21,7 +21,7 @@ abstract class Declaration: Expression{
 	bool isLinear(){ return true; }
 	bool isConst(){ return false; }
 
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
@@ -71,7 +71,7 @@ class CompoundDecl: Expression{
 	// semantic information
 	AggregateScope ascope_;
 
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 
 	mixin VariableFree; // TODO!
 }

@@ -424,7 +424,11 @@ struct Parser{
 		Token t; // DMD 2.072.1: hoisted to satisfy buggy deprecation code
 		switch(ttype){
 			case Tok!"i": return parseIdentifier();
-			case Tok!"*": auto r=New!Identifier("*"); r.loc=tok.loc; nextToken(); return r;
+			case Tok!"*",Tok!"⊥",Tok!"⊤":{
+				res=New!Identifier(TokenTypeToString(ttype));
+				nextToken();
+				return res;
+			}
 			case Tok!"?": nextToken(); return res=New!PlaceholderExp(parseIdentifier());
 			case Tok!"_": nextToken(); return res=New!WildcardExp();
 			case Tok!"``", Tok!"``c", Tok!"``w", Tok!"``d": // adjacent string tokens get concatenated
@@ -440,7 +444,7 @@ struct Parser{
 			case Tok!"assert": return parseAssert();
 			case Tok!"forget": return parseForget();
 			case Tok!"typeof": return parseTypeof();
-			case Tok!"true",Tok!"⊤":{
+			case Tok!"true":{
 				nextToken();
 				auto tok=Token(Tok!"0");
 				tok.str="1";
@@ -448,7 +452,7 @@ struct Parser{
 				res.type=Bool(true);
 				return res;
 			}
-			case Tok!"false",Tok!"⊥":{
+			case Tok!"false":{
 				nextToken();
 				auto tok=Token(Tok!"0");
 				tok.str="0";

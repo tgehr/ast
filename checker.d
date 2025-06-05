@@ -846,6 +846,30 @@ class Checker {
 		visCall(e.e, e.arg, false);
 	}
 
+	void implExpr(ast_exp.ClassicalTy e) {
+		assert(ast_ty.isType(e));
+		visExpr(e.inner);
+	}
+
+	void implExpr(ast_exp.TupleTy e) {
+		assert(ast_ty.isTypeTy(e.type) || ast_ty.isQNumericTy(e.type));
+		foreach(sub; e.types) {
+			assert(ast_ty.isTypeTy(sub.type) || ast_ty.isQNumericTy(sub.type));
+			visExpr(sub);
+		}
+	}
+
+	void implExpr(ast_exp.VectorTy e) {
+		assert(ast_ty.isTypeTy(e.type) || ast_ty.isQNumericTy(e.type));
+		assert(ast_ty.isTypeTy(e.next.type) || ast_ty.isQNumericTy(e.next.type));
+		visExpr(e.next);
+		visExpr(e.num);
+	}
+
+	void implExpr(ast_exp.NumericTy e) {}
+	void implExpr(ast_exp.TypeTy e) {}
+	void implExpr(ast_exp.ProductTy e) {}
+
 	void visCall(ast_exp.Expression targetExpr, ast_exp.Expression argExpr, bool isReversed) {
 		if(auto targetId = cast(ast_exp.Identifier) targetExpr) {
 			switch(ast_sem.isBuiltIn(targetId)) {

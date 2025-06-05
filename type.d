@@ -37,6 +37,8 @@ enum NumericType{
 }
 
 NumericType isNumericTy(Expression t){
+	assert(t);
+	assert(t.isSemEvaluated());
 	auto ty = cast(NumericTy)t;
 	if(!ty) return NumericType.none;
 	return ty.nty;
@@ -52,6 +54,8 @@ struct FixedIntTy {
 }
 
 FixedIntTy isFixedIntTy(Expression e){
+	assert(e);
+	assert(e.isSemEvaluated());
 	auto ce=cast(CallExp)e;
 	if(!ce || !ce.isSquare) return FixedIntTy();
 	auto bits=ce.arg;
@@ -96,17 +100,17 @@ bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
 bool isSubtype(Expression lhs,Expression rhs){
 	if(!lhs||!rhs) return false;
+	assert(lhs.isSemEvaluated());
+	assert(rhs.isSemEvaluated());
 	if(lhs is rhs) return true;
-	auto l=lhs.eval(), r=rhs.eval();
-	if(l is r) return true;
-	if(l.isClassical()&&!r.isClassical()) {
-		r = r.getClassical();
-		if(!r) return false;
-		if(l is r) return true;
-	} else if(!l.isClassical()&&r.isClassical()) {
+	if(lhs.isClassical()&&!rhs.isClassical()) {
+		rhs = rhs.getClassical();
+		if(!rhs) return false;
+		if(lhs is rhs) return true;
+	} else if(!lhs.isClassical()&&rhs.isClassical()) {
 		return false;
 	}
-	return l.isSubtypeImpl(r);
+	return lhs.isSubtypeImpl(rhs);
 }
 
 Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
@@ -145,7 +149,7 @@ class NumericTy: Type{
 			this.nty = nty;
 			this.classical = classical;
 			this.type = classical ? ctypeTy() : nty == NumericType.Bool ? qtypeTy() : qnumericTy();
-			setSemCompleted();
+			setSemEvaluated();
 		}
 	} else {
 		private enum classical=true;
@@ -153,7 +157,7 @@ class NumericTy: Type{
 			assert(!theNumeric[nty]);
 			this.nty = nty;
 			this.type = typeTy();
-			super();
+			setSemEvaluated();
 		}
 	}
 	override NumericTy getClassical(){
@@ -199,7 +203,7 @@ class NumericTy: Type{
 	override bool opEquals(Object o){
 		return o is this;
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -262,7 +266,7 @@ class AggregateTy: Type{
 			}
 		}
 		this.type=typeTy(); // TODO
-		setSemCompleted();
+		setSemEvaluated();
 	}
 	override AggregateTy copyImpl(CopyArgs args){
 		return this;
@@ -286,7 +290,7 @@ class AggregateTy: Type{
 		else return this;
 	}
 
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0;
@@ -299,7 +303,7 @@ class ContextTy: Type{
 	private this(bool classical){
 		static if(language==silq) this.classical=classical;
 		this.type = classical ? ctypeTy() : typeTy();
-		setSemCompleted();
+		setSemEvaluated();
 	}
 	override ContextTy copyImpl(CopyArgs args){
 		return this;
@@ -317,7 +321,7 @@ class ContextTy: Type{
 	override ContextTy getClassical(){
 		return contextTy(true);
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0;
@@ -334,7 +338,7 @@ ContextTy contextTy(bool classical=true){
 class BottomTy: Type{
 	this(){
 		type = etypeTy;
-		setSemCompleted();
+		setSemEvaluated();
 	}
 	override BottomTy copyImpl(CopyArgs args){
 		return this;
@@ -357,7 +361,7 @@ class BottomTy: Type{
 	override BottomTy getClassical(){
 		return this;
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0;
@@ -366,6 +370,38 @@ class BottomTy: Type{
 private BottomTy theBottomTy;
 BottomTy bottom(){
 	return theBottomTy?theBottomTy:(theBottomTy=new BottomTy());
+}
+
+
+class ClassicalTy: Expression{
+	Expression inner;
+	this(Expression inner){
+		this.inner = inner;
+	}
+	override string toString(){
+		return "!" ~ inner.toString();
+	}
+	override ClassicalTy copyImpl(CopyArgs args){
+		return new ClassicalTy(inner.copy(args));
+	}
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return dg(inner);
+	}
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		return inner.freeVarsImpl(dg);
+	}
+	override Expression substituteImpl(Expression[Id] subst){
+		return new ClassicalTy(inner.substitute(subst));
+	}
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+		assert(false);
+	}
+	override Annotation getAnnotation(){
+		return pure_;
+	}
+	override Expression evalImpl(){
+		return inner.eval().getClassical();
+	}
 }
 
 
@@ -381,16 +417,13 @@ class TupleTy: Type,ITupleTy{
 	@property size_t length(){ return types.length; }
 	Expression opIndex(size_t i){ return types[i]; }
 	Expression opSlice(size_t l,size_t r){ return tupleTy(types[l..r]); }
-	private this(Expression[] types)in{
-		assert(types.all!(e=>isType(e)||isQNumeric(e)));
-		assert(!types.length||!types[1..$].all!(x=>x==types[0]));
+	this(Expression[] types)in{
+		assert(types.all!());
 	}do{
 		this.types=types;
-		this.type=typeOfTupleTy(types);
-		setSemCompleted();
 	}
 	override TupleTy copyImpl(CopyArgs args){
-		return this;
+		return new TupleTy(types.map!(ty => ty.copy(args)).array);
 	}
 	override string toString(){
 		if(!types.length) return "𝟙";
@@ -469,10 +502,10 @@ class TupleTy: Type,ITupleTy{
 		foreach(x;types) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override Expression evalImpl(Expression ntype){
-		assert(isTypeTy(ntype));
+	override Expression evalImpl(){
+		assert(isTypeTy(type) || isQNumericTy(type));
 		auto ntypes=types.map!(t=>t.eval()).array;
-		if(ntypes==types) return this;
+		if(iota(types.length).all!(i => ntypes[i] is types[i])) return this;
 		return tupleTy(ntypes);
 	}
 }
@@ -481,13 +514,19 @@ Type unit(){ return tupleTy([]); }
 
 Type tupleTy(Expression[] types)in{
 	assert(types.all!(e=>isType(e)||isQNumeric(e)));
+	assert(types.all!(e=>e.isSemEvaluated()));
 }do{
 	import ast.lexer: Token,Tok;
 	if(types.length&&types.all!(x=>x==types[0])){
 		auto len=LiteralExp.makeInteger(types.length);
 		return vectorTy(types[0],len);
 	}
-	return memoize!((Expression[] types)=>new TupleTy(types))(types);
+	return memoize!((Expression[] types){
+		auto r = new TupleTy(types);
+		r.type = typeOfTupleTy(r.types);
+		r.setSemEvaluated();
+		return r;
+	})(types);
 }
 
 size_t numComponents(Expression t){
@@ -498,15 +537,13 @@ size_t numComponents(Expression t){
 
 class ArrayTy: Type{
 	Expression next;
-	private this(Expression next)in{
-		assert(isType(next)||isQNumeric(next));
+	this(Expression next)in{
+		assert(next);
 	}do{
 		this.next=next;
-		this.type=typeOfArrayTy(next);
-		setSemCompleted();
 	}
 	override ArrayTy copyImpl(CopyArgs args){
-		return this;
+		return new ArrayTy(next.copy(args));
 	}
 	override string toString(){
 		bool p=cast(FunTy)next||next.isTupleTy()&&next!is unit;
@@ -529,8 +566,8 @@ class ArrayTy: Type{
 			return next.unifyImpl(at.next,subst,meet);
 		return false;
 	}
-	override ArrayTy evalImpl(Expression ntype){
-		assert(isTypeTy(ntype) || isQNumericTy(ntype));
+	override ArrayTy evalImpl(){
+		assert(isTypeTy(type) || isQNumericTy(type));
 		return arrayTy(next.eval());
 	}
 	override bool opEquals(Object o){
@@ -582,18 +619,31 @@ class ArrayTy: Type{
 
 ArrayTy arrayTy(Expression next)in{
 	assert(isType(next)||isQNumeric(next));
+	assert(next.isSemEvaluated());
 }do{
-	return memoize!((Expression next)=>new ArrayTy(next))(next);
+	return memoize!((Expression next){
+		auto r = new ArrayTy(next);
+		r.type = typeOfArrayTy(next);
+		r.setSemEvaluated();
+		return r;
+	})(next);
 }
 
 class VectorTy: Type, ITupleTy{
 	Expression next,num;
+	this(Expression next,Expression num)in{
+		assert(next);
+		assert(num);
+	}do{
+		this.next=next;
+		this.num=num;
+	}
 	override ITupleTy isTupleTy(){
 		if(cast(LiteralExp)num) return this;
 		return null;
 	}
 	override VectorTy copyImpl(CopyArgs args){
-		return this;
+		return new VectorTy(next.copy(args), num.copy(args));
 	}
 	@property size_t length(){
 		auto lit=cast(LiteralExp)num;
@@ -605,15 +655,6 @@ class VectorTy: Type, ITupleTy{
 		assert(0<=l&&l<=r&&r<=length);
 		auto len=LiteralExp.makeInteger(r-l);
 		return vectorTy(next,len);
-	}
-	private this(Expression next,Expression num)in{
-		assert(isType(next)||isQNumeric(next));
-		assert(isSubtype(num.type,ℕt(true)));
-	}do{
-		this.next=next;
-		this.num=num;
-		this.type=typeOfVectorTy(next,num);
-		setSemCompleted();
 	}
 	override string toString(){
 		bool p=cast(FunTy)next||next.isTupleTy&&next!is unit;
@@ -640,8 +681,8 @@ class VectorTy: Type, ITupleTy{
 		}
 		return false;
 	}
-	override VectorTy evalImpl(Expression ntype){
-		assert(isTypeTy(ntype) || isQNumericTy(ntype));
+	override VectorTy evalImpl(){
+		assert(isTypeTy(type) || isQNumericTy(type));
 		return vectorTy(next.eval(),num.eval());
 	}
 	override bool opEquals(Object o){
@@ -714,9 +755,16 @@ class VectorTy: Type, ITupleTy{
 
 VectorTy vectorTy(Expression next,Expression num)in{
 	assert(isType(next)||isQNumeric(next));
+	assert(next.isSemEvaluated(), format("unevaluated vector item type %s", next));
 	assert(num&&isSubtype(num.type,ℕt(true)));
+	assert(num.isSemEvaluated(), format("unevaluated vector length %s", num));
 }do{
-	return memoize!((Expression next,Expression num)=>new VectorTy(next,num))(next,num);
+	return memoize!((Expression next,Expression num){
+		auto r = new VectorTy(next,num);
+		r.type = typeOfVectorTy(next, num);
+		r.setSemEvaluated();
+		return r;
+	})(next,num);
 }
 
 static Expression elementType(Expression ty){
@@ -730,7 +778,7 @@ class StringTy: Type{
 	else enum classical=true;
 	private this(bool classical){
 		this.type=typeOfStringTy(classical);
-		setSemCompleted();
+		setSemEvaluated();
 	}
 	override StringTy copyImpl(CopyArgs args){
 		return this;
@@ -744,7 +792,7 @@ class StringTy: Type{
 	override bool opEquals(Object o){
 		return !!cast(StringTy)o;
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -793,12 +841,11 @@ class ProductTy: Type{
 		}
 	}
 	override void setSemCompleted() {
-		assert(dom && dom.isSemCompleted(), format("completed semantic analysis of product type without domain: %s", this));
+		assert(dom && dom.isSemEvaluated(), format("completed semantic analysis of product type without domain: %s", this));
 		assert(cod && cod.isSemCompleted(), format("completed semantic analysis of product type without codomain: %s", this));
 		super.setSemCompleted();
 	}
 	override ProductTy copyImpl(CopyArgs args){
-		if(dom) return this; // TODO
 		auto r = new ProductTy(params.map!(p=>p.copy(args)).array, cod.copy(args), isSquare, isTuple, annotation, isClassical_);
 		if(args.preserveSemantic) {
 			r.dom = dom;
@@ -865,7 +912,9 @@ class ProductTy: Type{
 		return params.length;
 	}
 	Expression argTy(size_t i){
-		return params[i].vtype;
+		auto ty = params[i].vtype;
+		assert(ty.isSemEvaluated());
+		return ty;
 	}
 	bool argConst(size_t i){
 		return params[i].isConst;
@@ -1010,6 +1059,7 @@ class ProductTy: Type{
 		return cod.tryApply(arg,false);
 	}
 	Expression tryApply(Expression arg,bool isSquare){
+		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;
 		if(!isSubtype(arg.type,dom)) return null;
 		Expression[Id] subst;
@@ -1024,7 +1074,7 @@ class ProductTy: Type{
 			}
 		}else{
 			assert(names.length==1);
-			subst[names[0]]=arg;
+			subst[names[0]]=arg.eval();
 		}
 		return cod.substitute(subst);
 	}
@@ -1170,18 +1220,17 @@ class ProductTy: Type{
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0; // TODO: ok?
 	}
-	override Expression evalImpl(Expression ntype){
-		assert(isTypeTy(ntype));
-		auto ndom=dom.eval();
+	override Expression evalImpl(){
+		assert(isTypeTy(type));
+		auto ndom=dom;
 		auto ncod=cod.eval();
-		if(ndom is dom && ncod is cod) return this;
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
 	}
 }
 
 ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
-	assert(dom && dom.isSemCompleted(), format("function domain not analyzed: %s", dom));
-	assert(cod && cod.isSemCompleted());
+	assert(dom && dom.isSemEvaluated(), format("function domain not analyzed: %s", dom));
+	assert(cod && cod.isSemEvaluated());
 	if(isTuple){
 		auto tdom=dom.isTupleTy();
 		assert(tdom&&names.length==tdom.length&&isConst.length==tdom.length);
@@ -1208,12 +1257,12 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 				id.type = p.vtype;
 				id.setSemCompleted();
 			}
-			p.setSemCompleted();
+			p.setSemEvaluated();
 		}
 		auto r = new ProductTy(params, cod, isSquare, isTuple, annotation, isClassical);
 		r.dom = dom;
 		r.type = typeOfProductTy(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
-		r.setSemCompleted();
+		r.setSemEvaluated();
 		return r;
 	})(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
 }
@@ -1289,7 +1338,7 @@ class VariadicTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override VariadicTy substituteImpl(Expression[Id] subst){
+	override Expression substituteImpl(Expression[Id] subst){
 		return variadicTy(next.substitute(subst),isClassical_);
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
@@ -1306,8 +1355,8 @@ class VariadicTy: Type{
 		}
 		return false;
 	}
-	override Expression evalImpl(Expression ntype){
-		assert(isTypeTy(ntype));
+	override Expression evalImpl(){
+		assert(isTypeTy(type));
 		auto ne=next.eval();
 		bool hasElements=false;
 		Expression[] elements;
@@ -1324,6 +1373,7 @@ class VariadicTy: Type{
 			if(isClassical_) return tt.getClassical;
 			return tt;
 		}
+		if(ne is next) return this;
 		return variadicTy(ne,isClassical_);
 	}
 	override bool opEquals(Object o){
@@ -1359,8 +1409,8 @@ class VariadicTy: Type{
 	}
 }
 
-VariadicTy variadicTy(Expression next,bool isClassical)in{
-	assert(next&&next.isSemCompleted());
+Expression variadicTy(Expression next,bool isClassical)in{
+	assert(next&&next.isSemEvaluated());
 	if(auto tpl=cast(TupleTy)next.type)
 		assert(tpl.types.all!(t=>isType(t)||isQNumeric(t)));
 	else assert(isType(elementType(next.type))||isQNumeric(elementType(next.type)));
@@ -1369,6 +1419,7 @@ VariadicTy variadicTy(Expression next,bool isClassical)in{
 		next=new TupleExp(ve.e);
 		next.type=tupleTy(ve.e.map!(e=>e.type).array);
 		next.setSemCompleted();
+		next=next.eval();
 	}
 	return memoize!((Expression next,bool isClassical){
 		auto r = new VariadicTy(next, isClassical);
@@ -1376,7 +1427,7 @@ VariadicTy variadicTy(Expression next,bool isClassical)in{
 		r.setSemCompleted();
 		assert(!r.isClassical_ || r.type.isClassical);
 		return r;
-	})(next,isClassical);
+	})(next,isClassical).eval();
 }
 
 Identifier varTy(Id name,Expression type,bool classical=false)in{
@@ -1386,7 +1437,7 @@ Identifier varTy(Id name,Expression type,bool classical=false)in{
 		auto r=new Identifier(name);
 		static if(language==silq) r.classical=classical;
 		r.type=type;
-		r.setSemCompleted();
+		r.setSemEvaluated();
 		return r;
 	})(name,type,classical);
 }
@@ -1454,7 +1505,7 @@ class TypeTy: Type{
 			this.tyty = tyty;
 			// TODO: types capturing quantum values?
 			this.type=(tyty == TypeType.ctype ? this : ctypeTy());
-			setSemCompleted();
+			setSemEvaluated();
 		}
 		override string toString(){
 			final switch(tyty) {
@@ -1500,7 +1551,7 @@ class TypeTy: Type{
 	override bool opEquals(Object o){
 		return o is this;
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -1565,7 +1616,7 @@ static if(language==silq)
 class QNumericTy: Type{
 	this(){
 		this.type=ctypeTy;
-		setSemCompleted();
+		setSemEvaluated();
 	}
 	override QNumericTy copyImpl(CopyArgs args){
 		return this;
@@ -1576,7 +1627,7 @@ class QNumericTy: Type{
 	override bool opEquals(Object o){
 		return !!cast(QNumericTy)o;
 	}
-	override Expression evalImpl(Expression ntype){ return this; }
+	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
