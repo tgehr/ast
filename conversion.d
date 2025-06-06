@@ -41,13 +41,7 @@ class ExplosionConversion: Conversion{
 bool isNoOpConversion(Expression from,Expression to)in{
 	assert(isType(from)&&isType(to));
 }do{
-	if(from is to) return true;
-	if(from!=to){
-		from=from.eval();
-		to=to.eval();
-		if(from!=to) return false;
-	}
-	return true;
+	return from==to;
 }
 
 class NoOpConversion: Conversion{
