@@ -2308,6 +2308,21 @@ Expression defineLhsSemanticImpl(ProductTy e,DefineLhsContext context){
 Expression defineLhsSemanticImpl(VariadicTy e,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(e,context);
 }
+Expression defineLhsSemanticImpl(TypeTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(QNumericTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(BottomTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(NumericTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
+Expression defineLhsSemanticImpl(StringTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
 
 
 Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
@@ -5666,6 +5681,26 @@ Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){
 	va.type = typeOfVariadicTy(next, va.isClassical_);
 	assert(!va.isClassical_ || va.type.isClassical);
 	return va;
+}
+
+Expression expressionSemanticImpl(TypeTy e,ExpSemContext context){
+	assert(false, "unanalyzed built-in type");
+}
+
+Expression expressionSemanticImpl(QNumericTy e,ExpSemContext context){
+	assert(false, "unanalyzed built-in type");
+}
+
+Expression expressionSemanticImpl(BottomTy e,ExpSemContext context){
+	assert(false, "unanalyzed built-in type");
+}
+
+Expression expressionSemanticImpl(NumericTy e,ExpSemContext context){
+	assert(false, "unanalyzed built-in type");
+}
+
+Expression expressionSemanticImpl(StringTy e,ExpSemContext context){
+	assert(false, "unanalyzed built-in type");
 }
 
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
