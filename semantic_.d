@@ -5347,11 +5347,14 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 
 	e2 = expressionSemantic(e2, context.nestConst);
 	propErr(e2, e);
+	if(!e1.type || !e2.type) {
+		assert(e.isSemError());
+		return e;
+	}
 	e.type = determineType(e1.type, e2.type);
 	if(!e.type){
-		if(e1.type&&e2.type)
-			sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
-		e.sstate=SemState.error;
+		sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+		e.setSemError();
 	}
 	return e;
 }
