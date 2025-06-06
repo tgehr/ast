@@ -331,6 +331,7 @@ class TypeAnnotationExp: Expression{
 		return e.unify(rhs,subst,meet);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto tae=cast(TypeAnnotationExp)o;
 		if(!tae) return false;
 		return e==tae.e&&t==tae.t&&annotationType==tae.annotationType;
@@ -421,6 +422,7 @@ class LiteralExp: Expression{
 	}
 
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto r=cast(LiteralExp)o;
 		if(!r) return false;
 		if(lit.type!=r.lit.type) return false;
@@ -600,6 +602,7 @@ class Identifier: Expression{
 		return true;
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		if(auto r=cast(Identifier)o){
 			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning)
 				return true;
@@ -811,6 +814,7 @@ class UnaryExp(TokenType op): AUnaryExp{
 		return e.unify(ue.e,subst,meet);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto ue=cast(UnaryExp!op)o;
 		return ue&&e==ue.e;
 	}
@@ -913,6 +917,7 @@ class IndexExp: Expression{ //e[a...]
 		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
 	}
 	override bool opEquals(Object rhs){
+		if(rhs is this) return true;
 		auto idx=cast(IndexExp)rhs;
 		return idx&&idx.e==e&&idx.a==a;
 	}
@@ -986,6 +991,7 @@ class SliceExp: Expression{
 		return e.unify(sl.e,subst,meet)&&l.unify(sl.l,subst,meet)&&r.unify(sl.r,subst,meet);
 	}
 	override bool opEquals(Object rhs){
+		if(rhs is this) return true;
 		auto sl=cast(SliceExp)rhs;
 		return e == sl.e && l == sl.l && r == sl.r;
 	}
@@ -1045,6 +1051,7 @@ class CallExp: Expression{
 		return e.unify(ce.e,subst,meet)&&arg.unify(ce.arg,subst,meet);
 	}
 	override bool opEquals(Object rhs){
+		if(rhs is this) return true;
 		auto ce=cast(CallExp)rhs;
 		if(!ce) return false;
 		return e==ce.e&&arg==ce.arg&&isSquare==ce.isSquare&&isClassical_==ce.isClassical_;
@@ -1560,6 +1567,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	}
 
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto be=cast(BinaryExp!op)o;
 		return be && e1==be.e1&&e2==be.e2;
 	}
@@ -1605,6 +1613,7 @@ class FieldExp: Expression{
 		return e.unify(fe.e,subst,meet);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto fe=cast(FieldExp)o;
 		if(!fe||f!=fe.f) return false;
 		return e==fe.e;
@@ -1662,6 +1671,7 @@ class IteExp: Expression{
 			&&(!othw&&!ite.othw||othw&&ite.othw&&othw.unify(ite.othw,subst,meet));
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto ite=cast(IteExp)o;
 		if(!ite) return false;
 		return cond==ite.cond&&then==ite.then
@@ -1871,6 +1881,7 @@ class CompoundExp: Expression{
 		return iota(s.length).all!(i=>s[i].unify(ce.s[i],subst,meet));
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto ce=cast(CompoundExp)o;
 		if(!ce) return false;
 		if(s.length!=ce.s.length) return false;
@@ -1935,6 +1946,7 @@ class TupleExp: Expression{
 		return all!(i=>e[i].unify(te.e[i],subst,meet))(iota(e.length));
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto tpl=cast(TupleExp)o;
 		return tpl&&e==tpl.e;
 	}
@@ -1989,6 +2001,7 @@ class VectorExp: Expression{
 	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto r=cast(VectorExp)o;
 		return r&&e==r.e;
 	}
@@ -2087,6 +2100,7 @@ class AssertExp: Expression{
 		return e.unify(ae.e,subst,meet);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto ae=cast(AssertExp)o;
 		return ae&&e==ae.e;
 	}

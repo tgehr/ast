@@ -272,6 +272,7 @@ class AggregateTy: Type{
 		return this;
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		if(auto r=cast(AggregateTy)o)
 			return decl is r.decl && classical==r.classical;
 		return false;
@@ -311,6 +312,7 @@ class ContextTy: Type{
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto ctx=cast(ContextTy)o;
 		return ctx&&ctx.classical==classical;
 	}
@@ -454,6 +456,7 @@ class TupleTy: Type,ITupleTy{
 
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		if(auto r=cast(TupleTy)o)
 			return types==r.types;
 		return false;
@@ -789,9 +792,7 @@ class StringTy: Type{
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		return !!cast(StringTy)o;
-	}
+	override bool opEquals(Object o){ return o is this; }
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -1079,6 +1080,7 @@ class ProductTy: Type{
 		return cod.substitute(subst);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		auto r=cast(ProductTy)o;
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
@@ -1378,6 +1380,7 @@ class VariadicTy: Type{
 		return variadicTy(ne,isClassical_);
 	}
 	override bool opEquals(Object o){
+		if(o is this) return true;
 		if(auto r=cast(VariadicTy)o)
 			return next==r.next&&isClassical_==r.isClassical;
 		return false;
