@@ -99,9 +99,12 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 	if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
 		                              &&(knownLength(cat.e1,true)||knownLength(cat.e2,true));
 	if(auto ce=cast(CallExp)olhs){
-		static if(language==silq)
-		if(isBuiltInCall(cast(CallExp)unwrap(ce.e)))
-			return false;
+		static if(language==silq){
+			if(isPrimitiveCall(ce))
+				return false;
+			if(isBuiltInCall(cast(CallExp)unwrap(ce.e)))
+				return false;
+		}
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
@@ -761,14 +764,56 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	}+/
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
+	auto fbody_=fd.body_;
+	if(!fbody_){
+		if(isPrimitive(fd)){
+			auto id=new Identifier(fd.name.id);
+			id.loc=fd.loc;
+			id.meaning=fd;
+			id.type=fd.ftype;
+			id.sstate=SemState.completed;
+			auto ids=fd.params.map!(delegate Expression(p){
+				auto id=new Identifier(p.name.id);
+				id.constLookup=p.isConst;
+				id.meaning=p;
+				id.type=p.vtype;
+				id.sstate=SemState.completed;
+				id.loc=p.loc;
+				return id;
+			}).array;
+			Expression arg;
+			if(fd.isTuple){
+				arg=new TupleExp(ids);
+				arg.loc=fd.loc;
+				arg.type=tupleTy(ids.map!(id=>id.type).array);
+				arg.sstate=SemState.completed;
+			}else{
+				assert(ids.length==1);
+				arg=ids[0];
+			}
+			auto ce=new CallExp(id,arg,fd.isSquare,false);
+			ce.loc=fd.loc;
+			ce.type=fd.ftype.tryApply(arg,fd.isSquare);
+			ce.sstate=SemState.completed;
+			auto ret=new ReturnExp(ce);
+			ret.loc=fd.loc;
+			ret.type=bottom;
+			ret.sstate=SemState.completed;
+			auto cmp=new CompoundExp([ret]);
+			cmp.loc=fd.loc;
+			cmp.type=bottom;
+			fbody_=cmp;
+		}else sc.error("cannot reverse function without body",fd.loc);
+	}
+
 	bool simplify=r.innerNeeded;
 	ReturnExp getRet(CompoundExp bdy){
-		if(!fd.body_.s.length) return null;
+		if(!bdy||!bdy.s.length) return null;
 		if(auto ret=cast(ReturnExp)bdy.s[$-1]) return ret;
 		if(auto ce=cast(CompoundExp)bdy.s[$-1]) return getRet(ce);
 		return null;
 	}
-	auto ret=getRet(fd.body_);
+	auto ret=getRet(fbody_);
 	if(!ret){
 		sc.error("reversing early returns not supported yet",fd.loc);
 		enforce(0,text("errors while reversing function"));
@@ -852,7 +897,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	retRhs.type=r.returnType;
 	retRhs.loc=ret.loc;
 	auto body_=new CompoundExp([]);
-	body_.loc=fd.body_.loc;
+	body_.loc=fbody_.loc;
 	auto result=new FunctionDef(null,params,isTuple,cod,body_);
 	foreach(name, val; fd.attributes) {
 		if(copyAttr(name)) result.attributes[name] = val;
@@ -909,7 +954,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fd.body_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		import util.io:stderr;
