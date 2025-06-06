@@ -1100,9 +1100,12 @@ class ProductTy: Type{
 	}
 
 	bool isConstCompatible(ProductTy rhs){
-		return zip(zip(this.isConst,this.isConstForSubtyping),
-		           zip(rhs.isConst,rhs.isConstForSubtyping))
-			.all!(x=>x[0][0]!=x[0][1]||x[1][0]!=x[1][1]||x[0][0]==x[1][0]);
+		assert(isTuple == rhs.isTuple);
+		assert(nargs == rhs.nargs);
+		return iota(nargs).all!(i =>
+			argConst(i) == rhs.argConst(i) ||
+			argTy(i).isClassical || rhs.argTy(i).isClassical
+		);
 	}
 
 	override bool isSubtypeImpl(Expression rhs){
@@ -1111,7 +1114,7 @@ class ProductTy: Type{
 		if(isTuple&&!r.dom.isTupleTy()) return false;
 		r=r.setTuple(isTuple);
 		if(!r) return false;
-		if(!isConstCompatible(r)||isSquare!=r.isSquare||nargs!=r.nargs)
+		if(isSquare!=r.isSquare||nargs!=r.nargs||!isConstCompatible(r))
 			return false;
 		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
 			return false;

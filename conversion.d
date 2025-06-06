@@ -383,8 +383,9 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 			else return typeExplicitConversion!witness(ft1,nft2);
 		}
 	}
-	if(!ft1.isConstCompatible(ft2)) return typeof(return).init;
+	if(ft1.isSquare!=ft2.isSquare) return typeof(return).init;
 	if(ft1.nargs!=ft2.nargs) return typeof(return).init;
+	if(!ft1.isConstCompatible(ft2)) return typeof(return).init;
 	Id[] names;
 	if(ft1.names!=ft2.names){
 		names=ft1.freshNames(ft2);
