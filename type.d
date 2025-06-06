@@ -1247,18 +1247,19 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 		}
 		assert(types.length == names.length);
 		auto params = new Parameter[names.length];
+		Expression[Id] subst;
 		foreach(i, name; names) {
-			auto id = name ? new Identifier(name) : null;
+			Identifier id;
+			if(name) {
+				id = varTy(name, types[i]);
+				if(name) subst[name] = id;
+			}
 			auto p = new Parameter(isConst[i], id, types[i]);
 			params[i] = p;
 			p.vtype = p.dtype;
-			if(id) {
-				id.meaning = p;
-				id.type = p.vtype;
-				id.setSemCompleted();
-			}
 			p.setSemEvaluated();
 		}
+		cod = cod.substitute(subst);
 		auto r = new ProductTy(params, cod, isSquare, isTuple, annotation, isClassical);
 		r.dom = dom;
 		r.type = typeOfProductTy(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
