@@ -340,7 +340,7 @@ class FunctionConversion: Conversion{
 	this(ProductTy from,ProductTy to,Id[] names,Conversion dom,Conversion cod)in{
 		assert(isNoOpConversion(to.dom,dom.from)&&isNoOpConversion(dom.to,from.dom));
 		auto subst=functionConversionSubstitution(names,from,to);
-		assert(isNoOpConversion(cod.from,from.cod.substitute(subst[0]))&&isNoOpConversion(to.cod.substitute(subst[1]),cod.to),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
+		assert(isNoOpConversion(cod.from,from.cod.substitute(subst)),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
 		assert(from.isConstCompatible(to)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
 		assert(from.annotation>=to.annotation);
@@ -353,19 +353,18 @@ class FunctionConversion: Conversion{
 	}
 }
 
-Expression[Id][2] functionConversionSubstitution(Id[] names,ProductTy from,ProductTy to)in{
+Expression[Id] functionConversionSubstitution(Id[] names,ProductTy from,ProductTy to)in{
 	assert(from.names==names&&to.names==names);
 }do{
-	Expression[Id][2] subst;
-	foreach(k;0..2){
-		foreach(i;0..names.length){
-			if(!names[i]) continue;
-			auto tae=new TypeAnnotationExp(varTy(names[i],(k?from:to).argTy(i)),from.argTy(i),TypeAnnotationType.coercion);
-			tae.brackets++;
-			tae.type=from.argTy(i);
-			tae.setSemCompleted();
-			subst[k][names[i]]=tae.eval();
-		}
+	Expression[Id] subst;
+	foreach(i;0..names.length){
+		if(!names[i]) continue;
+		if(to.argTy(i) == from.argTy(i)) continue;
+		auto tae=new TypeAnnotationExp(varTy(names[i],to.argTy(i)),from.argTy(i),TypeAnnotationType.annotation);
+		tae.brackets++;
+		tae.type = from.argTy(i);
+		tae.setSemCompleted();
+		subst[names[i]]=tae.eval();
 	}
 	return subst;
 }
@@ -403,9 +402,9 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	if(!dom) return typeof(return).init;
 	auto subst=functionConversionSubstitution(names,ft1,ft2);
 	assert(!ft1.cod.hasFreeVar(Id()));
-	auto nft1Cod=ft1.cod.substitute(subst[0]);
+	auto nft1Cod=ft1.cod.substitute(subst);
 	assert(!ft2.cod.hasFreeVar(Id()));
-	auto nft2Cod=ft2.cod.substitute(subst[1]);
+	auto nft2Cod=ft2.cod;
 	auto cod=typeExplicitConversion!witness(nft1Cod,nft2Cod,TypeAnnotationType.coercion);
 	if(!cod) return typeof(return).init;
 	return new FunctionConversion(ft1,ft2,names,dom,cod);
