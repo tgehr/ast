@@ -573,6 +573,7 @@ class Identifier: Expression{
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	override Expression substituteImpl(Expression[Id] subst){
+		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
 		if(id in subst){
 			auto result=subst[id];
 			static if(language==silq){
@@ -586,6 +587,7 @@ class Identifier: Expression{
 				result.setConstLookup(constLookup);
 				if(implicitDup) result.implicitDup=true;
 			}
+			assert(constLookup == result.constLookup || type.isClassical(), "bad setConstLookup");
 			return result;
 		}
 		return this;
@@ -1219,7 +1221,7 @@ class CallExp: Expression{
 		if(ne is e && narg is arg) r=this;
 		else r=new CallExp(ne,narg,isSquare,isClassical_);
 		// TODO: partially evaluate arbitrary functions
-		if(type.isClassical()){
+		if(type.isClassical() || constLookup) {
 			if(auto sub=r.isDup()) return sub.eval(); // TODO: ok?
 		}
 		return r;

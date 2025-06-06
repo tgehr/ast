@@ -14,6 +14,7 @@ import ast_exp = ast.expression;
 import ast_ty = ast.type;
 import ast_decl = ast.declaration;
 import ast_scope = ast.scope_;
+import ast_conv = ast.conversion;
 import ast.lexer: Tok;
 
 alias typeForDecl = ast_sem.typeForDecl;
@@ -145,12 +146,24 @@ class Checker {
 	void visExpr(ast_exp.Expression e) {
 		assert(e.isSemCompleted());
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
+		visType(e.type);
 		ast_exp.dispatchExp!((auto ref e){
 			this.implExpr(e);
 		})(e);
 	}
 
 	void visType(ast_exp.Expression e) {
+		assert(ast_ty.isType(e) || ast_ty.isQNumeric(e), format("expected type: %s", e));
+		visExprOnce(e);
+	}
+
+	void visExprOnce(ast_exp.Expression e) {
+		auto p = cast(void*)e;
+		if(p in checked) return;
+		checked[p] = unit;
+		for(auto sc = parent; sc; sc = sc.parent) {
+			if(p in sc.checked) return;
+		}
 		visExpr(e);
 	}
 
@@ -580,7 +593,7 @@ class Checker {
 		}
 
 		if(auto init=e.getInitializer()) {
-			visExpr(init);
+			visExprOnce(init);
 			return;
 		}
 
@@ -1057,14 +1070,44 @@ class Checker {
 
 	void expectConvertible(ast_exp.Expression e, ast_exp.Expression ty, ast_ty.TypeAnnotationType annotationType) {
 		import ast.conversion;
-		if(typeExplicitConversion!true(e.type, ty, annotationType)) return; // check witness generation
-		assert(0, format("ERROR: Expected %s of type %s to be convertible to type %s", e, e.type, ty));
+		auto conv = typeExplicitConversion!true(e.type, ty, annotationType);
+		// check witness generation
+		assert(conv, format("ERROR: Expected %s of type %s to be convertible to type %s", e, e.type, ty));
+		visConv(conv);
+	}
+
+	void visConv(ast_conv.Conversion conv) {
+		visType(conv.from);
+		visType(conv.to);
+		if(auto c = cast(ast_conv.TransitiveConversion)conv) {
+			visConv(c.a);
+			visConv(c.b);
+		} else if(auto c = cast(ast_conv.TupleConversion)conv) {
+			foreach(sub; c.elements) {
+				visConv(sub);
+			}
+		} else if(auto c = cast(ast_conv.VectorConversion)conv) {
+			visConv(c.next);
+		} else if(auto c = cast(ast_conv.ArrayConversion)conv) {
+			visConv(c.next);
+		} else if(auto c = cast(ast_conv.FunctionConversion)conv) {
+			visConv(c.dom);
+			auto to = cast(ast_ty.ProductTy) c.to;
+			auto sc = new Checker(nscope, this);
+			sc.strictScope = false;
+			foreach(p; to.params) {
+				if(p.name && p.isConst) sc.defineVar(p, "product type parameter", p.name);
+			}
+			sc.strictScope = true;
+			sc.visConv(c.cod);
+		}
 	}
 
 	Checker parent;
 	ast_scope.NestedScope nscope;
 	IdMap!(ast_decl.Declaration) vars;
 	bool strictScope = true;
+	Unit[void*] checked;
 }
 
 void checkFunction(ast_decl.FunctionDef fd) {
