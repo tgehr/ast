@@ -1166,16 +1166,15 @@ class CallExp: Expression{
 	}
 
 	final private Expression isDup(){
-		import ast.semantic_:isPreludeSymbol,PreludeSymbol;
-		static if(__traits(hasMember,PreludeSymbol,"dup")) {
+		import ast.semantic_:isPreludeSymbol;
+		static if(language==silq) {
 			if(isSquare || isClassical_) return null;
 			auto ce2=cast(CallExp)e;
 			if(!ce2) return null;
 			if(!ce2.isSquare || ce2.isClassical_) return null;
 			auto id=cast(Identifier)ce2.e;
 			if(!id) return null;
-			if(id.name!="dup") return null;
-			if(isPreludeSymbol(id.meaning)!=PreludeSymbol.dup) return null;
+			if(isPreludeSymbol(id)!="dup") return null;
 			return arg;
 		} else {
 			return null;

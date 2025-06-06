@@ -437,15 +437,6 @@ enum BuiltIn{
 	primitive,
 	show,
 	query,
-	typeTy,
-	bottom,
-	unit,
-	B,two=B,
-	ℕ,N=ℕ,
-	ℤ,Z=ℤ,
-	ℚ,Q=ℚ,
-	ℝ,R=ℝ,
-	ℂ,C=ℂ,
 }
 
 static if(language==psi)
@@ -456,15 +447,6 @@ enum BuiltIn{
 	Marginal,
 	sampleFrom,
 	Expectation,
-	typeTy,
-	bottom,
-	unit,
-	B,two=B,
-	ℕ,N=ℕ,
-	ℤ,Z=ℤ,
-	ℚ,Q=ℚ,
-	ℝ,R=ℝ,
-	ℂ,C=ℂ,
 }
 
 BuiltIn isBuiltIn(Identifier id){
@@ -491,92 +473,21 @@ BuiltIn isBuiltIn(Identifier id){
 			case "Expectation":
 				return BuiltIn.Expectation;
 		}else static assert(0);
-		case "*":
-			return BuiltIn.typeTy;
-		case "𝟘","⊥","bottom","never":
-			return BuiltIn.bottom;
-		case "𝟙","unit":
-			return BuiltIn.unit;
-		case "𝔹","B","𝟚":
-			return BuiltIn.B;
-		case "ℕ","N":
-			return BuiltIn.ℕ;
-		case "ℤ","Z":
-			return BuiltIn.ℤ;
-		case "ℚ","Q":
-			return BuiltIn.ℚ;
-		case "ℝ","R":
-			return BuiltIn.ℝ;
-		case "ℂ","C":
-			return BuiltIn.ℂ;
 	}
 }
 
-static if(language==silq)
-enum PreludeSymbol{
-	none,
-	dup,
-	measure,
-	H,
-	X,
-	Y,
-	Z,
-	phase,
-	rotX,
-	rotY,
-	rotZ,
-	I,
-	S,
-	CNOT,
-	reverse,
-	floor,
-	ceil,
-	round,
-	inℤ,
-	sqrt,
-	exp,
-	log,
-	sin,
-	asin,
-	cos,
-	acos,
-	tan,
-	atan,
-	abs,
-	min,
-	max,
-	array,
-	vector,
-	print,
-	dump,
-	exit,
-}
-
-static if(language==psi)
-enum PreludeSymbol{
-	none,
-	// TODO
-}
-
-PreludeSymbol isPreludeSymbol(Identifier id){
-	if(!id||!id.meaning) return PreludeSymbol.none;
+string isPreludeSymbol(Identifier id){
+	if(!id||!id.meaning) return null;
 	return isPreludeSymbol(id.meaning);
 }
-PreludeSymbol isPreludeSymbol(Declaration decl){
-	if(!isInPrelude(decl)) return PreludeSymbol.none;
-	if(!decl.name) return PreludeSymbol.none;
-	switch(decl.name.name){
-		default: return PreludeSymbol.none;
-		import std.traits:EnumMembers;
-		static foreach(ps;EnumMembers!PreludeSymbol){
-			case text(ps):
-				return ps;
-		}
-	}
+string isPreludeSymbol(Declaration decl){
+	if(!isInPrelude(decl)) return null;
+	if(!decl.name) return null;
+	return decl.name.id.str;
 }
 
-PreludeSymbol isPreludeCall(CallExp ce){
-	if(!ce) return PreludeSymbol.none;
+string isPreludeCall(CallExp ce){
+	if(!ce) return null;
 	return isPreludeSymbol(cast(Identifier)ce.e);
 }
 BuiltIn isBuiltInCall(CallExp ce){
@@ -3608,15 +3519,11 @@ Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool checked,
 }
 
 bool isReverse(Identifier id){
-	if(!id) return false;
-	if(id.name!="reverse") return false;
-	return id.meaning&&isReverse(id.meaning);
+	return isPreludeSymbol(id) == "reverse";
 }
 
 bool isReverse(Declaration decl){
-	if(!isInPrelude(decl)) return false;
-	if(!decl.name) return false;
-	return decl.getName=="reverse";
+	return isPreludeSymbol(decl) == "reverse";
 }
 
 Parameter[] makeParams(C,R,T)(C isConst,R paramNames,T types,Location loc)in{
@@ -4063,7 +3970,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto calledId=cast(Identifier)ce.e;
 			switch(isPreludeSymbol(calledId)){
 				default: break;
-				case PreludeSymbol.reverse:
+				case "reverse":
 					if(auto r=tryReverseSemantic(ce,context))
 						return r;
 					break;
@@ -5274,7 +5181,7 @@ Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	une.e=expressionSemantic(une.e,context.nestConst);
 	static if(language==silq){
 		if(auto id=cast(Identifier)une.e)
-			if(isPreludeSymbol(id)==PreludeSymbol.Z)
+			if(isPreludeSymbol(id) == "Z")
 				une.e = getPreludeSymbol("ℤ", id.loc, sc);
 	}
 	static if(language==silq) if(isType(une.e)||isQNumeric(une.e)){
