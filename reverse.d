@@ -551,37 +551,41 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	if(string prim=isPrimitiveCall(olhs)) {
 		auto primCallE=cast(CallExp)olhs;
 		Expression fun=primCallE.e;
-		Expression[] args=(cast(TupleExp)primCallE.arg).e;
+		Expression arg=primCallE.arg;
 		Expression newlhs, newrhs;
 		switch(prim) {
 			case null:
 				break;
 			case "dup":
-				//dup(args[0]) := orhs
-				//forget(orhs=args[0]);
-				assert(args.length==1);
-				return new ForgetExp(orhs, args[0]);
+				//dup(arg) := orhs
+				//forget(orhs=arg);
+				return new ForgetExp(orhs, arg);
 			case "H", "X", "Y", "Z":
-				//gate(args[0]) := orhs
-				//args[0] := gate(orhs)
-				assert(args.length==1);
-				newlhs=args[0];
-				newrhs=new CallExp(fun, new TupleExp([orhs]), false, false);
+				//gate(arg) := orhs
+				//arg := gate(orhs)
+				newlhs=arg;
+				newrhs=new CallExp(fun, orhs, false, false);
 				newrhs.loc=olhs.loc;
 				break;
 			case "P":
-				//P(args[0]) := orhs
-				//orhs; P(-args[0])
-				assert(args.length==1);
-				auto negated=new UMinusExp(args[0]);
+				//P(arg) := orhs
+				//orhs; P(-arg)
+				auto negated=new UMinusExp(arg);
 				negated.loc=olhs.loc;
-				auto reversed=new CallExp(fun, new TupleExp([negated]), false, false);
+				auto reversed=new CallExp(fun, negated, false, false);
 				reversed.loc=olhs.loc;
 				//return new CompoundExp([orhs, reversed]);
 				return reversed;
 			case "rZ":
-				//rZ(args[0], args[1]) := orhs
+				//rZ(arg[0], arg[1]) := orhs
 				//orhs; rZ(-args[0], args[1])
+				auto argt = cast(TupleExp)arg;
+				if(!argt) {
+					// TODO unpack?
+					sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+					return error();
+				}
+				auto args = argt.e;
 				assert(args.length==2);
 				auto negated=new UMinusExp(args[0]);
 				negated.loc=olhs.loc;
@@ -592,6 +596,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			case "rX","rY":
 				//rX(args[0], args[1]) := orhs
 				//args[1] := rX(-args[0], orhs)
+				auto argt = cast(TupleExp)arg;
+				if(!argt) {
+					// TODO unpack?
+					sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+					return error();
+				}
+				auto args = argt.e;
 				assert(args.length==2);
 				newlhs=args[1];
 				auto negated=new UMinusExp(args[0]);
@@ -709,6 +720,16 @@ Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool uncheck
 	if(e.isSemError()) return e;
 	if(validDefLhs!flags(e.e1,sc)) return null;
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked);
+}
+
+private bool copyAttr(Id name) {
+	switch(name.str) {
+		case "artificial":
+		case "inline":
+			return true;
+		default:
+			return false;
+	}
 }
 
 static if(language==silq)
@@ -833,7 +854,9 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto body_=new CompoundExp([]);
 	body_.loc=fd.body_.loc;
 	auto result=new FunctionDef(null,params,isTuple,cod,body_);
-	if(fd.hasAttribute("artificial")) result.attributes~="artificial";
+	foreach(name, val; fd.attributes) {
+		if(copyAttr(name)) result.attributes[name] = val;
+	}
 	result.isSquare=fd.isSquare;
 	result.annotation=fd.annotation;
 	result.scope_=sc;

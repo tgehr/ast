@@ -143,7 +143,7 @@ class FunctionDef: Declaration{
 		r.isSquare=isSquare;
 		r.annotation=annotation;
 		r.inferAnnotation=inferAnnotation;
-		r.attributes=attributes.array;
+		r.attributes=attributes.dup;
 		return r;
 	}
 	override string toString(){
@@ -177,7 +177,7 @@ class FunctionDef: Declaration{
 	bool hasReturn;
 	bool isConstructor;
 	string[] retNames;
-	string[] attributes;
+	Expression[Id] attributes;
 
 	void seal(){
 		sealed=true;
@@ -214,8 +214,21 @@ class FunctionDef: Declaration{
 		return ftype.cod.numComponents;
 	}
 
-	bool hasAttribute(string attr) {
-		return attributes.any!(a => a == attr);
+	bool boolAttribute(Id attr, bool default_=false) {
+		auto p = attr in attributes;
+		if(!p) return default_;
+		auto val = *p;
+		auto num = val.asIntegerConstant();
+		if(!num) return default_; // TODO
+		return num.get() != 0;
+	}
+
+	string stringAttribute(Id attr, string default_=null) {
+		auto p = attr in attributes;
+		if(!p) return default_;
+		auto e = cast(LiteralExp)*p;
+		if(e.lit.type != Tok!"``") return default_; // TODO
+		return e.lit.str;
 	}
 
 	FunctionDef reversed=null;

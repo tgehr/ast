@@ -468,6 +468,13 @@ struct Id {
 		return (cast(immutable(char)*)raw)[0..len];
 	}
 
+	template s(string v) {
+		__gshared static immutable Id s;
+		shared static this() {
+			s = intern(v);
+		}
+	}
+
 	static Id intern(string s) @trusted {
 		// TODO make thread-safe?
 		import core.stdc.stdlib: malloc;

@@ -152,7 +152,6 @@ private template getParseProc(T...){
 	}else enum prc="parse"~T[0].stringof~"()", off=2;
 }
 private struct Existing{}
-private struct AssignExp{}
 private struct OrOrExp{}
 private struct ArgumentList{}
 
@@ -819,10 +818,30 @@ struct Parser{
 		auto annotation=Annotation.none;
 		bool inferAnnotation=true;
 		bool isLifted=false;
-		auto attributes=appender!(string[]);
+		Expression[Id] attributes;
 		while(ttype==Tok!"@"){
-			attributes.put(tok.name);
+			import std.stdio: stderr;
+			if(tok.name.length) {
+				attributes[Id.intern(tok.name)] = null;
+				nextToken();
+				continue;
+			}
 			nextToken();
+			expect(Tok!"[");
+			foreach(attr; parseArgumentList(Tok!"]")[0]) {
+				if(auto id = cast(Identifier)attr) {
+					attributes[id.id] = LiteralExp.makeBoolean(true);
+					continue;
+				}
+				if(auto ae = cast(EqExp)attr) {
+					auto id = cast(Identifier)ae.e1;
+					if(!id) error("invalid attribute name", ae.e1.loc);
+					attributes[id.id] = ae.e2;
+					continue;
+				}
+				error("invalid attribute", attr.loc);
+			}
+			expect(Tok!"]");
 		}
 		static if(language==silq){
 			if(ttype==Tok!"lifted"||ttype==Tok!"qfree"){
@@ -864,7 +883,7 @@ struct Parser{
 					annotation=pure_;
 					inferAnnotation=false;
 				}
-				attributes.put("artificial");
+				attributes[Id.s!"artificial"] = null;
 				e=parseLambdaExp!semicolon();
 			}else{
 				nextToken();
@@ -884,7 +903,7 @@ struct Parser{
 		if(inferAnnotation) annotation=pure_;
 		res.annotation=annotation;
 		res.inferAnnotation=inferAnnotation;
-		res.attributes=attributes[];
+		res.attributes=attributes;
 		return res;
 	}
 	DatParameter parseDatParameter(bool constDefault){

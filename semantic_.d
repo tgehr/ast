@@ -434,7 +434,6 @@ static if(language==silq)
 enum BuiltIn{
 	none,
 	π,pi=π,
-	primitive,
 	show,
 	query,
 }
@@ -459,8 +458,6 @@ BuiltIn isBuiltIn(Identifier id){
 				return BuiltIn.readCSV;
 		}
 		static if(language==silq){
-			case "__primitive":
-				return BuiltIn.primitive;
 			case "__show":
 				return BuiltIn.show;
 			case "__query":
@@ -497,19 +494,20 @@ BuiltIn isBuiltInCall(CallExp ce){
 
 static if(language==silq)
 string isPrimitive(Expression e){
-	auto ce=cast(CallExp)e;
-	if(!ce) return null;
-	auto id=cast(Identifier)ce.e;
+	auto id = cast(Identifier)e;
 	if(!id) return null;
-	if(id.meaning || id.name != "__primitive") return null;
-	auto args=cast(TupleExp)ce.arg;
-	enforce(!!args&&args.e.length==2);
-	auto opLit=cast(LiteralExp)args.e[0];
-	enforce(!!opLit&&opLit.lit.type==Tok!"``");
-	return opLit.lit.str;
+	auto fd = cast(FunctionDef)id.meaning;
+	if(!fd) return null;
+	return isPrimitive(fd);
 }
 
-// TODO `class PrimitiveExp: Expression { string prim; Expression[] args; Annotation annotation; }`
+static if(language==silq)
+string isPrimitive(FunctionDef fd){
+	string name = fd.stringAttribute(Id.s!"extern");
+	if(!name.startsWith("primitive.")) return null;
+	return name["primitive.".length..$];
+}
+
 static if(language==silq)
 string isPrimitiveCall(Expression e){
 	auto ce=cast(CallExp)e;
@@ -558,7 +556,7 @@ Expression builtIn(Identifier id,Scope sc){
 				break;
 		}
 		static if(language==silq){
-			case "__primitive","__query","__show":
+			case "__query","__show":
 				t=unit;
 				break; // those are actually magic polymorphic functions
 		}
@@ -4041,8 +4039,6 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto id=cast(Identifier)ce.e;
 			switch(id.name){
 				static if(language==silq){
-					case "__primitive":
-						return handlePrimitive(ce, context);
 					case "__show":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
 						auto lit=cast(LiteralExp)ce.arg;
@@ -6387,34 +6383,6 @@ Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 	return ce;
 }
 }else static if(language==silq){
-
-Expression handlePrimitive(CallExp ce, ExpSemContext context){
-	Scope sc=context.sc;
-	ce.arg=expressionSemantic(ce.arg,context.nestConst);
-	propErr(ce.arg,ce);
-	if(ce.isSemError()) return ce;
-	Expression[] args;
-	if(auto tpl=cast(TupleExp)ce.arg) args=tpl.e;
-	else {
-		sc.error("expected literal arguments to __primitive",ce.loc);
-		ce.setSemError();
-		return ce;
-	}
-	if(args.length!=2){
-		sc.error("expected two arguments to __primitive",ce.loc);
-		ce.setSemError();
-		return ce;
-	}
-	auto literal=cast(LiteralExp)args[0];
-	if(!literal||literal.lit.type!=Tok!"``"){
-		sc.error("first argument to __primitive must be string literal",args[0].loc);
-		ce.setSemError();
-		return ce;
-	}
-	ce.type = typeSemantic(args[1], sc);
-	propErr(args[1], ce);
-	return ce;
-}
 
 Expression handleQuery(CallExp ce,ExpSemContext context){
 	auto sc=context.sc;
