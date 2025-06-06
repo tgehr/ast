@@ -185,6 +185,11 @@ abstract class Scope{
 			DeclProp dup(){
 				return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup);
 			}
+			DeclProp move(){
+				auto r=DeclProp(constBlock,componentReplacements,accesses,capturers);
+				this=typeof(this).init;
+				return r;
+			}
 			DeclProp inherit(){ return default_(); }
 			DeclProp merged()in{
 				//assert(!constBlock);
@@ -199,6 +204,30 @@ abstract class Scope{
 			}do{
 				accesses~=nested.accesses;
 				capturers~=nested.capturers;
+			}
+			void replaceDecl(Declaration splitFrom,Declaration splitInto){
+				foreach(id;accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+					if(id.meaning !is splitFrom) continue;
+					id.meaning=splitInto;
+				}
+				foreach(capturer;capturers){
+					void doIt(T)(T capturer){
+						if(splitFrom !in capturer.captures) return;
+						capturer.captures[splitInto]=capturer.captures[splitFrom];
+						capturer.captures.remove(splitFrom);
+						foreach(ref oldDecl;capturer.capturedDecls){
+							if(oldDecl is splitFrom){
+								oldDecl=splitInto;
+							break;
+							}
+						}
+						foreach(id;capturer.captures[splitInto])
+							if(id.meaning is splitFrom) id.meaning=splitInto;
+					}
+					if(auto fd=cast(FunctionDef)capturer) doIt(fd);
+					else if(auto dat=cast(DatDecl)capturer) doIt(dat);
+					else assert(0,text(typeid(capturer)));
+				}
 			}
 		}
 		static struct DeclProps{
@@ -216,6 +245,12 @@ abstract class Scope{
 				foreach(decl,ref prop;nested.props){
 					if(decl !in props) props[decl]=prop.merged();
 					else props[decl].merge(prop);
+				}
+			}
+			void replaceDecl(Declaration splitFrom,Declaration splitInto){
+				if(auto declProp=tryGet(splitFrom)){
+					declProp.replaceDecl(splitFrom,splitInto);
+					props[splitInto]=declProp.move();
 				}
 			}
 		}
@@ -454,35 +489,10 @@ abstract class Scope{
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		assert(splitFrom !is splitInto);
 	}do{
-		if(dependencyTracked(splitFrom))
-			replaceDependencies(splitFrom,splitInto);
-		if(auto declProps=declProps.tryGet(splitFrom)){
-			foreach(id;declProps.accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
-				if(id.meaning !is splitFrom) continue;
-				id.meaning=splitInto;
-				recordAccess(id,splitInto);
-			}
-			declProps.accesses=[];
-			foreach(capturer;declProps.capturers){
-				void doIt(T)(T capturer){
-					if(splitFrom !in capturer.captures) return;
-					capturer.captures[splitInto]=capturer.captures[splitFrom];
-					capturer.captures.remove(splitFrom);
-					foreach(ref oldDecl;capturer.capturedDecls){
-						if(oldDecl is splitFrom){
-							oldDecl=splitInto;
-							break;
-						}
-					}
-					foreach(id;capturer.captures[splitInto])
-						if(id.meaning is splitFrom) id.meaning=splitInto;
-					recordCapturer(capturer,splitInto);
-				}
-				if(auto fd=cast(FunctionDef)capturer) doIt(fd);
-				else if(auto dat=cast(DatDecl)capturer) doIt(dat);
-				else assert(0,text(typeid(capturer)));
-			}
-			declProps.capturers=[];
+		if(language==silq){
+			if(dependencyTracked(splitFrom))
+				replaceDependencies(splitFrom,splitInto);
+			declProps.replaceDecl(splitFrom,splitInto);
 		}
 	}
 
