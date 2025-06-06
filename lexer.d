@@ -129,7 +129,6 @@ string[2][] unicodeTokens =
 	 ["≥",     "GreaterEqual2"             ],
 	 ["!≤",    "NotLessEqual2"             ],
 	 ["!≥",    "NotGreaterEqual2"          ],
-	 ["@",     "At"                        ],
 	 ["×",     "Times"                     ],
 	 ["→",     "To"                        ],
 	 ["⇒",     "GoesTo"                    ],

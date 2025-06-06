@@ -848,7 +848,6 @@ class Checker {
 			switch(ast_sem.isBuiltIn(targetId)) {
 				case ast_sem.BuiltIn.none:
 					break;
-				case ast_sem.BuiltIn.primitive:
 				case ast_sem.BuiltIn.query:
 					return;
 				case ast_sem.BuiltIn.show:
