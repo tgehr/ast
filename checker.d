@@ -145,36 +145,6 @@ class Checker {
 	void visExpr(ast_exp.Expression e) {
 		assert(e.isSemCompleted());
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
-		if(cast(ast_ty.Type) e) {
-			if(auto te = cast(ast_ty.VectorTy) e) {
-				return this.implTy(te);
-			}
-			if(auto te = cast(ast_ty.ArrayTy) e) {
-				return this.implTy(te);
-			}
-			if(auto te = cast(ast_ty.TupleTy) e) {
-				return this.implTy(te);
-			}
-			if(auto te = cast(ast_ty.ProductTy) e) {
-				return this.implTy(te);
-			}
-			if(auto te = cast(ast_ty.VariadicTy) e) {
-				return this.implTy(te);
-			}
-			if(cast(ast_ty.TypeTy) e) {
-				return;
-			}
-			if(cast(ast_ty.QNumericTy) e) {
-				return;
-			}
-			if(cast(ast_ty.NumericTy) e) {
-				return;
-			}
-			if(cast(ast_ty.BottomTy) e) {
-				return;
-			}
-			assert(0, format("TODO: type %s: << %s >>", typeid(e).name, e));
-		}
 		ast_exp.dispatchExp!((auto ref e){
 			this.implExpr(e);
 		})(e);
@@ -190,7 +160,7 @@ class Checker {
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		visExpr(to);
 		// imported!"util.io".writeln("lowered ", from, " → ", to, " ", from.type, " ", to.type);
-		assert(to.type && from.type.eval() == to.type.eval());
+		assert(to.type && from.type == to.type);
 		return to;
 	}
 
@@ -213,7 +183,7 @@ class Checker {
 			return null;
 		}
 		// imported!"util.io".writeln("lowered ", from, " → ", to);
-		assert(to.type && from.type.eval() == to.type.eval());
+		assert(to.type && from.type == to.type);
 		return to;
 	}
 
@@ -591,29 +561,6 @@ class Checker {
 		return StmtResult.MayPass;
 	}
 
-	void implTy(ast_ty.VectorTy e) {
-		visExpr(e.next);
-		visExpr(e.num);
-	}
-
-	void implTy(ast_ty.ArrayTy e) {
-		visExpr(e.next);
-	}
-
-	void implTy(ast_ty.TupleTy e) {
-		foreach(sube; e.types) {
-			visExpr(sube);
-		}
-	}
-
-	void implTy(ast_ty.ProductTy e) {
-		visExpr(e.dom);
-	}
-
-	void implTy(ast_ty.VariadicTy e) {
-		visExpr(e.next);
-	}
-
 	void implExpr(ast_exp.Identifier e) {
 		switch(ast_sem.isBuiltIn(e)) {
 			case ast_sem.BuiltIn.none:
@@ -628,7 +575,7 @@ class Checker {
 		}
 
 		auto decl = e.meaning;
-		assert(!!decl);
+		if(!decl) return; // TODO
 		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
 		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
 	}
@@ -690,8 +637,8 @@ class Checker {
 	}
 
 	void visSplit(ref Checker ifTrue, ast_scope.NestedScope scTrue, ref Checker ifFalse, ast_scope.NestedScope scFalse, ast_exp.Expression cause) {
-		assert(scTrue is nscope || scTrue.parent is nscope);
-		assert(scFalse is nscope || scFalse.parent is nscope);
+		assert(scTrue.parent is nscope);
+		assert(scFalse.parent is nscope);
 		ifTrue = new Checker(scTrue, this);
 		ifFalse = new Checker(scFalse, this);
 
@@ -737,6 +684,8 @@ class Checker {
 	void visMerge(Checker ifTrue, Checker ifFalse, ast_exp.Expression cause) {
 		auto scTrue = ifTrue.nscope;
 		auto scFalse = ifFalse.nscope;
+		assert(scTrue.parent is nscope);
+		assert(scFalse.parent is nscope);
 
 		struct Triple {
 			ast_decl.Declaration outer, dTrue, dFalse;
@@ -863,12 +812,36 @@ class Checker {
 		assert(ast_ty.isTypeTy(e.type) || ast_ty.isQNumericTy(e.type));
 		assert(ast_ty.isTypeTy(e.next.type) || ast_ty.isQNumericTy(e.next.type));
 		visExpr(e.next);
+		assert(ast_ty.isSubtype(e.num.type, ast_ty.ℕt()));
 		visExpr(e.num);
 	}
 
-	void implExpr(ast_exp.NumericTy e) {}
+	void implExpr(ast_exp.ArrayTy e) {
+		assert(ast_ty.isTypeTy(e.type) || ast_ty.isQNumericTy(e.type));
+		assert(ast_ty.isTypeTy(e.next.type) || ast_ty.isQNumericTy(e.next.type));
+		visExpr(e.next);
+	}
+
+	void implExpr(ast_ty.VariadicTy e) {
+		visExpr(e.next);
+	}
+
 	void implExpr(ast_exp.TypeTy e) {}
-	void implExpr(ast_exp.ProductTy e) {}
+	void implExpr(ast_exp.QNumericTy e) {}
+	void implExpr(ast_exp.BottomTy e) {}
+	void implExpr(ast_exp.NumericTy e) {}
+	void implExpr(ast_exp.StringTy e) {}
+
+	void implExpr(ast_ty.ProductTy e) {
+		visType(e.dom);
+		auto sc = new Checker(nscope, this);
+		sc.strictScope = false;
+		foreach(i, p; e.params) {
+			if(p.name) sc.defineVar(p, "product type parameter", p.name);
+		}
+		sc.strictScope = true;
+		sc.visType(e.cod);
+	}
 
 	void visCall(ast_exp.Expression targetExpr, ast_exp.Expression argExpr, bool isReversed) {
 		if(auto targetId = cast(ast_exp.Identifier) targetExpr) {

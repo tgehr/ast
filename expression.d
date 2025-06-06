@@ -148,7 +148,7 @@ abstract class Expression: Node{
 		if(r !is this) {
 			assert(type !is this);
 			assert(!r.type || r.type.isSemEvaluated(), format("eval %s -> %s, unevaluated type %s", this, r, r.type));
-			if(!r.type) r.type = type.substitute(subst).eval();
+			if(!r.type) r.type = type.substitute(subst);
 			r.setSemCompleted();
 		}
 		return r.eval();
@@ -2326,6 +2326,11 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	if(auto ty=cast(TupleTy)e) return f(ty,forward!args);
 	if(auto ty=cast(VectorTy)e) return f(ty,forward!args);
 	if(auto va=cast(VariadicTy)e) return f(va,forward!args);
+	if(auto va=cast(TypeTy)e) return f(va,forward!args);
+	if(auto va=cast(QNumericTy)e) return f(va,forward!args);
+	if(auto va=cast(BottomTy)e) return f(va,forward!args);
+	if(auto va=cast(NumericTy)e) return f(va,forward!args);
+	if(auto va=cast(StringTy)e) return f(va,forward!args);
 
 	static if(unanalyzed){
 		// expression types that only occur in unanalyzed expressions
