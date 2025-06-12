@@ -218,7 +218,7 @@ abstract class Scope{
 						foreach(ref oldDecl;capturer.capturedDecls){
 							if(oldDecl is splitFrom){
 								oldDecl=splitInto;
-							break;
+								break;
 							}
 						}
 						foreach(id;capturer.captures[splitInto])
@@ -1453,9 +1453,10 @@ class CapturingScope(T): NestedScope{
 		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
 		static if(is(T==FunctionDef)){
 			// for recursive nested closures
-			if(meaning.isSplitFrom(decl)/+||fd2&&!fd2.isLinear()+/){
-				if(meaning.isSplitFrom(decl)) decl.seal();
+			if(meaning.isSplitFrom(decl)){
+				decl.seal();
 				id.lazyCapture=true;
+				Declaration[] recaptures;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
 					auto recapture=new Identifier(capture.getId);
@@ -1503,7 +1504,9 @@ class CapturingScope(T): NestedScope{
 					}
 					if(recapture.isSemError())
 						id.setSemError();
+					recaptures~=recapture.meaning;
 				}
+				id.recaptures=recaptures;
 			}else if(decl.sealed&&meaning.isLinear()&&meaning !in decl.captures){
 				/+if(!id.isSemError()){
 					origin.error("capturing additional quantum variables after a recursive call is not supported yet", id.loc);

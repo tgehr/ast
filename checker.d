@@ -263,7 +263,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.FunctionDef e) {
-		getFunc(e, false, e);
+		getFunc(e, e.capturedDecls, false, e);
 		defineVar(e, "function definition", e);
 		return StmtResult.MayPass;
 	}
@@ -341,6 +341,12 @@ class Checker {
 			visMerge(trans, e);
 		}
 
+		/+if(e.isIndices) { // TODO
+			auto oldDecl = e.aggregate(true);
+			assert(!!oldDecl);
+			getVar(oldDecl, false, "consumed aggregate for component replacement", e);
+		}+/
+
 		if(e.bdy.blscope_) {
 			visSplit(bdy, e.bdy.blscope_, e);
 		} else {
@@ -352,6 +358,11 @@ class Checker {
 		if(bdy !is this) {
 			visMerge(bdy, e);
 		}
+
+		/+if(e.isIndices) { // TODO
+			auto newDecl = e.aggregate(false);
+			defineVar(newDecl, "new aggregate for component replacement", e);
+		}+/
 
 		assert(!!e.itrans);
 		if(e.itrans.blscope_) {
@@ -392,11 +403,11 @@ class Checker {
 			expectConst(e.step, "for-step");
 			visExpr(e.step);
 		}
-		auto retBdy = visLoop(e.bdy, e.var);
+		auto retBdy = visLoop(e.bdy, e.loopVar);
 		return retBdy | StmtResult.MayPass;
 	}
 
-	StmtResult visLoop(ast_exp.CompoundExp bdy, ast_exp.Identifier loopVar, ast_exp.Expression condition = null) { // (result: loop body definitely returns)
+	StmtResult visLoop(ast_exp.CompoundExp bdy, ast_exp.Declaration loopVar, ast_exp.Expression condition = null) { // (result: loop body definitely returns)
 		auto sc = bdy.blscope_;
 		assert(sc.parent is nscope);
 
@@ -404,12 +415,7 @@ class Checker {
 
 		auto sub = new Checker(sc, this);
 		if(loopVar) {
-			ast_decl.Declaration decl = loopVar.meaning;
-			if(!decl) {
-				// TODO
-				decl = new ast_decl.VarDecl(loopVar);
-			}
-			sub.vars[loopVar.id] = decl;
+			sub.vars[loopVar.getId] = loopVar;
 		}
 
 		foreach(inner0; sc.splitVars) {
@@ -551,6 +557,11 @@ class Checker {
 			visLhs(e.e1);
 			strictScope = true;
 		}
+		foreach(r; e.replacements) {
+			assert(r.previous && r.new_);
+			getVar(r.previous, false, "consumed variable for assignment", e);
+			defineVar(r.new_, "new variable after assignment", e);
+		}
 		return StmtResult.MayPass;
 	}
 
@@ -581,7 +592,7 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {
-		getFunc(e.fd, e.constLookup, e);
+		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
 	}
 
 	void implExpr(ast_exp.SliceExp e) {
@@ -602,9 +613,9 @@ class Checker {
 		visExpr(e.a);
 	}
 
-	void getFunc(ast_decl.FunctionDef fd, bool isBorrow, ast_exp.Expression causeExpr) {
+	void getFunc(ast_decl.FunctionDef fd, ast_decl.Declaration[] capturedDecls, bool isBorrow, ast_exp.Expression causeExpr) {
 		assert(fd.sstate == ast_exp.SemState.completed);
-		foreach(decl; fd.capturedDecls) {
+		foreach(decl; capturedDecls) {
 			auto ty = typeForDecl(decl);
 			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty) || imported!"astopt".allowUnsafeCaptureConst && decl.isConst();
 			if(keep && fd.captures[decl].any!(id => id.byRef)) keep = false;
@@ -1003,7 +1014,13 @@ class Checker {
 		assert(!decl.splitInto.any!(d=>nscope.isNestedIn(d.scope_)), format("ERROR: variable access %s does not refer to maximally split version: %s on %s << %s >>", id, causeType, causeExpr.loc, causeExpr));
 
 		if(fd && (!fd.scope_.getFunction() || nscope.isNestedIn(fd.fscope_))) {
-			getFunc(fd, isBorrow, causeExpr);
+			auto capturedDecls = fd.capturedDecls;
+			if(auto lookup = cast(ast_exp.Identifier)causeExpr) {
+				if(lookup.recaptures) {
+					capturedDecls = lookup.recaptures;
+				}
+			}
+			getFunc(fd, capturedDecls, isBorrow, causeExpr);
 			return;
 		}
 

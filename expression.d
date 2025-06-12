@@ -736,6 +736,7 @@ class Identifier: Expression{
 		bool classical=false;
 	}
 	else enum classical=false;
+	Declaration[] recaptures;
 }
 
 class PlaceholderExp: Expression{
@@ -1740,7 +1741,7 @@ class WithExp: Expression{
 	bool isIndices=false;
 	Declaration aggregate(bool old)in{
 		assert(isIndices);
-		assert(trans&&itrans);
+		assert(old?!!trans:!!itrans);
 	}do{
 		Declaration meaning;
 		foreach(e;(old?trans:itrans).s){

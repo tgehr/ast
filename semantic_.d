@@ -757,6 +757,16 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 		with_.trans.setSemForceError();
 	}
 	propErr(with_.trans,with_);
+	ArrayConsumer consumer;
+	if(with_.isIndices&&with_.sstate!=SemState.error){
+		foreach(e;with_.trans.s){
+			auto de=cast(DefineExp)e;
+			assert(!!de);
+			auto idx=cast(IndexExp)unwrap(de.e2);
+			assert(idx.byRef);
+			//consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no)); // TODO
+		}
+	}
 	with_.bdy=compoundExpSemantic(with_.bdy,sc);
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
 	if(auto ret=mayReturn(with_.bdy)){
@@ -764,6 +774,9 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 		with_.bdy.setSemForceError();
 	}
 	propErr(with_.trans,with_);
+	if(with_.isIndices){
+		consumer.redefineArrays(with_.loc,sc);
+	}
 	if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
 			with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
@@ -1185,16 +1198,19 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		Expression.CopyArgs cargs={preserveSemantic: true};
 		bdy=fe.bdy.copy(cargs);
 		auto fesc=bdy.blscope_=state.makeScopes(sc);
-		auto vd=new VarDecl(fe.var);
+		auto id=new Identifier(fe.var.id);
+		id.loc=fe.var.loc;
+		auto vd=new VarDecl(id);
+		vd.loc=fe.var.loc;
 		vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
 		assert(fe.isSemError()||vd.vtype.isClassical());
 		if(fe.isSemError()){
 			if(!vd.vtype) vd.vtype=ℤt(true);
 			vd.vtype=vd.vtype.getClassical();
 		}
-		vd.loc=fe.var.loc;
 		fe.fescope_=fesc;
 		fe.var.id=vd.getId;
+		fe.var.meaning=vd;
 		fe.loopVar=vd;
 		if(vd.name.name!="_"&&!fesc.insert(vd)){
 			vd.setSemError();
