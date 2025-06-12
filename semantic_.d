@@ -1827,7 +1827,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				assert(!!result.type);
 				bool ok=true;
 				if(auto id=getIdFromIndex(idx)){
-					if(auto nt=updatedType(id,idx,context.type)){
+					if(auto nt=updatedType(idx,context.type)){
 						if(auto vd=cast(VarDecl)id.meaning){
 							vd.vtype=nt;
 							id.type=id.typeFromMeaning;
@@ -3036,14 +3036,13 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 	return true;
 }
 
-Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
-	assert(id&&id.type);
+Expression updatedType(Expression lhs,Expression rhsty)in{
 	assert(lhs&&lhs.type);
 	assert(!!rhsty);
 }do{
-	if(id is lhs) return rhsty;
+	if(cast(Identifier)lhs) return rhsty;
 	auto idx=cast(IndexExp)lhs;
-	assert(!!idx,text(id," ",lhs));
+	assert(!!idx,text(lhs));
 	Expression getNrhsty(){
 		if(auto tt=idx.e.type.isTupleTy){
 			if(auto lit=idx.a.asIntegerConstant(true)){
@@ -3080,7 +3079,7 @@ Expression updatedType(Expression id,Expression lhs,Expression rhsty)in{
 	auto nrhsty=getNrhsty();
 	if(nrhsty&&!idx.a.type.isClassical) nrhsty=nrhsty.getQuantum();
 	if(!nrhsty) return null;
-	return updatedType(id,idx.e,nrhsty);
+	return updatedType(idx.e,nrhsty);
 }
 
 Expression assignExpSemantic(AssignExp ae,Scope sc){
@@ -3244,7 +3243,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								auto name=decl.name.name;
 								Expression ntype=indexed?null:rhsty;
 								if(id.type&&rhsty){
-									ntype=updatedType(id,olhs,rhsty);
+									ntype=updatedType(olhs,rhsty);
 									if(!ntype){
 										sc.error("assignment not yet supported",ae.loc);
 										ae.setSemError();
