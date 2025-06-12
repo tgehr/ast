@@ -507,6 +507,8 @@ class Checker {
 
 	void implLhs(ast_exp.IndexExp e) {
 		visExpr(e.a);
+		auto expectedType = ast_sem.indexType(e.e.type, e.a);
+		assert(e.type == expectedType, format("index type mismatch: %s has type %s, indexed with %s results in %s instead of %s at %s", e.e, e.e.type, e.a, expectedType, e.type, e.loc));
 		while(true) {
 			auto sube = cast(ast_exp.IndexExp) e.e;
 			if(sube) {
@@ -518,7 +520,7 @@ class Checker {
 		auto sube = cast(ast_exp.Identifier) e.e;
 		assert(!!sube, format("TODO: LHS index expression [[ %s ]] on %s bottom not identifier", e, e.loc));
 		auto decl = sube.meaning;
-		assert(sube.type == typeForDecl(decl), format("LHS indexed identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, sube.type, typeForDecl(decl)));
+		// assert(sube.type == typeForDecl(decl), format("LHS indexed identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, sube.type, typeForDecl(decl))); // (can mismatch due to multiple updates)
 		if(decl.getId !in vars || vars[decl.getId] is null) {
 			defineVar(decl, "LHS", e);
 		} else {
@@ -608,6 +610,8 @@ class Checker {
 		assert(e.e.constLookup, "TODO: non-lifted indexing");
 		visExpr(e.e);
 		visExpr(e.a);
+		auto expectedType = ast_sem.indexType(e.e.type, e.a);
+		assert(e.type == expectedType, format("index type mismatch: %s has type %s, indexed with %s results in %s instead of %s at %s", e.e, e.e.type, e.a, expectedType, e.type, e.loc));
 	}
 
 	void getFunc(ast_decl.FunctionDef fd, ast_decl.Declaration[] capturedDecls, bool isBorrow, ast_exp.Expression causeExpr) {

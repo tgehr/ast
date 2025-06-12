@@ -1829,9 +1829,19 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto id=getIdFromIndex(idx)){
 					if(auto nt=updatedType(idx,context.type)){
 						if(auto vd=cast(VarDecl)id.meaning){
-							vd.vtype=nt;
+							vd.vtype=nt; // TODO: introduce new declarations to make types match in identifiers?
 							id.type=id.typeFromMeaning;
-							context.sc.updateType(vd);
+							//context.sc.updateType(vd);
+							void updateIndexTypes(IndexExp idx){
+								if(auto nidx=cast(IndexExp)idx.e)
+									updateIndexTypes(nidx);
+								idx.type=indexType(idx.e.type,idx.a);
+								if(!idx.type){
+									idx.setSemError();
+									ok=false;
+								}
+							}
+							updateIndexTypes(idx);
 						}
 					}else ok=false;
 				}else if(!joinTypes(context.type,result.type)){
@@ -3080,6 +3090,115 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 	if(nrhsty&&!idx.a.type.isClassical) nrhsty=nrhsty.getQuantum();
 	if(!nrhsty) return null;
 	return updatedType(idx.e,nrhsty);
+}
+
+Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
+	assert(!idx||aty is idx.e.type && index is idx.a);
+}do{
+	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
+		if(isBasicIndexType(indexTy)){
+			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
+				if(auto qty=next.getQuantum()){
+					return qty;
+				}else{
+					if(sc) sc.error(format("cannot use quantum index to index aggregate whose elements of type '%s' have classical components",next),indexLoc);
+					return null;
+				}
+			}
+			return next;
+		}
+		if(auto tpl=cast(TupleExp)index){
+			auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
+			if(types.all!(e=>e!is null)) return tupleTy(types);
+			return null;
+		}
+		if(auto at=cast(ArrayTy)indexTy){
+			auto type=check(next,null,at.next,indexLoc);
+			if(type) return arrayTy(type);
+			return null;
+		}
+		if(auto vt=cast(VectorTy)indexTy){
+			auto type=check(next,null,vt.next,indexLoc);
+			if(type) return vectorTy(type,vt.num);
+			return null;
+		}
+		if(auto tt=cast(TupleTy)indexTy){
+			auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
+			if(types.all!(e=>e!is null)) return tupleTy(types);
+			return null;
+		}
+		if(isEmpty(indexTy)) return bottom;
+		if(sc) sc.error(format("index should be integer, not %s",indexTy),indexLoc);
+		return null;
+	}
+	bool checkBounds(Expression index,ℤ len){
+		if(auto lit=index.asIntegerConstant(true)){
+			auto c=lit.get();
+			if(c<0||c>=len){
+				if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",aty,len),index.loc);
+				return false;
+			}
+		}
+		if(auto tpl=cast(TupleExp)index)
+			return tpl.e.all!(e=>checkBounds(e,len));
+		return true;
+	}
+	if(auto at=cast(ArrayTy)aty){
+		return check(at.next, index, index.type, index.loc);
+	}else if(auto vt=cast(VectorTy)aty){
+		if(auto mlen=vt.num.asIntegerConstant()){
+			auto len=mlen.get();
+			if(!checkBounds(index,len))
+				return null;
+		}
+		return check(vt.next, index, index.type, index.loc);
+	}else if(auto idxInt=isFixedIntTy(aty)){
+		if(auto mlen=idxInt.bits.asIntegerConstant()){
+			auto len=mlen.get();
+			if(!checkBounds(index,len))
+				return null;
+		}
+		return check(Bool(idxInt.isClassical), index, index.type, index.loc);
+	}else if(auto tt=cast(TupleTy)aty){
+		Expression checkTpl(Expression index){
+			if(auto lit=index.asIntegerConstant(true)){
+				auto c=lit.get();
+				if(c<0||c>=tt.types.length){
+					if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+					return null;
+				}else{
+					return tt.types[cast(size_t)c.toLong()];
+				}
+			}
+			if(auto tpl=cast(TupleExp)index){
+				auto types=tpl.e.map!(e=>checkTpl(e)).array;
+				if(types.all!(e=>e!is null)) return tupleTy(types);
+				return null;
+			}
+			Expression next=bottom;
+			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
+			if(next) return check(next,index,index.type,index.loc);
+			if(isEmpty(index.type)) return bottom;
+			if(sc) sc.error(format("index for type %s should be integer constant",tt),index.loc);
+			return null;
+		}
+		return checkTpl(index);
+	}else if(isEmpty(aty)){
+		return bottom;
+	}else{
+		if(idx&&sc){
+			sc.error(format("type %s is not indexable",aty),idx.loc);
+			if(isType(idx.e)||isQNumeric(idx.e)){
+				if(!cast(TupleExp)index)
+				sc.note(format("did you mean to write '%s^%s'?",idx.e,index),idx.loc);
+			}
+		}
+		return null;
+	}
+}
+
+Expression indexType(Expression aty,Expression index){
+	return checkIndex(aty,index,null,null);
 }
 
 Expression assignExpSemantic(AssignExp ae,Scope sc){
@@ -4634,108 +4753,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq)
 		if(replaceIndex)
 			propErr(crepls[replaceIndexLoc].write,idx);
-	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
-		if(isBasicIndexType(indexTy)){
-			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
-				if(auto qty=next.getQuantum()){
-					return qty;
-				}else{
-					sc.error(format("cannot use quantum index to index array whose elements of type '%s' have classical components",next),indexLoc);
-					idx.setSemError();
-				}
-			}
-			return next;
-		}
-		if(auto tpl=cast(TupleExp)index){
-			auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
-			if(types.all!(e=>e!is null)) return tupleTy(types);
-			return null;
-		}
-		if(auto at=cast(ArrayTy)indexTy){
-			auto type=check(next,null,at.next,indexLoc);
-			if(type) return arrayTy(type);
-			return null;
-		}
-		if(auto vt=cast(VectorTy)indexTy){
-			auto type=check(next,null,vt.next,indexLoc);
-			if(type) return vectorTy(type,vt.num);
-			return null;
-		}
-		if(auto tt=cast(TupleTy)indexTy){
-			auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
-			if(types.all!(e=>e!is null)) return tupleTy(types);
-			return null;
-		}
-		if(isEmpty(indexTy)) return bottom;
-		sc.error(format("index should be integer, not %s",indexTy),indexLoc);
-		idx.setSemError();
-		return null;
-	}
-	bool checkBounds(Expression index,ℤ len){
-		if(auto lit=index.asIntegerConstant(true)){
-			auto c=lit.get();
-			if(c<0||c>=len){
-				if(!idx.isSemError())
-					sc.error(format("index for type '%s' is out of bounds [0..%s)",idx.e.type,len),index.loc);
-				idx.setSemError();
-				return false;
-			}
-		}
-		if(auto tpl=cast(TupleExp)index)
-			return tpl.e.all!(e=>checkBounds(e,len));
-		return true;
-	}
-	if(auto at=cast(ArrayTy)idx.e.type){
-		idx.type=check(at.next, idx.a, idx.a.type, idx.a.loc);
-	}else if(auto vt=cast(VectorTy)idx.e.type){
-		if(auto mlen=vt.num.asIntegerConstant()){
-			auto len=mlen.get();
-			checkBounds(idx.a,len);
-		}
-		idx.type=check(vt.next, idx.a, idx.a.type, idx.a.loc);
-	}else if(auto idxInt=isFixedIntTy(idx.e.type)){
-		if(auto mlen=idxInt.bits.asIntegerConstant()){
-			auto len=mlen.get();
-			checkBounds(idx.a,len);
-		}
-		idx.type=check(Bool(idxInt.isClassical), idx.a, idx.a.type, idx.a.loc);
-	}else if(auto tt=cast(TupleTy)idx.e.type){
-		Expression checkTpl(Expression index){
-			if(auto lit=index.asIntegerConstant(true)){
-				auto c=lit.get();
-				if(c<0||c>=tt.types.length){
-					if(!idx.isSemError())
-						sc.error(format("index for type '%s' is out of bounds [0..%s)",tt,tt.types.length),index.loc);
-					idx.setSemError();
-					return null;
-				}else{
-					return tt.types[cast(size_t)c.toLong()];
-				}
-			}
-			if(auto tpl=cast(TupleExp)index){
-				auto types=tpl.e.map!(e=>checkTpl(e)).array;
-				if(types.all!(e=>e!is null)) return tupleTy(types);
-				return null;
-			}
-			Expression next=bottom;
-			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
-			if(next) return check(next,index,index.type,index.loc);
-			if(isEmpty(index.type)) return bottom;
-			sc.error(format("index for type %s should be integer constant",tt),index.loc);
-			idx.setSemError();
-			return null;
-		}
-		idx.type=checkTpl(idx.a);
-	}else if(isEmpty(idx.e.type)){
-		return idx.e;
-	}else{
-		sc.error(format("type %s is not indexable",idx.e.type),idx.loc);
-		if(isType(idx.e)||isQNumeric(idx.e)){
-			if(!cast(TupleExp)idx.a)
-				sc.note(format("did you mean to write '%s^%s'?",idx.e,idx.a),idx.loc);
-		}
-		idx.setSemError();
-	}
+	if(isEmpty(idx.e.type)) return idx.e;
+	idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
+	if(!idx.type) idx.setSemError();
 	static if(language==silq)
 	if(replaceIndex){
 		assert(cid&&cid.meaning);
