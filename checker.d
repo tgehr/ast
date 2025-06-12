@@ -341,12 +341,6 @@ class Checker {
 			visMerge(trans, e);
 		}
 
-		/+if(e.isIndices) { // TODO
-			auto oldDecl = e.aggregate(true);
-			assert(!!oldDecl);
-			getVar(oldDecl, false, "consumed aggregate for component replacement", e);
-		}+/
-
 		if(e.bdy.blscope_) {
 			visSplit(bdy, e.bdy.blscope_, e);
 		} else {
@@ -359,10 +353,13 @@ class Checker {
 			visMerge(bdy, e);
 		}
 
-		/+if(e.isIndices) { // TODO
+		if(e.isIndices) { // TODO
+			auto oldDecl = e.aggregate(true);
+			assert(!!oldDecl);
+			getVar(oldDecl, false, "consumed aggregate for component replacement", e);
 			auto newDecl = e.aggregate(false);
 			defineVar(newDecl, "new aggregate for component replacement", e);
-		}+/
+		}
 
 		assert(!!e.itrans);
 		if(e.itrans.blscope_) {
@@ -617,8 +614,7 @@ class Checker {
 		assert(fd.sstate == ast_exp.SemState.completed);
 		foreach(decl; capturedDecls) {
 			auto ty = typeForDecl(decl);
-			bool keep = isBorrow || !ast_ty.hasQuantumComponent(ty) || imported!"astopt".allowUnsafeCaptureConst && decl.isConst();
-			if(keep && fd.captures[decl].any!(id => id.byRef)) keep = false;
+			bool keep = isBorrow || !decl.scope_.isNestedIn(fd.fscope_);
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}

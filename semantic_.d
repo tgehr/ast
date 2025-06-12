@@ -758,15 +758,6 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	}
 	propErr(with_.trans,with_);
 	ArrayConsumer consumer;
-	if(with_.isIndices&&with_.sstate!=SemState.error){
-		foreach(e;with_.trans.s){
-			auto de=cast(DefineExp)e;
-			assert(!!de);
-			auto idx=cast(IndexExp)unwrap(de.e2);
-			assert(idx.byRef);
-			//consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no)); // TODO
-		}
-	}
 	with_.bdy=compoundExpSemantic(with_.bdy,sc);
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
 	if(auto ret=mayReturn(with_.bdy)){
@@ -774,7 +765,14 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 		with_.bdy.setSemForceError();
 	}
 	propErr(with_.trans,with_);
-	if(with_.isIndices){
+	if(with_.isIndices&&with_.sstate!=SemState.error){
+		foreach(e;with_.trans.s){
+			auto de=cast(DefineExp)e;
+			assert(!!de);
+			auto idx=cast(IndexExp)unwrap(de.e2);
+			assert(idx.byRef);
+			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no)); // TODO
+		}
 		consumer.redefineArrays(with_.loc,sc);
 	}
 	if(with_.itrans){
