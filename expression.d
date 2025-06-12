@@ -264,6 +264,7 @@ abstract class Expression: Node{
 
 	// semantic information
 	bool constLookup=true;
+	void setConstLookup(bool constLookup){ this.constLookup=constLookup; }
 	bool byRef=false;
 	bool implicitDup=false;
 }
@@ -343,6 +344,11 @@ class TypeAnnotationExp: Expression{
 		auto ne = e.eval(), nt = t.eval();
 		if(ne is e && nt is t) return this;
 		return new TypeAnnotationExp(ne,nt,annotationType);
+	}
+	// semantic information
+	override void setConstLookup(bool constLookup){
+		e.setConstLookup(constLookup);
+		super.setConstLookup(constLookup);
 	}
 }
 
@@ -574,10 +580,11 @@ class Identifier: Expression{
 					return result.eval().getClassical();
 				}
 			}
-			if(result.constLookup!=constLookup){
+			if(constLookup!=result.constLookup||implicitDup&&!result.implicitDup){
 				Expression.CopyArgs cargs={preserveSemantic: true};
 				result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
-				result.constLookup=constLookup;
+				result.setConstLookup(constLookup);
+				if(implicitDup) result.implicitDup=true;
 			}
 			return result;
 		}
@@ -725,6 +732,11 @@ class Identifier: Expression{
 		}
 	}
 	// semantic information:
+	override void setConstLookup(bool constLookup){
+		if(this.constLookup==constLookup) return;
+		implicitDup=true;
+		this.constLookup=false;
+	}
 	Declaration meaning;
 	bool lazyCapture=false;
 	Scope scope_;
@@ -1713,6 +1725,12 @@ class IteExp: Expression{
 		r.type=type;
 		return r;
 	}
+	// semantic information
+	override void setConstLookup(bool constLookup){
+		then.setConstLookup(constLookup);
+		othw.setConstLookup(constLookup);
+		super.setConstLookup(constLookup);
+	}
 }
 
 class WithExp: Expression{
@@ -1965,6 +1983,11 @@ class TupleExp: Expression{
 		if(iota(e.length).all!(i => ne[i] is e[i])) return this;
 		return new TupleExp(ne);
 	}
+	// semantic information
+	override void setConstLookup(bool constLookup){
+		foreach(x;e) x.setConstLookup(constLookup);
+		super.setConstLookup(constLookup);
+	}
 }
 
 class LambdaExp: Expression{
@@ -2039,6 +2062,11 @@ class VectorExp: Expression{
 		auto ne = e.map!(e=>e.eval()).array;
 		if(iota(e.length).all!(i => ne[i] is e[i])) return this;
 		return new VectorExp(ne);
+	}
+	// semantic information
+	override void setConstLookup(bool constLookup){
+		foreach(x;e) x.setConstLookup(constLookup);
+		super.setConstLookup(constLookup);
 	}
 }
 
