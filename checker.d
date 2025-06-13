@@ -476,6 +476,13 @@ class Checker {
 			}
 		}
 		visExpr(rhs);
+		if(e.isSwap) {
+			foreach(r; e.replacements) {
+				assert(r.previous && r.new_);
+				getVar(r.previous, false, "consumed variable for swap", e);
+				defineVar(r.new_, "new variable after swap", e);
+			}
+		}
 		visLhs(lhs);
 		if(ast_ty.isEmpty(e.type)) return StmtResult.Diverges;
 		return StmtResult.MayPass;

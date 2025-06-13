@@ -2360,6 +2360,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	propErr(be.e2,be);
 	if(!be.isSemError()){
 		ArrayConsumer consumer;
+		consumer.recordReplacementsInto(&be.replacements);
 		//imported!"util.io".writeln("!!! ",idx2[0]," ",idx2[0].sstate);
 		Expression.CopyArgs cargs={ preserveMeanings: true };
 		consumer.consumeArray(idx2[0].copy(),econtext);
@@ -2751,6 +2752,10 @@ static if(language==silq){
 struct ArrayConsumer{
 	Q!(Expression,Declaration,Dependency,SemState,Scope)[string] consumed;
 	Identifier[] ids;
+	AAssignExp.Replacement[]* replacements;
+	void recordReplacementsInto(AAssignExp.Replacement[]* replacements){
+		this.replacements=replacements;
+	}
 	void consumeArray(IndexExp e,ExpSemContext context){
 		Identifier id=null;
 		void doIt(IndexExp e){
@@ -2801,6 +2806,7 @@ struct ArrayConsumer{
 					sc.addDependency(var,consumed[id.name][2]);
 				else sc.addDefaultDependency(var);
 				added.insert(id.id);
+				if(replacements) *replacements~=AAssignExp.Replacement(id.meaning,var);
 			}
 		}
 	}

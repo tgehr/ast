@@ -1595,6 +1595,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	// semantic information
 	static if(op==Tok!":="){
 		bool isSwap=false;
+		AAssignExp.Replacement[] replacements;
 	}
 	static if(isAssignToken(op)&&op!=Tok!"←"){
 		Expression operation;
