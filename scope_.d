@@ -1173,7 +1173,7 @@ abstract class Scope{
 			return ScopeState(nsymtab,nrnsymtab,prevCaptures,restoreable);
 		}
 	}
-	private Declaration getSplit(Declaration decl,bool clearSplitInto=false){
+	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
 		if(decl.scope_ is this){
 			if(clearSplitInto)
 				resetSplits(decl);
@@ -1185,7 +1185,7 @@ abstract class Scope{
 			if(this.isNestedIn(ndecl.scope_))
 				return getSplit(ndecl,clearSplitInto);
 		}
-		assert(0,text(decl));
+		return decl;
 	}
 
 	void updateStateSnapshot(ref ScopeState state){
@@ -1456,7 +1456,7 @@ class CapturingScope(T): NestedScope{
 			if(meaning.isSplitFrom(decl)){
 				decl.seal();
 				id.lazyCapture=true;
-				Declaration[] recaptures;
+				Identifier[] recaptures;
 				foreach(capture;decl.capturedDecls){
 					if(capture.isSplitFrom(decl)) continue;
 					auto recapture=new Identifier(capture.getId);
@@ -1504,7 +1504,7 @@ class CapturingScope(T): NestedScope{
 					}
 					if(recapture.isSemError())
 						id.setSemError();
-					recaptures~=recapture.meaning;
+					recaptures~=recapture;
 				}
 				id.recaptures=recaptures;
 			}else if(decl.sealed&&meaning.isLinear()&&meaning !in decl.captures){
@@ -1576,7 +1576,7 @@ class CapturingScope(T): NestedScope{
 				origin.insertCapture(id,meaning,this);
 			}
 			if(!id.isSemError()){
-				parent.recordAccess(id,meaning);
+				if(!consumed) parent.recordAccess(id,meaning);
 				parent.recordCapturer(decl,meaning);
 			}
 		}

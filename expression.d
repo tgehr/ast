@@ -750,7 +750,7 @@ class Identifier: Expression{
 		bool classical=false;
 	}
 	else enum classical=false;
-	Declaration[] recaptures;
+	Identifier[] recaptures;
 }
 
 class PlaceholderExp: Expression{

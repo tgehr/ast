@@ -276,6 +276,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.FunctionDef e) {
+		checkFunction(e, this);
 		getFunc(e, e.capturedDecls, false, e);
 		defineVar(e, "function definition", e);
 		return StmtResult.MayPass;
@@ -371,6 +372,7 @@ class Checker {
 			assert(!!oldDecl);
 			getVar(oldDecl, false, "consumed aggregate for component replacement", e);
 			auto newDecl = e.aggregate(false);
+			while(newDecl.splitFrom) newDecl = newDecl.splitFrom; // TODO: avoid
 			defineVar(newDecl, "new aggregate for component replacement", e);
 		}
 
@@ -611,6 +613,7 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {
+		// checkFunction(e.fd, this); // TODO
 		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
 	}
 
@@ -636,9 +639,9 @@ class Checker {
 
 	void getFunc(ast_decl.FunctionDef fd, ast_decl.Declaration[] capturedDecls, bool isBorrow, ast_exp.Expression causeExpr) {
 		assert(fd.sstate == ast_exp.SemState.completed);
-		foreach(decl; capturedDecls) {
+		foreach(i, decl; capturedDecls) {
 			auto ty = typeForDecl(decl);
-			bool keep = isBorrow || !fd.isConsumedCapture(decl);
+			bool keep = isBorrow || !fd.isConsumedCapture(fd.capturedDecls[i]);
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}
@@ -1037,7 +1040,7 @@ class Checker {
 			auto capturedDecls = fd.capturedDecls;
 			if(auto lookup = cast(ast_exp.Identifier)causeExpr) {
 				if(lookup.recaptures) {
-					capturedDecls = lookup.recaptures;
+					capturedDecls = lookup.recaptures.map!(id => id.meaning).array;
 				}
 			}
 			getFunc(fd, capturedDecls, isBorrow, causeExpr);
@@ -1117,15 +1120,15 @@ class Checker {
 	Unit[void*] checked;
 }
 
-void checkFunction(ast_decl.FunctionDef fd) {
+void checkFunction(ast_decl.FunctionDef fd, Checker parent = null) {
 	assert(fd.sstate == ast_exp.SemState.completed);
-	auto sc = new Checker(fd.fscope_, null);
+	auto sc = new Checker(fd.fscope_, parent);
 
-	sc.strictScope = false;
 	foreach(decl; fd.capturedDecls) {
-		sc.defineVar(decl, "capture", decl.name);
+		if(!fd.isConsumedCapture(decl)) sc.strictScope = false;
+		sc.defineVar(sc.nscope.getSplit(decl), "capture", decl.name);
+		sc.strictScope = true;
 	}
-	sc.strictScope = true;
 	foreach(decl; fd.params) {
 		sc.visExpr(decl.dtype);
 		sc.visExpr(decl.vtype);
