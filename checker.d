@@ -631,7 +631,7 @@ class Checker {
 		assert(fd.sstate == ast_exp.SemState.completed);
 		foreach(decl; capturedDecls) {
 			auto ty = typeForDecl(decl);
-			bool keep = isBorrow || !decl.scope_.isNestedIn(fd.fscope_);
+			bool keep = isBorrow || !fd.isConsumedCapture(decl);
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}

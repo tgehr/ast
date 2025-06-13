@@ -1461,7 +1461,7 @@ class CapturingScope(T): NestedScope{
 					if(capture.isSplitFrom(decl)) continue;
 					auto recapture=new Identifier(capture.getId);
 					recapture.loc=id.loc;
-					bool isConsuming=capture.scope_.isNestedIn(this);
+					bool isConsuming=decl.isConsumedCapture(capture);
 					DeadDecl[] failures;
 					recapture.meaning=origin.lookup(recapture,true,false,isConsuming?Lookup.consuming:Lookup.constant,&failures);
 					bool callErrorShown=false;
@@ -1565,7 +1565,12 @@ class CapturingScope(T): NestedScope{
 			}
 		}
 		if(!id.lazyCapture){
-			if(!isConstLookup&&(meaning.isLinear()||id.byRef)){
+			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
+			if(!id.isSemError){
+				if(consumed) meaning=parent.split(meaning,id);
+				decl.addCapture(meaning,id);
+			}
+			if(consumed){
 				symtabInsert(meaning);
 				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this);
@@ -1573,7 +1578,6 @@ class CapturingScope(T): NestedScope{
 			if(!id.isSemError()){
 				parent.recordAccess(id,meaning);
 				parent.recordCapturer(decl,meaning);
-				decl.addCapture(meaning,id);
 			}
 		}
 		return meaning;

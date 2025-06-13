@@ -5893,44 +5893,40 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.origRret) fd.rret=fd.origRret.copy();
 		assert(!!fd.origBody_);
 		fd.body_=fd.origBody_.copy();
-		auto oldfscope_=fd.fscope_;
-		fd.fscope_=new FunctionScope(fd.scope_,fd);
+		auto newfscope_=new FunctionScope(fd.scope_,fd);
 		fd.sstate=SemState.initial;
 		foreach(p;fd.params){
 			p.splitInto=[];
-			assert(p.scope_ is oldfscope_);
+			assert(p.scope_ is fd.fscope_);
 			p.scope_=null;
-			fd.fscope_.insert(p);
+			newfscope_.insert(p);
 		}
 		Declaration[] ncapturedDecls;
 		Identifier[][Declaration] ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
-			auto ocapture=capture;
-			while(ocapture.scope_.isNestedIn(oldfscope_)){
-				ocapture=ocapture.splitFrom;
-			}
-			ocapture.splitInto=ocapture.splitInto.filter!(x=>!x.scope_.isNestedIn(oldfscope_)).array;
+			capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
 			if(capture.isLinear&&fd.scope_.canInsert(capture.name)){
-				assert(ocapture.scope_ is fd.scope_); // TODO: ok?
+				assert(capture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
-				ocapture.scope_=null;
-				fd.scope_.unconsume(ocapture);
-				fd.fscope_.symtabInsert(ocapture);
+				capture.scope_=null;
+				fd.scope_.unconsume(capture);
+				newfscope_.symtabInsert(capture);
 			}
 			auto loc=fd.captures[capture][0].loc;
 			auto id=new Identifier(capture.getName);
 			id.loc=loc;
-			id.meaning=capture.isLinear?fd.fscope_.split(ocapture,id):ocapture;
+			id.meaning=fd.isConsumedCapture(capture)?newfscope_.split(capture,id):capture;
 			id.type=id.typeFromMeaning;
 			id.constLookup=false;
 			propErr(id.meaning, id);
 			id.setSemCompleted();
 			propErr(id,fd);
 			if(id.meaning){
-				ncapturedDecls~=id.meaning;
-				ncaptures[id.meaning]~=id;
+				ncapturedDecls~=capture;
+				ncaptures[capture]~=id;
 			}
 		}
+		fd.fscope_=newfscope_;
 		fd.captures=ncaptures;
 		fd.capturedDecls=ncapturedDecls;
 		fd.context=null;

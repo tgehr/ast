@@ -170,6 +170,12 @@ class FunctionDef: Declaration{
 		if(meaning !in captures) capturedDecls~=meaning;
 		captures[meaning]~=id;
 	}
+	final bool isConsumedCapture(Declaration capture)in{
+		assert(capture in captures);
+		assert(!!fscope_);
+	}do{
+		return captures[capture][0].meaning.scope_.isNestedIn(fscope_);
+	}
 	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
 	Expression ret; // return type
 	FunTy ftype;
