@@ -118,8 +118,8 @@ abstract class Scope{
 	bool allowsLinear(){
 		return true;
 	}
-	bool canInsert(Identifier name){
-		auto decl=symtabLookup(name,false,null);
+	bool canInsert(Id id){
+		auto decl=symtabLookup(id,false,null);
 		return !decl;
 	}
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
@@ -433,7 +433,7 @@ abstract class Scope{
 		}
 		cd.scope_=decl.scope_;
 		cd.setSemCompleted();
-		if(canInsert(cd.name))
+		if(canInsert(cd.name.id))
 			symtabInsert(cd);
 	}
 	final Declaration consume(Declaration decl,Identifier use){
@@ -547,8 +547,11 @@ abstract class Scope{
 	}
 
 	protected final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
+		return symtabLookup(ident.id,rnsym,failures);
+	}
+	protected final Declaration symtabLookup(Id id,bool rnsym,DeadDecl[]* failures){
 		if(allowMerge) return null;
-		auto r=rnsym?rnsymtab.get(ident.id,null):symtab.get(ident.id,null);
+		auto r=rnsym?rnsymtab.get(id,null):symtab.get(id,null);
 		if(auto dd=cast(DeadDecl)r){
 			if(failures) *failures~=dd;
 			r=null;

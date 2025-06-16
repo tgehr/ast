@@ -93,7 +93,7 @@ void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if
 	}
 }
 
-VarDecl addVar(string name,Expression ty,Location loc,Scope sc){
+VarDecl addVar(Id name,Expression ty,Location loc,Scope sc){
 	auto id=new Identifier(name);
 	id.loc=loc;
 	auto var=new VarDecl(id);
@@ -149,7 +149,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 				static if(language==psi) fd.contextVal=fd.context;
 			}
 			if(!fd.body_) return;
-			auto thisVar=addVar("this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
+			auto thisVar=addVar(Id.s!"this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
 			fd.thisVar=thisVar;
 			if(!fd.body_.s.length||!cast(ReturnExp)fd.body_.s[$-1]){
 				auto thisid=new Identifier(thisVar.getName);
@@ -164,16 +164,16 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 				fd.body_.s~=rete;
 			}
 		}else{
-			static if(language==psi) fd.contextVal=addVar("this",unit,fd.loc,fsc);
+			static if(language==psi) fd.contextVal=addVar(Id.s!"this",unit,fd.loc,fsc);
 			assert(!fd.body_||!!fd.body_.blscope_);
 			assert(fsc.allowMerge);
 			fsc.allowMerge=false; // TODO: this is hacky
-			if(fd.body_) fd.context=addVar("this",ctxty,fd.loc,fd.body_.blscope_);
+			if(fd.body_) fd.context=addVar(Id.s!"this",ctxty,fd.loc,fd.body_.blscope_);
 			fsc.allowMerge=true;
 		}
 		assert(dsc.decl.dtype);
 	}else if(auto nsc=cast(NestedScope)sc){
-		fd.context=addVar("`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
+		fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
 		static if(language==psi) fd.contextVal=fd.context;
 	}
 }
@@ -189,7 +189,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		dat.dtype=new AggregateTy(dat,!dat.isQuantum);
 		if(dat.hasParams) declareParameters(dat,true,dat.params,dsc);
 		if(!dat.body_.ascope_) dat.body_.ascope_=new AggregateScope(dat.dscope_);
-		if(cast(NestedScope)sc) dat.context = addVar("`outer",contextTy(true),dat.loc,null);
+		if(cast(NestedScope)sc) dat.context = addVar(Id.s!"`outer",contextTy(true),dat.loc,null);
 		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_);
 		foreach(ref exp;dat.body_.s) if(auto decl=cast(Declaration)exp) exp=presemantic(decl,dat.body_.ascope_);
 	}
@@ -268,7 +268,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			nid.loc=id.loc;
 			auto vd=new VarDecl(nid);
 			vd.loc=id.loc;
-			if(!be.isSemError()||sc.canInsert(nid))
+			if(!be.isSemError()||sc.canInsert(nid.id))
 				success&=sc.insert(vd);
 			id.meaning=vd;
 			id.id=vd.getId;
@@ -771,7 +771,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			assert(!!de);
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(idx.byRef);
-			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no)); // TODO
+			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no));
 		}
 		consumer.redefineArrays(with_.loc,sc);
 	}
@@ -869,11 +869,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		return prms.map!((p){
 			auto id=new Identifier(renamed?p[0]:p[1].name.id);
 			id.loc=p[1].loc;
-			return id;
-		}).filter!((id){
-			if(!checkDefined) return true;
-			return !sc.canInsert(id);
-		}).array;
+			if(!checkDefined||!sc.canInsert(p[1].name.id)) return id;
+			return null;
+		}).filter!(id=>!!id).array;
 	}
 	auto fi=freshName();
 	auto allParams=loopParams~constParams~movedParams;
@@ -2758,8 +2756,8 @@ bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,I
 
 static if(language==silq){
 struct ArrayConsumer{
-	Q!(Expression,Declaration,Dependency,SemState,Scope)[string] consumed;
-	Identifier[] ids;
+	Q!(Expression,Declaration,Dependency,SemState,Scope)[Id] consumed;
+	Q!(Id,Identifier)[] ids;
 	AAssignExp.Replacement[]* replacements;
 	void recordReplacementsInto(AAssignExp.Replacement[]* replacements){
 		this.replacements=replacements;
@@ -2774,8 +2772,10 @@ struct ArrayConsumer{
 			}
 			auto id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
-			if(id.name in consumed){
-				auto tpl=consumed[id.name];
+			auto origId=id.id;
+			if(id.meaning) origId=id.meaning.name.id;
+			if(origId in consumed){
+				auto tpl=consumed[origId];
 				id.constLookup=true;
 				id.type=tpl[0];
 				id.meaning=tpl[1];
@@ -2800,20 +2800,20 @@ struct ArrayConsumer{
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
-			ids~=id;
-			consumed[id.name]=q(id.type,id.meaning,dep,e.e.sstate,id.scope_);
+			ids~=q(origId,id);
+			consumed[origId]=q(id.type,id.meaning,dep,e.e.sstate,id.scope_);
 		}
 		doIt(e);
 	}
 	void redefineArrays(Location loc,Scope sc){
 		SetX!Id added;
-		foreach(id;ids){
-			if(id&&id.meaning&&id.type&&id.id !in added){
-				auto var=addVar(id.meaning.name.name,id.type,loc,sc);
-				if(id.name in consumed)
-					sc.addDependency(var,consumed[id.name][2]);
+		foreach(origId,id;ids.map!(t=>t)){
+			if(id&&id.meaning&&id.type&&origId !in added){
+				auto var=addVar(origId,id.type,loc,sc);
+				if(origId in consumed)
+					sc.addDependency(var,consumed[origId][2]);
 				else sc.addDefaultDependency(var);
-				added.insert(id.id);
+				added.insert(origId);
 				if(replacements) *replacements~=AAssignExp.Replacement(id.meaning,var);
 			}
 		}
@@ -3373,7 +3373,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 							break;
 						case Stage.defineVars:
 							if(decl.getId !in defined){
-								auto name=decl.name.name;
+								auto origId=decl.name.id;
 								Expression ntype=indexed?null:rhsty;
 								if(id.type&&rhsty){
 									ntype=updatedType(olhs,rhsty);
@@ -3383,7 +3383,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 										ntype=indexed?id.type:rhsty;
 									}
 								}
-								auto var=addVar(name,ntype,lhs.loc,sc);
+								auto var=addVar(origId,ntype,lhs.loc,sc);
 								static if(language==silq){
 									if(rhs.isQfree()) sc.addDependency(var,dependencies[decl]);
 								}
@@ -3498,7 +3498,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		propErr(be.e1,be);
 		if(auto id=cast(Identifier)be.e1){
 			if(id.meaning){
-				if(sc.canInsert(id.meaning.name))
+				if(sc.canInsert(id.meaning.name.id))
 					sc.unconsume(id.meaning); // TODO: ok?
 			}
 		}
@@ -3563,8 +3563,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				sc.clearConsumed();
 		}
 		void define(Dependency dependency){
-			auto name=id.meaning.name.name;
-			auto var=addVar(name,ce.type,be.loc,sc);
+			auto origId=id.meaning.name.id;
+			auto var=addVar(origId,ce.type,be.loc,sc);
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			sc.addDependency(var,dependency);
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
@@ -5930,7 +5930,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		Identifier[][Declaration] ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
 			capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
-			if(capture.isLinear&&fd.scope_.canInsert(capture.name)){
+			if(capture.isLinear&&fd.scope_.canInsert(capture.name.id)){
 				assert(capture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
 				capture.scope_=null;
