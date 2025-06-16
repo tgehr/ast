@@ -912,7 +912,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		constParamDef=new DefineExp(constTpl,constTmpTpl);
 		constParamDef.loc=loop.loc;
 	}
+	bool isInfinite=false;
 	static if(is(T==WhileExp)){
+		isInfinite=isTrue(loop.cond);
 		auto ncond=loop.cond.copy(cargsDefault);
 	}else static if(is(T==ForExp)){
 		//writeln("?? ",constParams);
@@ -1057,7 +1059,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 			adjustEarlyReturns(we.bdy);
 	}
 	Expression bdy;
-	if(!isTrue(ncond)){
+	if(!isInfinite){
 		adjustEarlyReturns(nbdy);
 		//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
 		Expression retexp=returnTpl;
@@ -1131,7 +1133,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		defineLocals(defLocals,locals.copy());
 		auto othw=new CompoundExp(defLocals);
 		match(stmts,ce2,retId2,then,locals,othw);
-	}else if(isTrue(ncond)){
+	}else if(isInfinite){
 		auto fret=new ReturnExp(ce2);
 		fret.loc=loop.loc;
 		stmts~=fret;
@@ -4179,8 +4181,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				static if(language==silq){
 					case "__show":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
-						auto lit=cast(LiteralExp)ce.arg;
-						if(lit&&lit.lit.type==Tok!"``") sc.message(lit.lit.str,ce.loc);
+						if(auto s=ce.arg.asStringConstant()) sc.message(s.get(),ce.loc);
 						else sc.message(text(ce.arg),ce.loc);
 						ce.type=unit;
 						break;
@@ -4377,17 +4378,29 @@ Expression expressionSemanticImpl(AssertExp ae,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
-	switch(le.lit.type){
-		case Tok!"0",Tok!".0":
-			if(!le.type)
-				le.type=util.among(le.lit.str,"0","1")?Bool(true):le.lit.str.canFind(".")?ℝ(true):le.lit.str.canFind("-")?ℤt(true):ℕt(true); // TODO: type inference
-			return le;
-		case Tok!"``":
-			le.type=stringTy(true);
-			return le;
-		default:
-			return expressionSemanticImplDefault(le,context);
+	if(auto v = le.asIntegerConstant()) {
+		if(!le.type) {
+			if(v.get() < 0) {
+				le.type = ℤt(true);
+			} else if(v.get() > 1) {
+				le.type = ℕt(true);
+			} else {
+				le.type = Bool(true);
+			}
+		}
+		return le;
 	}
+	if(auto v = le.asRationalConstant()) {
+		if(!le.type)
+			le.type = ℝ(true); // actually rational, but whatever
+		return le;
+	}
+	if(auto v = le.asStringConstant()) {
+		if(!le.type)
+			le.type = stringTy(true);
+		return le;
+	}
+	return expressionSemanticImplDefault(le,context);
 }
 
 Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
@@ -6148,10 +6161,8 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc){
 				return a~low;
 			}
 			if(allowNum){
-				if(auto le=cast(LiteralExp)e){
-					if(le.lit.type==Tok!"0")
-						return le.lit.str;
-				}
+				if(auto v = e.asIntegerConstant())
+					return text(v.get());
 			}
 			return null;
 		}
@@ -6226,30 +6237,6 @@ Expression typeForDecl(Declaration decl){
 	return unit; // TODO
 }
 
-bool isZero(Expression e){
-	if(auto tae=cast(TypeAnnotationExp)e)
-		return isZero(tae.e);
-	if(auto le=cast(LiteralExp)e)
-		if(le.lit.type==Tok!"0")
-			if(le.lit.str=="0")
-				return true;
-	return false;
-}
-alias isFalse=isZero;
-bool isTrue(Expression e){
-	if(auto le=cast(LiteralExp)e)
-		if(le.lit.type==Tok!"0")
-			return le.lit.str!="0";
-	return false;
-}
-bool isPositive(Expression e){
-	if(isZero(e)) return false;
-	if(auto le=cast(LiteralExp)e)
-		if(le.lit.type==Tok!"0")
-			return le.lit.str[0]!='-';
-	return false;
-}
-
 bool definitelyReturns(Expression e){
 	if(e.type) return isEmpty(e.type);
 	if(auto ret=cast(ReturnExp)e)
@@ -6265,7 +6252,7 @@ bool definitelyReturns(Expression e){
 	if(auto fe=cast(ForExp)e){
 		/+auto lle=cast(LiteralExp)fe.left;
 		auto rle=cast(LiteralExp)fe.right;
-		if(lle && rle && lle.lit.type==Tok!"0" && rle.lit.type==Tok!"0"){ // TODO: parse values correctly
+		if(lle && rle && lle.isInteger() && rle.isInteger()){ // TODO: parse values correctly
 			ℤ l=ℤ(lle.lit.str), r=ℤ(rle.lit.str);
 			l+=cast(long)fe.leftExclusive;
 			r-=cast(long)fe.rightExclusive;
@@ -6333,8 +6320,8 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 		err.error("expected arguments to sampleFrom",ce.loc);
 		return SampleFromInfo(true);
 	}
-	auto literal=cast(LiteralExp)args[0];
-	if(!literal||literal.lit.type!=Tok!"``"){
+	auto literal=args[0].asStringConstant();
+	if(!literal){
 		err.error("first argument to sampleFrom must be string literal",args[0].loc);
 		return SampleFromInfo(true);
 	}
@@ -6345,7 +6332,7 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 	HSet!(string,(a,b)=>a==b,a=>typeid(string).getHash(&a)) names;
 	try{
 		import sym.dparse;
-		auto parser=DParser(literal.lit.str);
+		auto parser=DParser(literal.get());
 		parser.skipWhitespace();
 		parser.expect('(');
 		for(bool seen=false;parser.cur()!=')';){
@@ -6429,8 +6416,8 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 		ce.setSemError();
 		return ce;
 	}
-	auto literal=cast(LiteralExp)args[0];
-	if(!literal||literal.lit.type!=Tok!"``"){
+	auto literal=args[0].asStringConstant();
+	if(!literal){
 		sc.error("first argument to __query must be string literal",args[0].loc);
 		ce.setSemError();
 		return ce;
@@ -6445,7 +6432,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 		nlit.setSemCompleted();
 		return nlit;
 	}
-	switch(literal.lit.str){
+	switch(literal.get()){
 		case "dep":
 			if(args.length!=2||!cast(Identifier)args[1]){
 				sc.error("expected single variable as argument to 'dep' query", ce.loc);
@@ -6483,7 +6470,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 				return makeStrLit(text(typeExplicitConversion!true(args[1], args[2], TypeAnnotationType.coercion)));
 			}
 		default:
-			sc.error(format("unknown query '%s'",literal.lit.str),literal.loc);
+			sc.error(format("unknown query '%s'",literal.get()),args[0].loc);
 			ce.setSemError();
 			break;
 	}

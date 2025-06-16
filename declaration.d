@@ -233,8 +233,9 @@ class FunctionDef: Declaration{
 		auto p = attr in attributes;
 		if(!p) return default_;
 		auto e = cast(LiteralExp)*p;
-		if(e.lit.type != Tok!"``") return default_; // TODO
-		return e.lit.str;
+		auto str = e.asStringConstant();
+		if(!str) return default_; // TODO
+		return str.get();
 	}
 
 	FunctionDef reversed=null;
