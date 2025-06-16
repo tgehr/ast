@@ -5281,7 +5281,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	propErr(e1,e);
 	if(e.isSemError())
 		return e;
-	if((isType(e1)||isQNumeric(e1))&&name=="power"){
+	if((isType(e1)||isQNumeric(e1))&&name=="power"&&!isEmpty(e1)){
 		auto r = new VectorTy(e1, e2);
 		r.loc = e.loc;
 		return expressionSemantic(r, context);
