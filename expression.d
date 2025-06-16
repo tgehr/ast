@@ -6,6 +6,7 @@ import std.array, std.algorithm, std.range, std.conv, std.string, std.exception;
 
 import ast.lexer, ast.parser, ast.scope_, ast.type, ast.declaration, util;
 import util.maybe;
+import util.tuple: Q=Tuple, q=tuple;
 import astopt;
 
 enum SemState{
@@ -121,6 +122,9 @@ abstract class Expression: Node{
 		auto r = ev.asIntegerConstant(false);
 		assert(r || !ev.isConstant() || !ev.isTotal(), format("expression total constant of integer type, but failed to get value: %s -> %s", this, ev));
 		return r;
+	}
+	Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
+		return none!(Q!(ℤ, ℤ, int, int));
 	}
 	Maybe!string asStringConstant() {
 		return none!string;
@@ -428,6 +432,30 @@ class LiteralExp: Expression{
 	override Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(!isInteger()) return none!(ℤ);
 		return just(ℤ(lit.str));
+	}
+	// returns (x, y, b, n) where the value is x/y * b**n; y > 0, b > 0
+	override Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
+		if(lit.type == Tok!"0") return just(q(ℤ(lit.str), ℤ(1), 1, 0));
+		if(lit.type != Tok!".0") return none!(Q!(ℤ, ℤ, int, int));
+
+		int base = 10;
+		int exp = 0;
+		string numPart = lit.str;
+		auto e = lit.str.find("e");
+		if(e.length > 0) {
+			numPart = lit.str[0..(e.ptr - lit.str.ptr)];
+			exp = e[1..$].to!int(); // TODO overflow
+		}
+
+		string intPart = numPart, fracPart = "";
+		auto dot = numPart.find(".");
+		if(dot.length > 0) {
+			intPart = lit.str[0..(dot.ptr - numPart.ptr)];
+			fracPart = dot[1..$];
+		}
+		exp -= fracPart.length;
+
+		return just(q(ℤ(intPart ~ fracPart), ℤ(1), base, exp));
 	}
 	override Maybe!string asStringConstant() {
 		if(lit.type != Tok!"``") return none!string;
