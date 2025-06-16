@@ -348,16 +348,19 @@ class TypeAnnotationExp: Expression{
 		return e.getAnnotation();
 	}
 	override Expression evalImpl(){
-		auto ne = e.eval(), nt = t.eval();
-		if(nt == ℕt(true)) {
+		auto ne = e.eval();
+		if(annotationType == TypeAnnotationType.annotation || ne.type == type) {
+			return ne;
+		}
+		if(type == ℕt(true)) {
 			// `(a - b) coerce !N`  ->  `a sub b`
 			auto se = cast(SubExp)ne;
 			if(se && se.type == ℤt(true)) {
 				return new NSubExp(se.e1, se.e2);
 			}
 		}
-		if(ne is e && nt is t) return this;
-		return new TypeAnnotationExp(ne,nt,annotationType);
+		if(ne is e && type is t) return this;
+		return new TypeAnnotationExp(ne, type, annotationType);
 	}
 	// semantic information
 	override void setConstLookup(bool constLookup){
