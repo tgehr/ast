@@ -122,6 +122,9 @@ abstract class Expression: Node{
 		assert(r || !ev.isConstant() || !ev.isTotal(), format("expression total constant of integer type, but failed to get value: %s -> %s", this, ev));
 		return r;
 	}
+	Maybe!string asStringConstant() {
+		return none!string;
+	}
 
 	final Expression eval(){
 		if(isSemEvaluated()) return this;
@@ -425,6 +428,10 @@ class LiteralExp: Expression{
 	override Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(!isInteger()) return none!(ℤ);
 		return just(ℤ(lit.str));
+	}
+	override Maybe!string asStringConstant() {
+		if(lit.type != Tok!"``") return none!string;
+		return just(lit.str);
 	}
 
 	override bool opEquals(Object o){
