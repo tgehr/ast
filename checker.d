@@ -306,7 +306,7 @@ class Checker {
 	StmtResult implStmt(ast_exp.AssertExp e) {
 		expectConst(e.e, "assert condition");
 		visExpr(e.e);
-		if(ast_sem.isFalse(e.e)) return StmtResult.Diverges;
+		if(ast_exp.isFalse(e.e)) return StmtResult.Diverges;
 		return StmtResult.MayPass;
 	}
 
@@ -394,7 +394,7 @@ class Checker {
 	StmtResult implStmt(ast_exp.WhileExp e) {
 		expectConst(e.cond, "while condition");
 		auto retBdy = visLoop(e.bdy, null, e.cond);
-		if(ast_sem.isTrue(e.cond)) return StmtResult.Diverges;
+		if(ast_exp.isTrue(e.cond)) return StmtResult.Diverges;
 		return retBdy;
 	}
 
@@ -402,7 +402,7 @@ class Checker {
 		expectConst(e.num, "repeat count");
 		visExpr(e.num);
 		auto retBdy = visLoop(e.bdy, null);
-		if(!ast_sem.isPositive(e.num)) retBdy |= StmtResult.MayPass;
+		if(!ast_exp.isPositive(e.num)) retBdy |= StmtResult.MayPass;
 		return retBdy;
 	}
 

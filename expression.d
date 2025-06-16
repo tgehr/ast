@@ -403,16 +403,6 @@ class LiteralExp: Expression{
 	bool isInteger(){
 		return lit.type==Tok!"0";
 	}
-	bool isZero()in{
-		assert(isInteger());
-	}do{
-		return lit.str=="0";
-	}
-	bool isNegative()in{
-		assert(lit.type==Tok!"0");
-	}do{
-		return lit.str.startsWith("-");
-	}
 	static LiteralExp makeBoolean(bool b){
 		auto r=makeInteger(b?1:0);
 		r.type=Bool(true);
@@ -482,6 +472,51 @@ class LiteralExp: Expression{
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	mixin VariableFree;
+}
+
+bool isZero(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type));
+	if(auto v = e.asIntegerConstant(eval))
+		return v.get() == 0;
+	return false;
+}
+bool isOne(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type));
+	if(auto v = e.asIntegerConstant(eval))
+		return v.get() == 1;
+	return false;
+}
+bool isNonzero(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type));
+	if(auto v = e.asIntegerConstant(eval))
+		return v.get() != 0;
+	return false;
+}
+bool isPositive(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type));
+	if(auto v = e.asIntegerConstant(eval))
+		return v.get() > 0;
+	return false;
+}
+bool isFalse(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type) == NumericType.Bool);
+	return isZero(e, eval);
+}
+bool isTrue(Expression e, bool eval=false){
+	assert(e.isSemFinal());
+	if(!e.type) return false;
+	assert(isNumericTy(e.type) == NumericType.Bool);
+	return isOne(e, eval);
 }
 
 struct Id {
@@ -1338,8 +1373,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			return false;
 		}else{
 			static if(op==Tok!"/"||op==Tok!"div"||op==Tok!"%"||op==Tok!"/←"||op==Tok!"div←"||op==Tok!"%←"){
-				auto rhsLiteral=cast(LiteralExp)e2;
-				if(!rhsLiteral||rhsLiteral.isZero())
+				if(!isNonzero(e2, true))
 					return false;
 			}else static if(op!=Tok!":="&&op!=Tok!"←"&&op!=Tok!"="&&op!=Tok!"≠"&&op!=Tok!"<"&&op!=Tok!"≤"&&op!=Tok!">"&&op!=Tok!"≥"){
 				if(isNumericTy(type) >= NumericType.ℝ){
@@ -1465,8 +1499,8 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 							}
 						}
 						auto le1=cast(LiteralExp)se1.e2,le2=cast(LiteralExp)ne2;
-						if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0"){
-							auto nle=LiteralExp.makeInteger(ℤ(le1.lit.str)-ℤ(le2.lit.str)); // TODO: replace literal exp internal representation
+						if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
+							auto nle=LiteralExp.makeInteger(le1.asIntegerConstant().get()-le2.asIntegerConstant().get()); // TODO: replace literal exp internal representation
 							nle.loc=loc;
 							nle.type=type;
 							nle.setSemCompleted();
@@ -1499,15 +1533,15 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					return make(new LiteralExp(tok));
 				}
 				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-				if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0"){
-					auto v=ℤ(le1.lit.str)-ℤ(le2.lit.str);
+				if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
+					auto v=le1.asIntegerConstant().get()-le2.asIntegerConstant().get();
 					static if(op==Tok!"sub"){
 						if(v>=0) return make(LiteralExp.makeInteger(v)); // TODO: replace literal exp internal representation
 					}else{
 						return make(LiteralExp.makeInteger(v)); // TODO: replace literal exp internal representation
 					}
 				}
-				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0"){
+				if(le2&&isZero(le2)){
 					static if(op==Tok!"sub"){
 						if(auto se1=cast(SubExp)ne1)
 							return make(new NSubExp(se1.e1,se1.e2));
@@ -1548,20 +1582,24 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 			}else static if(op==Tok!"·"){
 				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-				if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0")
-					return make(LiteralExp.makeInteger(ℤ(le1.lit.str)*ℤ(le2.lit.str))); // TODO: replace literal exp internal representation
-				if(le1&&le1.lit.type==Tok!"0"&&le1.lit.str=="0") return le1.eval();
-				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return le2.eval();
-				if(le1&&le1.lit.type==Tok!"0"&&le1.lit.str=="1") return ne2.eval();
-				if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="1") return ne1.eval();
+				if(le1&&le2&&le1.isInteger()&&le2.isInteger())
+					return make(LiteralExp.makeInteger(le1.asIntegerConstant().get()*le2.asIntegerConstant().get())); // TODO: replace literal exp internal representation
+				if(le1&&isZero(le1)) return le1.eval();
+				if(le2&&isZero(le2)) return le2.eval();
+				if(le1&&isOne(le1)) return ne2.eval();
+				if(le2&&isOne(le2)) return ne1.eval();
 				if(le2&&!le1) return make(new BinaryExp!op(ne2,ne1));
 				}
 			}else static if(op==Tok!"^"){
 				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-					if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="0") return make(LiteralExp.makeInteger(1));
-					if(le2&&le2.lit.type==Tok!"0"&&le2.lit.str=="1") return ne1.eval();
-					if(le1&&le2&&le1.lit.type==Tok!"0"&&le2.lit.type==Tok!"0" && !le2.isNegative()){
-						return make(LiteralExp.makeInteger(pow(ℤ(le1.lit.str),ℤ(le2.lit.str)))); // TODO: replace literal exp internal representation
+					if(le2&&isZero(le2)) return make(LiteralExp.makeInteger(1));
+					if(le2&&isOne(le2)) return ne1.eval();
+					if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
+						auto v1 = le1.asIntegerConstant().get();
+						auto v2 = le2.asIntegerConstant().get();
+						if(v2 >= 0) {
+							return make(LiteralExp.makeInteger(pow(v1, v2)));
+						}
 					}
 				}
 			}else static if(op==Tok!"~"){
@@ -2152,11 +2190,9 @@ class AssertExp: Expression{
 	override string toString(){ return _brk("assert("~e.toString()~")"); }
 
 	override bool isConstant(){
-		import ast.semantic_:isTrue;
 		return e.isConstant()&&isTrue(e);
 	}
 	override bool isTotal(){
-		import ast.semantic_:isTrue;
 		return e.isTotal()&&isTrue(e);
 	}
 
