@@ -218,7 +218,10 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		return make!op(loc, ne2, ne1);
 	}
 	if(!v2) {
-		return make!op(loc, make!(Tok!"-")(loc, ne1, ne2), make(0));
+		import ast.semantic_: subtractionType;
+		if(subtractionType(ne1.type, ne2.type)) {
+			return make!op(loc, make!(Tok!"-")(loc, ne1, ne2), make(0));
+		}
 	}
 	return null;
 }
