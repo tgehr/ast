@@ -349,6 +349,13 @@ class TypeAnnotationExp: Expression{
 	}
 	override Expression evalImpl(){
 		auto ne = e.eval(), nt = t.eval();
+		if(nt == ℕt(true)) {
+			// `(a - b) coerce !N`  ->  `a sub b`
+			auto se = cast(SubExp)ne;
+			if(se && se.type == ℤt(true)) {
+				return new NSubExp(se.e1, se.e2);
+			}
+		}
 		if(ne is e && nt is t) return this;
 		return new TypeAnnotationExp(ne,nt,annotationType);
 	}
@@ -400,9 +407,6 @@ class LiteralExp: Expression{
 		r.setSemEvaluated();
 		return r;
 	}
-	bool isInteger(){
-		return lit.type==Tok!"0";
-	}
 	static LiteralExp makeBoolean(bool b){
 		auto r=makeInteger(b?1:0);
 		r.type=Bool(true);
@@ -416,11 +420,17 @@ class LiteralExp: Expression{
 	override string toString(){
 		return _brk(lit.toString());
 	}
-	override bool isConstant(){ return true; }
-	override bool isTotal(){ return true; }
+	override bool isConstant(){
+		assert(type);
+		return type.isConstant();
+	}
+	override bool isTotal(){
+		assert(type);
+		return type.isTotal();
+	}
 
 	override Maybe!ℤ asIntegerConstant(bool eval=false) {
-		if(!isInteger()) return none!(ℤ);
+		if(lit.type!=Tok!"0") return none!(ℤ);
 		return just(ℤ(lit.str));
 	}
 	// returns (x, y, b, n) where the value is x/y * b**n; y > 0, b > 0
@@ -915,11 +925,11 @@ class UnaryExp(TokenType op): AUnaryExp{
 
 	override Expression evalImpl(){
 		auto ne=e.eval();
-		static if(op==Tok!"-"){
-			if(auto v=ne.asIntegerConstant()){
-				auto r=LiteralExp.makeInteger(-v.get());
-				r.type=type==e.type?ne.type:type.eval();
-				return r;
+		if(isNumericTy(type)) {
+			static if(op==Tok!"-"){
+				if(auto v=ne.asIntegerConstant()){
+					return LiteralExp.makeInteger(-v.get());
+				}
 			}
 		}
 		if(ne is e) return this;
@@ -1463,207 +1473,42 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	}
 
 	override Expression evalImpl(){
-		static if(op!=Tok!"→"){
-			auto ne1=e1.eval(), ne2=e2.eval();
-			auto make(Expression exp){
-				exp.type=type;
-				exp.loc=loc;
-				exp.setSemCompleted();
-				return exp.eval();
-			}
-			Expression create(Expression exp,Expression type){
-				exp.type=type;
-				exp.loc=loc;
-				exp.setSemCompleted();
-				return exp;
-			}
-			static if(op==Tok!"+"){
-				{
-					auto v1=ne1.asIntegerConstant(),v2=ne2.asIntegerConstant();
-					if(v1 && v2) return make(LiteralExp.makeInteger(v1.get() + v2.get()));
-					if(v1 && v1.get() == 0) return ne2.eval();
-					if(v2 && v2.get() == 0) return ne1.eval();
-					if(v1 && !v2) return make(new BinaryExp!op(ne2,ne1));
-					if(v2&&v2.get() < 0) {
-						return make(new BinaryExp!(Tok!"-")(ne1,create(LiteralExp.makeInteger(-v2.get()),ℕt(true))));
+		import ast.consteval;
+
+		auto ne1 = e1.eval(), ne2 = e2.eval();
+		static if(op == Tok!"~"){
+			auto ok1=false,ok2=false;
+			Expression[] es1=[],es2=[];
+			if(auto tpl1=cast(TupleExp)e1){ ok1=true; es1=tpl1.e; }
+			if(auto vec1=cast(VectorExp)e1){ ok1=true; es1=vec1.e; }
+			if(auto tpl2=cast(TupleExp)e2){ ok2=true; es2=tpl2.e; }
+			if(auto vec2=cast(VectorExp)e2){ ok2=true; es2=vec2.e; }
+			if(ok1 && ok2) return new TupleExp(es1 ~ es2);
+		} else static if(util.among(op, Tok!"+", Tok!"-", Tok!"sub", Tok!"·", Tok!"^", Tok!"=", Tok!"≠")){
+			if(isNumericTy(e1.type) && isNumericTy(e2.type)) {
+				assert(isNumericTy(type));
+				auto v1 = ne1.asIntegerConstant(), v2 = ne2.asIntegerConstant();
+				Expression e = evalNumericBinop!op(loc, ne1, v1, ne2, v2);
+				if(e) {
+					assert(e.type);
+					assert(isNumericTy(e.type));
+					if(!isSubtype(e.type, type)) {
+						e = new TypeAnnotationExp(e, type, TypeAnnotationType.coercion);
+						e.type = type;
+						e.loc = loc;
+						e.setSemCompleted();
+						e = e.eval();
 					}
-				}
-				static foreach(sub1;[Tok!"-",Tok!"sub"]){
-					if(auto se1=cast(BinaryExp!sub1)ne1){
-						static foreach(sub2;[Tok!"-",Tok!"sub"]){
-							if(auto se2=cast(BinaryExp!sub2)ne2){
-								auto nb0=make(new BinaryExp!op(se1.e1,se2.e2));
-								auto nb1=make(new BinaryExp!sub1(nb0,se1.e2));
-								auto nb2=make(new BinaryExp!sub2(nb1,se2.e2));
-								return nb2.eval();
-							}
-						}
-						auto le1=cast(LiteralExp)se1.e2,le2=cast(LiteralExp)ne2;
-						if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
-							auto nle=LiteralExp.makeInteger(le1.asIntegerConstant().get()-le2.asIntegerConstant().get()); // TODO: replace literal exp internal representation
-							nle.loc=loc;
-							nle.type=type;
-							nle.setSemCompleted();
-							return make(new BinaryExp!sub1(se1.e1,nle));
-						}
-						if(se1.e2==ne2) return se1.e1.evalImpl();
-					}
-				}
-				auto isDeterministic=this.isDeterministic();
-				if(isDeterministic)
-				static foreach(sub2;[Tok!"-",Tok!"sub"]){
-					if(auto se2=cast(BinaryExp!sub2)ne2){
-						if(se2.e2==ne1) return se2.e1.evalImpl();
-					}
-				}
-				if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
-					auto nb0=make(new BinaryExp!op(ne1,ae2.e1));
-					return make(new BinaryExp!op(nb0,ae2.e2));
-				}
-				if(isDeterministic&&ne1==ne2){
-					auto two=LiteralExp.makeInteger(2);
-					two.loc=loc;
-					return make(new BinaryExp!(Tok!"·")(two,ne2));
-				}
-			}else static if(op==Tok!"-"||op==Tok!"sub"){
-				if(ne1==ne2){
-					Token tok;
-					tok.type=Tok!"0";
-					tok.str="0";
-					return make(new LiteralExp(tok));
-				}
-				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-				if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
-					auto v=le1.asIntegerConstant().get()-le2.asIntegerConstant().get();
-					static if(op==Tok!"sub"){
-						if(v>=0) return make(LiteralExp.makeInteger(v)); // TODO: replace literal exp internal representation
-					}else{
-						return make(LiteralExp.makeInteger(v)); // TODO: replace literal exp internal representation
-					}
-				}
-				if(le2&&isZero(le2)){
-					static if(op==Tok!"sub"){
-						if(auto se1=cast(SubExp)ne1)
-							return make(new NSubExp(se1.e1,se1.e2));
-						// TODO: coerce?
-					}
-					return ne1.eval();
-				}
-				}
-				if(this.isDeterministic()){
-					if(auto ae1=cast(BinaryExp!(Tok!"+"))ne1){
-						if(ae1.e1==ne2) return ae1.e2.eval();
-						if(ae1.e2==ne2) return ae1.e1.eval();
-						if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
-							if(ae1.e1==ae2.e1)
-								return make(new BinaryExp!op(ae1.e2,ae2.e2));
-						}
-					}
-					static foreach(sub;[Tok!"-",Tok!"sub"]){
-						if(auto se1=cast(BinaryExp!sub)ne1){
-							if(se1.e1==ne2) return make(new UnaryExp!(Tok!"-")(se1.e2));
-							// TODO: if(se1.e2==-ne2)
-						}
-						if(auto se2=cast(BinaryExp!sub)ne2){
-							if(se2.e1==ne1) return se2.e2.eval();
-							// TODO: if(se2.e2==-ne1
-						}
-					}
-					if(auto ae2=cast(BinaryExp!(Tok!"+"))ne2){
-						if(ae2.e1==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e2));
-						if(ae2.e2==ne1) return make(new UnaryExp!(Tok!"-")(ae2.e1));
-					}
-				}
-				static foreach(sub2;[Tok!"-",Tok!"sub"]){
-					if(auto se2=cast(BinaryExp!sub2)ne2){
-						auto nb0=make(new BinaryExp!op(ne1,se2.e1));
-						return make(new BinaryExp!(Tok!"+")(nb0,se2.e2));
-					}
-				}
-			}else static if(op==Tok!"·"){
-				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-				if(le1&&le2&&le1.isInteger()&&le2.isInteger())
-					return make(LiteralExp.makeInteger(le1.asIntegerConstant().get()*le2.asIntegerConstant().get())); // TODO: replace literal exp internal representation
-				if(le1&&isZero(le1)) return le1.eval();
-				if(le2&&isZero(le2)) return le2.eval();
-				if(le1&&isOne(le1)) return ne2.eval();
-				if(le2&&isOne(le2)) return ne1.eval();
-				if(le2&&!le1) return make(new BinaryExp!op(ne2,ne1));
-				}
-			}else static if(op==Tok!"^"){
-				{auto le1=cast(LiteralExp)ne1,le2=cast(LiteralExp)ne2;
-					if(le2&&isZero(le2)) return make(LiteralExp.makeInteger(1));
-					if(le2&&isOne(le2)) return ne1.eval();
-					if(le1&&le2&&le1.isInteger()&&le2.isInteger()){
-						auto v1 = le1.asIntegerConstant().get();
-						auto v2 = le2.asIntegerConstant().get();
-						if(v2 >= 0) {
-							return make(LiteralExp.makeInteger(pow(v1, v2)));
-						}
-					}
-				}
-			}else static if(op==Tok!"~"){
-				auto ok1=false,ok2=false;
-				Expression[] es1=[],es2=[];
-				if(auto tpl1=cast(TupleExp)e1){ ok1=true; es1=tpl1.e; }
-				if(auto vec1=cast(VectorExp)e1){ ok1=true; es1=vec1.e; }
-				if(auto tpl2=cast(TupleExp)e2){ ok2=true; es2=tpl2.e; }
-				if(auto vec2=cast(VectorExp)e2){ ok2=true; es2=vec2.e; }
-				if(ok1&&ok2) return make(new TupleExp(es1~es2));
-			}
-			static if(op==Tok!"+"||op==Tok!"-"||op==Tok!"sub"){
-				if(auto me1=cast(BinaryExp!(Tok!"·"))ne1){
-					if(auto le1=cast(LiteralExp)me1.e1){
-						if(me1.e2==ne2){
-							auto one=LiteralExp.makeInteger(1);
-							one.loc=le1.loc;
-							auto a=new BinaryExp!op(le1,one);
-							a.loc=le1.loc;
-							a.type=le1.type;
-							a.setSemCompleted();
-							return make(new BinaryExp!(Tok!"·")(a,me1.e2));
-						}
-						if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
-							if(auto le2=cast(LiteralExp)me2.e1){
-								if(me1.e2==me2.e2){
-									auto a=new BinaryExp!op(le1,le2);
-									a.loc=ne1.loc.to(ne2.loc);
-									if(le1.type==le2.type) a.type=le1.type;
-									else a.type=type;
-									a.setSemCompleted();
-									return make(new BinaryExp!(Tok!"·")(a,me1.e2));
-								}
-							}
-						}
-					}
-				}
-				if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
-					if(auto le2=cast(LiteralExp)me2.e1){
-						if(me2.e2==ne1){
-							auto one=LiteralExp.makeInteger(1);
-							auto a=create(new BinaryExp!op(one,le2), le2.type);
-							return make(new BinaryExp!(Tok!"·")(a,ne1));
-						}
-					}
+					return e;
 				}
 			}
-			static if(op==Tok!"="||op==Tok!"≠"){
-				if(ne1.isDeterministic()){
-					if(ne1==ne2) return make(LiteralExp.makeBoolean(op==Tok!"="));
-					if(cast(LiteralExp)ne1&&cast(LiteralExp)ne2) return make(LiteralExp.makeBoolean(op!=Tok!"="));
-				}
-				if(util.among(ne1.type,Bool(true),ℕt(true),ℤt(true))&&util.among(ne2.type,Bool(true),ℕt(true),ℤt(true))){
-					if(!cast(LiteralExp)ne2){
-						import ast.semantic_: subtractionType;
-						auto sub=create(new BinaryExp!(Tok!"-")(ne1,ne2), subtractionType(ne1.type,ne2.type));
-						auto zero=create(LiteralExp.makeInteger(0),ℕt(true));
-						return make(new BinaryExp!op(sub,zero));
-					}
-				}
-			}
-			if(ne1 is e1 && ne2 is e1) return this;
-			return new BinaryExp!op(ne1,ne2);
-		}else return this;
+		}
+		if(ne1 is e1 && ne2 is e1) return this;
+		static if(op == Tok!"→") {
+			return new BinaryExp!op(ne1, ne2, annotation, isLifted);
+		} else {
+			return new BinaryExp!op(ne1, ne2);
+		}
 	}
 
 	override bool opEquals(Object o){
