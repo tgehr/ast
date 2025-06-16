@@ -521,8 +521,7 @@ Type tupleTy(Expression[] types)in{
 }do{
 	import ast.lexer: Token,Tok;
 	if(types.length&&types.all!(x=>x==types[0])){
-		auto len=LiteralExp.makeInteger(types.length);
-		return vectorTy(types[0],len);
+		return vectorTy(types[0], types.length);
 	}
 	return memoize!((Expression[] types){
 		auto r = new TupleTy(types);
@@ -768,6 +767,9 @@ VectorTy vectorTy(Expression next,Expression num)in{
 		r.setSemEvaluated();
 		return r;
 	})(next,num);
+}
+VectorTy vectorTy(Expression next, size_t num){
+	return vectorTy(next, LiteralExp.makeInteger(num));
 }
 
 static Expression elementType(Expression ty){

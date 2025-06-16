@@ -230,7 +230,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 		static if(witness){
 			auto elements=next.array;
 			if(elements.all!(x=>!!x)){
-				auto nvec2=vectorTy(arr2.next,LiteralExp.makeInteger(tpl1.length));
+				auto nvec2=vectorTy(arr2.next, tpl1.length);
 				return trans(new TupleConversion(from,nvec2,elements),new VectorToArrayConversion(nvec2,arr2));
 			}
 		}else if(next.all) return true;
@@ -271,11 +271,11 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 		if((arr1||vec1)&&to==unit){ // TODO: redundant?
 			static if(witness){
 				if(arr1){
-					auto nvec1=vectorTy(arr1.next,LiteralExp.makeInteger(0));
+					auto nvec1=vectorTy(arr1.next, 0);
 					return trans(new ArrayToVectorConversion(arr1,nvec1,checkLength),new TupleConversion(nvec1,unit,[]));
 				}
 				if(vec1){
-					auto nvec1=vectorTy(vec1.next,LiteralExp.makeInteger(0));
+					auto nvec1=vectorTy(vec1.next, 0);
 					return trans(new VectorConversion(vec1,nvec1,refl(vec1.next),checkLength),new TupleConversion(nvec1,unit,[]));
 				}
 			}else return true;
@@ -299,7 +299,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			static if(witness){
 				auto elements=next.array;
 				if(elements.all!(x=>!!x)){
-					auto nvec1=vectorTy(vec1.next,LiteralExp.makeInteger(tpl2.length));
+					auto nvec1=vectorTy(vec1.next, tpl2.length);
 					return trans(new VectorConversion(vec1,nvec1,refl(vec1.next),checkLength),new TupleConversion(nvec1,to,elements));
 				}
 			}else if(next.all) return true;
@@ -309,7 +309,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			static if(witness){
 				auto elements=next.array;
 				if(elements.all!(x=>!!x)){
-					auto nvec2=vectorTy(vec2.next,LiteralExp.makeInteger(tpl1.length));
+					auto nvec2=vectorTy(vec2.next, tpl1.length);
 					return trans(new TupleConversion(from,nvec2,elements),new VectorConversion(nvec2,vec2,refl(vec2.next),checkLength));
 				}
 			}else if(next.all) return true;
@@ -319,7 +319,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			static if(witness){
 				auto elements=next.array;
 				if(elements.all!(x=>!!x)){
-					auto nvec1=vectorTy(arr1.next,LiteralExp.makeInteger(tpl2.length));
+					auto nvec1=vectorTy(arr1.next, tpl2.length);
 					return trans(new ArrayToVectorConversion(arr1,nvec1,checkLength),new TupleConversion(nvec1,to,elements));
 				}
 			}else if(next.all) return true;
@@ -642,7 +642,7 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 				auto elements=next.array;
 				update();
 				if(elements.all!(x=>!!x)){
-					auto nvec2=vectorTy(arr2.next,LiteralExp.makeInteger(tpl1.e.length));
+					auto nvec2=vectorTy(arr2.next, tpl1.e.length);
 					return trans(new TupleConversion(expr.type,nvec2,elements),new VectorToArrayConversion(nvec2,arr2));
 				}
 			}else{ scope(exit) update(); return next.all; }
@@ -665,7 +665,7 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 					auto elements=next.array;
 					update();
 					if(elements.all!(x=>!!x)){
-						auto nvec2=vectorTy(vec2.next,LiteralExp.makeInteger(tpl1.e.length));
+						auto nvec2=vectorTy(vec2.next, tpl1.e.length);
 						return trans(new TupleConversion(expr.type,nvec2,elements),new VectorConversion(nvec2,vec2,refl(vec2.next),checkLength));
 					}
 				}else{ scope(exit) update(); return next.all; }
