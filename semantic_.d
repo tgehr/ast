@@ -1965,9 +1965,9 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 				t=joinTypes(t,e.type);
 				if(!t) break;
 			}
-			if(t) vec.type=vectorTy(t,LiteralExp.makeInteger(vec.e.length));
+			if(t) vec.type=vectorTy(t, vec.e.length);
 			else if(vec.e.length) vec.type=tupleTy(vec.e.map!(e=>e.type).array);
-			else vec.type=vectorTy(bottom,LiteralExp.makeInteger(0));
+			else vec.type=vectorTy(bottom, 0);
 		}
 	}
 	return vec;
@@ -4935,9 +4935,9 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 		}else t=nt;
 	}
 	if(vec.e.length && t){
-		if(vec.e[0].type) vec.type=vectorTy(t,LiteralExp.makeInteger(vec.e.length));
+		if(vec.e[0].type) vec.type=vectorTy(t, vec.e.length);
 	}else{
-		vec.type=vectorTy(bottom,LiteralExp.makeInteger(0));
+		vec.type=vectorTy(bottom, 0);
 	}
 	return vec;
 }
