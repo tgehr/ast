@@ -580,6 +580,7 @@ struct Parser{
 					auto empty=New!TupleExp(Expression[].init);
 					empty.loc=iloc;
 					nextToken();
+					scope(success) (cast(IndexExp)res).isArraySyntax=true;
 					mixin(rule!(IndexExp,Existing,q{left,empty}));
 				}
 				auto l=parseExpression(rbp!(Tok!","));

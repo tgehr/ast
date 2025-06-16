@@ -890,12 +890,15 @@ class PostfixExp(TokenType op): Expression{
 	}
 }
 
-class IndexExp: Expression{ //e[a...]
+class IndexExp: Expression{ //e[a]
 	Expression e;
 	Expression a;
+	bool isArraySyntax=false; // e[] vs e[()]
 	this(Expression exp, Expression arg){e=exp; a=arg;}
 	override IndexExp copyImpl(CopyArgs args){
-		return new IndexExp(e.copy(args),a.copy(args));
+		auto r=new IndexExp(e.copy(args),a.copy(args));
+		r.isArraySyntax=isArraySyntax;
+		return r;
 	}
 	override string toString(){
 		return _brk(e.toString()~a.tupleToString(true));
@@ -913,7 +916,9 @@ class IndexExp: Expression{ //e[a...]
 			}
 		}
 		if(ne is e && na is a) return this;
-		return new IndexExp(ne,na);
+		auto r=new IndexExp(ne,na);
+		r.isArraySyntax=isArraySyntax;
+		return r;
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
@@ -930,6 +935,7 @@ class IndexExp: Expression{ //e[a...]
 		auto na=a.substitute(subst);
 		if(ne==e&&na==a) return this;
 		auto r=new IndexExp(ne,na);
+		r.isArraySyntax=isArraySyntax;
 		r.loc=loc;
 		return r;
 	}

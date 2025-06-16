@@ -3195,8 +3195,8 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 		if(idx&&sc){
 			sc.error(format("type %s is not indexable",aty),idx.loc);
 			if(isType(idx.e)||isQNumeric(idx.e)){
-				if(!cast(TupleExp)index)
-				sc.note(format("did you mean to write '%s^%s'?",idx.e,index),idx.loc);
+				if(index.type?isBasicIndexType(index.type):!cast(TupleExp)index&&!cast(CatExp)index)
+					sc.note(format("did you mean to write '%s^%s'?",idx.e,index),idx.loc);
 			}
 		}
 		return null;
@@ -4697,7 +4697,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		ce.loc=idx.loc;
 		return callSemantic(ce,context);
 	}
-	if(idx.e.sstate != SemState.error && (isType(idx.e)||isQNumeric(idx.e))){
+	if(idx.e.sstate != SemState.error && idx.isArraySyntax && (isType(idx.e)||isQNumeric(idx.e))){
 		if(auto tpl=cast(TupleExp)idx.a){
 			if(tpl.length==0) {
 				auto r = new ArrayTy(idx.e);
