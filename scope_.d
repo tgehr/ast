@@ -1120,7 +1120,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Expression,bool,Location)[][2] loopParams(Scope loopScope){ // (name,type,mayChange,loc)
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(Scope loopScope){ // (name,decl,type,mayChange)
 			typeof(return) r;
 			foreach(id,decl;rnsymtab){
 				import ast.semantic_: typeForDecl;
@@ -1134,7 +1134,7 @@ abstract class Scope{
 					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
 				bool isConstParamDecl=type.isClassical()||!mayChange||dependencies.canForget(decl);
 				Expression.CopyArgs cargs;
-				r[isConstParamDecl?0:1]~=q(id,type.copy(cargs),mayChange,decl.loc);
+				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
 			}
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;

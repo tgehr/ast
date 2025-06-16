@@ -83,6 +83,7 @@ abstract class Expression: Node{
 	struct CopyArgs{
 		bool preserveSemantic=false;
 		bool preserveMeanings=false;
+		Scope preserveRenames=null;
 	}
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
@@ -619,7 +620,14 @@ class Identifier: Expression{
 	}
 	override Identifier copyImpl(CopyArgs args){
 		Identifier r;
-		if(meaning&&meaning.name&&meaning.name.name.length&&!args.preserveSemantic&&!args.preserveMeanings)
+		bool resetName(){
+			if(!meaning||!meaning.name||!meaning.name.name.length) return false;
+			if(args.preserveSemantic||args.preserveMeanings) return false;
+			if(!args.preserveRenames) return true;
+			if(!meaning.scope_) return true;
+			return meaning.scope_ is args.preserveRenames||!meaning.scope_.isNestedIn(args.preserveRenames);
+		}
+		if(resetName())
 			r=new Identifier(meaning.name.id); // TODO: this is a hack
 		else r=new Identifier(id);
 		if(args.preserveSemantic){
