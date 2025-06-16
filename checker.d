@@ -1070,11 +1070,13 @@ class Checker {
 
 	void expectConst(ast_exp.Expression e, string why) {
 		if(e.constLookup) return;
+		if(!ast_ty.hasQuantumComponent(e.type)) return;
 		assert(0, format("ERROR: Expected const %s on %s: << %s >>", why, e.loc, e));
 	}
 
 	void expectMoved(ast_exp.Expression e, string why) {
 		if(!e.constLookup) return;
+		if(!ast_ty.hasQuantumComponent(e.type)) return;
 		assert(0, format("ERROR: Expected moved %s on %s: << %s >>", why, e.loc, e));
 	}
 

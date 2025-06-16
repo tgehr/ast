@@ -477,8 +477,7 @@ class LiteralExp: Expression{
 
 	override Annotation getAnnotation(){ return pure_; }
 	override Expression evalImpl(){
-		if(constLookup) return this;
-		return new LiteralExp(lit);
+		return this;
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	mixin VariableFree;
@@ -661,10 +660,10 @@ class Identifier: Expression{
 					return result.eval().getClassical();
 				}
 			}
-			if(constLookup!=result.constLookup||implicitDup&&!result.implicitDup){
+			if(constLookup!=result.constLookup && !type.isClassical() || implicitDup && !result.implicitDup){
 				Expression.CopyArgs cargs={preserveSemantic: true};
 				result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
-				result.setConstLookup(constLookup);
+				if(constLookup != result.constLookup&& !type.isClassical()) result.setConstLookup(constLookup);
 				if(implicitDup) result.implicitDup=true;
 			}
 			assert(constLookup == result.constLookup || type.isClassical(), "bad setConstLookup");
