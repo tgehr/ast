@@ -5604,6 +5604,7 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	scope(exit) fsc.forceClose();
 	declareParameters(fa,fa.isSquare,fa.params,fsc); // parameter variables
 	if(fa.isSemError()) return fa;
+	fa.names = fa.params.map!(p => p.name ? p.getId : Id()).array; // TODO: get rid of this
 	auto types=fa.params.map!(p=>p.vtype).array;
 	assert(fa.isTuple||types.length==1);
 	fa.dom=fa.isTuple?tupleTy(types):types[0];

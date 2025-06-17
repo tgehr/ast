@@ -834,7 +834,7 @@ class ProductTy: Type{
 	}do{
 		this.params = params;
 		this.isConst = params.map!(p => p.isConst).array;
-		this.names = params.map!(p => p.name ? p.name.id : Id()).array;
+		this.names = params.map!(p => p.name ? p.getId : Id()).array;
 		this.isSquare = isSquare;
 		this.isTuple = isTuple;
 		this.cod = cod;
