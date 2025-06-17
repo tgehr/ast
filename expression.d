@@ -119,9 +119,7 @@ abstract class Expression: Node{
 		if(!eval) return none!(ℤ);
 		if(type && (isEmpty(type) || !isSubtype(type, ℤt(true)))) return none!(ℤ);
 		auto ev = this.eval();
-		auto r = ev.asIntegerConstant(false);
-		assert(r || !ev.isConstant() || !ev.isTotal(), format("expression total constant of integer type, but failed to get value: %s -> %s", this, ev));
-		return r;
+		return ev.asIntegerConstant(false);
 	}
 	Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
 		return none!(Q!(ℤ, ℤ, int, int));
