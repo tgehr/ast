@@ -1040,6 +1040,7 @@ class Checker {
 			auto capturedDecls = fd.capturedDecls;
 			if(auto lookup = cast(ast_exp.Identifier)causeExpr) {
 				if(lookup.recaptures) {
+					assert(lookup.recaptures.length == capturedDecls.length, format("ERROR: number of captures does not match for function %s, looked up at %s, captures %s, recaptured as %s", fd.getName, lookup.loc, capturedDecls, lookup.recaptures));
 					capturedDecls = lookup.recaptures.map!(id => id.meaning).array;
 				}
 			}

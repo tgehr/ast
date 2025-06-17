@@ -5922,7 +5922,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(fd.sstate==SemState.started) return fd; // only one active semantic analysis at one time
 	if(!fd.isSemError()) fd.sstate=SemState.started;
 	auto ftypeBefore=fd.ftype;
-	auto numCapturesBefore=fd.capturedDecls.filter!(d=>d.isLinear).walkLength; // TODO: really needed?
+	auto numCapturesBefore=fd.capturedDecls.length;
 	fd.inferringReturnType|=!fd.ret;
 	//imported!"util.io".writeln("STARTING: ",fd," ",fd.ftype," ",fd.ret," ",fd.rret," ",fd.inferringReturnType);
 	if(!fd.ret){
@@ -6038,7 +6038,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		Identifier[][Declaration] ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
 			capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
-			if(capture.isLinear&&fd.scope_.canInsert(capture.name.id)){
+			if(fd.isConsumedCapture(capture)&&fd.scope_.canInsert(capture.name.id)){
 				assert(capture.scope_ is fd.scope_); // TODO: ok?
 				//imported!"util.io".writeln("INSERTING: ",capture);
 				capture.scope_=null;
@@ -6071,7 +6071,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
-	auto numCapturesAfter=fd.capturedDecls.filter!(d=>d.isLinear).walkLength;
+	auto numCapturesAfter=fd.capturedDecls.length;
 	static void resetFunctionDefsToUpdate()(FunctionDef fd){
 		foreach(ofd;fd.functionDefsToUpdate)
 			notify(ofd,fd);
