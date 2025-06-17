@@ -661,6 +661,7 @@ class Identifier: Expression{
 		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
 		if(id in subst){
 			auto result=subst[id];
+			assert(result.isSemCompleted());
 			static if(language==silq){
 				if(classical) {
 					return result.eval().getClassical();
@@ -705,8 +706,14 @@ class Identifier: Expression{
 	override bool opEquals(Object o){
 		if(o is this) return true;
 		if(auto r=cast(Identifier)o){
-			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning)
-				return true;
+			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning) {
+				if(meaning) {
+					assert(type == r.type);
+					return true;
+				}
+				// In product types we have `Identifier`s without a `meaning`. Compare their types instead.
+				return type == r.type;
+			}
 		}
 		return false;
 	}
