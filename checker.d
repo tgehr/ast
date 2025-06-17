@@ -613,7 +613,7 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {
-		// checkFunction(e.fd, this); // TODO
+		checkFunction(e.fd, this);
 		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
 	}
 
