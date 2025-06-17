@@ -90,7 +90,7 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 	return null;
 }
 
-bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
+bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked){
 	bool validDefEntry(Expression e){
 		if(e.implicitDup) return false;
 		return cast(Identifier)e||cast(IndexExp)e;
@@ -108,6 +108,12 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc){
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
+		if(ce.checkReverse&&!unchecked){
+			auto r=reverseCallRewriter(ft,ce.loc);
+			if(r.movedType.hasClassicalComponent()||r.returnType.hasClassicalComponent()){
+				return false;
+			}
+		}
 		// if(!equal(ft.isConst,ft.isConstForReverse)) return false; // TODO: can we completely rewrite away isConstForReverse?
 		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
 			auto tpl=cast(TupleExp)ce.arg;
@@ -343,8 +349,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		res.setSemError();
 		return res;
 	}
-	if(validDefLhs!flags(olhs,sc)){
+	if(validDefLhs!flags(olhs,sc,unchecked)){
 		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
+		if(auto ce=cast(CallExp)lhs) ce.checkReverse&=!unchecked;
 		return res=new DefineExp(lhs,rhs);
 	}
 	Expression forget(){ return res=new ForgetExp(rhs,lhs); }
@@ -375,6 +382,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res=new CompoundExp([d1,d2]);
 	}
 	if(isLiftedBuiltIn(olhs)) return forget();
+	if(auto ce=cast(CallExp)olhs){
+		if(auto ft=cast(FunTy)ce.e.type){
+			if(ft.isSquare==ce.isSquare&&ft.annotation>=Annotation.qfree&&ft.isConstForReverse.all)
+				return forget();
+		}
+	}
 	if(auto tae=cast(TypeAnnotationExp)olhs){
 		static if(reverseMode){
 			if(olhs.type){
@@ -641,7 +654,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
 			sc.error("reversed function must be 'mfree'",ce.e.loc);
-			return error;
+			return error();
 		}
 		if(!unchecked&&!needWrapper&&!ft.isClassical){
 			sc.error("quantum function call not supported as definition left-hand side",ce.loc); // TODO: support within reversed functions
@@ -698,12 +711,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		auto checked=!unchecked;
 		enum simplify=false, outerWanted=false;
-		auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,checked,outerWanted);
-		auto reversed=tryReverse(rev,ce.e,false,false,sc,simplify);
+		auto rev=getReverse(ce.e.loc,sc,Annotation.mfree,outerWanted);
+		auto reversed=tryReverse(rev,ce.e,false,false,sc,checked,simplify);
 		if(ce.e.isSemError()) return error();
 		if(!reversed){
-			reversed=new CallExp(rev,ce.e,false,false);
-			reversed.loc=ce.e.loc;
+			auto ce2=new CallExp(rev,ce.e,false,false);
+			ce2.loc=ce.e.loc;
+			ce2.checkReverse=checked;
+			reversed=ce2;
 		}
 		auto newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
 		newrhs.loc=newarg.loc;
@@ -721,7 +736,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 
 Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked){
 	if(e.isSemError()) return e;
-	if(validDefLhs!flags(e.e1,sc)) return null;
+	if(validDefLhs!flags(e.e1,sc,unchecked)) return null;
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked);
 }
 
@@ -821,7 +836,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Id cpname,rpname;
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
-		if(!id.implicitDup&&validDefLhs!flags(id,sc)){
+		if(!id.implicitDup&&validDefLhs!flags(id,sc,unchecked)){
 			retDefReplaced=true;
 			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
 		}

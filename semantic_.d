@@ -1774,6 +1774,15 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					sc.error("arguments to reversed function call cannot appear in result type",f.loc);
 					ok=false;
 				}else{
+					auto r=reverseCallRewriter(ft,ce.loc);
+					if(ce.checkReverse&&r.movedType.hasClassicalComponent()){
+						sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+						ok=false;
+					}
+					if(ce.checkReverse&&r.returnType.hasClassicalComponent()){
+						sc.error("reversed function cannot have classical components in return value", f.loc);
+						ok=false;
+					}
 					ce.type=ft.cod;
 					if(context.type&&!isSubtype(context.type,ce.type)){
 						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
@@ -3760,11 +3769,10 @@ Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
 
 static if(language==silq){
 
-Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool checked,bool outerWanted)in{
+Identifier getReverse(Location loc,Scope isc,Annotation annotation,bool outerWanted)in{
 	assert(annotation>=Annotation.mfree);
 }do{
 	auto r=getPreludeSymbol(annotation==Annotation.qfree?"__reverse_qfree":"reverse",loc,isc);
-	if(!checked) r.checkReverse=false; // TODO: is there a better solution than this for frontend reverse?
 	if(!outerWanted) r.outerWanted=false; // TODO: is there a better solution than this?
 	return r;
 }
@@ -3826,7 +3834,8 @@ Expression lookupParams(Parameter[] params, bool isTuple,Location loc)in{
 }
 
 Expression makeReverseCall(Expression ce1,Annotation annotation,bool check,Scope sc,Location loc,bool outerWanted){
-	auto ce2=new CallExp(getReverse(loc,sc,annotation,check,outerWanted),ce1,false,false);
+	auto ce2=new CallExp(getReverse(loc,sc,annotation,outerWanted),ce1,false,false);
+	ce2.checkReverse=check;
 	ce2.loc=loc;
 	return ce2;
 }
@@ -3849,11 +3858,10 @@ Expression makeLambda(Parameter[] params,bool isTuple,bool isSquare,Annotation a
 	return le;
 }
 
-Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClassical,Scope sc,bool simplify){
+Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClassical,Scope sc,bool check,bool simplify){
 	bool errors=false;
 	auto ft=cast(FunTy)f.type;
 	if(!ft) return null;
-	bool check=reverse.checkReverse;
 	bool outerWanted=reverse.outerWanted;
 	auto ft2=cast(FunTy)ft.cod;
 	if(ft2&&ft.isSquare&&ft.isConst.all&&!ft2.isSquare){
@@ -3948,7 +3956,7 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	assert(reverse&&isReverse(reverse));
 	ce.arg=expressionSemantic(ce.arg,/+context.nest((rft.isConst.length?rft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
 	enum simplify=true;
-	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,simplify);
+	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,ce.checkReverse,simplify);
 	if(ce.arg.isSemError())
 		return null;
 	if(!r) return null;

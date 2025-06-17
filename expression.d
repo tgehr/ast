@@ -636,7 +636,6 @@ class Identifier: Expression{
 			r.calledDirectly=calledDirectly;
 			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
-				r.checkReverse=checkReverse;
 				r.outerWanted=outerWanted;
 				r.classical=classical;
 			}
@@ -645,7 +644,6 @@ class Identifier: Expression{
 				r.meaning=meaning;
 			}
 			static if(language==silq){
-				r.checkReverse=checkReverse;
 				r.outerWanted=outerWanted;
 				r.classical=classical;
 			}
@@ -835,7 +833,6 @@ class Identifier: Expression{
 	bool calledDirectly=false;
 	bool indexedDirectly=false;
 	static if(language==silq){
-		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
 	}
@@ -1141,7 +1138,9 @@ class CallExp: Expression{
 		static if(language==silq) this.isClassical_=isClassical_;
 	}
 	override CallExp copyImpl(CopyArgs args){
-		return new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical_);
+		auto r=new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical_);
+		static if(language==silq) r.checkReverse=checkReverse;
+		return r;
 	}
 	override string toString(){
 		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~arg.tupleToString(isSquare));
@@ -1321,6 +1320,10 @@ class CallExp: Expression{
 			if(auto sub=r.isDup()) return sub.eval(); // TODO: ok?
 		}
 		return r;
+	}
+	// semantic information
+	static if(language==silq){
+		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 	}
 }
 
