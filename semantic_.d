@@ -850,6 +850,10 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
 		auto loopParamType=loopVarType;
 		if(loopParamType is Bool(true)) loopParamType=ℕt(true);
+		if(loop.step){
+			if(auto at=arithmeticType!false(loopParamType,loop.step.type))
+				loopParamType=at;
+		}
 		Declaration loopVarDecl=loop.loopVar;
 		auto loopParams=[q(loopVarId,loopVarDecl,loopParamType,true)];
 	}else static if(is(T==RepeatExp)){
@@ -904,17 +908,14 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
 	DefineExp constParamDef=null;
 	if(constTmpNames.length){
-		auto constTmpTpl=new TupleExp(cast(Expression[])constTmpNames);
+		static if(is(T==ForExp)) auto tmpNames=constTmpNames[loopParams.length..$];
+		else auto tmpNames=constTmpNames;
+		auto constTmpTpl=new TupleExp(cast(Expression[])tmpNames);
 		constTmpTpl.loc=loop.loc;
-		auto constTpl=new TupleExp(cast(Expression[])ids(loopConstParams.filter!(p=>p[3]).array));
+		static if(is(T==ForExp)) auto cParams=constParams;
+		else auto cParams=loopConstParams;
+		auto constTpl=new TupleExp(cast(Expression[])ids(cParams.filter!(p=>p[3]).array));
 		constTpl.loc=loop.loc;
-		static if(is(T==ForExp)){
-			if(loopConstParams[0][2]&&loopConstParams[0][1]!is loopVarType){
-				auto tae=new TypeAnnotationExp(constTpl.e[0],loopVarType,TypeAnnotationType.coercion);
-				tae.loc=constTpl.e[0].loc;
-				constTpl.e[0]=tae;
-			}
-		}
 		constParamDef=new DefineExp(constTpl,constTmpTpl);
 		constParamDef.loc=loop.loc;
 	}
@@ -928,39 +929,123 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		leftName.loc=loop.left.loc;
 		auto leftInit=loop.left.copy(cargsDefault);
 		leftInit.loc=loop.left.loc;
-		if(loop.leftExclusive){
-			auto one=LiteralExp.makeInteger(1);
-			one.loc=loop.left.loc;
-			leftInit=new AddExp(leftInit,one);
-			leftInit.loc=loop.left.loc;
-		}
 		auto leftDef=new DefineExp(leftName,leftInit);
 		leftDef.loc=loop.left.loc;
 		auto rightName=new Identifier(freshName());
 		rightName.loc=loop.right.loc;
 		auto rightInit=loop.right.copy(cargsDefault);
 		rightInit.loc=loop.right.loc;
-		if(!loop.rightExclusive){
-			auto one=LiteralExp.makeInteger(1);
-			one.loc=loop.right.loc;
-			rightInit=new AddExp(rightInit,one);
-			rightInit.loc=loop.right.loc;
-		}
 		auto rightDef=new DefineExp(rightName,rightInit);
 		rightDef.loc=loop.right.loc;
 		Identifier stepName=null;
 		Expression stepDef=null;
+		Identifier modMatchName=null;
+		Expression modMatchDef=null;
+		Expression adjDef=null;
+		Expression adjIte=null;
+		Expression adjUpd=null;
 		if(loop.step){
 			stepName=new Identifier(freshName());
 			auto stepInit=loop.step.copy(cargsDefault);
 			stepInit.loc=loop.step.loc;
 			stepDef=new DefineExp(stepName,stepInit);
 			stepDef.loc=loop.step.loc;
+			if(loop.leftExclusive==loop.rightExclusive){
+				auto two=LiteralExp.makeInteger(2);
+				two.loc=loop.step.loc;
+				auto add=new AddExp(leftName.copy(cargsDefault),rightName.copy(cargsDefault));
+				add.loc=loop.step.loc;
+				modMatchName=new Identifier(freshName());
+				modMatchName.loc=loop.step.loc;
+				auto modMatchInit=new IDivExp(add,two);
+				modMatchInit.loc=loop.step.loc;
+				modMatchDef=new DefineExp(modMatchName,modMatchInit);
+				modMatchDef.loc=loop.step.loc;
+			}else{
+				bool isOne=false;
+				if(auto v=loop.step.eval().asIntegerConstant())
+					isOne=util.among(v.get(),-1,1);
+				if(!isOne) modMatchName=loop.leftExclusive?rightName:leftName;
+				else modMatchName=leftName;
+			}
+			Expression adjName=null;
+			if(modMatchName !is leftName){
+				auto sub=new SubExp(modMatchName.copy(cargsDefault),leftName.copy(cargsDefault));
+				sub.brackets++;
+				sub.loc=loop.step.loc;
+				adjName=new Identifier(freshName());
+				adjName.loc=loop.step.loc;
+				auto adjInit=new ModExp(sub,stepName.copy(cargsDefault));
+				adjDef=new DefineExp(adjName,adjInit);
+				adjDef.loc=loop.step.loc;
+			}
+			if(loop.leftExclusive){
+				if(adjName){
+					auto zero=LiteralExp.makeInteger(0);
+					zero.loc=loop.step.loc;
+					auto adjCond=new EqExp(adjName.copy(cargsDefault),zero);
+					adjCond.loc=loop.step.loc;
+					auto setAdj=new AssignExp(adjName.copy(cargsDefault),stepName.copy(cargsDefault));
+					setAdj.loc=loop.step.loc;
+					auto setAdjBdy=new CompoundExp([setAdj]);
+					setAdjBdy.loc=loop.step.loc;
+					adjIte=new IteExp(adjCond,setAdjBdy,null);
+					adjIte.loc=loop.step.loc;
+				}else{
+					adjUpd=new AddAssignExp(leftName.copy(cargsDefault),stepName.copy(cargsDefault));
+					adjUpd.loc=loop.step.loc;
+				}
+			}
+			if(adjName){
+				adjUpd=new AddAssignExp(leftName.copy(cargsDefault),adjName.copy(cargsDefault));
+				adjUpd.loc=loop.step.loc;
+			}
+		}else if(loop.leftExclusive){
+			auto one=LiteralExp.makeInteger(1);
+			one.loc=loop.left.loc;
+			adjUpd=new AddAssignExp(leftName.copy(cargsDefault),one);
+			adjUpd.loc=loop.left.loc;
 		}
 		auto loopVarName=constTmpNames[0].copy(cargsDefault);
 		loopVarName.loc=loop.var.loc;
-		auto ncond=new LtExp(loopVarName,rightName.copy(cargsDefault));
-		ncond.loc=loop.loc;
+		Expression makeForCond(){
+			auto makePositive(){
+				auto ncond=loop.rightExclusive?
+					new LtExp(loopVarName,rightName.copy(cargsDefault))
+				:   new LeExp(loopVarName,rightName.copy(cargsDefault));
+				ncond.loc=loop.loc;
+				return ncond;
+			}
+			auto makeNegative(){
+				auto ncond=loop.rightExclusive?
+					new GtExp(loopVarName,rightName.copy(cargsDefault))
+				:   new GeExp(loopVarName,rightName.copy(cargsDefault));
+				ncond.loc=loop.loc;
+				return ncond;
+			}
+			if(!loop.step||isSubtype(loop.step.type,ℕt(true))){
+				return makePositive();
+			}
+			if(auto v=loop.step.eval().asIntegerConstant()){
+				if(v.get()<0){
+					return makeNegative();
+				}
+			}
+			auto zero=LiteralExp.makeInteger(0);
+			zero.loc=loop.loc;
+			assert(!!stepName);
+			auto stepPos=new GeExp(stepName.copy(cargsDefault),zero);
+			stepPos.loc=loop.loc;
+			auto posBdy=new CompoundExp([makePositive()]);
+			posBdy.loc=loop.loc;
+			auto negBdy=new CompoundExp([makeNegative()]);
+			negBdy.loc=loop.loc;
+			auto ite=new IteExp(stepPos,posBdy,negBdy);
+			ite.loc=loop.loc;
+			ite.brackets++;
+			return ite;
+		}
+		auto ncond=makeForCond();
 	}else static if(is(T==RepeatExp)){
 		auto numName=new Identifier(freshName());
 		numName.loc=loop.num.loc;
@@ -994,6 +1079,28 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	auto retName=new Identifier(freshName());
 	retName.loc=loop.loc;
 	auto nbdy=loop.bdy.copy(cargsDefault);
+	static if(is(T==ForExp)){
+		auto lhs=cast(Expression[])ids(loopParams);
+		if(loopParams[0][3]&&loopParams[0][2]!is loopVarType){
+			auto tae=new TypeAnnotationExp(lhs[0],loopVarType,TypeAnnotationType.coercion);
+			tae.loc=lhs[0].loc;
+			lhs[0]=tae;
+		}
+		if(loopParams.length==1){
+			auto loopParamDef=new DefineExp(lhs[0],constTmpNames[0]);
+			loopParamDef.loc=loop.loc;
+			nbdy.s=loopParamDef~nbdy.s;
+		}else if(loopParams.length>1){
+			auto loopTpl=new TupleExp(lhs);
+			loopTpl.loc=loop.var.loc;
+			auto loopTmpTpl=new TupleExp(cast(Expression[])constTmpNames[0..loopParams.length]);
+			loopTmpTpl.loc=loop.var.loc;
+			auto loopParamDef=new DefineExp(loopTpl,loopTmpTpl);
+			loopParamDef.loc=loop.loc;
+			nbdy.s=loopParamDef~nbdy.s;
+		}
+	}
+
 	if(!definitelyReturns(loop.bdy)){
 		auto thene=new DefineExp(retName,ce);
 		thene.loc=ce.loc;
@@ -1147,7 +1254,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		stmts~=ce2;
 	}
 	static if(is(T==ForExp)){
-		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~stmts;
+		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~(modMatchDef?[modMatchDef]:[])~(adjDef?[adjDef]:[])~(adjIte?[adjIte]:[])~(adjUpd?[adjUpd]:[])~stmts;
 	}else static if(is(T==RepeatExp)){
 		stmts=[cast(Expression)numDef]~stmts;
 	}
