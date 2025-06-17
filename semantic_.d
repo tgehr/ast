@@ -750,14 +750,14 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			setDefLhsByRef(idx);
 		}
 	}
-	with_.trans=compoundExpSemantic(with_.trans,sc,Annotation.mfree);
+	with_.trans=compoundExpSemantic(with_.trans, sc, Annotation.mfree, blscope: !with_.isIndices);
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	if(auto ret=mayReturn(with_.trans)){
 		sc.error("cannot return from within `with` transformation",ret.loc);
 		with_.trans.setSemForceError();
 	}
 	propErr(with_.trans,with_);
-	with_.bdy=compoundExpSemantic(with_.bdy,sc);
+	with_.bdy=compoundExpSemantic(with_.bdy, sc, blscope: !with_.isIndices);
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
 	if(auto ret=mayReturn(with_.bdy)){
 		sc.error("early return in `with` body must be last statement",ret.loc);
@@ -777,13 +777,13 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	}
 	if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
-			with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
+			with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices);
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.isSemCompleted()){
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,false)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
-		with_.itrans=compoundExpSemantic(with_.itrans,sc,Annotation.mfree);
+		with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		if(with_.itrans.isSemError()){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
