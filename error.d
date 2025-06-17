@@ -3,10 +3,29 @@
 module ast.error;
 
 import std.string, std.range, std.array, std.uni, std.algorithm.searching;
+import std.conv: to;
 
 import ast.lexer, util;
 import util.io;
 
+
+enum ErrorType {
+	error,
+	run_error,
+	warning,
+	note,
+	message,
+}
+
+private string prefix(ErrorType ty){
+	final switch(ty) {
+		case ErrorType.error: return "error: ";
+		case ErrorType.run_error: return "error: ";
+		case ErrorType.warning: return "warning: ";
+		case ErrorType.note: return "note: ";
+		case ErrorType.message: return "";
+	}
+}
 
 abstract class ErrorHandler{
 	//string source;
@@ -14,10 +33,27 @@ abstract class ErrorHandler{
 	int nerrors=0;
 	private int tabsize=8;
 
-	void error(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{nerrors++;}   // in{assert(loc.rep);}body
-	void warning(lazy string err, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
-	void note(lazy string note, Location loc)in{assert(loc.rep);}do{}
-	void message(lazy string msg, Location loc)in{assert(loc.line>=1&&loc.rep);}do{}
+	void report(ErrorType ty, lazy string msg, Location loc) {
+		if(ty <= ErrorType.run_error) {
+			nerrors++;
+		}
+	}
+
+	final void error(lazy string msg, Location loc) {
+		return report(ErrorType.error, msg, loc);
+	}
+	final void run_error(lazy string msg, Location loc) {
+		return report(ErrorType.run_error, msg, loc);
+	}
+	final void warning(lazy string msg, Location loc) {
+		return report(ErrorType.warning, msg, loc);
+	}
+	final void note(lazy string msg, Location loc) {
+		return report(ErrorType.note, msg, loc);
+	}
+	final void message(lazy string msg, Location loc) {
+		return report(ErrorType.message, msg, loc);
+	}
 
 	bool showsEffect(){ return true; }
 
@@ -29,23 +65,13 @@ abstract class ErrorHandler{
 	void finalize(){}
 }
 class SimpleErrorHandler: ErrorHandler{
-	override void error(lazy string err, Location loc){
+	override void report(ErrorType ty, lazy string err, Location loc){
+		super.report(ty, err, loc);
 		if(loc.line == 0){ // just here for robustness
-			stderr.writeln("(location missing): error: "~err);
+			stderr.writef("(location missing): %s%s\n", ty.prefix(), err);
 			return;
 		}
-		nerrors++;
-		stderr.writeln(loc.source.name,'(',loc.line,"): error: ",err);
-	}
-	override void warning(lazy string err, Location loc){
-		if(loc.line == 0){ // just here for robustness
-			stderr.writeln("(location missing): warning: "~err);
-			return;
-		}
-		stderr.writeln(loc.source.name,'(',loc.line,"): warning: ",err);
-	}
-	override void message(lazy string msg, Location loc){
-		stderr.writeln(msg);
+		stderr.writef("%s(%d): %s%s\n", loc.source.name, loc.line, ty.prefix(), err);
 	}
 }
 
@@ -68,37 +94,22 @@ class JSONErrorHandler: ErrorHandler{
 		this.close = close;
 	}
 
-	private JS makeJS(string error, Location loc, string severity, bool addRelated){
+	override void report(ErrorType ty, lazy string error, Location loc){
+		super.report(ty, error, loc);
 		auto li = loc.info(getTabsize());
 		auto sourceJS = JS(li.source.name);
 		auto startJS = JS(["byte": li.startByte, "line": li.startLine, "column": li.startColumn]);
 		auto endJS = JS(["byte": li.endByte, "line": li.endLine, "column": li.endColumn]);
 		auto messageJS = JS(error);
-		auto severityJS = JS(severity);
+		auto severityJS = JS(ty.to!string());
 		auto diagnosticJS = JS(["source": sourceJS, "start": startJS, "end": endJS, "message": messageJS, "severity": severityJS]);
-		if(addRelated){
+		if(ty != ErrorType.note){
 			auto relatedInformationJS = JS((JS[]).init);
 			diagnosticJS["relatedInformation"] = relatedInformationJS;
+			result~=diagnosticJS;
+		} else {
+			result[$-1]["relatedInformation"]~=[diagnosticJS];
 		}
-		return diagnosticJS;
-	}
-	override void error(lazy string error, Location loc){
-		assert(loc.line>=1);
-		nerrors++;
-		result~=makeJS(error,loc,"error",true);
-	}
-	override void warning(lazy string warning, Location loc){
-		assert(loc.line>=1);
-		result~=makeJS(warning,loc,"warning",true);
-	}
-	override void note(lazy string note, Location loc){
-		assert(result.length>0);
-		assert(loc.line>=1);
-		result[$-1]["relatedInformation"]~=[makeJS(note,loc,"note",false)];
-	}
-	override void message(lazy string message, Location loc){
-		assert(loc.line>=1);
-		result~=[makeJS(message,loc,"message",false)];
 	}
 	override void finalize(){
 		output.writeln(result);
@@ -112,27 +123,15 @@ class JSONErrorHandler: ErrorHandler{
 // TODO: remove code duplication
 
 class VerboseErrorHandler: ErrorHandler{
-	override void error(lazy string err, Location loc){
-		nerrors++;
-		impl(err, loc, "error");
-	}
-	override void warning(lazy string warn, Location loc){
-		impl(warn, loc, "warning");
-	}
-	override void note(lazy string err, Location loc){
-		impl(err, loc, "note");
-	}
-	override void message(lazy string err, Location loc){
-		impl(err, loc, "message");
-	}
-	private void impl(lazy string err, Location loc, string severity){
+	override void report(ErrorType ty, lazy string err, Location loc){
+		super.report(ty, err, loc);
 		if(loc.line == 0||!loc.rep.length){ // just here for robustness
-			stderr.writeln("(location missing): "~err);
+			stderr.writef("(location missing): %s%s\n", ty.prefix(), err);
 			return;
 		}
 		auto li = loc.info(getTabsize());
 		auto line = li.source.getLineOf(loc.rep);
-		write(li.source.name, li.startLine, li.startColumn, err, severity);
+		write(ty, li.source.name, li.startLine, li.startColumn, err);
 		if(line.length&&line[0]){
 			display(line);
 			auto ntabs = line.countUntil!(c => c != '\t');
@@ -140,8 +139,8 @@ class VerboseErrorHandler: ErrorHandler{
 		}
 	}
 protected:
-	void write(string source, int line, int column, string error, string severity){
-		stderr.writeln(source,':',line,":",column,": ",severity,": ",error);
+	void write(ErrorType ty, string source, int line, int column, string error){
+		stderr.writeln(source, ':', line, ':', column, ": ", ty.prefix(), error);
 	}
 	void display(string line){
 		stderr.writeln(line);
@@ -171,10 +170,10 @@ protected:
 import util.terminal;
 class FormattingErrorHandler: VerboseErrorHandler{
 protected:
-	override void write(string source, int line, int column, string error, string severity = "error"){
+	override void write(ErrorType ty, string source, int line, int column, string error){
 		string color = BLACK;
-		if(severity=="error") color = RED;
-		stderr.writeln(BOLD,source,':',line,":",column,": ",color,severity,":",RESET,BOLD," ",error,RESET);
+		if(ty <= ErrorType.run_error) color = RED;
+		stderr.writeln(BOLD, source, ':', line, ':', column, ": ", color, ty.prefix(), RESET, BOLD, error, RESET);
 	}
 
 	override void highlight(int column, int ntabs, string rep){
@@ -183,9 +182,4 @@ protected:
 		writeUnderline(rep, column);
 		stderr.writeln(RESET);
 	}
-}
-
-string formatError(string msg,Location loc){
-	import std.conv;
-	return text(loc.line,": ",msg); // TODO: column
 }
