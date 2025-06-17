@@ -150,6 +150,10 @@ class Checker {
 		ast_exp.dispatchExp!((auto ref e){
 			this.implExpr(e);
 		})(e);
+		if(e.isDeterministic()) {
+			// for assertions
+			e.eval();
+		}
 	}
 
 	void visType(ast_exp.Expression e) {
