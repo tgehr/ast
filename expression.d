@@ -1679,7 +1679,9 @@ class WithExp: Expression{
 		this.isIndices=isIndices;
 	}
 	override WithExp copyImpl(CopyArgs args){
-		return new WithExp(trans.copy(args),bdy.copy(args),isIndices);
+		auto r=new WithExp(trans.copy(args),bdy.copy(args),isIndices);
+		if(isIndices&&itrans) r.itrans=itrans.copy(args);
+		return r;
 	}
 	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()); }
 	override @property string kind(){ return "with"; }
