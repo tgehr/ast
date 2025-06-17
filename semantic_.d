@@ -867,11 +867,11 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		loopVarDecl.sstate=SemState.completed;
 		auto loopParams=[q(loopVarId,cast(Declaration)loopVarDecl,loopVarType,true)];
 	}else static assert(0);
-	Expression.CopyArgs cargsDefault={ preserveRenames: sc };
+	Expression.CopyArgs cargsDefault;
 	//imported!"util.io".writeln(constParams,movedParams,nsbdy);
-	Identifier[] ids(Q!(Id,Declaration,Expression,bool)[] prms,bool checkDefined=false,bool renamed=true){
+	Identifier[] ids(Q!(Id,Declaration,Expression,bool)[] prms,bool checkDefined){
 		return prms.map!((p){
-			auto id=new Identifier(renamed?p[0]:p[1].name.id);
+			auto id=new Identifier(p[1].name.id);
 			id.loc=p[1].loc;
 			if(!checkDefined||!sc.canInsert(p[1].name.id)) return id;
 			return null;
@@ -896,7 +896,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	foreach(i,p;allParams){
 		bool isConst=i<loopParams.length+constParams.length;
 		bool mayChange=p[3];
-		auto id=isConst&&mayChange?freshName:p[0];
+		auto id=isConst&&mayChange?freshName:p[1].name.id;
 		auto pname=new Identifier(id);
 		pname.loc=p[1].loc;
 		if(isConst&&mayChange) constTmpNames~=pname.copy(cargsDefault);
@@ -905,7 +905,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		param.loc=p[1].loc;
 		params~=param;
 	}
-	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams)).array);
+	auto paramTmpTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,false)).array);
 	DefineExp constParamDef=null;
 	if(constTmpNames.length){
 		static if(is(T==ForExp)) auto tmpNames=constTmpNames[loopParams.length..$];
@@ -914,7 +914,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		constTmpTpl.loc=loop.loc;
 		static if(is(T==ForExp)) auto cParams=constParams;
 		else auto cParams=loopConstParams;
-		auto constTpl=new TupleExp(cast(Expression[])ids(cParams.filter!(p=>p[3]).array));
+		auto constTpl=new TupleExp(cast(Expression[])ids(cParams.filter!(p=>p[3]).array,false));
 		constTpl.loc=loop.loc;
 		constParamDef=new DefineExp(constTpl,constTmpTpl);
 		constParamDef.loc=loop.loc;
@@ -1058,7 +1058,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto ncond=new LtExp(loopVarName,numName.copy(cargsDefault));
 		ncond.loc=loop.loc;
 	}else static assert(0,"unsupported type of loop for lowering: ",T);
-	auto paramTpl=new TupleExp(cast(Expression[])ids(allParams));
+	auto paramTpl=new TupleExp(cast(Expression[])ids(allParams,false));
 	paramTpl.loc=loop.loc;
 	static if(is(T==ForExp)){{
 		auto loopVar=constTmpNames[0].copy(cargsDefault);
@@ -1080,7 +1080,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	retName.loc=loop.loc;
 	auto nbdy=loop.bdy.copy(cargsDefault);
 	static if(is(T==ForExp)){
-		auto lhs=cast(Expression[])ids(loopParams);
+		auto lhs=cast(Expression[])ids(loopParams,false);
 		if(loopParams[0][3]&&loopParams[0][2]!is loopVarType){
 			auto tae=new TypeAnnotationExp(lhs[0],loopVarType,TypeAnnotationType.coercion);
 			tae.loc=lhs[0].loc;
@@ -1197,22 +1197,22 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){
-		auto paramTpl2=new TupleExp([cast(Expression)leftName.copy(cargsDefault)]~cast(Expression[])ids(constMovedParams,false,false));
+		auto paramTpl2=new TupleExp([cast(Expression)leftName.copy(cargsDefault)]~cast(Expression[])ids(constMovedParams,false));
 	}else static if(is(T==RepeatExp)){
 		auto zero=LiteralExp.makeInteger(0);
 		zero.loc=loop.loc;
-		auto paramTpl2=new TupleExp([cast(Expression)zero]~cast(Expression[])ids(constMovedParams,false,false));
+		auto paramTpl2=new TupleExp([cast(Expression)zero]~cast(Expression[])ids(constMovedParams,false));
 	}else{
-		auto paramTpl2=new TupleExp(cast(Expression[])ids(allParams,false,false));
+		auto paramTpl2=new TupleExp(cast(Expression[])ids(allParams,false));
 	}
 	paramTpl2.loc=loop.loc;
 	auto ce2=new CallExp(cee.copy(cargsDefault),paramTpl2,false,false);
 	ce2.loc=loop.loc;
 	static if(returnOnlyMoved){
-		auto defTpl=new TupleExp(cast(Expression[])ids(movedParams,true,false));
+		auto defTpl=new TupleExp(cast(Expression[])ids(movedParams,true));
 		defTpl.loc=movedTpl.loc;
 	}else{
-		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,true,false)).array);
+		auto defTpl=new TupleExp(cast(Expression[])chain(constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
 	Expression[] stmts=[fd];
@@ -1222,7 +1222,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		stmts~=def;
 		static if(!returnOnlyMoved){
 			if(constTmpNames[loopParams.length..$].length){
-				auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[3]).array,false,false));
+				auto assgnTpl1=new TupleExp(cast(Expression[])ids(constParams.filter!(p=>p[3]).array,false));
 				assgnTpl1.loc=loop.loc;
 				auto assgnTpl2=new TupleExp(cast(Expression[])constTmpNames[loopParams.length..$].map!(id=>id.copy(cargsDefault)).array);
 				assgnTpl2.loc=loop.loc;

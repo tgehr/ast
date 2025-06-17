@@ -14,9 +14,6 @@ abstract class Declaration: Expression{
 		this.type=unit;
 	}
 	protected Identifier copyNameImpl(CopyArgs args){
-		if(args.preserveRenames){
-			if(rename) return rename.copy(args);
-		}
 		return name?name.copy(args):null;
 	}
 	override @property string kind(){ return "declaration"; }
