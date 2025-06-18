@@ -920,6 +920,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		constParamDef.loc=loop.loc;
 	}
 	bool isInfinite=false;
+	bool isCertainReturn=definitelyReturns(loop.bdy);
 	static if(is(T==WhileExp)){
 		isInfinite=isTrue(loop.cond);
 		auto ncond=loop.cond.copy(cargsDefault);
@@ -1101,7 +1102,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		}
 	}
 
-	if(!definitelyReturns(loop.bdy)){
+	if(!isCertainReturn){
 		auto thene=new DefineExp(retName,ce);
 		thene.loc=ce.loc;
 		nbdy.s~=thene;
@@ -1187,10 +1188,13 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	}else bdy=nbdy;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
-	auto ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
-	ret.loc=loop.loc;
+	Expression ret=null;
+	if(!isInfinite||!isCertainReturn){
+		ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
+		ret.loc=loop.loc;
+	}
 	auto cmpbdy=cast(CompoundExp)bdy;
-	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s~ret:[bdy,ret]));
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
 	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
 	fd.annotation=pure_;
