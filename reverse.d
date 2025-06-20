@@ -110,7 +110,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 		if(ce.isSquare!=ft.isSquare) return false;
 		if(ce.checkReverse&&!unchecked){
 			auto r=reverseCallRewriter(ft,ce.loc);
-			if(r.movedType.hasClassicalComponent()||r.returnType.hasClassicalComponent()){
+			if(r.movedType.hasClassicalComponent()){
 				return false;
 			}
 		}
@@ -664,10 +664,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		auto r=reverseCallRewriter(ft,f.loc);
 		if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
-			return error();
-		}
-		if(!unchecked&&!needWrapper&&r.returnType.hasClassicalComponent()){
-			sc.error("reversed function cannot have classical components in return value", f.loc);
 			return error();
 		}
 		Expression newlhs;

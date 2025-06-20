@@ -1784,10 +1784,6 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 						sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
 						ok=false;
 					}
-					if(ce.checkReverse&&r.returnType.hasClassicalComponent()){
-						sc.error("reversed function cannot have classical components in return value", f.loc);
-						ok=false;
-					}
 					ce.type=ft.cod;
 					if(context.type&&!isSubtype(context.type,ce.type)){
 						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
@@ -3946,10 +3942,6 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		}
 		if(check&&r.movedType.hasClassicalComponent()){
 			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
-			errors=true;
-		}
-		if(check&&r.returnType.hasClassicalComponent()){
-			sc.error("reversed function cannot have classical components in return value", f.loc);
 			errors=true;
 		}
 		if(errors) return null;
