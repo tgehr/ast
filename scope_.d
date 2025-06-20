@@ -308,25 +308,48 @@ abstract class Scope{
 		static struct TrackedTemporary{
 			Expression expr;
 			Dependency dep;
+			Identifier read; // for recordConstBlockedConsumption
 			TrackedTemporary dup(){
 				return TrackedTemporary(expr,dep.dup);
 			}
 		}
 		final bool trackTemporary(Expression expr){
+			//imported!"util.io".writeln("TRACKING: ",expr," ",expr.loc);
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(expr,this);
 			if(dep.isTop) return false;
 			trackedTemporaries~=TrackedTemporary(expr,dep);
 			return true;
 		}
+		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
+			assert(read.meaning&&read is isConst(read.meaning));
+			assert(canForget(read.meaning),text(read.loc," ",use.loc));
+		}do{
+			import ast.semantic_:getDependency;
+			auto dep=getDependency(read,read.scope_);
+			assert(!dep.isTop);
+			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
+		}
 		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries){
+			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries);
 			bool success=true;
 			foreach(tt;trackedTemporaries){
 				if(!tt.dep.isTop) continue;
+				success=false;
+				if(auto id=cast(Identifier)tt.expr){
+					if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
+						assert(tt.read&&tt.read.meaning);
+						blockConst(tt.read.meaning,tt.read); // TODO: why neede?
+						if(checkConsumable(id,tt.read.meaning))
+							assert(tt.read.meaning.isSemError);
+						id.setSemForceError();
+						id.meaning.setSemForceError();
+						continue;
+					}
+				}
 				import ast.semantic_:nonLiftedError;
 				nonLiftedError(tt.expr,this);
 				tt.expr.setSemError();
-				success=false;
 			}
 			return success;
 		}
@@ -437,6 +460,10 @@ abstract class Scope{
 			symtabInsert(cd);
 	}
 	final Declaration consume(Declaration decl,Identifier use){
+		if(use&&!decl.isSemError&&!use.isSemError){
+			if(auto read=isConst(decl))
+				recordConstBlockedConsumption(read,use);
+		}
 		if(rnsymtab.get(decl.getId,null) !is decl) return null;
 		if(cast(DeadDecl)decl) return null;
 		Expression type;
@@ -447,7 +474,7 @@ abstract class Scope{
 	}do{
 		if(decl.scope_ is this) return true;
 		auto vd=cast(VarDecl)decl;
-		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)) return false;
+		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)&&!canForget(decl)) return false;
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
@@ -562,6 +589,40 @@ abstract class Scope{
 		return rnsym?rnsymtab.get(name,null):symtab.get(name,null);
 	}
 
+	final bool checkConsumable(Identifier id,Declaration meaning=null)in{
+		assert(id.meaning||meaning);
+	}do{
+		if(!meaning) meaning=id.meaning;
+		if(id.isSemError||meaning&&meaning.isSemError) return true;
+		assert(!!meaning);
+		if(auto vd=cast(VarDecl)meaning){
+			if(vd.typeConstBlocker){
+				error(format("cannot consume 'const' variable '%s'",id), id.loc);
+				id.setSemError();
+				vd.setSemForceError();
+				import ast.semantic_:typeConstBlockNote;
+				typeConstBlockNote(vd,this);
+				return false;
+			}
+		}
+		if(canForget(meaning))
+			return true;
+		if(auto read=isConst(meaning)){
+			error(format("cannot consume 'const' variable '%s'",id), id.loc);
+			note("variable was made 'const' here", read.loc);
+			id.setSemForceError();
+			meaning.setSemForceError();
+			return false;
+		}else if(meaning.isConst){
+			error(format("cannot consume 'const' variable '%s'",id), id.loc);
+			note("declared 'const' here", meaning.loc);
+			id.setSemForceError();
+			meaning.setSemForceError();
+			return false;
+		}
+		return true;
+	}
+
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
@@ -572,31 +633,14 @@ abstract class Scope{
 			if(!meaning) return meaning;
 			if(kind==Lookup.consuming){
 				bool doConsume=true;
-				if(auto vd=cast(VarDecl)meaning){
-					if(vd.typeConstBlocker){
-						error(format("cannot consume 'const' variable '%s'",id), id.loc);
-						import ast.semantic_:typeConstBlockNote;
-						typeConstBlockNote(vd,this);
-						doConsume=false;
-					}
-				}
 				if(doConsume){
-					if(auto read=isConst(meaning)){
-						error(format("cannot consume 'const' variable '%s'",id), id.loc);
-						note("variable was made 'const' here", read.loc);
-						id.setSemError();
+					if(!checkConsumable(id,meaning))
 						doConsume=false;
-					}else if(meaning.isConst){
-						error(format("cannot consume 'const' variable '%s'",id), id.loc);
-						note("declared 'const' here", meaning.loc);
-						id.setSemError();
-						doConsume=false;
+					if(doConsume&&meaning.scope_){
+						assert(!meaning.isConst);
+						if(auto nmeaning=consume(meaning,id))
+							meaning=nmeaning;
 					}
-				}
-				if(doConsume&&meaning.scope_){
-					assert(!meaning.isConst);
-					if(auto nmeaning=consume(meaning,id))
-						meaning=nmeaning;
 				}
 			}
 			static if(language==silq)
@@ -659,15 +703,17 @@ abstract class Scope{
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
-				if(auto read=isConst(d)){
+				if(!canSplit(d)){
 					if(!d.isSemError()){
-						error(format("cannot forget 'const' variable '%s'",d), d.loc);
-						note("variable was made 'const' here", read.loc);
-						d.setSemForceError();
-						errors=true;
+						if(auto read=isConst(d)){
+							error(format("cannot forget 'const' variable '%s'",d), d.loc);
+							note("variable was made 'const' here", read.loc);
+							d.setSemForceError();
+							errors=true;
+						}
 					}
+					continue;
 				}
-				if(!canSplit(d)) continue;
 				if(d.scope_.getFunction() !is getFunction()) continue;
 				d=split(d,null);
 				assert(d.scope_ is this);
@@ -681,7 +727,15 @@ abstract class Scope{
 					d.setSemForceError();
 					errors=true;
 				}else{
-					consume(d,null);
+					Identifier use=null;
+					if(isConst(d)){
+						use=new Identifier(d.getName);
+						use.constLookup=false;
+						static if(is(T==Scope)) use.loc=d.loc;
+						else use.loc=loc.loc;
+						use.sstate=SemState.completed;
+					}
+					consume(d,use);
 					clearConsumed();
 				}
 			}
@@ -771,6 +825,7 @@ abstract class Scope{
 		}
 		final void pushDependencies(Declaration decl,bool keep){
 			dependencies.pushUp(decl,keep);
+			this.pushUp(controlDependency,decl);
 			foreach(ref tt;trackedTemporaries)
 				this.pushUp(tt.dep,decl);
 			if(keep) toRemove~=decl;
@@ -778,7 +833,7 @@ abstract class Scope{
 
 		bool canForget(Declaration decl){
 			if(decl.isSemError()) return true;
-			assert(decl.isSemCompleted(),text(decl," ",decl.sstate));
+			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&decl.isSemStarted(),text(decl," ",decl.sstate));
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
@@ -955,7 +1010,8 @@ abstract class Scope{
 								sc.addDefaultDependency(osym); // TODO: ideally can be removed
 							//sc.dependencies.replace(osym,sym); // reverse-inherit dependencies
 							auto dep=sc.getDependency(osym);
-							dep.joinWith(sc.controlDependency);
+							// dep.joinWith(sc.controlDependency); // TODO
+							dep.joinWith(nestedControlDependency);
 							sc.addDependency(sym,dep);
 							sc.pushDependencies(osym,false);
 						}

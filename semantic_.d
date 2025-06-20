@@ -1532,6 +1532,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	if(e.isSemCompleted()) return e;
 	static if(language==silq){
 		scope(exit){
+			//imported!"util.io".writeln("RESETTING AFTER: ",e);
 			if(!sc.resetConst())
 				e.setSemForceError();
 			sc.clearConsumed();
@@ -3130,7 +3131,7 @@ bool isNonConstVar(Declaration decl,Scope sc){
 	return true;
 }
 
-bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){
+bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){ // TODO: also use this for variables that were originally forgettable
 	if(isNonConstVar(meaning,sc)) return true;
 	auto vd=cast(VarDecl)meaning;
 	if(vd&&(vd.isConst||vd.typeConstBlocker||sc.isConst(vd))){
@@ -3365,8 +3366,11 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	checkIndexReplacement(ae,sc);
 	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,ae.loc,sc,false))
+			if(!checkAssignable(id.meaning,ae.loc,sc,false)){
+				id.setSemForceError();
+				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
+			}
 		}else if(auto tpl=cast(TupleExp)lhs){
 			if(indexed){
 				sc.error("cannot index into tuple expression in left-hand side of assignment",lhs.loc);
@@ -3630,8 +3634,11 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be)))
+			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be))){
+				id.setSemForceError();
+				if(id.meaning) id.meaning.setSemForceError();
 				be.setSemError();
+			}
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);
 		}else if(auto fe=cast(FieldExp)lhs){
@@ -4624,7 +4631,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		}
 	}else if(!canForgetImplicitly&&!fe.isSemError()){
 		static if(language==silq){
-			sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.loc);
+			sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
 		}else{
 			sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
 		}
