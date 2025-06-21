@@ -3263,7 +3263,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 		return null;
 	}
 	bool checkBounds(Expression index,ℤ len){
-		if(auto lit=index.asIntegerConstant(true)){
+		if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
 			auto c=lit.get();
 			if(c<0||c>=len){
 				if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",aty,len),index.loc);
@@ -3292,7 +3292,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 		return check(Bool(idxInt.isClassical), index, index.type, index.loc);
 	}else if(auto tt=cast(TupleTy)aty){
 		Expression checkTpl(Expression index){
-			if(auto lit=index.asIntegerConstant(true)){
+			if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
 					if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",tt,tt.types.length),index.loc);
@@ -5399,7 +5399,7 @@ Expression expressionSemanticImpl(VectorTy ve, ExpSemContext context){
 	propErr(ve.next, ve);
 	propErr(ve.num, ve);
 
-	if(!isSubtype(ve.num.type, ℕt(true))){
+	if(ve.num.type && !isSubtype(ve.num.type, ℕt(true))){
 		sc.error(format("vector length should be of type !ℕ, not %s", ve.num.type), ve.num.loc);
 		ve.sstate = SemState.error;
 	}
@@ -5625,6 +5625,26 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 			auto npow=new PowExp(elemTy,pow.e2);
 			npow.loc=pow.loc;
 			return npow;
+		}
+	}
+	if(auto idx=cast(IndexExp)wildcards){
+		if(idx.isArraySyntax&&cast(WildcardExp)idx.e){
+			Expression elemTy=null;
+			if(auto aty=cast(ArrayTy)analyzed)
+				elemTy=aty.next;
+			if(auto vty=cast(VectorTy)analyzed)
+				elemTy=vty.next;
+			if(auto tpl=analyzed.isTupleTy){
+				foreach(i;0..tpl.length){
+					elemTy=joinTypes(elemTy, tpl[i]);
+					if(!elemTy) break;
+				}
+			}
+			if(!elemTy) return null;
+			auto nidx=new IndexExp(elemTy,idx.a);
+			nidx.isArraySyntax=true;
+			nidx.loc=idx.loc;
+			return nidx;
 		}
 	}
 	return null;

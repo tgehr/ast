@@ -114,6 +114,237 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 	enforce(0,text("unsupported lowering arity: ",types));
 	assert(0);
 }
+Expression makeComparisonCall(string name,Expression original,Expression[] args,Location loc,ExpSemContext context)in{
+	assert(args.length==2);
+}do{
+	Expression.CopyArgs cargs={ preserveMeanings: true };
+	auto e0=args[0],e1=args[1];
+	if(!cast(TupleTy)e0.type&&!cast(ArrayTy)e0.type&&!cast(VectorTy)e0.type){
+		assert(!cast(TupleTy)e1.type&&!cast(ArrayTy)e1.type&&!cast(VectorTy)e1.type);
+		return makeFunctionCall(OB.comparison,name,original,args,loc,context);
+	}
+	Expression makeConst(bool b){
+		auto r=LiteralExp.makeBoolean(b);
+		r.loc=loc;
+		return r;
+	}
+	Expression makeMismatch(Expression b0,Expression b1){
+		if(cast(EqExp)original){
+			if(!b0||!b1) return makeConst(true);
+			return makeConst(false);
+		}else if(cast(NeqExp)original){
+			if(!b0||!b1) return makeConst(false);
+			return makeConst(true);
+		}else if(cast(LeExp)original){
+			if(!b0||!b1) return makeConst(true);
+			auto r=new LtExp(b0.copy(cargs),b1.copy(cargs));
+			r.loc=loc;
+			return r;
+		}else if(cast(LtExp)original){
+			if(!b0||!b1) return makeConst(false);
+			auto r=new LtExp(b0.copy(cargs),b1.copy(cargs));
+			r.loc=loc;
+			return r;
+		}else if(cast(GeExp)original){
+			if(!b0||!b1) return makeConst(true);
+			auto r=new GtExp(b0.copy(cargs),b1.copy(cargs));
+			r.loc=loc;
+			return r;
+		}else if(cast(GtExp)original){
+			if(!b0||!b1) return makeConst(false);
+			auto r=new GtExp(b0.copy(cargs),b1.copy(cargs));
+			r.loc=loc;
+			return r;
+		}else assert(0);
+	}
+	Parameter makeParam(Expression arg){
+		auto name=new Identifier(freshName());
+		name.loc=arg.loc;
+		auto dtype=arg.type.copy(cargs);
+		dtype.loc=arg.loc;
+		auto r=new Parameter(true,name,dtype);
+		r.loc=arg.loc;
+		return r;
+	}
+	auto params=[makeParam(e0),makeParam(e1)];
+	auto p0=params[0].name.copy(cargs),p1=params[1].name.copy(cargs);
+	p0.type=e0.type,p1.type=e1.type;
+	Expression[] body_;
+	auto doneName=new Identifier(freshName());
+	doneName.loc=loc;
+	auto ddef=new DefineExp(doneName,makeConst(false));
+	ddef.loc=loc;
+	body_~=ddef;
+	auto resultName=new Identifier(freshName());
+	resultName.loc=loc;
+	auto rdef=new DefineExp(resultName,makeConst(false));
+	rdef.loc=loc;
+	body_~=rdef;
+	void checkDone(ref Expression[] s,Expression e){
+		auto cond=new UNotExp(doneName.copy(cargs));
+		cond.loc=e.loc;
+		CompoundExp then;
+		if(auto ce=cast(CompoundExp)e){
+			then=ce;
+		}else{
+			then=new CompoundExp([e]);
+			then.loc=e.loc;
+		}
+		auto r=new IteExp(cond,then,null);
+		r.loc=e.loc;
+		s~=r;
+	}
+	void stm(ref Expression[] s,Expression e){
+		// s~=e;
+		checkDone(s,e);
+	}
+	void ret(ref Expression[] s,Expression e,bool check=false){
+		/+auto r=new ReturnExp(e);
+		r.loc=e.loc;
+		stm(s,r);+/
+		auto cond=new UNotExp(doneName.copy(cargs));
+		cond.loc=e.loc;
+		auto sdone=new AssignExp(doneName.copy(cargs),makeConst(true));
+		sdone.loc=e.loc;
+		if(!check) s~=sdone;
+		auto sret=new AssignExp(resultName.copy(cargs),e);
+		sret.loc=e.loc;
+		if(!check) s~=sret;
+		else{
+			auto ce=new CompoundExp([sdone,sret]);
+			ce.loc=e.loc;
+			checkDone(s,ce);
+		}
+	}
+	void iterate(ref Expression[] body_,Expression p0,Expression p1){
+		Expression[] r;
+		static Expression makeIndex(Expression p,Expression t,Expression i){
+			auto r=new IndexExp(p,i);
+			r.loc=p.loc;
+			r.type=indexType(t,i);
+			assert(!!r.type,text(p," ",t," ",i," ",r," ",r.type));
+			return r;
+		}
+		auto tt0=p0.type.isTupleTy(),tt1=p1.type.isTupleTy();
+		if(tt0&&tt1&&(cast(TupleTy)tt0||cast(TupleTy)tt1)){
+			foreach(i;0..min(tt0.length,tt1.length)){
+				auto i0=LiteralExp.makeInteger(i);
+				i0.loc=loc;
+				auto i1=LiteralExp.makeInteger(i);
+				i1.loc=loc;
+				auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+				iterate(body_,np0,np1);
+			}
+			return;
+		}
+		Expression next0=null,next1=null;
+		if(auto vt0=cast(VectorTy)p0.type) next0=vt0.next;
+		else if(auto at0=cast(ArrayTy)p0.type) next0=at0.next;
+		if(auto vt1=cast(VectorTy)p1.type) next1=vt1.next;
+		else if(auto at1=cast(ArrayTy)p1.type) next1=at1.next;
+		void doComparison(ref Expression[] body_,Expression p0,Expression p1){
+			auto cond=new NeqExp(p0.copy(cargs),p1.copy(cargs));
+			cond.loc=loc;
+			Expression[] bdy;
+			ret(bdy,makeMismatch(p0,p1));
+			auto then=new CompoundExp(bdy);
+			then.loc=loc;
+			auto ite=new IteExp(cond,then,null);
+			ite.loc=loc;
+			stm(body_,ite);
+		}
+		if((next0||tt0)&&(next1||tt1)){
+			auto lenName=new Identifier(Id.s!"length");
+			lenName.loc=loc;
+			auto len0=new FieldExp(p0.copy(cargs),lenName);
+			len0.loc=loc;
+			auto len1=new FieldExp(p1.copy(cargs),lenName.copy(cargs));
+			len1.loc=loc;
+			Expression len;
+			if(cast(EqExp)original||cast(NeqExp)original){
+				auto cond=new NeqExp(len0,len1);
+				cond.loc=loc;
+				Expression[] s;
+				ret(s,makeConst(!!cast(NeqExp)original));
+				auto then=new CompoundExp(s);
+				then.loc=loc;
+				auto ite=new IteExp(cond,then,null);
+				ite.loc=loc;
+				stm(body_,ite);
+				len=len0.copy(cargs);
+			}else if(next0&&next1){
+				auto cond=new LeExp(len0.copy(cargs),len1.copy(cargs));
+				cond.loc=loc;
+				auto then=new CompoundExp([len0.copy(cargs)]),othw=new CompoundExp([len1.copy(cargs)]);
+				then.loc=loc,othw.loc=loc;
+				auto minExp=new IteExp(cond,then,othw);
+				minExp.loc=loc;
+				len=minExp;
+			}else{
+				assert(!!tt0^!!tt1);
+				len=tt0?len1.copy(cargs):len0.copy(cargs);
+			}
+			if(next0&&next1){
+				auto i0=new Identifier(freshName());
+				i0.loc=loc;
+				i0.type=ℤt(true);
+				auto i1=new Identifier(i0.id);
+				i1.loc=loc;
+				i1.type=ℤt(true);
+				// TODO: in principle runtime indexing could fail for tuples even if comparable to non-tuple
+				auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+				Expression[] s;
+				iterate(s,np0,np1);
+				auto forBdy=new CompoundExp(s);
+				forBdy.loc=loc;
+				auto for_=new ForExp(i0.copy(cargs),false,makeConst(0),null,true,len,forBdy);
+				for_.loc=loc;
+				stm(body_,for_);
+			}else{
+				assert(!!tt0^!!tt1);
+				auto clen=tt0?tt0.length:tt1.length;
+				foreach(i;0..clen){
+					auto bound=LiteralExp.makeInteger(i);
+					bound.loc=loc;
+					auto cond=new LtExp(bound,len.copy(cargs));
+					cond.loc=loc;
+					Expression[] s;
+					auto i0=LiteralExp.makeInteger(i);
+					i0.loc=loc;
+					auto i1=LiteralExp.makeInteger(i);
+					i1.loc=loc;
+					auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+					iterate(s,np0,np1);
+					auto then=new CompoundExp(s);
+					then.loc=loc;
+					auto ite=new IteExp(cond,then,null);
+					ite.loc=loc;
+					body_~=ite;
+				}
+			}
+			if(!(cast(EqExp)original||cast(NeqExp)original))
+				doComparison(body_,len0.copy(cargs),len1.copy(cargs));
+		}else doComparison(body_,p0,p1);
+	}
+	iterate(body_,p0,p1);
+	ret(body_,makeMismatch(null,null),true);
+	auto r=new ReturnExp(resultName.copy(cargs));
+	r.loc=loc;
+	body_~=r;
+	auto fbdy=new CompoundExp(body_);
+	fbdy.loc=loc;
+	auto fd=new FunctionDef(null,params,true,null,fbdy);
+	fd.annotation=Annotation.qfree;
+	fd.loc=loc;
+	auto lambda=new LambdaExp(fd);
+	lambda.fd=lambda.orig.copy(cargs); // TODO: this is a hack, also, need to insert captures
+	lambda.loc=loc;
+	auto arg=new TupleExp(args);
+	arg.loc=loc;
+	auto ce=new CallExp(lambda,arg,false,false);
+	ce.loc=loc;
+	return expressionSemantic(ce,context);
+}
 
 Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression original,Expression[] args,Location loc,ExpSemContext context){
 	foreach(arg;args){
@@ -132,9 +363,13 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 		arg=new TupleExp(args);
 		arg.loc=loc;
 	}else arg=args[0];
-	auto fullName=name~"_"~getSuffix(behavior,name,args.map!(x=>x.type));
-	Expression fun=getOperatorSymbol(fullName,loc,sc);
-	enforce(!!fun,text("function prototype for lowering not found: ",fullName));
+	Expression fun=null;
+	string fullName="";
+	if(!fun){
+		fullName=name~"_"~getSuffix(behavior,name,args.map!(x=>x.type));
+		fun=getOperatorSymbol(fullName,loc,sc);
+		enforce(!!fun,text("function prototype for lowering not found: ",fullName));
+	}
 	bool isSquare=false,isClassical=false;
 	if(behavior==OB.cat){ // TODO: implicitly fill multiple square argument lists
 		if(fullName=="__cat_t"){
@@ -173,12 +408,12 @@ Expression getLowering(PowExp pe,ExpSemContext context){ return makeFunctionCall
 
 Expression getLowering(CatExp ce,ExpSemContext context){ return makeFunctionCall(OB.cat,"__cat",ce,[ce.e1,ce.e2],ce.loc,context); }
 
-Expression getLowering(LtExp lt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__lt",lt,[lt.e1,lt.e2],lt.loc,context); }
-Expression getLowering(LeExp le,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__le",le,[le.e1,le.e2],le.loc,context); }
-Expression getLowering(GtExp gt,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__gt",gt,[gt.e1,gt.e2],gt.loc,context); }
-Expression getLowering(GeExp ge,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__ge",ge,[ge.e1,ge.e2],ge.loc,context); }
-Expression getLowering(EqExp eq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__eq",eq,[eq.e1,eq.e2],eq.loc,context); }
-Expression getLowering(NeqExp neq,ExpSemContext context){ return makeFunctionCall(OB.comparison,"__neq",neq,[neq.e1,neq.e2],neq.loc,context); }
+Expression getLowering(LtExp lt,ExpSemContext context){ return makeComparisonCall("__lt",lt,[lt.e1,lt.e2],lt.loc,context); }
+Expression getLowering(LeExp le,ExpSemContext context){ return makeComparisonCall("__le",le,[le.e1,le.e2],le.loc,context); }
+Expression getLowering(GtExp gt,ExpSemContext context){ return makeComparisonCall("__gt",gt,[gt.e1,gt.e2],gt.loc,context); }
+Expression getLowering(GeExp ge,ExpSemContext context){ return makeComparisonCall("__ge",ge,[ge.e1,ge.e2],ge.loc,context); }
+Expression getLowering(EqExp eq,ExpSemContext context){ return makeComparisonCall("__eq",eq,[eq.e1,eq.e2],eq.loc,context); }
+Expression getLowering(NeqExp neq,ExpSemContext context){ return makeComparisonCall("__neq",neq,[neq.e1,neq.e2],neq.loc,context); }
 
 Expression getLowering(BitOrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__orb",oe,[oe.e1,oe.e2],oe.loc,context); }
 Expression getLowering(BitXorExp xe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__xorb",xe,[xe.e1,xe.e2],xe.loc,context); }

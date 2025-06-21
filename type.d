@@ -641,7 +641,8 @@ class VectorTy: Type, ITupleTy{
 		this.num=num;
 	}
 	override ITupleTy isTupleTy(){
-		if(cast(LiteralExp)num) return this;
+		if(auto len=num.asIntegerConstant())
+			if(len.get()<=size_t.max) return this;
 		return null;
 	}
 	override VectorTy copyImpl(CopyArgs args){
