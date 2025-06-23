@@ -1690,12 +1690,11 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 	assert(num&&isSubtype(num.type,ℕt(true)));
 }do{
 	if(isQNumeric(e)) return qnumericTy;
-	auto nlit=num.asIntegerConstant();
-	if(nlit){
-		if(nlit.get()==0) return utypeTy;
-		else if(isEmpty(e)) return etypeTy;
-	}else{
-		if(isEmpty(e)) return utypeTy;
+	auto nume=num.eval();
+	if(isZero(nume)) return utypeTy;
+	if(isEmpty(e)){
+		if(isNonzero(nume)) return etypeTy;
+		return utypeTy;
 	}
 	return e.type;
 }

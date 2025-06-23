@@ -487,7 +487,7 @@ class LiteralExp: Expression{
 bool isZero(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type));
+	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() == 0;
 	return false;
@@ -495,7 +495,7 @@ bool isZero(Expression e, bool eval=false){
 bool isOne(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type));
+	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() == 1;
 	return false;
@@ -503,7 +503,7 @@ bool isOne(Expression e, bool eval=false){
 bool isNonzero(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type));
+	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() != 0;
 	return false;
@@ -511,7 +511,7 @@ bool isNonzero(Expression e, bool eval=false){
 bool isPositive(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type));
+	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() > 0;
 	return false;
@@ -519,13 +519,13 @@ bool isPositive(Expression e, bool eval=false){
 bool isFalse(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type) == NumericType.Bool);
+	assert(isNumericTy(e.type) == NumericType.Bool||isEmpty(e.type));
 	return isZero(e, eval);
 }
 bool isTrue(Expression e, bool eval=false){
 	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type) == NumericType.Bool);
+	assert(isNumericTy(e.type) == NumericType.Bool||isEmpty(e.type));
 	return isOne(e, eval);
 }
 
