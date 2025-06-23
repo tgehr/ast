@@ -287,7 +287,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.FunctionDef e) {
-		checkFunction(e, this);
+		checkFunction(e);
 		getFunc(e, e.capturedDecls, false, e);
 		defineVar(e, "function definition", e);
 		return StmtResult.MayPass;
@@ -624,7 +624,7 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {
-		checkFunction(e.fd, this);
+		checkFunction(e.fd);
 		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
 	}
 
@@ -1134,9 +1134,9 @@ class Checker {
 	Unit[void*] checked;
 }
 
-void checkFunction(ast_decl.FunctionDef fd, Checker parent = null) {
+void checkFunction(ast_decl.FunctionDef fd) {
 	assert(fd.sstate == ast_exp.SemState.completed);
-	auto sc = new Checker(fd.fscope_, parent);
+	auto sc = new Checker(fd.fscope_, null);
 
 	foreach(decl; fd.capturedDecls) {
 		if(!fd.isConsumedCapture(decl)) sc.strictScope = false;
