@@ -171,14 +171,21 @@ class Checker {
 		visExpr(e);
 	}
 
-	ast_exp.Expression visLoweringExpr(E)(E from) {
+	ast_exp.Expression lowerExpr(E)(E from) {
 		auto constResult = from.constLookup?ast_sem.ConstResult.yes:ast_sem.ConstResult.no;
 		auto to = ast_low.getLowering(from, ast_sem.ExpSemContext(nscope, constResult, ast_sem.InType.no));
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
-		visExpr(to);
 		// imported!"util.io".writeln("lowered ", from, " → ", to, " ", from.type, " ", to.type);
 		assert(to.type && from.type == to.type);
 		return to;
+	}
+
+	bool visLoweredExpr(E)(E from) {
+		if(auto to = lowerExpr(from)) {
+			visExpr(to);
+			return true;
+		}
+		return false;
 	}
 
 	// Check statement, return true iff it definitely returns
@@ -203,7 +210,7 @@ class Checker {
 		assert(to.type && from.type == to.type);
 		return to;
 	}
-
+	
 	void visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) {
 		assert(e.blscope_ is nscope);
 		assert(e.s.length > 0);
@@ -982,7 +989,7 @@ class Checker {
 			expectMoved(e.e1, "concat LHS");
 			expectMoved(e.e2, "concat RHS");
 		}
-		// if(visLoweringExpr(e)) return;
+		// if(visLoweredExpr(e)) return;
 		visExpr(e.e1);
 		visExpr(e.e2);
 	}
@@ -995,8 +1002,8 @@ class Checker {
 		static if(cmpops.canFind(op)) {
 			if((ast_ty.isFixedIntTy(e.e1.type) || ast_ty.isNumericTy(e.e1.type))
 			   && (ast_ty.isFixedIntTy(e.e2.type) || ast_ty.isNumericTy(e.e2.type)))
-				if(visLoweringExpr(e)) return;
-		}else if(visLoweringExpr(e)) return;
+				if(visLoweredExpr(e)) return;
+		}else if(visLoweredExpr(e)) return;
 		visExpr(e.e1);
 		if(boolops.canFind(op)){
 			if(ast_sem.definitelyReturns(e.e2))
@@ -1008,7 +1015,7 @@ class Checker {
 	static foreach(op;unops)
 	void implExpr(ast_exp.UnaryExp!(Tok!op) e) {
 		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
-		if(visLoweringExpr(e)) return;
+		if(visLoweredExpr(e)) return;
 		visExpr(e.e);
 	}
 
