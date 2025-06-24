@@ -434,7 +434,7 @@ class TupleTy: Type,ITupleTy{
 			if(cast(FunTy)a) return "("~a.toString()~")";
 			return a.toString();
 		}
-		return types.map!(a=>a.isTupleTy()&&a!is unit?"("~a.toString()~")":addp(a)).join(" × ");
+		return types.map!(a=>a.isTupleTy()&&a!=unit?"("~a.toString()~")":addp(a)).join(" × ");
 	}
 	override bool isConstant(){ return types.all!(ty=>ty.isConstant()); }
 	override bool isTotal(){ return types.all!(ty=>ty.isTotal()); }
@@ -548,7 +548,7 @@ class ArrayTy: Type{
 		return new ArrayTy(next.copy(args));
 	}
 	override string toString(){
-		bool p=cast(FunTy)next||next.isTupleTy()&&next!is unit;
+		bool p=cast(FunTy)next||next.isTupleTy()&&next!=unit;
 		return p?"("~next.toString()~")[]":next.toString()~"[]";
 	}
 	override bool isConstant(){ return next.isConstant(); }
@@ -660,7 +660,7 @@ class VectorTy: Type, ITupleTy{
 		return vectorTy(next,len);
 	}
 	override string toString(){
-		bool p=cast(FunTy)next||next.isTupleTy&&next!is unit;
+		bool p=cast(FunTy)next||next.isTupleTy&&next!=unit;
 		bool q=!cast(Identifier)num&&!cast(LiteralExp)num; // TODO: improve
 		return (p?"("~next.toString()~")^":next.toString()~"^")~(q?"("~num.toString()~")":num.toString());
 	}
@@ -884,7 +884,7 @@ class ProductTy: Type{
 				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
 				return paramKind~a.toString();
 			}
-			d=params.map!((p){
+			d=params.empty?cod.toString():params.map!((p){
 				auto paramKind=getParamKind(p.isConst);
 				auto pty = p.vtype ? p.vtype : p.dtype;
 				auto ptup = pty.isTupleTy();
