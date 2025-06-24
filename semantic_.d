@@ -4590,7 +4590,6 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	fe.var=expressionSemantic(fe.var,context.nestConsumed);
 	propErr(fe.var,fe);
 	void classicalForget(Expression var){
-		if(var.implicitDup) return;
 		if(auto tpl=cast(TupleExp)var){
 			tpl.e.each!classicalForget;
 			return;
@@ -4666,23 +4665,15 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	assert(id.sstate!=SemState.started);
 	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
-	bool implicitDup=false;
 	void setImplicitDup()in{
 		assert(!!id.meaning);
 	}do{
-		implicitDup=!context.constResult&&!id.byRef&&!id.meaning.isLinear(); // TODO: last-use analysis
-	}
-	Expression dupIfNeeded(Identifier result){
-		assert(!implicitDup||!context.constResult);
-		if(result.constLookup) result.implicitDup=false;
-		else result.implicitDup|=implicitDup;
-		return result;
+		id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||!id.meaning.isLinear())); // TODO: last-use analysis
 	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
-		auto nonLinear=id.meaning&&(!id.byRef&&!id.meaning.isLinear()||id.meaning.isConst);
 		if(id.meaning) setImplicitDup();
-		auto lookup=nonLinear||context.constResult||implicitDup?Lookup.constant:Lookup.consuming;
+		auto lookup=context.constResult||id.implicitDup?Lookup.constant:Lookup.consuming;
 		DeadDecl[] failures;
 		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
 		if(id.isSemError()) return id;
@@ -4696,7 +4687,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				return r;
 			}
 			undefinedIdentifierError(id,failures,context.sc);
-			return dupIfNeeded(id);
+			return id;
 		}else{
 			static if(language==silq){
 				if(!id.indexedDirectly && !id.meaning.isSemError()) {
@@ -4748,7 +4739,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 		}
 	}
-	return dupIfNeeded(id);
+	return id;
 }
 
 Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
