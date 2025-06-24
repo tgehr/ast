@@ -336,8 +336,35 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	auto fd=new FunctionDef(null,params,true,null,fbdy);
 	fd.annotation=Annotation.qfree;
 	fd.loc=loc;
-	auto lambda=new LambdaExp(fd);
-	lambda.fd=lambda.orig.copy(cargs); // TODO: this is a hack, also, need to insert captures
+	void visId(Identifier id){
+		auto cur=id.meaning;
+		assert(!!cur);
+		if(cur.scope_.isNestedIn(context.sc)){
+			while(cur.splitFrom&&cur.splitFrom.scope_!is context.sc)
+				cur=cur.splitFrom;
+			assert(cur.scope_ is context.sc);
+		}
+		fd.addCapture(cur,id);
+	}
+	foreach(p;params){
+		assert(!!p.dtype);
+		foreach(id;p.dtype.freeVars)
+			visId(id);
+	}
+	Declaration[] inserted;
+	foreach(capture;fd.capturedDecls){
+		if(capture.scope_.canInsert(capture.name.id)){
+			auto origCaptureScope=capture.scope_;
+			capture.scope_=null;
+			origCaptureScope.unconsume(capture);
+			inserted~=capture;
+		}
+	}
+	scope(success)
+		foreach(capture;inserted)
+			capture.scope_.consume(capture,null);
+	auto ofd=fd.copy(cargs); // TODO: this is a hack
+	auto lambda=new LambdaExp(ofd,fd);
 	lambda.loc=loc;
 	auto arg=new TupleExp(args);
 	arg.loc=loc;

@@ -1938,8 +1938,11 @@ class LambdaExp: Expression{
 	FunctionDef orig;
 	FunctionDef fd;
 	this(FunctionDef orig){
+		this(orig,orig.copy());
+	}
+	this(FunctionDef orig,FunctionDef fd){
 		this.orig=orig;
-		this.fd=orig.copy();
+		this.fd=fd;
 	}
 	override LambdaExp copyImpl(CopyArgs args){
 		return new LambdaExp(orig);
