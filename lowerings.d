@@ -227,6 +227,10 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 		}
 		auto tt0=p0.type.isTupleTy(),tt1=p1.type.isTupleTy();
 		if(tt0&&tt1&&(cast(TupleTy)tt0||cast(TupleTy)tt1)){
+			if(tt0.length!=tt1.length&&(cast(EqExp)original||cast(NeqExp)original)){
+				ret(body_,makeConst(!!cast(NeqExp)original),true);
+				return;
+			}
 			foreach(i;0..min(tt0.length,tt1.length)){
 				auto i0=LiteralExp.makeInteger(i);
 				i0.loc=loc;
@@ -234,6 +238,13 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 				i1.loc=loc;
 				auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
 				iterate(body_,np0,np1);
+			}
+			if(tt0.length!=tt1.length){
+				if(cast(LeExp)original||cast(LtExp)original){
+					ret(body_,makeConst(tt0.length<tt1.length),true);
+				}else if(cast(GeExp)original||cast(GtExp)original){
+					ret(body_,makeConst(tt0.length>tt1.length),true);
+				}else assert(0);
 			}
 			return;
 		}
