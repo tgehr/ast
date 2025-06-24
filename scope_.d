@@ -1429,7 +1429,7 @@ class NestedScope: Scope{
 				result=added;
 				splitVar(ndecl,result);
 				static if(language==silq){
-					if(remove){ // TODO: cen we get rid of this?
+					if(remove){ // TODO: can we get rid of this?
 						if(parent.getFunction() is getFunction()){
 							if(dependencyTracked(odecl))
 								removeDependency(odecl);
