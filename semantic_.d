@@ -3238,7 +3238,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 			}
 			return next;
 		}
-		if(auto tpl=cast(TupleExp)index){
+		/+if(auto tpl=cast(TupleExp)index){
 			auto types=tpl.e.map!(e=>check(next,e,e.type,e.loc)).array;
 			if(types.all!(e=>e!is null)) return tupleTy(types);
 			return null;
@@ -3257,7 +3257,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 			auto types=tt.types.map!(ty=>check(next,null,ty,indexLoc)).array;
 			if(types.all!(e=>e!is null)) return tupleTy(types);
 			return null;
-		}
+		}+/
 		if(isEmpty(indexTy)) return bottom;
 		if(sc) sc.error(format("index should be integer, not %s",indexTy),indexLoc);
 		return null;
@@ -3270,8 +3270,8 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 				return false;
 			}
 		}
-		if(auto tpl=cast(TupleExp)index)
-			return tpl.e.all!(e=>checkBounds(e,len));
+		/+if(auto tpl=cast(TupleExp)index)
+			return tpl.e.all!(e=>checkBounds(e,len));+/
 		return true;
 	}
 	if(auto at=cast(ArrayTy)aty){
@@ -3301,11 +3301,11 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 					return tt.types[cast(size_t)c.toLong()];
 				}
 			}
-			if(auto tpl=cast(TupleExp)index){
+			/+if(auto tpl=cast(TupleExp)index){
 				auto types=tpl.e.map!(e=>checkTpl(e)).array;
 				if(types.all!(e=>e!is null)) return tupleTy(types);
 				return null;
-			}
+			}+/
 			Expression next=bottom;
 			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 			if(next) return check(next,index,index.type,index.loc);
