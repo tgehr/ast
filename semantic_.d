@@ -4670,12 +4670,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	void setImplicitDup()in{
 		assert(!!id.meaning);
 	}do{
-		implicitDup=!context.constResult&&(!id.byRef&&!id.meaning.isLinear()); // TODO: last-use analysis
+		implicitDup=!context.constResult&&!id.byRef&&!id.meaning.isLinear(); // TODO: last-use analysis
 	}
 	Expression dupIfNeeded(Identifier result){
 		assert(!implicitDup||!context.constResult);
-		if(id.calledDirectly||id.indexedDirectly)
-			result.constLookup|=implicitDup;
 		if(result.constLookup) result.implicitDup=false;
 		else result.implicitDup|=implicitDup;
 		return result;
