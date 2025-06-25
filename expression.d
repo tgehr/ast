@@ -256,6 +256,9 @@ abstract class Expression: Node{
 		if(isQuantum(this)) return this;
 		return null;
 	}
+	bool mayBeClassical(){ return isClassical(this); }
+	bool mayBeQuantum(){ return isQuantum(this); }
+
 	Annotation getAnnotation(){
 		return Annotation.none;
 	}
@@ -774,6 +777,12 @@ class Identifier: Expression{
 			return null;
 		}else return null;
 	}
+	override bool mayBeClassical(){
+		return isType(this); // could be substituted with unit type
+	}
+	override bool mayBeQuantum(){
+		return isType(this); // could be substituted with unit type
+	}
 
 	final Expression typeFromMeaning(Declaration meaning){
 		if(!meaning) return null;
@@ -1277,6 +1286,12 @@ class CallExp: Expression{
 			return null;
 		}else return null;
 	}
+	override bool mayBeClassical(){
+		return super.mayBeClassical()||isType(this); // may evaluate to unit type
+	}
+	override bool mayBeQuantum(){
+		return super.mayBeQuantum()||isType(this); // may evaluate to unit type
+	}
 
 	override Annotation getAnnotation(){
 		auto fty=cast(FunTy)e.type;
@@ -1655,6 +1670,18 @@ class IteExp: Expression{
 			r.setSemCompleted();
 			return r.eval();
 		}else return this;
+	}
+	override bool mayBeClassical(){
+		if(!cond.type||!cond.type.isClassical()) return true; // TODO: what to do here?
+		assert(then&&then.s.length==1);
+		assert(othw&&othw.s.length==1);
+		return then.s[0].mayBeClassical()||othw.s[0].mayBeClassical();
+	}
+	override bool mayBeQuantum(){
+		if(!cond.type||!cond.type.isClassical()) return true; // TODO: what to do here?
+		assert(then&&then.s.length==1);
+		assert(othw&&othw.s.length==1);
+		return then.s[0].mayBeQuantum()||othw.s[0].mayBeQuantum();
 	}
 	override Annotation getAnnotation(){
 		return min(cond.getAnnotation(), then.getAnnotation(), othw.getAnnotation());

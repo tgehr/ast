@@ -501,6 +501,8 @@ class TupleTy: Type,ITupleTy{
 		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
 		return null;
 	}
+	override bool mayBeClassical(){ return types.all!(x=>x.mayBeClassical()); }
+	override bool mayBeQuantum(){ return types.all!(x=>x.mayBeQuantum()); }
 	override int componentsImpl(scope int delegate(Expression) dg){
 		foreach(x;types) if(auto r=dg(x)) return r;
 		return 0;
@@ -614,6 +616,8 @@ class ArrayTy: Type{
 	override Expression getQuantum(){
 		return null; // length is classical
 	}
+	override bool mayBeClassical(){ return next.mayBeClassical(); }
+	override bool mayBeQuantum(){ return false; } // TODO: ok?
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(next);
 	}
@@ -750,6 +754,8 @@ class VectorTy: Type, ITupleTy{
 		if(!nnext) return null;
 		return vectorTy(nnext,num);
 	}
+	override bool mayBeClassical(){ return next.mayBeClassical(); }
+	override bool mayBeQuantum(){ return next.mayBeQuantum(); }
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(next)) return r;
 		return dg(num);
@@ -926,7 +932,7 @@ class ProductTy: Type{
 	bool argConstForReverse(size_t i){
 		if(argConst(i)) return true;
 		auto ty = argTy(i);
-		return ty.isClassical() && !ty.isQuantum();
+		return ty.isClassical() && !ty.mayBeQuantum();
 	}
 	bool argConstForSubtyping(size_t i){
 		return argConst(i) || argTy(i).isClassical;
@@ -1414,6 +1420,8 @@ class VariadicTy: Type{
 	override Expression getQuantum(){
 		return null; // TODO
 	}
+	override bool mayBeClassical(){ return true; } // TODO
+	override bool mayBeQuantum(){ return true; } // TODO
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(next);
 	}
