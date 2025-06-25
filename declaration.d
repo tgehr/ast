@@ -225,7 +225,7 @@ class FunctionDef: Declaration{
 
 	bool boolAttribute(Id attr, bool default_=false) {
 		auto p = attr in attributes;
-		if(!p) return default_;
+		if(!p||!*p) return default_;
 		auto val = *p;
 		auto num = val.asIntegerConstant();
 		if(!num) return default_; // TODO
