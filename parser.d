@@ -332,7 +332,7 @@ struct Parser{
 	Identifier parseIdentifier(){ // Identifier(null) is the error value
 		string name;
 		if(ttype==Tok!"i") name=tok.name;
-		else if(ttype==Tok!"_"){ import ast.semantic_; name=freshName().str; } // TODO: remove dependency
+		else if(ttype==Tok!"_"){ import ast.semantic_:freshName; name=freshName().str; } // TODO: remove dependency
 		else{expectErr!"identifier"(); auto e=New!Identifier(string.init); e.loc=tok.loc; return e;}
 		displayExpectErr=true;
 		auto e=New!Identifier(name);
@@ -361,6 +361,26 @@ struct Parser{
 		}
 		return res=New!Parameter(isConst,i,t);
 	}
+
+	static void liftParameters(ref Expression[] params,Location loc)in{
+		assert(params.all!(p=>!!cast(Parameter)p)); // TODO: make this unnecessary
+	}do{
+		if(!params.length){
+			enum bool isConst=true;
+			import ast.semantic_:freshName; // TODO: rmeove dependency
+			auto id=new Identifier(freshName());
+			id.loc=loc;
+			auto ty=new TupleTy([]);
+			ty.loc=loc;
+			auto param=New!Parameter(isConst,id,ty);
+			param.loc=loc;
+			params=[param];
+		}else{
+			foreach(p;cast(Parameter[])params)
+				p.isConst_=true;
+		}
+	}
+
 
 	Q!(Expression[],bool) parseArgumentList(bool nonempty=false, Entry=AssignExp, T...)(TokenType delim, T args)if(!is(Entry==Parameter)&&!is(Entry==DatParameter)){
 		return parseArgumentList!(nonempty,Entry,T)(false,delim,args);
@@ -494,10 +514,12 @@ struct Parser{
 				nextToken();
 				Expression parseProduct(){
 					bool isSquare=false;
+					auto paramLoc=tok.loc;
 					if(ttype==Tok!"[") isSquare=true;
 					expect(isSquare?Tok!"[":Tok!"(");
 					auto params=parseArgumentList!(false,Parameter)(isSquare,isSquare?Tok!"]":Tok!")");
 					expect(isSquare?Tok!"]":Tok!")");
+					paramLoc=paramLoc.to(ptok.loc);
 					Expression cod;
 					auto annotation=Annotation.none;
 					bool isLifted=false;
@@ -514,7 +536,7 @@ struct Parser{
 								nextToken();
 								annotation=Annotation.none;
 							}
-							if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
+							if(isLifted) liftParameters(params[0],paramLoc);
 						}else static if(language==psi){
 							if(ttype==Tok!"pure"){
 								nextToken();
@@ -811,11 +833,13 @@ struct Parser{
 			auto name=parseIdentifier();
 		}else Identifier name=null; // TODO
 		bool isSquare=false;
+		auto paramLoc=tok.loc;
 		if(ttype==Tok!"[") isSquare=true;
 		expect(isSquare?Tok!"[":Tok!"(");
 		auto constDefault=isSquare;
 		auto params=parseArgumentList!(false,Parameter)(constDefault,isSquare?Tok!"]":Tok!")");
 		expect(isSquare?Tok!"]":Tok!")");
+		paramLoc=paramLoc.to(ptok.loc);
 		auto annotation=Annotation.none;
 		bool inferAnnotation=true;
 		bool isLifted=false;
@@ -859,7 +883,7 @@ struct Parser{
 				annotation=Annotation.none;
 				inferAnnotation=false;
 			}
-			if(isLifted) foreach(p;cast(Parameter[])params[0]) p.isConst_=true;
+			if(isLifted) liftParameters(params[0],paramLoc);
 		}else static if(language==psi){
 			if(ttype==Tok!"pure"){
 				nextToken();
