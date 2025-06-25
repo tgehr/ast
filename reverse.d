@@ -778,43 +778,51 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	auto fbody_=fd.body_;
 	if(!fbody_){
 		if(isPrimitive(fd)){
-			auto id=new Identifier(fd.name.id);
-			id.loc=fd.loc;
-			id.meaning=fd;
-			id.type=fd.ftype;
-			id.sstate=SemState.completed;
-			auto ids=fd.params.map!(delegate Expression(p){
-				auto id=new Identifier(p.name.id);
-				id.constLookup=p.isConst;
-				id.meaning=p;
-				id.type=p.vtype;
+			if(fd.name){
+				auto id=new Identifier(fd.name.id);
+				id.loc=fd.loc;
+				id.meaning=fd;
+				id.type=fd.ftype;
 				id.sstate=SemState.completed;
-				id.loc=p.loc;
-				return id;
-			}).array;
-			Expression arg;
-			if(fd.isTuple){
-				arg=new TupleExp(ids);
-				arg.loc=fd.loc;
-				arg.type=tupleTy(ids.map!(id=>id.type).array);
-				arg.sstate=SemState.completed;
+				auto ids=fd.params.map!(delegate Expression(p){
+						auto id=new Identifier(p.name.id);
+						id.constLookup=p.isConst;
+						id.meaning=p;
+						id.type=p.vtype;
+						id.sstate=SemState.completed;
+						id.loc=p.loc;
+						return id;
+					}).array;
+				Expression arg;
+				if(fd.isTuple){
+					arg=new TupleExp(ids);
+					arg.loc=fd.loc;
+					arg.type=tupleTy(ids.map!(id=>id.type).array);
+					arg.sstate=SemState.completed;
+				}else{
+					assert(ids.length==1);
+					arg=ids[0];
+				}
+				auto ce=new CallExp(id,arg,fd.isSquare,false);
+				ce.loc=fd.loc;
+				ce.type=fd.ftype.tryApply(arg,fd.isSquare);
+				ce.sstate=SemState.completed;
+				auto ret=new ReturnExp(ce);
+				ret.loc=fd.loc;
+				ret.type=bottom;
+				ret.sstate=SemState.completed;
+				auto cmp=new CompoundExp([ret]);
+				cmp.loc=fd.loc;
+				cmp.type=bottom;
+				fbody_=cmp;
 			}else{
-				assert(ids.length==1);
-				arg=ids[0];
+				sc.error("cannot reverse nested function",fd.loc);
+				enforce(0,text("errors while reversing function"));
 			}
-			auto ce=new CallExp(id,arg,fd.isSquare,false);
-			ce.loc=fd.loc;
-			ce.type=fd.ftype.tryApply(arg,fd.isSquare);
-			ce.sstate=SemState.completed;
-			auto ret=new ReturnExp(ce);
-			ret.loc=fd.loc;
-			ret.type=bottom;
-			ret.sstate=SemState.completed;
-			auto cmp=new CompoundExp([ret]);
-			cmp.loc=fd.loc;
-			cmp.type=bottom;
-			fbody_=cmp;
-		}else sc.error("cannot reverse function without body",fd.loc);
+		}else{
+			sc.error("cannot reverse function without body",fd.loc);
+			enforce(0,text("errors while reversing function"));
+		}
 	}
 
 	bool simplify=r.innerNeeded;
@@ -1133,6 +1141,15 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		return res;
 	}
 	if(auto ce=cast(CallExp)e){
+		if(string prim=isPrimitiveCall(ce)){
+			switch(prim) {
+				case null:
+				default:
+					break;
+				case "print","dump":
+					return e.copy();
+			}
+		}
 		auto te=new TupleExp([]);
 		te.type=unit;
 		te.loc=ce.loc;
