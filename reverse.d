@@ -90,6 +90,11 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 	return null;
 }
 
+bool isEmptyTuple(Expression e){
+	auto tpl=cast(TupleExp)e;
+	return tpl&&tpl.length==0;
+}
+
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked){
 	bool validDefEntry(Expression e){
 		if(e.implicitDup) return false;
@@ -115,7 +120,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 			}
 		}
 		// if(!equal(ft.isConst,ft.isConstForReverse)) return false; // TODO: can we completely rewrite away isConstForReverse?
-		if(iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
+		if((ft.nargs||isEmptyTuple(ce.arg))&&iota(ft.nargs).all!(i=>ft.isConstForReverse[i])){
 			auto tpl=cast(TupleExp)ce.arg;
 			auto tt=ft.dom.isTupleTy;
 			return !tpl||tt&&tpl.length==tt.length;
@@ -384,7 +389,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	if(isLiftedBuiltIn(olhs)) return forget();
 	if(auto ce=cast(CallExp)olhs){
 		if(auto ft=cast(FunTy)ce.e.type){
-			if(ft.isSquare==ce.isSquare&&ft.annotation>=Annotation.qfree&&ft.isConstForReverse.all)
+			if(ft.isSquare==ce.isSquare&&ft.annotation>=Annotation.qfree&&(ft.nargs||isEmptyTuple(ce.arg))&&ft.isConstForReverse.all)
 				return forget();
 		}
 	}
