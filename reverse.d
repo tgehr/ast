@@ -928,24 +928,20 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	assert(!!result);
 	if(fd.annotation>=Annotation.qfree && r.movedIndices.empty){
 		Expression argExp;
-		bool needCall=true;
 		if(isEmptyTupleTy(r.constType)) argExp=new TupleExp([]);
-		else if(simplify&&isEmptyTupleTy(r.returnType)){
-			needCall=false;
-		}else{
-			assert(cpname);
+		else if(cpname){ // TODO: would probably be better to not create the temporary at all in this case
 			argExp=new Identifier(cpname);
+		}else{
+			argExp=isTuple?new TupleExp(fd.params.map!(p=>cast(Expression)p.name.copy()).array):fd.params[0].name.copy();
 		}
 		Expression call=null;
-		if(needCall){
-			argExp.loc=fd.loc; // TODO: use precise parameter locations
-			argExp.type=r.constType;
-			auto nfd=fd.copy();
-			auto fun=new LambdaExp(nfd);
-			fun.loc=fd.loc;
-			call=new CallExp(fun,argExp,fd.isSquare,false);
-			call.loc=fd.loc;
-		}
+		argExp.loc=fd.loc; // TODO: use precise parameter locations
+		argExp.type=r.constType;
+		auto nfd=fd.copy();
+		auto fun=new LambdaExp(nfd);
+		fun.loc=fd.loc;
+		call=new CallExp(fun,argExp,fd.isSquare,false);
+		call.loc=fd.loc;
 		auto fe=New!ForgetExp(retRhs,call);
 		fe.loc=fd.loc;
 		body_.s=[fe];
