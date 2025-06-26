@@ -206,10 +206,8 @@ abstract class Scope{
 				capturers~=nested.capturers;
 			}
 			void replaceDecl(Declaration splitFrom,Declaration splitInto){
-				foreach(id;accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
-					if(id.meaning !is splitFrom) continue;
+				foreach(id;accesses) // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
 					id.meaning=splitInto;
-				}
 				foreach(capturer;capturers){
 					void doIt(T)(T capturer){
 						if(splitFrom !in capturer.captures) return;
@@ -222,7 +220,7 @@ abstract class Scope{
 							}
 						}
 						foreach(id;capturer.captures[splitInto])
-							if(id.meaning is splitFrom) id.meaning=splitInto;
+							id.meaning=splitInto;
 					}
 					if(auto fd=cast(FunctionDef)capturer) doIt(fd);
 					else if(auto dat=cast(DatDecl)capturer) doIt(dat);
