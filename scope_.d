@@ -106,6 +106,8 @@ struct Dependencies{
 	}
 }
 }
+
+import ast.lastuse;
 enum Lookup{
 	consuming,
 	constant,
@@ -118,15 +120,33 @@ abstract class Scope{
 	bool allowsLinear(){
 		return true;
 	}
-	bool canInsert(Id id){
+	final bool canInsert(Id id){
 		auto decl=symtabLookup(id,false,null);
 		return !decl;
 	}
+
+	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
+		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
+			lastUses.forget(oldDecl);
+			return true;
+		}
+		if(!newDecl.isSemError()) redefinitionError(newDecl, oldDecl);
+		newDecl.setSemError();
+		return false;
+	}
+	final void redefinitionError(Declaration decl, Declaration prev) in{
+		assert(decl&&prev);
+		assert(!cast(DeadDecl)decl&&!cast(DeadDecl)prev);
+	}do{
+		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
+		note("previous definition was here",prev.name.loc);
+		decl.setSemError();;
+	}
+
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
 		if(auto d=symtabLookup(decl.name,false,null)){
-			if(!decl.isSemError()) redefinitionError(decl, d);
-			decl.setSemError();
-			return false;
+			if(!tryPrepareRedefine(decl,d))
+				return false;
 		}
 		rename(decl);
 		symtabInsert(decl);
@@ -152,15 +172,6 @@ abstract class Scope{
 		rnsymtab.remove(decl.getId);
 	}
 
-	void redefinitionError(Declaration decl, Declaration prev) in{
-		assert(decl&&prev);
-		assert(!cast(DeadDecl)decl&&!cast(DeadDecl)prev);
-	}do{
-		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
-		note("previous definition was here",prev.name.loc);
-		decl.setSemError();;
-	}
-
 	static if(language==silq){
 		static struct DeclProp{
 			private Identifier constBlock;
@@ -177,8 +188,8 @@ abstract class Scope{
 					componentReplacements~=r;
 				}
 			}
-			private Identifier[] accesses;
-			private Declaration[] capturers;
+			/+private+/ Identifier[] accesses;
+			/+private+/ Declaration[] capturers;
 			static DeclProp default_(){
 				return DeclProp.init;
 			}
@@ -254,7 +265,6 @@ abstract class Scope{
 		}
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
-		final void resetDeclProps(){ declProps.clear(); }
 		final void mergeDeclProps(ref DeclProps nested){
 			declProps.merge(nested);
 		}
@@ -291,7 +301,9 @@ abstract class Scope{
 			return &declProps.set(decl,DeclProp.default_());
 		}
 		final void recordAccess(Identifier id,Declaration meaning){
+			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 			updateDeclProps(meaning).accesses~=id;
+			if(id.implicitDup) trackTemporary(id);
 		}
 		final void recordCapturer(Declaration capturer,Declaration meaning){
 			updateDeclProps(meaning).capturers~=capturer;
@@ -321,17 +333,25 @@ abstract class Scope{
 		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
-			assert(canForget(read.meaning),text(read.loc," ",use.loc));
+			assert(canRecompute(read.meaning),text(read.loc," ",use.loc));
 		}do{
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(read,read.scope_);
 			assert(!dep.isTop);
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
 		}
-		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries){
+		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
 			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries);
 			bool success=true;
 			foreach(tt;trackedTemporaries){
+				if(auto id=cast(Identifier)tt.expr){
+					if(id.meaning&&id.implicitDup){
+						if(id.scope_.canSplit(id.meaning)){
+							lastUses.implicitDup(id,parent);
+						}else lastUses.constUse(id,parent);
+						continue;
+					}
+				}
 				if(!tt.dep.isTop) continue;
 				success=false;
 				if(auto id=cast(Identifier)tt.expr){
@@ -366,20 +386,20 @@ abstract class Scope{
 			foreach(decl,ref prop;declProps.props) constBlock[decl]=prop.constBlock;
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
-		final bool resetConst(ConstBlockContext context){
+		final bool resetConst(ConstBlockContext context,Expression parent){
 			foreach(decl,constBlock;context.constBlock)
 				updateDeclProps(decl).constBlock=constBlock;
 			foreach(decl,ref prop;declProps.props)
 				if(decl !in context.constBlock)
 					prop.constBlock=null;
-			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$]);
+			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
 			return success;
 		}
-		final bool resetConst(){
+		final bool resetConst(Expression parent){
 			foreach(decl,ref prop;declProps.props)
 				prop.constBlock=null;
-			auto success=checkTrackedTemporaries(trackedTemporaries);
+			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
 			trackedTemporaries=[];
 			return success;
 		}
@@ -437,7 +457,6 @@ abstract class Scope{
 		struct ConstBlockContext{ }
 		final DeclProps saveDeclProps(){ return DeclProps.init; }
 		final void resetDeclProps(DeclProps previous){ }
-		final void resetDeclProps(){ }
 		final Identifier isConst(Declaration decl){ return null; }
 		final ConstBlockContext saveConst(){ return ConstBlockContext.init; }
 		final void resetConst(ConstBlockContext previous){ }
@@ -468,10 +487,12 @@ abstract class Scope{
 		return consumeImpl(decl,decl,type,true,use); // TODO: separate splitting and consuming
 	}
 	final bool canSplit(Declaration decl)in{
-		assert(decl.scope_&&this.isNestedIn(decl.scope_));
+		if(!decl.isToplevelDeclaration())
+			assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return true;
-		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canForget(decl)) return false;
+		if(decl.isToplevelDeclaration()) return false;
+		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canForget(decl,true)) return false;
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
@@ -562,10 +583,8 @@ abstract class Scope{
 			dependency.replace(removed,dependencies.dependencies[removed]);
 		}
 		final void clearConsumed(){
-			foreach(removed;toRemove){
+			foreach(removed;toRemove)
 				removeDependency(removed);
-				declProps.remove(removed);
-			}
 			toRemove=[];
 		}
 	}
@@ -600,7 +619,7 @@ abstract class Scope{
 			typeConstBlockNote(meaning,this);
 			return false;
 		}
-		if(canForget(meaning))
+		if(canRecompute(meaning))
 			return true;
 		if(auto read=isConst(meaning)){
 			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
@@ -825,14 +844,17 @@ abstract class Scope{
 			if(keep) toRemove~=decl;
 		}
 
-		bool canForget(Declaration decl){
+		bool canForget(Declaration decl,bool forceHere=false){
 			if(decl.isSemError()) return true;
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
 			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-			return dependencies.canForget(decl);
+			return lastUses.canForget(decl,forceHere)||dependencies.canForget(decl);
+		}
+		final bool canRecompute(Declaration decl){
+			return canForget(decl,true);
 		}
 
 		Declaration[] forgottenVars;
@@ -840,6 +862,10 @@ abstract class Scope{
 			assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 		}do{
 			if(cast(DeadDecl)decl) return true;
+			if(lastUses.canForget(decl,false)){
+				lastUses.forget(decl);
+				return true;
+			}
 			if(canForget(decl)){
 				cause.forgottenVars~=decl;
 				return true;
@@ -868,6 +894,7 @@ abstract class Scope{
 			r.controlDependency.joinWith(controlDependency);
 			r.dependencies=dependencies.dup;
 		}
+		r.lastUses.parent=&lastUses;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		allowMerge=true;
@@ -916,7 +943,8 @@ abstract class Scope{
 				if(sc !is this)
 					if(auto dm=osym.name.id in deadMerges)
 						dm.mergedFrom~=osym;
-				sc.symtabRemove(osym);
+				if(sc.rnsymtab.get(osym.getId,null) is osym)
+					sc.symtabRemove(osym);
 				static if(language==silq){
 					if(sc.dependencyTracked(osym))
 						sc.pushDependencies(osym,false);
@@ -1046,7 +1074,6 @@ abstract class Scope{
 			}
 			foreach(sc;scopes){
 				mergeDeclProps(sc.declProps);
-				sc.resetDeclProps();
 			}
 		}
 		foreach(_,dm;deadMerges){
@@ -1057,8 +1084,6 @@ abstract class Scope{
 		}
 		foreach(sc;scopes){
 			static if(language==silq) sc.dependencies.clear();
-			sc.symtab.clear();
-			sc.rnsymtab.clear();
 		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
@@ -1077,9 +1102,10 @@ abstract class Scope{
 			var.rename.loc=decl.rename.loc;
 		}
 		if(auto d=symtabLookup(var.rename,true,null)){
-			if(isFirstDef) redefinitionError(d,var);
-			else redefinitionError(var,d);
-			return null;
+			bool ok;
+			if(isFirstDef) ok=tryPrepareRedefine(d,var);
+			else ok=tryPrepareRedefine(var,d);
+			if(!ok) return null;
 		}
 		symtabInsert(var);
 		var.vtype=type;
@@ -1197,6 +1223,7 @@ abstract class Scope{
 			return r;
 		}
 	private:
+		// LastUses lastUses; // TODO: needed?
 		static if(language==silq){
 			Dependencies dependencies;
 			DeclProps declProps;
@@ -1338,6 +1365,7 @@ abstract class Scope{
 		}
 	}
 //private: // !!!
+	LastUses lastUses;
 	static if(language==silq){
 		Dependencies dependencies;
 		DeclProps declProps;
@@ -1427,6 +1455,7 @@ class NestedScope: Scope{
 			// TODO: backtrace forgets and last usages
 			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
+				assert(ndecl.scope_ is parent&&result.scope_ is this);
 				splitVar(ndecl,result);
 				static if(language==silq){
 					if(remove){ // TODO: can we get rid of this?

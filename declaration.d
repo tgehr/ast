@@ -8,7 +8,6 @@ import ast.lexer, ast.type, ast.expression, ast.scope_, util;
 
 abstract class Declaration: Expression{
 	Identifier name;
-	Scope scope_;
 	this(Identifier name){
 		this.name=name;
 		this.type=unit;
@@ -30,6 +29,7 @@ abstract class Declaration: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 
 	// semantic information
+	Scope scope_;
 	Identifier rename=null;
 	Declaration splitFrom=null;
 	Declaration[] splitInto=[];
