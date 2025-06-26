@@ -570,7 +570,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(string prim=isPrimitiveCall(olhs)) {
-		auto primCallE=cast(CallExp)olhs;
+		auto primCallE=cast(CallExp)lhs;
+		assert(!!primCallE);
 		Expression fun=primCallE.e;
 		Expression arg=primCallE.arg;
 		Expression newlhs, newrhs;
@@ -643,6 +644,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			ce.e=expressionSemantic(ce.e,expSemContext(sc,ConstResult.yes,InType.no));
 		}
 		auto ft=cast(FunTy)ce.e.type;
+		assert(!!ce);
 		if(!ft) {
 			sc.error("call to non-function not supported as definition left-hand side", ce.e.loc);
 			return error();
