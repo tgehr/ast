@@ -275,6 +275,7 @@ abstract class Expression: Node{
 	void setConstLookup(bool constLookup){ this.constLookup=constLookup; }
 	bool byRef=false;
 	bool implicitDup=false;
+	//Identifier[] forgottenConstUses; // TODO: can we avoid some space overhead from this?
 }
 
 mixin template VariableFree(){
