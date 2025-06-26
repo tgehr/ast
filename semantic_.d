@@ -1538,7 +1538,7 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	static if(language==silq){
 		scope(exit){
 			//imported!"util.io".writeln("RESETTING AFTER: ",e);
-			if(!sc.resetConst())
+			if(!sc.resetConst(e))
 				e.setSemForceError();
 			sc.clearConsumed();
 		}
@@ -3959,6 +3959,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		auto params=makeParams(ft.isConst,names,types,loc);
 		auto narg=lookupParams(params,ft.isTuple,loc);
 		auto ce1=new CallExp(f.copy,narg,true,false);
+		ce1.e.implicitDup=false;
 		ce1.loc=loc;
 		auto ce2=makeReverseCall(ce1,Annotation.mfree,check,sc,loc,outerWanted);
 		auto body_=makeLambdaBody(ce2,loc);
@@ -4021,7 +4022,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto reverse=cast(Identifier)ce.e;
 	assert(reverse&&isReverse(reverse));
-	ce.arg=expressionSemantic(ce.arg,/+context.nest((rft.isConst.length?rft.isConst[0]:true)?ConstResult.yes:ConstResult.no)+/context.nestConst);
+	ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
 	enum simplify=true;
 	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,ce.checkReverse,simplify);
 	if(ce.arg.isSemError())
@@ -4748,7 +4749,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	void setImplicitDup()in{
 		assert(!!id.meaning);
 	}do{
-		id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||!id.meaning.isLinear())); // TODO: last-use analysis
+		//id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||!id.meaning.isLinear)); // TODO: last-use analysis
+		id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||sc.canForget(id.meaning,true))); // TODO: last-use analysis
 	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
@@ -5926,7 +5928,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	scope(success){
 		static if(language==silq){
 			if(!context.constResult||!expr.type||expr.type.isClassical()){
-				if(!sc.resetConst(constSave))
+				if(!sc.resetConst(constSave,expr))
 					expr.setSemError();
 			}
 			if(!expr.isSemError()){
