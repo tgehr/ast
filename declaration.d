@@ -62,6 +62,8 @@ abstract class Declaration: Expression{
 		   return true;
 		return false;
 	}
+	// semantic information
+	Expression typeConstBlocker=null;
 }
 
 class CompoundDecl: Expression{
@@ -104,7 +106,6 @@ class VarDecl: Declaration{
 	// semantic information
 	Expression vtype;
 	Expression initializer;
-	Expression typeConstBlocker=null;
 }
 
 class Parameter: VarDecl{
@@ -161,7 +162,7 @@ class FunctionDef: Declaration{
 	override bool isCompound(){ return true; }
 	override bool isLinear(){ return ftype ? !ftype.isClassical() : context && context.vtype != contextTy(true) || capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
 
-	@property override string kind(){ return "function definition"; }
+	@property override string kind(){ return "function"; }
 
 	// semantic information
 	FunctionScope fscope_;

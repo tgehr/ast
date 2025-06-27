@@ -471,8 +471,7 @@ abstract class Scope{
 		assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return true;
-		auto vd=cast(VarDecl)decl;
-		if(vd&&(vd.isConst||vd.typeConstBlocker)||isConst(decl)&&!canForget(decl)) return false;
+		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canForget(decl)) return false;
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
@@ -593,26 +592,24 @@ abstract class Scope{
 		if(!meaning) meaning=id.meaning;
 		if(id.isSemError||meaning&&meaning.isSemError) return true;
 		assert(!!meaning);
-		if(auto vd=cast(VarDecl)meaning){
-			if(vd.typeConstBlocker){
-				error(format("cannot consume 'const' variable '%s'",id), id.loc);
-				id.setSemError();
-				vd.setSemForceError();
-				import ast.semantic_:typeConstBlockNote;
-				typeConstBlockNote(vd,this);
-				return false;
-			}
+		if(meaning.typeConstBlocker){
+			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+			id.setSemError();
+			meaning.setSemForceError();
+			import ast.semantic_:typeConstBlockNote;
+			typeConstBlockNote(meaning,this);
+			return false;
 		}
 		if(canForget(meaning))
 			return true;
 		if(auto read=isConst(meaning)){
-			error(format("cannot consume 'const' variable '%s'",id), id.loc);
-			note("variable was made 'const' here", read.loc);
+			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+			note(format("%s was made 'const' here", meaning.kind), read.loc);
 			id.setSemForceError();
 			meaning.setSemForceError();
 			return false;
 		}else if(meaning.isConst){
-			error(format("cannot consume 'const' variable '%s'",id), id.loc);
+			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
 			note("declared 'const' here", meaning.loc);
 			id.setSemForceError();
 			meaning.setSemForceError();
@@ -1170,9 +1167,9 @@ abstract class Scope{
 				return dprop.constBlock;
 			return null;
 		}
-		private bool isNonConstVar(Declaration decl){ // TODO: get rid of code duplication?
-			auto vd=cast(VarDecl)decl;
-			if(!vd||vd.isConst||vd.typeConstBlocker||isConst(vd))
+		private bool isNonConstDecl(Declaration decl){ // TODO: get rid of code duplication?
+			if(!decl) return false;
+			if(!decl||decl.isConst||decl.typeConstBlocker||isConst(decl))
 				return false;
 			return true;
 		}
@@ -1182,7 +1179,7 @@ abstract class Scope{
 				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
 				if(!type) continue;
-				bool mayChange=isNonConstVar(decl)||decl.isLinear();
+				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
 				if(!mayChange){
 					if(type.isClassical) continue;
 				}
@@ -1576,27 +1573,26 @@ class CapturingScope(T): NestedScope{
 			if(free.meaning)
 				addCapture(free,free.meaning,Lookup.constant,origin);
 		}
-		auto vd=cast(VarDecl)meaning;
-		bool isConstVar=meaning.isConst||(vd&&vd.typeConstBlocker)||origin.isConst(meaning);
-		bool isConstLookup=kind==Lookup.constant||isConstVar;
+		bool isConstDecl=meaning.isConst||meaning.typeConstBlocker||origin.isConst(meaning);
+		bool isConstLookup=kind==Lookup.constant||isConstDecl;
 		static if(language==silq)
 		if(type.hasQuantumComponent()){
 			if(origin.componentReplacements(meaning).length)
 				return null; // not captured, will be replaced (TODO: ok?)
 			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
-				if(isConstVar){
-					origin.error("cannot capture 'const' quantum variable", id.loc);
-					if(vd&&vd.typeConstBlocker){
+				if(isConstDecl){
+					origin.error(text("cannot capture 'const' quantum ",meaning.kind), id.loc);
+					if(meaning.typeConstBlocker){
 						import ast.semantic_:typeConstBlockNote;
-						typeConstBlockNote(vd,this);
+						typeConstBlockNote(meaning,this);
 					}
 					if(auto read=origin.isConst(meaning))
-						origin.note("variable was made 'const' here", read.loc);
+						origin.note(text(meaning.kind,"variable was made 'const' here"), read.loc);
 					id.setSemError();
 					return null;
 				}else{
 					if(kind==Lookup.constant){
-						origin.error("cannot capture quantum variable as constant", id.loc);
+						origin.error(text("cannot capture quantum ",meaning.kind," as constant"), id.loc);
 						id.setSemError();
 					}
 				}
@@ -1607,7 +1603,7 @@ class CapturingScope(T): NestedScope{
 					if(fd.ftype&&fd.ftypeFinal){
 						assert(fd.ftype.isClassical_);
 						if(!id.isSemError()){
-							origin.error("cannot capture quantum variable in classical function", id.loc);
+							origin.error(text("cannot capture quantum ",meaning.kind," in classical function"), id.loc);
 							id.setSemError();
 						}
 					}else{

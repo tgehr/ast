@@ -1615,11 +1615,8 @@ Dependency getDependencyImpl(Identifier id,Scope sc){
 	if(!sc.dependencyTracked(decl))
 		sc.addDefaultDependency(decl); // TODO: ideally can be removed
 	result.dependencies.insert(decl);
-	if(!id.constLookup&&!id.implicitDup||id.byRef){
-		/+auto vd=cast(VarDecl)id.meaning;
-		 if(!vd||!(vd.typeConstBlocker||sc.isConst(vd)))+/
+	if(!id.constLookup&&!id.implicitDup||id.byRef)
 		result.replace(decl,sc.getDependency(decl));
-	}
 	return result;
 }
 
@@ -3106,8 +3103,7 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
 }
 
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc){
-	if(auto vd=cast(VarDecl)decl)
-		vd.typeConstBlocker=blocker;
+	decl.typeConstBlocker=blocker;
 	assert(!isAssignable(decl,sc));
 }
 
@@ -3121,51 +3117,46 @@ void typeConstBlock(Expression type,Expression blocker,Scope sc){
 }
 
 bool isAssignable(Declaration meaning,Scope sc){
-	auto vd=cast(VarDecl)meaning;
-	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd)) return false;
+	if(meaning.isConst||meaning.typeConstBlocker||sc.isConst(meaning)) return false;
 	for(auto csc=sc;csc !is meaning.scope_&&cast(NestedScope)csc;csc=(cast(NestedScope)csc).parent)
 		if(auto fsc=cast(FunctionScope)csc)
 			return false;
 	return true;
 }
 
-void typeConstBlockNote(VarDecl vd,Scope sc)in{
-	assert(!!vd.typeConstBlocker);
+void typeConstBlockNote(Declaration decl,Scope sc)in{
+	assert(!!decl.typeConstBlocker);
 }do{
 	string name;
-	if(auto decl=cast(Declaration)vd.typeConstBlocker) name=decl.getName;
+	if(auto blocker=cast(Declaration)decl.typeConstBlocker) name=blocker.getName;
 	if(name){
-		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",vd.name,name),vd.typeConstBlocker.loc);
+		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",decl.name,name),decl.typeConstBlocker.loc);
 	}else{
-		sc.note(format("'%s' was made 'const' because it appeared in type of local variable",vd.name),vd.typeConstBlocker.loc);
+		sc.note(format("'%s' was made 'const' because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
 	}
 }
 
-bool isNonConstVar(Declaration decl,Scope sc){
-	auto vd=cast(VarDecl)decl;
-	if(!vd||vd.isConst||vd.typeConstBlocker||sc.isConst(vd))
+bool isNonConstDecl(Declaration decl,Scope sc){
+	if(!decl) return false;
+	if(decl.isConst||decl.typeConstBlocker||sc.isConst(decl))
 		return false;
 	return true;
 }
 
-bool checkNonConstVar(string action,string continuous)(Declaration meaning,Location loc,Scope sc){ // TODO: also use this for variables that were originally forgettable
-	if(isNonConstVar(meaning,sc)) return true;
-	auto vd=cast(VarDecl)meaning;
-	if(vd&&(vd.isConst||vd.typeConstBlocker||sc.isConst(vd))){
-		if(cast(Parameter)meaning&&(cast(Parameter)meaning).isConst)
-			sc.error("cannot "~action~" 'const' parameters",loc);
-		else sc.error("cannot "~action~" 'const' variables",loc);
-		if(vd.typeConstBlocker) typeConstBlockNote(vd,sc);
-		else if(auto read=sc.isConst(vd))
-			sc.note("variable was made 'const' here", read.loc);
-	}else if(meaning&&!vd) sc.error(continuous~" non-variables not supported",loc); // (once this works, remember to support typeConstBlocker)
-		else if(meaning) sc.error("cannot assign",loc);
+bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Location loc,Scope sc){ // TODO: also use this for variables that were originally forgettable
+	if(!meaning) return false;
+	if(isNonConstDecl(meaning,sc)) return true;
+	if(!meaning.isSemError()){
+		sc.error(text("cannot "~action~" 'const' ",meaning.kind,"s"),loc);
+		if(meaning.typeConstBlocker) typeConstBlockNote(meaning,sc);
+		else if(auto read=sc.isConst(meaning)) sc.note(text(meaning.kind," was made 'const' here"), read.loc);
+	}
 	return false;
 }
 
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible){
 	if(!meaning||meaning.isSemError()) return false;
-	if(!checkNonConstVar!("reassign","reassigning")(meaning,loc,sc))
+	if(!checkNonConstDecl!("reassign","reassigning")(meaning,loc,sc))
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
@@ -4619,7 +4610,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		if(!id) return;
 		auto meaning=id.meaning;
 		if(!meaning) return;
-		if(!checkNonConstVar!("forget","forgetting")(meaning,id.loc,sc)){
+		if(!checkNonConstDecl!("forget","forgetting")(meaning,id.loc,sc)){
 			fe.setSemError();
 			return;
 		}
