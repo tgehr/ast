@@ -176,6 +176,11 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 		fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
 		static if(language==psi) fd.contextVal=fd.context;
 	}
+	if(fd.capturedDecls.any!(d=>d.isLinear)){
+		assert(!!fd.context);
+		fd.context.vtype=contextTy(false);
+	}
+	updateFunctionDependency(fd);
 }
 
 Expression presemantic(Declaration expr,Scope sc){
@@ -1636,6 +1641,22 @@ Dependency getDependency(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
 	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
 	return getDependencyImpl(e,sc);
+}
+
+void updateFunctionDependency(FunctionDef fd){
+	auto sc=fd.scope_;
+	if(!sc) return;
+	if(fd.isToplevelDeclaration()) return;
+	if(sc.rnsymtab.get(fd.getId,null) !is fd) return;
+	auto dep=Dependency();
+	foreach(decl;fd.capturedDecls){
+		if(decl.isSemError()||fd.captures[decl][0].isSemError()) continue;
+		auto type=typeForDecl(decl);
+		if(type&&type.isClassical()) continue;
+		if(fd.isConsumedCapture(decl)) dep.joinWith(sc.getDependency(decl));
+		else dep.dependencies.insert(decl);
+	}
+	sc.addDependency(fd,dep);
 }
 
 Identifier consumes(Expression e){
@@ -6085,10 +6106,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.context=null;
 		fd.thisVar=null;
 		prepareFunctionDef(fd,fd.scope_);
-		if(fd.capturedDecls.any!(d=>d.isLinear)){
-			assert(!!fd.context);
-			fd.context.vtype=contextTy(false);
-		}
 	}
 	auto functionDefsToUpdate=fd.functionDefsToUpdate;
 	auto numCapturesAfter=fd.capturedDecls.length;

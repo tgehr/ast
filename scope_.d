@@ -774,8 +774,7 @@ abstract class Scope{
 		void addDefaultDependency(Declaration decl)in{
 			assert(!dependencyTracked(decl));
 		}do{
-			//imported!"util.io".writeln("ADDING DEFAULT: ",decl," ",Dependency(decl.isSemCompleted()&&decl.isLinear));
-			addDependency(decl,Dependency(decl.isSemCompleted()&&decl.isLinear));
+			addDependency(decl,Dependency(!decl.isSemError()&&decl.isLinear));
 			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
 			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
 			//assert(decl.getName!="rrr");
@@ -831,9 +830,9 @@ abstract class Scope{
 
 		bool canForget(Declaration decl){
 			if(decl.isSemError()) return true;
-			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&decl.isSemStarted(),text(decl," ",decl.sstate));
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
+			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.canForget(decl);
@@ -1633,6 +1632,13 @@ class CapturingScope(T): NestedScope{
 				origin.insertCapture(id,meaning,this);
 			}
 			if(!id.isSemError()){
+				static if(is(T==FunctionDef)){
+					import ast.semantic_:updateFunctionDependency;
+					auto origMeaning=id.meaning; // TODO: this is a hack
+					id.meaning=meaning;// TODO: this is a hack
+					updateFunctionDependency(decl);
+					id.meaning=origMeaning; // TODO: this is a hack
+				}
 				if(!consumed) parent.recordAccess(id,meaning);
 				parent.recordCapturer(decl,meaning);
 			}

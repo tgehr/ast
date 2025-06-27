@@ -36,6 +36,10 @@ abstract class Declaration: Expression{
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
 
+	bool isToplevelDeclaration(){
+		return scope_&&cast(TopScope)scope_;
+	}
+
 	@property splitSequence(){
 		return recurrence!"a[n-1].splitFrom"(this).until!(d=>d is null);
 	}
@@ -155,7 +159,7 @@ class FunctionDef: Declaration{
 	}
 
 	override bool isCompound(){ return true; }
-	override bool isLinear(){ return ftype ? !ftype.isClassical() : capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
+	override bool isLinear(){ return ftype ? !ftype.isClassical() : context && context.vtype != contextTy(true) || capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
 
 	@property override string kind(){ return "function definition"; }
 
@@ -177,7 +181,12 @@ class FunctionDef: Declaration{
 		assert(capture in captures);
 		assert(!!fscope_);
 	}do{
-		return captures[capture][0].meaning.scope_.isNestedIn(fscope_);
+		auto id=captures[capture][0];
+		if(!id.meaning) return false;
+		assert(!!id.meaning);
+		if(id.meaning.isSemError()) return false;
+		assert(!!id.meaning.scope_);
+		return id.meaning.scope_.isNestedIn(fscope_);
 	}
 	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
 	Expression ret; // return type
