@@ -138,13 +138,28 @@ struct LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				return false;
-			case lazySplit,lazyMerge,implicitForget:
+			case lazySplit,lazyMerge:
 				return false; // TODO
 			case implicitDup:
 				return canForget(false);
 			case constUse:
 				return canForget(true);
-			case consumption:
+			case implicitForget,consumption:
+				assert(0);
+		}
+	}
+
+	bool betterUnforgettableError(Scope sc){
+		final switch(kind)with(Kind){
+			case definition,constPinned:
+				return false;
+			case lazySplit,lazyMerge:
+				return false; // TODO
+			case implicitDup:
+				return false; // TODO
+			case constUse:
+				return false;
+			case implicitForget,consumption:
 				assert(0);
 		}
 	}
@@ -254,6 +269,14 @@ struct LastUses{
 		auto lastUse=decl in lastUses;
 		if(!lastUse&&parent) return parent.canRedefine(decl);
 		return lastUse&&lastUse.canRedefine();
+	}
+	bool betterUnforgettableError(Declaration decl,Scope sc)in{
+		assert(!canForget(decl,false));
+	}do{
+		auto lastUse=decl in lastUses;
+		if(!lastUse&&parent)
+			return parent.betterUnforgettableError(decl,sc);
+		return lastUse&&lastUse.betterUnforgettableError(sc);
 	}
 	void forget(Declaration decl)in{
 		assert(canForget(decl,false));
