@@ -354,6 +354,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		res.setSemError();
 		return res;
 	}
+	static if(reverseMode){
+		if(cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
+			lhs.implicitDup=true;
+	}
 	if(validDefLhs!flags(olhs,sc,unchecked)){
 		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
 		if(auto ce=cast(CallExp)lhs) ce.checkReverse&=!unchecked;
@@ -555,7 +559,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nval.type=fe.var.type;
 			nval.loc=fe.val.loc;
 		}
-		auto def=lowerDefine!flags(fe.var,nval,loc,sc,unchecked);
+		auto def=lowerDefine!(flags&~LowerDefineFlags.reverseMode)(fe.var,nval,loc,sc,unchecked);
 		auto arhs=rhs;
 		if(orhs.type!=unit){
 			arhs=new TypeAnnotationExp(arhs,unit,TypeAnnotationType.annotation);
@@ -570,7 +574,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(string prim=isPrimitiveCall(olhs)) {
-		auto primCallE=cast(CallExp)lhs;
+		auto primCallE=cast(CallExp)olhs;
 		assert(!!primCallE);
 		Expression fun=primCallE.e;
 		Expression arg=primCallE.arg;
