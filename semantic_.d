@@ -5939,6 +5939,8 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 						sc.error("cannot consume variables within types",expr.loc);
 						expr.setSemError();
 					}
+					if(id.meaning&&id.implicitDup)
+						context.sc.trackTemporary(id); // TODO: ok?
 				}else{
 					expr.constLookup=context.constResult;
 					if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
