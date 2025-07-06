@@ -303,7 +303,6 @@ abstract class Scope{
 		final void recordAccess(Identifier id,Declaration meaning){
 			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 			updateDeclProps(meaning).accesses~=id;
-			if(id.implicitDup) trackTemporary(id);
 		}
 		final void recordCapturer(Declaration capturer,Declaration meaning){
 			updateDeclProps(meaning).capturers~=capturer;
@@ -326,7 +325,10 @@ abstract class Scope{
 		final bool trackTemporary(Expression expr){
 			//imported!"util.io".writeln("TRACKING: ",expr," ",expr.loc);
 			import ast.semantic_:getDependency;
+			auto implicitDup=expr.implicitDup;
+			expr.implicitDup=false;
 			auto dep=getDependency(expr,this);
+			expr.implicitDup=implicitDup;
 			if(dep.isTop) return false;
 			trackedTemporaries~=TrackedTemporary(expr,dep);
 			return true;
@@ -341,33 +343,45 @@ abstract class Scope{
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
 		}
 		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
-			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries);
+			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
 			bool success=true;
 			foreach(tt;trackedTemporaries){
-				if(auto id=cast(Identifier)tt.expr){
-					if(id.meaning&&id.implicitDup){
-						if(id.scope_.canSplit(id.meaning)){
-							lastUses.implicitDup(id,parent);
-						}else lastUses.constUse(id,parent);
-						continue;
+				if(!tt.read){
+					if(auto id=cast(Identifier)tt.expr){
+						if(id.meaning&&id.implicitDup){
+							if(tt.dep.isTop){
+								id.implicitDup=false;
+								if(id.sstate!=SemState.error&&checkConsumable(id)){
+									consume(id.meaning,id);
+									import ast.semantic_:nonLiftedError;
+									nonLiftedError(tt.expr,this);
+									tt.expr.setSemError();
+								}
+								parent.setSemForceError();
+							}else{
+								lastUses.implicitDup(id,parent);
+							}
+							continue;
+						}
 					}
-				}
-				if(!tt.dep.isTop) continue;
-				success=false;
-				if(auto id=cast(Identifier)tt.expr){
-					if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
-						assert(tt.read&&tt.read.meaning);
-						blockConst(tt.read.meaning,tt.read); // TODO: why neede?
-						if(checkConsumable(id,tt.read.meaning))
-							assert(tt.read.meaning.isSemError);
-						id.setSemForceError();
-						id.meaning.setSemForceError();
-						continue;
+				}else if(tt.dep.isTop){
+					success=false;
+					if(auto id=cast(Identifier)tt.expr){
+						if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
+							assert(tt.read.meaning);
+							blockConst(tt.read.meaning,tt.read); // TODO: why needed?
+							if(checkConsumable(id,tt.read.meaning))
+								assert(tt.read.meaning.isSemError);
+							id.setSemForceError();
+							id.meaning.setSemForceError();
+							continue;
+						}
 					}
+					import ast.semantic_:nonLiftedError;
+					nonLiftedError(tt.expr,this);
+					tt.expr.setSemError();
+					parent.setSemForceError();
 				}
-				import ast.semantic_:nonLiftedError;
-				nonLiftedError(tt.expr,this);
-				tt.expr.setSemError();
 			}
 			return success;
 		}
@@ -492,7 +506,7 @@ abstract class Scope{
 	}do{
 		if(decl.scope_ is this) return true;
 		if(decl.isToplevelDeclaration()) return false;
-		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canForget(decl,true)) return false;
+		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canRecompute(decl)) return false;
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
@@ -638,6 +652,7 @@ abstract class Scope{
 	}
 
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
+		//imported!"util.io".writeln("POSTPROCESSING: ",id.loc," ",meaning," ",kind);
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
 		if(kind!=Lookup.probing&&meaning){
@@ -717,6 +732,7 @@ abstract class Scope{
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
+				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,false)," ",rnsymtab," ",isConst(d));
 				if(!canSplit(d)){
 					if(!d.isSemError()){
 						if(auto read=isConst(d)){
@@ -736,10 +752,13 @@ abstract class Scope{
 					continue;
 				}
 				if(!canForgetAppend(loc,d)){
-					if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-					else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+					if(!lastUses.betterUnforgettableError(d,this)){
+						if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+						else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+						errors=true;
+					}
 					d.setSemForceError();
-					errors=true;
+					static if(is(typeof(loc):Expression)) loc.setSemForceError();
 				}else{
 					Identifier use=null;
 					if(isConst(d)){
