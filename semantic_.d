@@ -4718,7 +4718,7 @@ Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisti
 	if(!ignoreExisting&&id.meaning) return id.meaning;
 	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
 	id.meaning=sc.lookup(id,false,true,lookup,failures);
-	if(nerr!=sc.handler.nerrors&&!id.isSemError()){ // TODO: still needed?
+	if(nerr!=sc.handler.nerrors&&!id.isSemError()&&(!id.meaning||!id.meaning.isSemError)){ // TODO: still needed?
 		sc.note("looked up here",id.loc);
 		id.setSemError();
 	}
