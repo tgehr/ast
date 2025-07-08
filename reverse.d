@@ -95,9 +95,9 @@ bool isEmptyTuple(Expression e){
 	return tpl&&tpl.length==0;
 }
 
-bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked){
+bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked,bool noImplicitDup){
 	bool validDefEntry(Expression e){
-		if(e.implicitDup) return false;
+		if(e.implicitDup&&!noImplicitDup) return false;
 		return cast(Identifier)e||cast(IndexExp)e||cast(SliceExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
@@ -328,7 +328,7 @@ static if(language==silq):
 	}
 }
 
-Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked)in{
+Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked,bool noImplicitDup)in{
 	assert(loc.line);
 }do{
 	enum createFresh=!!(flags&LowerDefineFlags.createFresh); // TODO: can we get rid of this?
@@ -339,6 +339,17 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	Expression lhs(){ // TODO: solve better
 		static if(createFresh){
 			if(!nlhs) nlhs=olhs.copy();
+			if(noImplicitDup){ // TODO: this is a hack
+				void removeImplicitDup(Expression e){
+					e.implicitDup=false;
+					if(auto tae=cast(TypeAnnotationExp)e)
+						removeImplicitDup(tae.e);
+					else if(auto tpl=cast(TupleExp)e)
+						foreach(ne;tpl.e)
+							removeImplicitDup(ne);
+				}
+				removeImplicitDup(nlhs);
+			}
 			return nlhs;
 		}else return olhs;
 	}
@@ -358,7 +369,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
 			lhs.implicitDup=true;
 	}
-	if(validDefLhs!flags(olhs,sc,unchecked)){
+	if(validDefLhs!flags(olhs,sc,unchecked,noImplicitDup)){
 		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
 		if(auto ce=cast(CallExp)lhs) ce.checkReverse&=!unchecked;
 		return res=new DefineExp(lhs,rhs);
@@ -374,16 +385,16 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			newRhs.type=tty;
 			newRhs.loc=orhs.loc;
 		}
-		return lowerDefine!flags(newLhs,newRhs,loc,sc,unchecked);
+		return lowerDefine!flags(newLhs,newRhs,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto tpll=cast(TupleExp)olhs){
 		auto tplr=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i){ auto id=new Identifier(freshName); id.loc=orhs.loc; return id; }).array);
 		tplr.loc=orhs.loc;
-		auto d1=lowerDefine!(flags&~LowerDefineFlags.createFresh)(tplr,rhs,loc,sc,unchecked);
+		auto d1=lowerDefine!(flags&~LowerDefineFlags.createFresh)(tplr,rhs,loc,sc,unchecked,noImplicitDup);
 		enforce(tpll.e.length==tplr.e.length);
 		Expression[] es;
 		foreach_reverse(i;0..tpll.e.length){
-			es~=lowerDefine!flags(tpll.e[i],moveExp(tplr.e[i]),loc,sc,unchecked); // TODO: evaluation order of rhs okay?
+			es~=lowerDefine!flags(tpll.e[i],moveExp(tplr.e[i]),loc,sc,unchecked,noImplicitDup); // TODO: evaluation order of rhs okay?
 		}
 		if(es.any!(x=>!x)) return null;
 		auto d2=new CompoundExp(es);
@@ -403,8 +414,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				if(!orhs.type||orhs.type!=tae.e.type){
 					auto newRhs=new TypeAnnotationExp(rhs,tae.e.type,TypeAnnotationType.coercion);
 					newRhs.loc=orhs.loc;
-					return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
-				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked);
+					return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup);
+				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked,noImplicitDup);
 			}
 		}
 		Expression newRhs;
@@ -415,7 +426,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			newRhs=new TypeAnnotationExp(orhs,tae.t,tae.annotationType);
 		}
 		newRhs.loc=orhs.loc;
-		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
+		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto ce=cast(CatExp)olhs){
 		//scope(exit) imported!"util.io".writeln(olhs," := ",orhs," → ",res);
@@ -433,7 +444,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			id.loc=tmp.loc;
 			return new FieldExp(tmp.copy(),id);
 		}
-		auto d1=lowerDefine!flags(tmp,orhs,loc,sc,unchecked);
+		auto d1=lowerDefine!flags(tmp,orhs,loc,sc,unchecked,noImplicitDup);
 		auto known1=knownLength(ce.e1,true),known2=knownLength(ce.e2,true);
 		auto ue1=unwrap(ce.e1),ue2=unwrap(ce.e2);
 		auto valid1=cast(Identifier)ue1,valid2=cast(Identifier)ue2;
@@ -443,14 +454,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			if(!cast(Identifier)ue1){
 				auto tmpe1=new Identifier(freshName);
 				tmpe1.loc=ce.e1.loc;
-				stmts2~=lowerDefine!flags(ne1,tmpe1,loc,sc,unchecked);
+				stmts2~=lowerDefine!flags(ne1,tmpe1,loc,sc,unchecked,noImplicitDup);
 				ne1=tmpe1.copy();
 				ne1.loc=ce.e1.loc;
 			}
 			if(!cast(Identifier)ue2){
 				auto tmpe2=new Identifier(freshName);
 				tmpe2.loc=ce.e2.loc;
-				stmts2~=lowerDefine!flags(ne2,tmpe2,loc,sc,unchecked);
+				stmts2~=lowerDefine!flags(ne2,tmpe2,loc,sc,unchecked,noImplicitDup);
 				ne2=tmpe2.copy();
 				ne2.loc=ce.e2.loc;
 			}
@@ -477,7 +488,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nce.loc=ce.loc;
 			auto tmp3=tmp.copy();
 			tmp3.loc=orhs.loc;
-			auto d2=lowerDefine!flags(nce,tmp3,loc,sc,unchecked);
+			auto d2=lowerDefine!flags(nce,tmp3,loc,sc,unchecked,noImplicitDup);
 			stmts1~=d2;
 			return res=new CompoundExp(stmts1~stmts2);
 		}else{
@@ -515,14 +526,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				tmpl.loc=ce.e1.loc;
 				static if(reverseMode) tmpl.type=ce.e1.type;
 			}
-			auto d2=lowerDefine!flags(tmpl.copy(),s1,loc,sc,unchecked);
+			auto d2=lowerDefine!flags(tmpl.copy(),s1,loc,sc,unchecked,noImplicitDup);
 			d2.loc=loc;
 			auto tmpr=cast(Identifier)ce.e2?ce.e2:new Identifier(freshName);
 			if(tmpr!is ce.e2){
 				tmpr.loc=ce.e2.loc;
 				static if(reverseMode) tmpr.type=ce.e2.type;
 			}
-			auto d3=lowerDefine!flags(tmpr.copy(),s2,loc,sc,unchecked);
+			auto d3=lowerDefine!flags(tmpr.copy(),s2,loc,sc,unchecked,noImplicitDup);
 			d3.loc=loc;
 			auto tmp3=tmp.copy();
 			tmp3.loc=orhs.loc;
@@ -532,12 +543,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			fe.loc=loc;
 			auto stmts=(d1?[d1]:[])~[d2,d3,fe];
 			if(ce.e1 !is tmpl){
-				auto d4=lowerDefine!flags(ce.e1,tmpl,loc,sc,unchecked);
+				auto d4=lowerDefine!flags(ce.e1,tmpl,loc,sc,unchecked,noImplicitDup);
 				d4.loc=loc;
 				stmts~=d4;
 			}
 			if(ce.e2 !is tmpr){
-				auto d5=lowerDefine!flags(ce.e2,tmpr,loc,sc,unchecked);
+				auto d5=lowerDefine!flags(ce.e2,tmpr,loc,sc,unchecked,noImplicitDup);
 				d5.loc=loc;
 				stmts~=d5;
 			}
@@ -564,7 +575,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nval.type=fe.var.type;
 			nval.loc=fe.val.loc;
 		}
-		auto def=lowerDefine!(flags&~LowerDefineFlags.reverseMode)(fe.var,nval,loc,sc,unchecked);
+		auto def=lowerDefine!(flags&~LowerDefineFlags.reverseMode)(fe.var,nval,loc,sc,unchecked,noImplicitDup);
 		auto arhs=rhs;
 		if(orhs.type!=unit){
 			arhs=new TypeAnnotationExp(arhs,unit,TypeAnnotationType.annotation);
@@ -575,7 +586,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return def;
 	}
 	if(auto conv=cast(TypeAnnotationExp)olhs) {
-		return lowerDefine!flags(conv.e, orhs, loc, sc, unchecked);
+		return lowerDefine!flags(conv.e, orhs, loc, sc, unchecked,noImplicitDup);
 	}
 	static if(language==silq)
 	if(string prim=isPrimitiveCall(olhs)) {
@@ -649,7 +660,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
 				return error();
 		}
-		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
+		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked,noImplicitDup);
 	}
 	static if(language==silq)
 	if(auto ce=cast(CallExp)olhs){
@@ -694,8 +705,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 					auto tmp=new Identifier(freshName);
 					newlhs=new CallExp(ce.e,tmp,ce.isSquare,ce.isClassical_);
 					newlhs.loc=loc;
-					auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked);
-					auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked);
+					auto def=lowerDefine!flags(newlhs,rhs,loc,sc,unchecked,noImplicitDup);
+					auto argUnpack=lowerDefine!flags(ce.arg,tmp,loc,sc,unchecked,noImplicitDup);
 					return res=new CompoundExp([def,argUnpack]);
 				}else{
 					newlhs=ce.arg;
@@ -738,7 +749,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		auto newrhs=new CallExp(reversed,newarg,ce.isSquare,ce.isClassical_);
 		newrhs.loc=newarg.loc;
-		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
+		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto we=cast(WildcardExp)olhs)
 		return res=new ForgetExp(rhs,null);
@@ -750,10 +761,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 // rev(x:=dup(y);) ⇒ dup(y):=x; ⇒ ():=reverse(dup)(x,y) ⇒ ():=forget(x=dup(y));
 // rev(x:=CNOT(a,b);) ⇒ CNOT(a,b):=x; ⇒ a:=reverse(CNOT)(x,b);
 
-Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked){
+Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked,bool noImplicitDup){
 	if(e.isSemError()) return e;
-	if(validDefLhs!flags(e.e1,sc,unchecked)) return null;
-	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked);
+	if(validDefLhs!flags(e.e1,sc,unchecked,noImplicitDup)) return null;
+	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked,noImplicitDup);
 }
 
 private bool copyAttr(Id name) {
@@ -772,6 +783,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 }do{
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	enum unchecked=true; // TODO: ok?
+	enum noImplicitDup=false;
 	if(fd.reversed) return fd.reversed;
 	auto sc=fd.scope_, ft=fd.ftype;
 	auto asc=sc;
@@ -860,7 +872,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	Id cpname,rpname;
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
-		if(!id.implicitDup&&validDefLhs!flags(id,sc,unchecked)){
+		if(!id.implicitDup&&validDefLhs!flags(id,sc,unchecked,noImplicitDup)){
 			retDefReplaced=true;
 			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
 		}
@@ -967,7 +979,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		body_.s=[fe];
 	}else{
 		bool retDefNecessary=!(isEmptyTupleTy(r.returnType)&&cast(TupleExp)ret.e||retDefReplaced);
-		auto retDef=retDefNecessary?lowerDefine!flags(ret.e,retRhs,ret.loc,result.fscope_,unchecked):null;
+		auto retDef=retDefNecessary?lowerDefine!flags(ret.e,retRhs,ret.loc,result.fscope_,unchecked,noImplicitDup):null;
 		auto movedNames=r.movedIndices.map!(i=>fd.params[i].name.name).array;
 		Expression[] movedTypes;
 		if(r.movedTuple){
@@ -989,7 +1001,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked))~[argRet];
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked,noImplicitDup))~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		import util.io:stderr;
@@ -1139,16 +1151,16 @@ Expression[] mergeCompound(Expression[] s){
 	return r;
 }
 
-Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked){
+Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup){
 	statements=mergeCompound(statements);
 	Expression[] classicalStatements=statements.filter!(s=>classifyStatement(s)==ComputationClass.classical).array;
 	foreach(ref e;classicalStatements) e=e.copy();
 	Expression[] quantumStatements=statements.retro.filter!(s=>classifyStatement(s)!=ComputationClass.classical).array;
-	foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked);
+	foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked,noImplicitDup);
 	return classicalStatements~middle~quantumStatements;
 }
 
-Expression reverseStatement(Expression e,Scope sc,bool unchecked){
+Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup){
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	if(!e) return e;
 	Expression error(){
@@ -1174,17 +1186,17 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 				if(isBuiltIn(id)){
 					switch(id.name){
 						case "__show","__query":
-							return lowerDefine!flags(te,te,ce.loc,sc,unchecked);
+							return lowerDefine!flags(te,te,ce.loc,sc,unchecked,noImplicitDup);
 						default:
 							break;
 					}
 				}
 			}
 		}
-		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked);
+		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked));
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup));
 		res.loc=ce.loc;
 		static if(language==silq){
 			if(ce.blscope_&&ce.blscope_.forgottenVars.any!(d=>d.isLinear())){
@@ -1195,9 +1207,9 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		return res;
 	}
 	if(auto ite=cast(IteExp)e){
-		auto then=cast(CompoundExp)reverseStatement(ite.then,sc,unchecked);
+		auto then=cast(CompoundExp)reverseStatement(ite.then,sc,unchecked,noImplicitDup);
 		assert(!!then);
-		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked);
+		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked,noImplicitDup);
 		assert(!!othw==!!ite.othw);
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
@@ -1205,7 +1217,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 	}
 	if(auto we=cast(WithExp)e){
 		auto trans=we.trans.copy();
-		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked);
+		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
 		auto res=new WithExp(trans,bdy);
 		res.loc=we.loc;
@@ -1229,7 +1241,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 			nrhs.loc=de.e1.loc;
 			nrhs.type=de.e2.type;
 		}
-		return lowerDefine!flags(de.e2,nrhs,de.loc,sc,unchecked);
+		return lowerDefine!flags(de.e2,nrhs,de.loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto ae=cast(AssignExp)e){
 		sc.error("reversal of functions containing assignments not supported yet",ae.loc);
@@ -1269,14 +1281,14 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 			auto nlhs=new CatExp(ae.e1.copy(),ae.e2);
 			nlhs.type=ae.e1.type;
 			auto nrhs=ae.e1;
-			return lowerDefine!flags(nlhs,nrhs,ae.loc,sc,unchecked);
+			return lowerDefine!flags(nlhs,nrhs,ae.loc,sc,unchecked,noImplicitDup);
 		}
 		if(auto ae=cast(BitXorAssignExp)e) return ae.copy();
 		sc.error("reversal not supported yet",e.loc);
 		return error();
 	}
 	if(auto fe=cast(ForExp)e){
-		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked);
+		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
 		auto leftExclusive=fe.rightExclusive;
 		auto left=fe.right.copy();
@@ -1298,7 +1310,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		return error();
 	}
 	if(auto re=cast(RepeatExp)e){
-		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc,unchecked);
+		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
 		auto res=new RepeatExp(re.num.copy(),bdy);
 		res.loc=re.loc;
@@ -1311,7 +1323,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked){
 		auto tpl=new TupleExp([]);
 		tpl.type=unit;
 		tpl.loc=fe.loc;
-		return lowerDefine!flags(fe,tpl,fe.loc,sc,unchecked);
+		return lowerDefine!flags(fe,tpl,fe.loc,sc,unchecked,noImplicitDup);
 	}
 	sc.error("reversal unsupported",e.loc);
 	return error();
