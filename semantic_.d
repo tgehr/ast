@@ -786,7 +786,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.isSemCompleted()){
-		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,false)); // TODO: fix (this is incomplete)
+		enum unchecked=false,noImplicitDup=true;
+		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,unchecked,noImplicitDup)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
@@ -1854,7 +1855,7 @@ Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
 	return fe;
 }
 Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
-	if(!isPresemantic){
+	static if(!isPresemantic){
 		if(!id.isSemError())
 		if(auto vd=cast(VarDecl)id.meaning){
 			if(context.type){
@@ -2474,8 +2475,8 @@ Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsC
 	static if(!isPresemantic) scope(success){
 		assert(!!r);
 		if(!r.isSemError()){
-			enum flags=LowerDefineFlags.createFresh, unchecked=false;
-			if(validDefLhs!flags(r,context.sc,unchecked)){
+			enum flags=LowerDefineFlags.createFresh, unchecked=false, noImplicitDup=false;
+			if(validDefLhs!flags(r,context.sc,unchecked,noImplicitDup)){
 				assert(!!r.type);
 				r.setSemCompleted();
 			}
@@ -2656,7 +2657,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	bool success=true;
 	DefineExp de=null;
-	enum flags=LowerDefineFlags.createFresh, unchecked=false;
+	enum flags=LowerDefineFlags.createFresh, unchecked=false, noImplicitDup=false;
 	bool attemptLowering=sc.allowsLinear;
 	void updateLhs(){
 		assert(!de);
@@ -2673,7 +2674,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		checkIndexReplacement(be,sc);
 		updateLhs();
 		if(!be.isSemError()){
-			if(auto e=lowerDefine!flags(be,sc,unchecked)){
+			if(auto e=lowerDefine!flags(be,sc,unchecked,noImplicitDup)){
 				if(!e.isSemError()){
 					sc.restoreStateSnapshot(preState);
 					auto r=statementSemantic(e,sc);
@@ -3191,7 +3192,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
-		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canForget(meaning)){
+		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canRecompute(meaning)){
 			sc.error("cannot reassign quantum variable", loc);
 			return false;
 		}
