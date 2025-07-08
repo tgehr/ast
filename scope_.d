@@ -362,42 +362,42 @@ abstract class Scope{
 		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
 			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
 			bool success=true;
-			foreach(tt;trackedTemporaries){
-				if(!tt.read){
-					if(auto id=cast(Identifier)tt.expr){
-						if(!id.constLookup&&id.meaning){
-							if(tt.dep.isTop){
-								id.implicitDup=false;
-								if(id.sstate!=SemState.error&&checkConsumable(id)){
-									consume(id.meaning,id);
-									import ast.semantic_:nonLiftedError;
-									imported!"util.io".writeln("HERE ",tt," ",parent);
-									nonLiftedError(tt.expr,this);
-									tt.expr.setSemError();
-								}
-								parent.setSemForceError();
-							}
-							continue;
-						}
-					}
-				}else if(tt.dep.isTop){
-					success=false;
-					if(auto id=cast(Identifier)tt.expr){
+			foreach(ref tt;trackedTemporaries){
+				if(!tt.dep.isTop) continue; // nothing to do for recomputable temporaries
+				if(auto id=cast(Identifier)tt.expr){
+					if(tt.read){ // non-recomputable const-blocked consumption
 						if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
+							success=false;
 							assert(tt.read.meaning);
 							blockConst(tt.read.meaning,tt.read); // TODO: why needed?
-							if(checkConsumable(id,tt.read.meaning))
+							if(tt.read.scope_.checkConsumable(id,tt.read.meaning))
 								assert(tt.read.meaning.isSemError);
 							id.setSemForceError();
 							id.meaning.setSemForceError();
-							continue;
+							parent.setSemForceError();
+						}
+					}else{
+						if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
+							assert(!id.constLookup);
+							if(!checkConsumable(id)){
+								parent.setSemForceError();
+							}else if(lastUses.canForget(id.meaning,true)){
+								lastUses.forget(id.meaning);
+							}else{
+								// TODO: what to do here?
+							}
 						}
 					}
-					import ast.semantic_:nonLiftedError;
-					nonLiftedError(tt.expr,this);
-					tt.expr.setSemError();
-					parent.setSemForceError();
 				}
+			}
+			foreach(ref tt;trackedTemporaries){
+				if(!tt.dep.isTop) continue;
+				if(auto id=cast(Identifier)tt.expr) continue;
+				success=false;
+				import ast.semantic_:nonLiftedError;
+				nonLiftedError(tt.expr,this);
+				tt.expr.setSemError();
+				parent.setSemForceError();
 			}
 			return success;
 		}
@@ -582,6 +582,11 @@ abstract class Scope{
 				replaceDependencies(splitFrom,splitInto);
 			declProps.replaceDecl(splitFrom,splitInto);
 		}
+		foreach(ref oldDecl;forgottenVarsOnEntry){
+			if(oldDecl is splitFrom)
+				oldDecl=splitInto;
+		}
+		lastUses.replaceDecl(splitFrom,splitInto);
 	}
 
 	final void updateType(Declaration decl){
@@ -923,7 +928,6 @@ abstract class Scope{
 		final Declaration forgetOnEntry(Declaration decl)in{
 			assert(canSplit(decl));
 		}do{
-			decl=split(decl,null);
 			forgottenVarsOnEntry~=decl;
 			return decl;
 		}
