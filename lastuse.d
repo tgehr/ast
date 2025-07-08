@@ -33,7 +33,6 @@ struct LastUse{
 	}do{
 		auto nsc=cast(NestedScope)scope_;
 		assert(!!nsc);
-		nsc.parent.lastUses.pin(decl,true);
 		auto plu=decl in nsc.parent.lastUses.lastUses;
 		assert(!!plu,text(decl," ",nsc.parent.lastUses.lastUses));
 		return plu;
@@ -44,6 +43,7 @@ struct LastUse{
 		if(kind==Kind.lazySplit){
 			auto plu=getSplitFrom();
 			assert(plu&&plu.numPendingSplits>0);
+			plu.pin();
 			--plu.numPendingSplits;
 		}
 		kind=Kind.constPinned;
@@ -95,13 +95,6 @@ struct LastUse{
 		assert(scope_.getSplit(decl) is result);
 		assert(!use||use.meaning is result);
 		result.scope_.unsplit(result);
-		/+void removeSplits(Declaration decl){
-			foreach(split;decl.splitInto){
-				split.scope_.consume(split,null); // TODO: need to make sure we don't remove anything that has an use
-				removeSplits(split);
-			}
-		}
-		removeSplits(result);+/
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){
 				if(nested.rnsymtab.get(result.getId,null) is result)
@@ -175,9 +168,9 @@ struct LastUse{
 				goto case constUse;
 			case lazySplit:
 				auto lu=getSplitFrom();
-				if(lu.canForget()){
-					lu.forget();
-				}
+				assert(lu&&lu.numPendingSplits>0);
+				if(lu.numPendingSplits==1&&lu.canForget())
+					return lu.forget();
 				assert(!dep.isTop);
 				decl=scope_.forgetOnEntry(decl);
 				break;
@@ -311,8 +304,9 @@ struct LastUses{
 		return lastUse&&lastUse.canForget();
 	}
 	bool canRedefine(Declaration decl){
-		auto lastUse=decl in lastUses;
-		return lastUse&&lastUse.canRedefine();
+		if(auto lastUse=decl in lastUses)
+			return lastUse.canRedefine();
+		return parent&&parent.canRedefine(decl);
 	}
 	bool betterUnforgettableError(Declaration decl,Scope sc){
 		auto lastUse=decl in lastUses;
