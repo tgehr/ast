@@ -33,8 +33,11 @@ struct LastUse{
 	}do{
 		auto nsc=cast(NestedScope)scope_;
 		assert(!!nsc);
-		auto plu=decl in nsc.parent.lastUses.lastUses;
-		assert(!!plu,text(decl," ",nsc.parent.lastUses.lastUses));
+		auto ndecl=nsc.parent.getSplit(decl);
+		while(ndecl.splitFrom&&ndecl.splitFrom.scope_.isNestedIn(nsc.parent))
+			ndecl=ndecl.splitFrom;
+		auto plu=ndecl in nsc.parent.lastUses.lastUses;
+		assert(!!plu,text(ndecl," ",nsc.parent.lastUses.lastUses));
 		return plu;
 	}
 
@@ -77,7 +80,12 @@ struct LastUse{
 	void consume(){
 		if(kind==Kind.implicitForget) return;
 		if(kind==Kind.consumption) return;
-		kind=Kind.consumption;
+		if(kind==Kind.lazySplit){
+			auto lu=getSplitFrom();
+			assert(lu&&lu.numPendingSplits>0);
+			--lu.numPendingSplits;
+		}
+		scope(exit) kind=Kind.consumption;
 		assert(!use||use.meaning is decl);
 		auto csc=cast(NestedScope)scope_;
 		assert(csc&&csc.isNestedIn(decl.scope_));
@@ -91,7 +99,10 @@ struct LastUse{
 			}
 			if(csc is decl.scope_) break;
 		}
-		auto result=scope_.consume(decl,use);
+		Declaration result=decl;
+		if(kind==Kind.lazySplit){
+			scope_.symtabRemove(result);
+		}else result=scope_.consume(result,use);
 		assert(scope_.getSplit(decl) is result);
 		assert(!use||use.meaning is result);
 		result.scope_.unsplit(result);
@@ -172,7 +183,7 @@ struct LastUse{
 				if(lu.numPendingSplits==1&&lu.canForget())
 					return lu.forget();
 				assert(!dep.isTop);
-				decl=scope_.forgetOnEntry(decl);
+				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
 				assert(0); // TODO
@@ -192,6 +203,10 @@ struct LastUse{
 				assert(0);
 		}
 		consume();
+	}
+
+	void replaceDecl(Declaration splitFrom,Declaration splitInto){
+		if(decl is splitFrom) decl=splitInto;
 	}
 }
 
@@ -339,5 +354,14 @@ struct LastUses{
 			assert(!!split.scope_);
 			split.scope_.lastUses.pin(split,true);
 		}
+	}
+
+	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
+		assert(splitInto !in lastUses);
+	}do{
+		if(splitFrom !in lastUses) return;
+		lastUses[splitInto]=lastUses[splitFrom];
+		lastUses.remove(splitFrom);
+		lastUses[splitInto].replaceDecl(splitFrom,splitInto);
 	}
 }
