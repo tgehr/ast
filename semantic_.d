@@ -1678,7 +1678,7 @@ bool isLiftedImpl(Expression e,Scope sc){
 }
 
 bool isLiftedImpl(Identifier id,Scope sc){
-	return id.constLookup||id.implicitDup;
+	return id.constLookup/+||id.implicitDup+/; // implicit dup may change, so have to track
 }
 
 bool isLiftedImpl(CallExp ce,Scope sc){
@@ -4656,7 +4656,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		static if(language==silq){
 			if(auto meaning=sc.lookup(id,false,true,Lookup.probing,null)){
 				if(!sc.dependencyTracked(meaning)) return false;
-				return sc.canForget(meaning);
+				return sc.canForget(meaning,true);
 			}else return false;
 		}else return true;
 	}
