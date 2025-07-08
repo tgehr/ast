@@ -359,6 +359,46 @@ abstract class Scope{
 				if(isConsumable(id)) lastUses.implicitDup(id);
 			}
 		}
+		final void pushTrackedTemporaryDependencies(Declaration decl){
+			foreach(ref tt;trackedTemporaries){
+				if(tt.dep.isTop) continue;
+				this.pushUp(tt.dep,decl);
+				if(!tt.dep.isTop) continue;
+				if(auto id=cast(Identifier)tt.expr){
+					if(!tt.read){
+						if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
+							assert(!id.constLookup);
+							if(!checkConsumable(id)){
+								id.setSemForceError();
+							}else if(lastUses.canForget(id.meaning,true)){
+								lastUses.forget(id.meaning);
+							}else if(auto declProp=declProps.tryGet(id.meaning)){
+								bool seen=false,error=false;
+								DeadDecl[] failures;
+								foreach(access;declProp.accesses){
+									if(seen&&access !is id){
+										if(!error){
+											if(auto cd=recordConsumption(id.meaning,id))
+												failures~=cd;
+										}
+										error=true;
+										id.setSemForceError();
+										decl.setSemForceError();
+										access.setSemForceError();
+										import ast.semantic_:undefinedIdentifierError;
+										undefinedIdentifierError(access,failures,this);
+									}
+									if(access is id) seen=true;
+								}
+								// TODO: can we have `id.sstate != SemState.error` here?
+							}else{
+								// TODO: can this happen?
+							}
+						}
+					}
+				}
+			}
+		}
 		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
 			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
 			bool success=true;
@@ -376,23 +416,15 @@ abstract class Scope{
 							id.meaning.setSemForceError();
 							parent.setSemForceError();
 						}
-					}else{
-						if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
-							assert(!id.constLookup);
-							if(!checkConsumable(id)){
-								parent.setSemForceError();
-							}else if(lastUses.canForget(id.meaning,true)){
-								lastUses.forget(id.meaning);
-							}else{
-								// TODO: what to do here?
-							}
-						}
 					}
 				}
 			}
 			foreach(ref tt;trackedTemporaries){
 				if(!tt.dep.isTop) continue;
-				if(auto id=cast(Identifier)tt.expr) continue;
+				if(auto id=cast(Identifier)tt.expr){
+					if(id.isSemError()) parent.setSemForceError();
+					continue;
+				}
 				success=false;
 				import ast.semantic_:nonLiftedError;
 				nonLiftedError(tt.expr,this);
@@ -493,9 +525,9 @@ abstract class Scope{
 		final void resetConst(){ }
 		final void resetComponentReplacement(){ }
 	}
-	final void recordConsumption(Declaration decl,Identifier use){
-		if(allowMerge) return;
-		if(!use) return;
+	final ConsumedDecl recordConsumption(Declaration decl,Identifier use){
+		if(allowMerge) return null;
+		if(!use) return null;
 		auto cd=new ConsumedDecl(decl,use);
 		if(decl.rename){
 			cd.rename=new Identifier(decl.rename.id);
@@ -505,6 +537,7 @@ abstract class Scope{
 		cd.setSemCompleted();
 		if(canInsert(cd.name.id))
 			symtabInsert(cd);
+		return cd;
 	}
 	final Declaration consume(Declaration decl,Identifier use){
 		if(use&&!decl.isSemError&&!use.isSemError){
@@ -906,8 +939,7 @@ abstract class Scope{
 		final void pushDependencies(Declaration decl,bool keep){
 			dependencies.pushUp(decl,keep);
 			this.pushUp(controlDependency,decl);
-			foreach(ref tt;trackedTemporaries)
-				this.pushUp(tt.dep,decl);
+			pushTrackedTemporaryDependencies(decl);
 			if(keep) toRemove~=decl;
 		}
 
