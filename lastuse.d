@@ -19,36 +19,40 @@ struct LastUse{
 		consumption,
 	}
 	Kind kind; // TODO: sum type?
+	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
 	Expression parent=null;
 	static if(language==silq)
-		ast.scope_.Dependency forgetDep;
+		ast.scope_.Dependency dep;
 	LastUse* prev=null,next=null;
+	int numPendingSplits=0;
 
-	void commit(){
-		switch(kind){
-			case LastUse.Kind.lazySplit:
-				decl.splitFrom.scope_.consume(decl,null);
-				kind=LastUse.Kind.constPinned;
-				break;
-			case LastUse.Kind.lazyMerge:
-				foreach(d;decl.mergedFrom)
-					d.scope_.consume(decl,null);
-				kind=LastUse.Kind.constPinned;
-				break;
-			default:
-				break;
+	LastUse* getSplitFrom()in{
+		assert(kind==Kind.lazySplit);
+	}do{
+		auto nsc=cast(NestedScope)scope_;
+		assert(!!nsc);
+		nsc.parent.lastUses.pin(decl,true);
+		auto plu=decl in nsc.parent.lastUses.lastUses;
+		assert(!!plu,text(decl," ",nsc.parent.lastUses.lastUses));
+		return plu;
+	}
+
+	bool pin(){
+		if(kind==Kind.consumption) return false;
+		if(kind==Kind.lazySplit){
+			auto plu=getSplitFrom();
+			assert(plu&&plu.numPendingSplits>0);
+			--plu.numPendingSplits;
 		}
+		kind=Kind.constPinned;
+		return true;
 	}
 
-	void pin(){
-		commit();
-		if(kind==Kind.implicitDup) kind=Kind.constPinned;
-	}
-
-	void remove(){
-		commit();
+	void remove()in{
+		assert(kind==Kind.constPinned||kind==Kind.consumption);
+	}do{
 		if(prev) prev.next=next;
 		if(next) next.prev=prev;
 		prev=next=null;
@@ -71,12 +75,11 @@ struct LastUse{
 	}
 
 	void consume(){
-		commit();
 		if(kind==Kind.implicitForget) return;
 		if(kind==Kind.consumption) return;
 		kind=Kind.consumption;
-		assert(use.meaning is decl);
-		auto csc=cast(NestedScope)use.scope_;
+		assert(!use||use.meaning is decl);
+		auto csc=cast(NestedScope)scope_;
 		assert(csc&&csc.isNestedIn(decl.scope_));
 		for(;csc;csc=cast(NestedScope)csc.parent){
 			if(auto d=decl.getId in csc.rnsymtab){
@@ -88,16 +91,17 @@ struct LastUse{
 			}
 			if(csc is decl.scope_) break;
 		}
-		auto result=use.scope_.consume(decl,use);
-		assert(use.scope_.getSplit(decl) is result);
-		assert(use.meaning is result);
-		void removeSplits(Declaration decl){
+		auto result=scope_.consume(decl,use);
+		assert(scope_.getSplit(decl) is result);
+		assert(!use||use.meaning is result);
+		result.scope_.unsplit(result);
+		/+void removeSplits(Declaration decl){
 			foreach(split;decl.splitInto){
 				split.scope_.consume(split,null); // TODO: need to make sure we don't remove anything that has an use
 				removeSplits(split);
 			}
 		}
-		removeSplits(result);
+		removeSplits(result);+/
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){
 				if(nested.rnsymtab.get(result.getId,null) is result)
@@ -110,23 +114,20 @@ struct LastUse{
 		// TODO: perform necessary updates
 	}
 
-	bool canForget(bool forceHere){
-		if(forceHere){
-			if(kind==Kind.consumption) return false; // TODO: can we get rid of this?
-			if(kind==Kind.implicitDup) return false; // TODO
-		}
-		if(!use.scope_.canSplit(use.meaning)) return false;
+	bool canForget(){
+		if(use&&!scope_.canSplit(use.meaning)) return false;
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
-				return false; // TODO
+				auto plu=getSplitFrom();
+				assert(!!plu&&plu.numPendingSplits>0);
+				return plu.numPendingSplits==1&&plu.canForget()||!dep.isTop&&scope_.canSplit(decl);
 			case lazyMerge:
 				return false; // TODO
 			case implicitForget:
 				return false; // TODO
 			case implicitDup:
-				if(forceHere) return false;
 				return true;
 			case constUse:
 				return false; // TODO
@@ -138,12 +139,14 @@ struct LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				return false;
-			case lazySplit,lazyMerge:
+			case lazySplit:
+				return getSplitFrom().canRedefine();
+			case lazyMerge:
 				return false; // TODO
 			case implicitDup:
-				return canForget(false);
+				return canForget();
 			case constUse:
-				return canForget(true);
+				return false;
 			case implicitForget,consumption:
 				assert(0);
 		}
@@ -153,7 +156,9 @@ struct LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				return false;
-			case lazySplit,lazyMerge:
+			case lazySplit:
+				return false; // TODO
+			case lazyMerge:
 				return false; // TODO
 			case implicitDup:
 				return false; // TODO
@@ -169,7 +174,12 @@ struct LastUse{
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
-				assert(0); // TODO
+				auto lu=getSplitFrom();
+				if(lu.canForget()){
+					lu.forget();
+				}
+				assert(!dep.isTop);
+				decl=scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
 				assert(0); // TODO
@@ -180,7 +190,7 @@ struct LastUse{
 			case implicitDup:
 				use.implicitDup=false;
 				assert(!use.constLookup);
-				//assert(!use.scope_.isConst(decl));
+				//assert(!scope_.isConst(decl));
 				break;
 			case constUse:
 				assert(0); // TODO
@@ -196,10 +206,32 @@ struct LastUses{
 	LastUses* parent;
 	LastUse[Declaration] lastUses;
 	LastUse* lastLastUse;
+	void nest(NestedScope r)return in{
+		with(r.lastUses){
+			assert(!parent);
+			assert(!lastUses.length);
+			assert(!lastLastUse);
+		}
+	}do{
+		r.lastUses.parent=&this;
+		foreach(d,lu;lastUses){
+			if(lu.kind==LastUse.Kind.consumption) continue;
+			r.lastUses.lazySplit(d,r);
+		}
+	}
 	private void add(LastUse lastUse)in{
-		assert(lastUse.kind!=LastUse.Kind.constUse||lastUse.parent);
-		assert(lastUse.use.scope_);
-		assert(lastUse.use.meaning);
+		assert(!!lastUse.scope_);
+		with(LastUse.Kind){
+			assert(!lastUse.kind.among(implicitForget,constUse)||lastUse.parent);
+		}
+		if(lastUse.use){
+			assert(lastUse.use.scope_ is lastUse.scope_);
+			assert(!!lastUse.use.meaning);
+		}else{
+			with(LastUse.Kind){
+				assert(lastUse.kind.among(definition,lazySplit,lazyMerge));
+			}
+		}
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		if(auto prevLastUse=lastUse.decl in lastUses){
@@ -211,68 +243,78 @@ struct LastUses{
 		if(lastLastUse) lastLastUse.append(newLastLastUse);
 		lastLastUse=newLastLastUse;
 	}
-	void definition(Declaration decl,Expression defExp){
-		Identifier use=null;
-		add(LastUse(LastUse.kind.definition,decl,use,defExp));
-	}
-	void lazySplit(Declaration decl)in{
-		assert(decl.splitFrom&&decl.splitFrom in lastUses);
+	void definition(Declaration decl,Expression defExp)in{
+		assert(!!decl.scope_);
 	}do{
-		add(LastUse(LastUse.kind.lazySplit,decl));
+		Identifier use=null;
+		add(LastUse(LastUse.kind.definition,decl.scope_,decl,use,defExp));
 	}
-	void lazyMerge(Declaration decl)in{
+	void lazySplit(Declaration decl,NestedScope sc)in{
+		assert(decl.scope_&&sc);
+		assert(sc.isNestedIn(decl.scope_));
+	}do{
+		auto lu=LastUse(LastUse.kind.lazySplit,sc,decl);
+		static if(language==silq) lu.dep=sc.getDependency(decl);
+		++lu.getSplitFrom().numPendingSplits;
+		add(lu);
+	}
+	void lazyMerge(Declaration decl,Scope sc)in{
+		assert(!!sc);
 		assert(decl.mergedFrom.length);
 	}do{
-		add(LastUse(LastUse.kind.lazyMerge,decl));
+		add(LastUse(LastUse.kind.lazyMerge,sc,decl));
 	}
 	void implicitForget(Identifier use,Expression forgetExp,Dependency forgetDep)in{
 		assert(!!use);
 		assert(use.byRef);
 		assert(!use.constLookup);
 		assert(!!use.meaning);
+		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.implicitForget,use.meaning,use,forgetExp,forgetDep));
+		add(LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep));
 	}
-	void implicitDup(Identifier use,Expression parent)in{
+	void implicitDup(Identifier use)in{
 		assert(!!use);
 		assert(use.implicitDup);
 		assert(!use.constLookup);
+		assert(!!use.meaning);
+		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.implicitDup,use.meaning,use,parent));
+		add(LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use));
 	}
 	void constUse(Identifier use,Expression parent)in{
 		assert(!!use);
 		assert(use.constLookup||use.implicitDup);
+		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.constUse,use.meaning,use,parent));
+		add(LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
-	void consume(Declaration decl,Identifier use)in{
+	void consume(Declaration decl,Identifier use,Scope sc)in{
 		assert(decl in lastUses);
+		assert(!!sc);
 		if(use){
 			assert(use.meaning is decl);
 			assert(!use.constLookup);
 			assert(!use.implicitDup);
+			assert(use.scope_ is sc);
 		}
 	}do{
 		auto lastUse=decl in lastUses;
 		assert(!!lastUse);
-		add(LastUse(LastUse.Kind.consumption,decl,use));
+		add(LastUse(LastUse.Kind.consumption,sc,decl,use));
 	}
 
 	bool canForget(Declaration decl,bool forceHere){
 		auto lastUse=decl in lastUses;
 		if(!lastUse&&!forceHere&&parent)
 			return parent.canForget(decl,false);
-		return lastUse&&lastUse.canForget(forceHere);
+		return lastUse&&lastUse.canForget();
 	}
 	bool canRedefine(Declaration decl){
 		auto lastUse=decl in lastUses;
-		if(!lastUse&&parent) return parent.canRedefine(decl);
 		return lastUse&&lastUse.canRedefine();
 	}
-	bool betterUnforgettableError(Declaration decl,Scope sc)in{
-		assert(!canForget(decl,false));
-	}do{
+	bool betterUnforgettableError(Declaration decl,Scope sc){
 		auto lastUse=decl in lastUses;
 		if(!lastUse&&parent)
 			return parent.betterUnforgettableError(decl,sc);
@@ -293,7 +335,11 @@ struct LastUses{
 		auto lastUse=decl in lastUses;
 		if(!lastUse&&!forceHere&&parent)
 			parent.pin(decl,false);
-		if(lastUse) lastUse.pin();
+		if(lastUse&&!lastUse.pin()){
+			lastUse.remove();
+			lastUses.remove(decl);
+			lastUse=null;
+		}
 		//decl.scope_.lastUses.lastUses.remove(decl);
 		foreach(split;decl.splitInto){
 			assert(!!split.scope_);

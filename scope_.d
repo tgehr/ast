@@ -301,7 +301,8 @@ abstract class Scope{
 			return &declProps.set(decl,DeclProp.default_());
 		}
 		final void recordAccess(Identifier id,Declaration meaning){
-			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
+			if(!meaning.isToplevelDeclaration())
+				lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 			updateDeclProps(meaning).accesses~=id;
 		}
 		final void recordCapturer(Declaration capturer,Declaration meaning){
@@ -331,16 +332,32 @@ abstract class Scope{
 			expr.implicitDup=implicitDup;
 			if(dep.isTop) return false;
 			trackedTemporaries~=TrackedTemporary(expr,dep);
+			if(auto id=cast(Identifier)expr){
+				if(id.implicitDup&&id.meaning) {
+					recordImplicitDup(id);
+				}
+			}
 			return true;
 		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
-			assert(canRecompute(read.meaning),text(read.loc," ",use.loc));
+			assert(read.scope_);
+			assert(read.scope_.canRecompute(read.meaning),text(read.loc," ",use.loc));
 		}do{
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(read,read.scope_);
 			assert(!dep.isTop);
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
+		}
+		final void recordImplicitDup(Identifier id)in{
+			assert(!!id);
+			assert(id.implicitDup);
+			assert(!id.constLookup);
+			assert(!!id.meaning);
+		}do{
+			if(!id.meaning.isToplevelDeclaration()){
+				if(isConsumable(id)) lastUses.implicitDup(id);
+			}
 		}
 		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
 			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
@@ -348,18 +365,17 @@ abstract class Scope{
 			foreach(tt;trackedTemporaries){
 				if(!tt.read){
 					if(auto id=cast(Identifier)tt.expr){
-						if(id.meaning&&id.implicitDup){
+						if(!id.constLookup&&id.meaning){
 							if(tt.dep.isTop){
 								id.implicitDup=false;
 								if(id.sstate!=SemState.error&&checkConsumable(id)){
 									consume(id.meaning,id);
 									import ast.semantic_:nonLiftedError;
+									imported!"util.io".writeln("HERE ",tt," ",parent);
 									nonLiftedError(tt.expr,this);
 									tt.expr.setSemError();
 								}
 								parent.setSemForceError();
-							}else{
-								lastUses.implicitDup(id,parent);
 							}
 							continue;
 						}
@@ -520,6 +536,19 @@ abstract class Scope{
 		unconsume(result);
 		return result;
 	}
+	final void unsplit(Declaration decl)in{
+		assert(this is decl.scope_);
+	}do{
+		foreach(split;decl.splitInto){
+			assert(split !in split.scope_.lastUses.lastUses);
+			split.scope_.unsplit(split);
+			if(split.scope_.forgottenVarsOnEntry.canFind(split)){
+				split.scope_.forgottenVarsOnEntry=split.scope_.forgottenVarsOnEntry.filter!(d=>d!is split).array; // TODO: make more efficient
+			}
+			split.scope_.consume(split,null);
+		}
+		decl.splitInto=[];
+	}
 	final void unconsume(Declaration decl)in{
 		assert(decl.scope_ is null||decl.scope_ is this||decl.isSemError(),text(decl," ",decl.loc));
 	}do{
@@ -619,8 +648,20 @@ abstract class Scope{
 		return rnsym?rnsymtab.get(name,null):symtab.get(name,null);
 	}
 
+	final bool isConsumable(Identifier id,Declaration meaning=null)in{
+		assert(id.isSemError||id.meaning||meaning);
+	}do{
+		if(!meaning) meaning=id.meaning;
+		if(id.isSemError||meaning&&meaning.isSemError) return true;
+		assert(!!meaning);
+		if(meaning.typeConstBlocker) return false;
+		if(canRecompute(meaning)) return true;
+		if(isConst(meaning)) return false;
+		if(meaning.isConst) return false;
+		return true;
+	}
 	final bool checkConsumable(Identifier id,Declaration meaning=null)in{
-		assert(id.meaning||meaning);
+		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
 		if(id.isSemError||meaning&&meaning.isSemError) return true;
@@ -732,32 +773,34 @@ abstract class Scope{
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
-				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,false)," ",rnsymtab," ",isConst(d));
-				if(!canSplit(d)){
-					if(!d.isSemError()){
-						if(auto read=isConst(d)){
-							error(format("cannot forget 'const' variable '%s'",d), d.loc);
-							note("variable was made 'const' here", read.loc);
-							d.setSemForceError();
-							errors=true;
-						}
-					}
-					continue;
-				}
+				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
 				if(d.scope_.getFunction() !is getFunction()) continue;
-				d=split(d,null);
-				assert(d.scope_ is this);
+				//d=split(d,null);
+				//assert(d.scope_ is this);
 				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
 					d.setSemForceError();
 					continue;
 				}
 				if(!canForgetAppend(loc,d)){
-					if(!lastUses.betterUnforgettableError(d,this)){
-						if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-						else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-						errors=true;
+					if(!d.isSemError()){
+						bool done=false;
+						if(!canSplit(d)){
+							if(auto read=isConst(d)){
+								error(format("cannot forget 'const' variable '%s'",d), d.loc);
+								note("variable was made 'const' here", read.loc);
+								errors=true;
+								done=true;
+							}else continue; // TODO: catch this early
+						}
+						if(!done) done=lastUses.betterUnforgettableError(d,this);
+						if(!done){
+							if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+							errors=true;
+							done=true;
+						}
+						d.setSemForceError();
 					}
-					d.setSemForceError();
 					static if(is(typeof(loc):Expression)) loc.setSemForceError();
 				}else{
 					Identifier use=null;
@@ -870,22 +913,33 @@ abstract class Scope{
 			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-			return lastUses.canForget(decl,forceHere)||dependencies.canForget(decl);
+			return !forceHere&&lastUses.canForget(decl,true)||dependencies.canForget(decl);
 		}
 		final bool canRecompute(Declaration decl){
 			return canForget(decl,true);
 		}
 
+		Declaration[] forgottenVarsOnEntry;
+		final Declaration forgetOnEntry(Declaration decl)in{
+			assert(canSplit(decl));
+		}do{
+			decl=split(decl,null);
+			forgottenVarsOnEntry~=decl;
+			return decl;
+		}
 		Declaration[] forgottenVars;
 		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
-			assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
+			//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 		}do{
 			if(cast(DeadDecl)decl) return true;
-			if(lastUses.canForget(decl,false)){
+			if(lastUses.canForget(decl,true)){
 				lastUses.forget(decl);
 				return true;
 			}
+			if(!canSplit(decl)) return false;
 			if(canForget(decl)){
+				decl=split(decl,null);
+				assert(decl.scope_ is this);
 				cause.forgottenVars~=decl;
 				return true;
 			}
@@ -913,11 +967,11 @@ abstract class Scope{
 			r.controlDependency.joinWith(controlDependency);
 			r.dependencies=dependencies.dup;
 		}
-		r.lastUses.parent=&lastUses;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		allowMerge=true;
 		activeNestedScopes~=r;
+		lastUses.nest(r);
 	}
 
 	bool merge(bool quantumControl,NestedScope[] scopes...)in{
@@ -1474,7 +1528,7 @@ class NestedScope: Scope{
 			// TODO: backtrace forgets and last usages
 			if(auto added=addVariable(ndecl,type,true)){
 				result=added;
-				assert(ndecl.scope_ is parent&&result.scope_ is this);
+				assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 				splitVar(ndecl,result);
 				static if(language==silq){
 					if(remove){ // TODO: can we get rid of this?
