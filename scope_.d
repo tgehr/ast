@@ -127,7 +127,7 @@ abstract class Scope{
 
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
 		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
-			lastUses.forget(oldDecl);
+			lastUses.forget(oldDecl,true);
 			return true;
 		}
 		if(!newDecl.isSemError()) redefinitionError(newDecl, oldDecl);
@@ -370,8 +370,8 @@ abstract class Scope{
 				error=true;
 				id.setSemForceError();
 				id.meaning.setSemForceError();
-			}else if(lastUses.canForget(id.meaning,true)){
-				lastUses.forget(id.meaning);
+			}else if(lastUses.canForget(id.meaning,true,true)){
+				lastUses.forget(id.meaning,true);
 			}else if(auto declProp=declProps.tryGet(id.meaning)){
 				bool seen=false;
 				DeadDecl[] failures;
@@ -963,7 +963,7 @@ abstract class Scope{
 			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-			return !forceHere&&lastUses.canForget(decl,true)||dependencies.canForget(decl);
+			return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
 		}
 		final bool canRecompute(Declaration decl){
 			if(decl.isSemError()) return false;
@@ -982,8 +982,8 @@ abstract class Scope{
 			//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 		}do{
 			if(cast(DeadDecl)decl) return true;
-			if(lastUses.canForget(decl,true)){
-				lastUses.forget(decl);
+			if(lastUses.canForget(decl,true,false)){
+				lastUses.forget(decl,false);
 				return true;
 			}
 			if(!canSplit(decl)) return false;
