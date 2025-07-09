@@ -703,8 +703,7 @@ abstract class Scope{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
-		if(id.isSemError||meaning&&meaning.isSemError) return true;
-		assert(!!meaning);
+		if(!meaning) return true;
 		if(meaning.typeConstBlocker) return false;
 		if(canRecompute(meaning)) return true;
 		if(isConst(meaning)) return false;
@@ -715,11 +714,11 @@ abstract class Scope{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
-		if(id.isSemError||meaning&&meaning.isSemError) return true;
+		if(!meaning) return true;
 		assert(!!meaning);
 		if(meaning.typeConstBlocker){
 			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			id.setSemError();
+			id.setSemForceError();
 			meaning.setSemForceError();
 			import ast.semantic_:typeConstBlockNote;
 			typeConstBlockNote(meaning,this);
@@ -967,6 +966,7 @@ abstract class Scope{
 			return !forceHere&&lastUses.canForget(decl,true)||dependencies.canForget(decl);
 		}
 		final bool canRecompute(Declaration decl){
+			if(decl.isSemError()) return false;
 			return canForget(decl,true);
 		}
 
