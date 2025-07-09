@@ -354,10 +354,47 @@ abstract class Scope{
 			assert(id.implicitDup);
 			assert(!id.constLookup);
 			assert(!!id.meaning);
+			assert(id.scope_ is this);
 		}do{
 			if(!id.meaning.isToplevelDeclaration()){
 				if(isConsumable(id)) lastUses.implicitDup(id);
 			}
+		}
+		final bool cancelImplicitDup(Identifier id)in{
+			assert(id.implicitDup);
+			assert(id.meaning);
+			assert(!id.constLookup);
+		}do{
+			bool error=false;
+			if(!checkConsumable(id)){
+				error=true;
+				id.setSemForceError();
+				id.meaning.setSemForceError();
+			}else if(lastUses.canForget(id.meaning,true)){
+				lastUses.forget(id.meaning);
+			}else if(auto declProp=declProps.tryGet(id.meaning)){
+				bool seen=false;
+				DeadDecl[] failures;
+				foreach(access;declProp.accesses){
+					if(seen&&access !is id){
+						if(!error){
+							if(auto cd=recordConsumption(id.meaning,id))
+								failures~=cd;
+						}
+						error=true;
+						id.setSemForceError();
+						id.meaning.setSemForceError();
+						access.setSemForceError();
+						import ast.semantic_:undefinedIdentifierError;
+						undefinedIdentifierError(access,failures,this);
+					}
+					if(access is id) seen=true;
+				}
+				// TODO: can we have `id.sstate != SemState.error` here?
+			}else{
+				// TODO: can this happen?
+			}
+			return !error;
 		}
 		final void pushTrackedTemporaryDependencies(Declaration decl){
 			foreach(ref tt;trackedTemporaries){
@@ -367,32 +404,8 @@ abstract class Scope{
 				if(auto id=cast(Identifier)tt.expr){
 					if(!tt.read){
 						if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
-							assert(!id.constLookup);
-							if(!checkConsumable(id)){
-								id.setSemForceError();
-							}else if(lastUses.canForget(id.meaning,true)){
-								lastUses.forget(id.meaning);
-							}else if(auto declProp=declProps.tryGet(id.meaning)){
-								bool seen=false,error=false;
-								DeadDecl[] failures;
-								foreach(access;declProp.accesses){
-									if(seen&&access !is id){
-										if(!error){
-											if(auto cd=recordConsumption(id.meaning,id))
-												failures~=cd;
-										}
-										error=true;
-										id.setSemForceError();
-										decl.setSemForceError();
-										access.setSemForceError();
-										import ast.semantic_:undefinedIdentifierError;
-										undefinedIdentifierError(access,failures,this);
-									}
-									if(access is id) seen=true;
-								}
-								// TODO: can we have `id.sstate != SemState.error` here?
-							}else{
-								// TODO: can this happen?
+							if(!cancelImplicitDup(id)){
+								decl.setSemForceError();
 							}
 						}
 					}
@@ -734,9 +747,6 @@ abstract class Scope{
 		//imported!"util.io".writeln("POSTPROCESSING: ",id.loc," ",meaning," ",kind);
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
-		if(kind!=Lookup.probing&&meaning){
-			recordAccess(id,meaning);
-		}
 		if(performConsume){
 			if(!meaning) return meaning;
 			if(kind==Lookup.consuming){
@@ -756,6 +766,9 @@ abstract class Scope{
 				if(!isConstHere(meaning))
 					blockConst(meaning,id);
 			}
+		}
+		if(kind!=Lookup.probing&&meaning){
+			recordAccess(id,meaning);
 		}
 		return meaning;
 	}
@@ -928,7 +941,7 @@ abstract class Scope{
 			return getDependency(id.meaning);
 		}
 		final Dependency getDependency(Declaration decl,bool pushed=false)in{
-			assert(decl.isSemCompleted()||decl.isSemError(),text(decl," ",decl.sstate));
+			assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl,text(decl," ",decl.sstate));
 		}do{
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];
@@ -938,9 +951,10 @@ abstract class Scope{
 		}
 		final void pushDependencies(Declaration decl,bool keep){
 			dependencies.pushUp(decl,keep);
+			if(keep) toRemove~=decl;
 			this.pushUp(controlDependency,decl);
 			pushTrackedTemporaryDependencies(decl);
-			if(keep) toRemove~=decl;
+			lastUses.pushDependencies(decl,this);
 		}
 
 		bool canForget(Declaration decl,bool forceHere=false){
@@ -1015,6 +1029,7 @@ abstract class Scope{
 		//debug assert(allowMerge);
 	}do{
 		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
+		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.rnsymtab));
 		foreach(sc;scopes) sc.clearConsumed();
 		static if(language==silq){
 			clearConsumed();
@@ -1563,6 +1578,7 @@ class NestedScope: Scope{
 			}
 			// TODO: backtrace forgets and last usages
 			if(auto added=addVariable(ndecl,type,true)){
+				if(ndecl.isSemError()) added.setSemForceError();
 				result=added;
 				assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 				splitVar(ndecl,result);
