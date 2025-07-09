@@ -115,7 +115,7 @@ class LastUse{
 		assert(csc&&csc.isNestedIn(decl.scope_));
 		for(;csc;csc=cast(NestedScope)csc.parent){
 			if(auto d=decl.getId in csc.rnsymtab){
-				assert(*d is decl);
+				assert(*d is decl,text(*d," ",decl));
 				//imported!"util.io".writeln("FOUND: ",decl," ",csc.getFunction()," ",csc.rnsymtab);
 			}else{
 				csc.symtabInsert(decl); // TODO: use insertCapture?
@@ -137,8 +137,7 @@ class LastUse{
 				removeCopies(nested);
 			}
 		}
-		if(result.scope_)
-			removeCopies(result.scope_);
+		removeCopies(scope_);
 		// TODO: perform necessary updates
 	}
 
