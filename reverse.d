@@ -574,10 +574,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(string prim=isPrimitiveCall(olhs)) {
-		auto primCallE=cast(CallExp)olhs;
-		assert(!!primCallE);
-		Expression fun=primCallE.e;
-		Expression arg=primCallE.arg;
+		auto oce=cast(CallExp)olhs;
+		assert(!!oce);
 		Expression newlhs, newrhs;
 		switch(prim) {
 			case null:
@@ -585,47 +583,53 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			case "dup":
 				//dup(arg) := orhs
 				//forget(orhs=arg);
-				return new ForgetExp(orhs, arg);
+				auto ce=cast(CallExp)lhs;
+				assert(!!ce);
+				return new ForgetExp(rhs, ce.arg);
 			case "H", "X", "Y", "Z":
 				//gate(arg) := orhs
 				//arg := gate(orhs)
-				newlhs=arg;
-				newrhs=new CallExp(fun, orhs, false, false);
+				newlhs=oce.arg;
+				newrhs=new CallExp(oce.e, orhs, false, false);
 				newrhs.loc=olhs.loc;
 				break;
 			case "P":
 				//P(arg) := orhs
 				//orhs; P(-arg)
-				auto negated=new UMinusExp(arg);
+				auto ce=cast(CallExp)lhs;
+				assert(!!ce);
+				auto negated=new UMinusExp(ce.arg);
 				negated.loc=olhs.loc;
-				auto reversed=new CallExp(fun, negated, false, false);
+				auto reversed=new CallExp(ce.e, negated, false, false);
 				reversed.loc=olhs.loc;
 				//return new CompoundExp([orhs, reversed]);
 				return reversed;
 			case "rZ":
 				//rZ(arg[0], arg[1]) := orhs
 				//orhs; rZ(-args[0], args[1])
-				auto argt = cast(TupleExp)arg;
+				auto ce=cast(CallExp)lhs;
+				assert(!!ce);
+				auto argt = cast(TupleExp)ce.arg;
 				if(!argt) {
 					// TODO unpack?
-					sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+					sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
 					return error();
 				}
 				auto args = argt.e;
 				assert(args.length==2);
 				auto negated=new UMinusExp(args[0]);
 				negated.loc=olhs.loc;
-				auto reversed=new CallExp(fun, new TupleExp([negated, args[1]]), false, false);
+				auto reversed=new CallExp(ce.e, new TupleExp([negated, args[1]]), false, false);
 				reversed.loc=olhs.loc;
 				//return new CompoundExp([orhs, reversed]);
 				return reversed;
 			case "rX","rY":
 				//rX(args[0], args[1]) := orhs
 				//args[1] := rX(-args[0], orhs)
-				auto argt = cast(TupleExp)arg;
+				auto argt = cast(TupleExp)oce.arg;
 				if(!argt) {
 					// TODO unpack?
-					sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+					sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
 					return error();
 				}
 				auto args = argt.e;
@@ -633,11 +637,11 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				newlhs=args[1];
 				auto negated=new UMinusExp(args[0]);
 				negated.loc=olhs.loc;
-				newrhs=new CallExp(fun, new TupleExp([negated, orhs]), false, false);
+				newrhs=new CallExp(oce.e, new TupleExp([negated, orhs]), false, false);
 				newrhs.loc=olhs.loc;
 				break; // DMD bug: does not detect if this is missing
 			default:
-				sc.error(format("cannot reverse primitive '%s'",prim),fun.loc);
+				sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
 				return error();
 		}
 		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked);
