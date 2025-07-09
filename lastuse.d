@@ -7,7 +7,7 @@ import std.range, std.algorithm, std.conv;
 import ast.expression,ast.declaration,ast.scope_;
 
 
-class LastUse{
+final class LastUse{
 	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent){
 		this.kind=kind;
 		this.scope_=scope_;
@@ -132,8 +132,11 @@ class LastUse{
 		result.scope_.unsplit(result);
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){
-				if(nested.rnsymtab.get(result.getId,null) is result)
+				if(nested.rnsymtab.get(result.getId,null) is result){
 					nested.symtabRemove(result);
+					if(use&&!use.constLookup&&!use.implicitDup)
+						nested.recordConsumption(result,use);
+				}
 				removeCopies(nested);
 			}
 		}
@@ -141,7 +144,7 @@ class LastUse{
 		// TODO: perform necessary updates
 	}
 
-	bool canForget(){
+	bool canForget(bool forceConsumed){
 		if(use&&!scope_.canSplit(use.meaning)) return false;
 		final switch(kind)with(Kind){
 			case definition,constPinned:
@@ -149,7 +152,7 @@ class LastUse{
 			case lazySplit:
 				auto plu=getSplitFrom();
 				assert(!!plu&&plu.numPendingSplits>0);
-				return plu.numPendingSplits==1&&plu.canForget()||!dep.isTop&&scope_.canSplit(decl);
+				return (plu.numPendingSplits==1||forceConsumed)&&plu.canForget(forceConsumed)||!forceConsumed&&!dep.isTop&&scope_.canSplit(decl);
 			case lazyMerge:
 				return false; // TODO
 			case implicitForget:
@@ -168,11 +171,11 @@ class LastUse{
 			case definition,constPinned:
 				return false;
 			case lazySplit:
-				return getSplitFrom().canRedefine();
+				return canForget(true);
 			case lazyMerge:
 				return false; // TODO
 			case implicitDup:
-				return canForget();
+				return canForget(true);
 			case constUse:
 				return false;
 			case implicitForget,consumption:
@@ -197,16 +200,17 @@ class LastUse{
 		}
 	}
 
-	void forget(){
+	void forget(bool forceConsumed){
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
 				auto lu=getSplitFrom();
 				assert(lu&&lu.numPendingSplits>0);
-				if(lu.numPendingSplits==1&&lu.canForget())
-					return lu.forget();
+				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed))
+					return lu.forget(forceConsumed);
 				assert(!dep.isTop);
+				assert(!forceConsumed);
 				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
@@ -359,11 +363,11 @@ struct LastUses{
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
 	}
 
-	bool canForget(Declaration decl,bool forceHere){
+	bool canForget(Declaration decl,bool forceHere,bool forceConsumed){
 		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&!forceHere&&parent)
-			return parent.canForget(decl,false);
-		return lastUse&&lastUse.canForget();
+			return parent.canForget(decl,false,forceConsumed);
+		return lastUse&&lastUse.canForget(forceConsumed);
 	}
 	bool canRedefine(Declaration decl){
 		if(auto lastUse=lastUses.get(decl,null))
@@ -376,15 +380,15 @@ struct LastUses{
 			return parent.betterUnforgettableError(decl,sc);
 		return lastUse&&lastUse.betterUnforgettableError(sc);
 	}
-	void forget(Declaration decl)in{
-		assert(canForget(decl,false));
+	void forget(Declaration decl,bool forceConsumed)in{
+		assert(canForget(decl,false,forceConsumed));
 	}do{
 		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse){
 			assert(!!parent);
-			return parent.forget(decl);
+			return parent.forget(decl,forceConsumed);
 		}
-		lastUse.forget();
+		lastUse.forget(forceConsumed);
 	}
 	void pin(Declaration decl,bool forceHere){
 		if(!decl.scope_) return;
@@ -404,7 +408,7 @@ struct LastUses{
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
-		assert(splitInto !in lastUses);
+		// assert(splitInto !in lastUses); // TODO
 	}do{
 		if(splitFrom !in lastUses) return;
 		lastUses[splitInto]=lastUses[splitFrom];
