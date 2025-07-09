@@ -751,8 +751,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		newrhs.loc=newarg.loc;
 		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked,noImplicitDup);
 	}
-	if(auto we=cast(WildcardExp)olhs)
+	if(auto we=cast(WildcardExp)olhs){
+		rhs.implicitDup=false; // TODO: ok?
 		return res=new ForgetExp(rhs,null);
+	}
 	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
 }

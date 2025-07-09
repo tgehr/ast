@@ -7,7 +7,29 @@ import std.range, std.algorithm, std.conv;
 import ast.expression,ast.declaration,ast.scope_;
 
 
-struct LastUse{
+class LastUse{
+	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent){
+		this.kind=kind;
+		this.scope_=scope_;
+		this.decl=decl;
+		this.use=use;
+		this.parent=parent;
+	}
+	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent,Dependency dep){
+		this(kind,scope_,decl,use,parent);
+		this.dep=dep;
+	}
+	override string toString(){
+		string r="LastUse(";
+		static foreach(i,alias m;this.tupleof){
+			static if(!is(typeof(m):LastUse)){
+				static if(i) r~=",";
+				r~=text(m);
+			}
+		}
+		r~=")";
+		return r;
+	}
 	enum Kind{
 		definition,
 		constPinned,
@@ -25,10 +47,10 @@ struct LastUse{
 	Expression parent=null;
 	static if(language==silq)
 		ast.scope_.Dependency dep;
-	LastUse* prev=null,next=null;
+	LastUse prev=null,next=null;
 	int numPendingSplits=0;
 
-	LastUse* getSplitFrom()in{
+	LastUse getSplitFrom()in{
 		assert(kind==Kind.lazySplit);
 	}do{
 		auto nsc=cast(NestedScope)scope_;
@@ -36,7 +58,7 @@ struct LastUse{
 		auto ndecl=nsc.parent.getSplit(decl);
 		while(ndecl.splitFrom&&ndecl.splitFrom.scope_.isNestedIn(nsc.parent))
 			ndecl=ndecl.splitFrom;
-		auto plu=ndecl in nsc.parent.lastUses.lastUses;
+		auto plu=nsc.parent.lastUses.lastUses.get(ndecl,null);
 		assert(!!plu,text(ndecl," ",nsc.parent.lastUses.lastUses));
 		return plu;
 	}
@@ -60,20 +82,20 @@ struct LastUse{
 		if(next) next.prev=prev;
 		prev=next=null;
 	}
-	void prepend(LastUse* prev)in{
+	void prepend(LastUse prev)in{
 		assert(!this.prev);
 		assert(!prev.next);
 	}do{
 		this.prev=prev;
-		prev.next=&this;
+		prev.next=this;
 		// TODO: perform necessary updates
 	}
-	void append(LastUse* next)in{
+	void append(LastUse next)in{
 		assert(!this.next);
 		assert(!next.prev);
 	}do{
 		this.next=next;
-		next.prev=&this;
+		next.prev=this;
 		// TODO: perform necessary updates
 	}
 
@@ -85,6 +107,8 @@ struct LastUse{
 			assert(lu&&lu.numPendingSplits>0);
 			--lu.numPendingSplits;
 		}
+		/+imported!"util.io".writeln("CONSUMING: ",this);
+		scope(exit) imported!"util.io".writeln("CONSUMED: ",this);+/
 		scope(exit) kind=Kind.consumption;
 		assert(!use||use.meaning is decl);
 		auto csc=cast(NestedScope)scope_;
@@ -136,7 +160,8 @@ struct LastUse{
 			case constUse:
 				return false; // TODO
 			case consumption:
-				assert(0);
+				assert(decl.isSemError(),text(this));
+				return true;
 		}
 	}
 	bool canRedefine(){
@@ -192,6 +217,7 @@ struct LastUse{
 				assert(0); // TODO
 				break;
 			case implicitDup:
+				assert(use.implicitDup);
 				use.implicitDup=false;
 				assert(!use.constLookup);
 				//assert(!scope_.isConst(decl));
@@ -208,12 +234,30 @@ struct LastUse{
 	void replaceDecl(Declaration splitFrom,Declaration splitInto){
 		if(decl is splitFrom) decl=splitInto;
 	}
+
+	void pushDependencies(Declaration decl,Scope sc){
+		if(kind==Kind.implicitDup){
+			//imported!"util.io".writeln("BEFORE PUSH: ",use.loc," ",decl," ",dep);
+			if(dep.isTop) return; // might reenter during cancelImplicitDup
+			sc.pushUp(dep,decl);
+			//imported!"util.io".writeln("AFTER PUSH: ",use.loc," ",decl," ",dep);
+			if(dep.isTop){
+				assert(use&&use.meaning is this.decl);
+				//imported!"util.io".writeln("BEFORE CANCEL: ",sc.rnsymtab," ",sc.lastUses.lastUses);
+				if(sc.cancelImplicitDup(use)){
+					assert(kind==LastUse.Kind.consumption);
+				}else{
+					// TODO
+				}
+			}
+		}
+	}
 }
 
 struct LastUses{
 	LastUses* parent;
 	LastUse[Declaration] lastUses;
-	LastUse* lastLastUse;
+	LastUse lastLastUse;
 	void nest(NestedScope r)return in{
 		with(r.lastUses){
 			assert(!parent);
@@ -221,8 +265,9 @@ struct LastUses{
 			assert(!lastLastUse);
 		}
 	}do{
+		//imported!"util.io".writeln("NESTING IN: ",r.lastUses);
 		r.lastUses.parent=&this;
-		foreach(d,lu;lastUses){
+		foreach(d,ref lu;lastUses){
 			if(lu.kind==LastUse.Kind.consumption) continue;
 			r.lastUses.lazySplit(d,r);
 		}
@@ -242,12 +287,13 @@ struct LastUses{
 		}
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
-		if(auto prevLastUse=lastUse.decl in lastUses){
+		//imported!"util.io".writeln("ADDING LU: ",lastUse);
+		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			prevLastUse.remove();
 			lastUses.remove(lastUse.decl);
 		}
 		lastUses[lastUse.decl]=lastUse;
-		auto newLastLastUse=lastUse.decl in lastUses;
+		auto newLastLastUse=lastUses.get(lastUse.decl,null);
 		if(lastLastUse) lastLastUse.append(newLastLastUse);
 		lastLastUse=newLastLastUse;
 	}
@@ -255,13 +301,13 @@ struct LastUses{
 		assert(!!decl.scope_);
 	}do{
 		Identifier use=null;
-		add(LastUse(LastUse.kind.definition,decl.scope_,decl,use,defExp));
+		add(new LastUse(LastUse.Kind.definition,decl.scope_,decl,use,defExp));
 	}
 	void lazySplit(Declaration decl,NestedScope sc)in{
 		assert(decl.scope_&&sc);
 		assert(sc.isNestedIn(decl.scope_));
 	}do{
-		auto lu=LastUse(LastUse.kind.lazySplit,sc,decl);
+		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
 		static if(language==silq) lu.dep=sc.getDependency(decl);
 		++lu.getSplitFrom().numPendingSplits;
 		add(lu);
@@ -270,7 +316,7 @@ struct LastUses{
 		assert(!!sc);
 		assert(decl.mergedFrom.length);
 	}do{
-		add(LastUse(LastUse.kind.lazyMerge,sc,decl));
+		add(new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null));
 	}
 	void implicitForget(Identifier use,Expression forgetExp,Dependency forgetDep)in{
 		assert(!!use);
@@ -279,7 +325,7 @@ struct LastUses{
 		assert(!!use.meaning);
 		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep));
+		add(new LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep));
 	}
 	void implicitDup(Identifier use)in{
 		assert(!!use);
@@ -288,14 +334,16 @@ struct LastUses{
 		assert(!!use.meaning);
 		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use));
+		auto lu=new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null);
+		static if(language==silq) lu.dep=use.scope_.getDependency(use.meaning);
+		add(lu);
 	}
 	void constUse(Identifier use,Expression parent)in{
 		assert(!!use);
 		assert(use.constLookup||use.implicitDup);
 		assert(!!use.scope_);
 	}do{
-		add(LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
+		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
 	void consume(Declaration decl,Identifier use,Scope sc)in{
 		assert(decl in lastUses);
@@ -307,24 +355,24 @@ struct LastUses{
 			assert(use.scope_ is sc);
 		}
 	}do{
-		auto lastUse=decl in lastUses;
+		auto lastUse=lastUses.get(decl,null);
 		assert(!!lastUse);
-		add(LastUse(LastUse.Kind.consumption,sc,decl,use));
+		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
 	}
 
 	bool canForget(Declaration decl,bool forceHere){
-		auto lastUse=decl in lastUses;
+		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&!forceHere&&parent)
 			return parent.canForget(decl,false);
 		return lastUse&&lastUse.canForget();
 	}
 	bool canRedefine(Declaration decl){
-		if(auto lastUse=decl in lastUses)
+		if(auto lastUse=lastUses.get(decl,null))
 			return lastUse.canRedefine();
 		return parent&&parent.canRedefine(decl);
 	}
 	bool betterUnforgettableError(Declaration decl,Scope sc){
-		auto lastUse=decl in lastUses;
+		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&parent)
 			return parent.betterUnforgettableError(decl,sc);
 		return lastUse&&lastUse.betterUnforgettableError(sc);
@@ -332,7 +380,7 @@ struct LastUses{
 	void forget(Declaration decl)in{
 		assert(canForget(decl,false));
 	}do{
-		auto lastUse=decl in lastUses;
+		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse){
 			assert(!!parent);
 			return parent.forget(decl);
@@ -341,7 +389,7 @@ struct LastUses{
 	}
 	void pin(Declaration decl,bool forceHere){
 		if(!decl.scope_) return;
-		auto lastUse=decl in lastUses;
+		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&!forceHere&&parent)
 			parent.pin(decl,false);
 		if(lastUse&&!lastUse.pin()){
@@ -363,5 +411,11 @@ struct LastUses{
 		lastUses[splitInto]=lastUses[splitFrom];
 		lastUses.remove(splitFrom);
 		lastUses[splitInto].replaceDecl(splitFrom,splitInto);
+	}
+
+	void pushDependencies(Declaration decl,Scope sc){
+		foreach(d,ref lu;lastUses){
+			lu.pushDependencies(decl,sc);
+		}
 	}
 }
