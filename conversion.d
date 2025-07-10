@@ -38,6 +38,14 @@ class ExplosionConversion: Conversion{
 	override ExplosionConversion isExplosion(){ return this; }
 }
 
+class ImplosionCoercion: Conversion{
+	this(Expression from,Expression to)in{
+		assert(isEmpty(to));
+	}do{
+		super(from,to);
+	}
+}
+
 bool isNoOpConversion(Expression from,Expression to)in{
 	assert(isType(from)&&isType(to));
 }do{
@@ -581,6 +589,12 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 		if(auto r=vectorToFixed!witness(from,to,annotationType)) return r;
 	}
 	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
+	if(annotationType>=annotationType.coercion){
+		if(isEmpty(to)){
+			static if(witness) return new ImplosionCoercion(from,to);
+			else return true;
+		}
+	}
 	return typeof(return).init;
 }
 bool isLiteral(Expression expr){
