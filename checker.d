@@ -965,12 +965,12 @@ class Checker {
 		foreach(i, arg; argVals) {
 			auto pTy = paramTypes[i];
 			if(!isConstForReverse[i]) {
-				// expectMoved(arg, "reversed argument");
+				expectMoved(arg, "reversed argument");
 				assert(!ast_ty.hasClassicalComponent(pTy), "reversed non-const classical parameter");
 			} else if(ast_ty.hasQuantumComponent(pTy)) {
-				// expectConst(arg, "non-reversed argument");
+				expectConst(arg, "non-reversed argument");
 			}
-			if(!isReversed) {
+			if(isConstForReverse[i]) {
 				visExpr(arg);
 			}
 		}
