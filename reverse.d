@@ -98,7 +98,7 @@ bool isEmptyTuple(Expression e){
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked){
 	bool validDefEntry(Expression e){
 		if(e.implicitDup) return false;
-		return cast(Identifier)e||cast(IndexExp)e;
+		return cast(Identifier)e||cast(IndexExp)e||cast(SliceExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
 	if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
@@ -407,8 +407,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked);
 			}
 		}
-		// TOOD: only do this if lhs is variable
-		auto newRhs=new TypeAnnotationExp(rhs,tae.t,tae.annotationType);
+		Expression newRhs;
+		if(tae.annotationType==TypeAnnotationType.coercion&&tae.e.type){
+			newRhs=new TypeAnnotationExp(orhs,tae.e.type,tae.annotationType);
+		}else{
+			// TOOD: only do this if lhs is variable
+			newRhs=new TypeAnnotationExp(orhs,tae.t,tae.annotationType);
+		}
 		newRhs.loc=orhs.loc;
 		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked);
 	}

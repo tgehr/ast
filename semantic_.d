@@ -185,7 +185,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 
 Expression presemantic(Declaration expr,Scope sc){
 	bool success=true; // dummy
-	if(!expr.scope_) makeDeclaration(expr,success,sc);
+	if(!expr.scope_) makeDeclaration(expr,success,sc,false);
 	if(auto dat=cast(DatDecl)expr){
 		if(dat.dtype) return expr;
 		auto dsc=new DataScope(sc,dat);
@@ -195,7 +195,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		if(dat.hasParams) declareParameters(dat,true,dat.params,dsc);
 		if(!dat.body_.ascope_) dat.body_.ascope_=new AggregateScope(dat.dscope_);
 		if(cast(NestedScope)sc) dat.context = addVar(Id.s!"`outer",contextTy(true),dat.loc,null);
-		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_);
+		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_,false);
 		foreach(ref exp;dat.body_.s) if(auto decl=cast(Declaration)exp) exp=presemantic(decl,dat.body_.ascope_);
 	}
 	if(auto fd=cast(FunctionDef)expr){
@@ -235,7 +235,7 @@ Expression presemantic(Declaration expr,Scope sc){
 	return expr;
 }
 
-Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
+Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignoreInvalidLhs){
 	if(auto imp=cast(ImportExp)expr){
 		imp.scope_ = sc;
 		auto ctsc=cast(TopScope)sc;
@@ -261,9 +261,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 		return decl;
 	}
 	if(auto ce=cast(CommaExp)expr){
-		ce.e1=makeDeclaration(ce.e1,success,sc);
+		ce.e1=makeDeclaration(ce.e1,success,sc,ignoreInvalidLhs);
 		propErr(ce.e1,ce);
-		ce.e2=makeDeclaration(ce.e2,success,sc);
+		ce.e2=makeDeclaration(ce.e2,success,sc,ignoreInvalidLhs);
 		propErr(ce.e2,ce);
 		return ce;
 	}
@@ -328,7 +328,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 				propErr(vd,be);
 				return be;
 			}else goto LbadDefLhs;
-		}else if(cast(IndexExp)be.e1){
+		}else if(cast(IndexExp)be.e1||cast(SliceExp)be.e1){
 			return be;
 		}else if(auto ce=cast(CatExp)be.e1){
 			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
@@ -341,7 +341,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 				if(!id.implicitDup) propErr(makeVar(id),be);
 			}else if(!cast(IndexExp)unwrap(be.e2)) goto LbadDefLhs;
 			return be;
-		}else LbadDefLhs:{
+		}else LbadDefLhs:if(!ignoreInvalidLhs){
 			if(!be.isSemError()){
 				sc.error("invalid definition left-hand side",be.e1.loc);
 				be.e1.setSemError();
@@ -349,7 +349,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc){
 			}
 			success=false;
 		}
-		success&=expr.isSemCompleted();
+		success&=!expr.isSemError();
 		return expr;
 	}
 	if(auto tae=cast(TypeAnnotationExp)expr){
@@ -386,7 +386,7 @@ void checkNotLinear(Expression e,Scope sc){
 
 Expression[] semantic(Expression[] exprs,Scope sc){
 	bool success=true;
-	foreach(ref expr;exprs) if(!cast(DefineExp)expr&&!cast(CommaExp)expr) expr=makeDeclaration(expr,success,sc); // TODO: get rid of special casing?
+	foreach(ref expr;exprs) if(!cast(DefineExp)expr&&!cast(CommaExp)expr) expr=makeDeclaration(expr,success,sc,false); // TODO: get rid of special casing?
 	/+foreach(ref expr;exprs){
 	 if(auto decl=cast(Declaration)expr) expr=presemantic(decl,sc);
 		if(cast(DefineExp)expr) expr=makeDeclaration(expr,success,sc);
@@ -648,7 +648,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&asc.close()) cd.setSemError(); // TODO: fix
 	cd.ascope_=asc;
 	bool success=true; // dummy
-	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc);
+	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc,false);
 	foreach(ref e;cd.s) if(auto decl=cast(Declaration)e) e=presemantic(decl,asc);
 	foreach(ref e;cd.s){
 		e=nestedDeclSemantic(e,asc);
@@ -1585,7 +1585,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, Annotation restriction
 
 VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 	bool success=true;
-	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc);
+	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc,false);
 	vd.type=unit;
 	if(!success) vd.setSemError();
 	if(!vd.vtype){
@@ -1778,13 +1778,14 @@ Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 static if(language==silq)
 Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 	auto result=callSemantic!isPresemantic(ce,context);
+	if(auto ce2=cast(CallExp)result) ce=ce2;
 	static if(!isPresemantic){ // TODO: move into callSemantic!(false,DefineLhsContext)?
 		auto sc=context.sc;
 		assert(ce.e.isSemFinal());
 		bool ok=true;
 		if(!ce.isSemError()){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
-			if(ft){
+			if(ft&&ft.isSquare==ce.isSquare){
 				if(ft.annotation<Annotation.mfree){
 					sc.error("reversed function must be 'mfree'",f.loc);
 					ok=false;
@@ -2034,16 +2035,17 @@ Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 	// maybe we will want to support slice replacement
 	return defineLhsSemanticImplCurrentlyUnsupported(slc,context);
 }
+
 Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 	auto at=cast(ArrayTy)context.type;
-	// auto vt=cast(VectorTy)context.type; // TODO
-	auto tt=!at&&context.type?context.type.isTupleTy:null;
+	auto vt=cast(VectorTy)context.type;
+	auto tt=!at&&!vt&&context.type?context.type.isTupleTy:null;
 	Expression[] es=[];
 	if(auto te=cast(TupleExp)context.initializer) es=te.e;
 	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
 	bool isBottom=context.type&&isEmpty(context.type);
 	foreach(i,ref e;tpl.e){
-		auto ttype=at?at.next:tt&&i<tt.length?tt[i]:isBottom?bottom:null;
+		auto ttype=at?at.next:vt?vt.next:tt&&i<tt.length?tt[i]:isBottom?bottom:null;
 		auto ninit=i<es.length?es[i]:null;
 		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype,ninit));
 		propErr(e,tpl);
@@ -2054,6 +2056,16 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 			if(tt){
 				if(tpl.length!=tt.length){
 					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc);
+					tpl.setSemError();
+				}
+			}else if(vt){
+				// TODO: technically this violates type refinement
+				auto lit=LiteralExp.makeInteger(tpl.e.length);
+				Expression neq=new NeqExp(lit,vt.num);
+				neq=expressionSemantic(neq,context.expSem.nestConst);
+				assert(neq.isSemCompleted());
+				if(neq.eval()==LiteralExp.makeBoolean(1)){
+					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc);
 					tpl.setSemError();
 				}
 			}else if(!at&&!isBottom){
@@ -2072,9 +2084,15 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	auto at=cast(ArrayTy)context.type;
 	auto vt=cast(VectorTy)context.type;
 	auto tt=!at&&!vt&&context.type?context.type.isTupleTy:null;
+	Expression[] es=[];
+	if(auto te=cast(TupleExp)context.initializer) es=te.e;
+	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
+	bool isBottom=context.type&&isEmpty(context.type);
 	foreach(i,ref e;vec.e){
-		auto ttype=at?at.next:vt?vt.next:tt&&i<tt.length?tt[i]:null;
-		e=defineLhsSemantic!isPresemantic(e,context);
+		auto ttype=at?at.next:vt?vt.next:tt&&i<tt.length?tt[i]:isBottom?bottom:null;
+		auto ninit=i<es.length?es[i]:null;
+		auto ncontext=context.nest(context.constResult,ttype,ninit);
+		e=defineLhsSemantic!isPresemantic(e,ncontext);
 		propErr(e,vec);
 	}
 	static if(!isPresemantic){
@@ -2100,6 +2118,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 				vec.setSemError();
 			}
 		}else vec.setSemError(); // TODO: ok?
+		if(isBottom) vec.type=bottom;
 		if(vec.e.all!(e=>!!e.type)){
 			Expression t=null;
 			foreach(e;vec.e){
@@ -2115,6 +2134,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
+	if(isLiftedBuiltIn(tae)) return defineLhsSemanticImplLifted(tae,context);
 	auto sc=context.sc;
 	static if(!isPresemantic){
 		if(context.type){
@@ -2400,12 +2420,13 @@ Expression defineLhsSemanticImpl(StringTy e,DefineLhsContext context){
 
 
 Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
+	if(auto slc=cast(SliceExp)e) return defineLhsSemanticImpl(slc,context);
 	auto result=expressionSemantic(e,context.expSem);
 	static if(!isPresemantic){
 		if(context.type&&result.type){
 			if(!joinTypes(context.type,result.type)){ // TODO: generate coerce expression instead?
 				context.sc.error(format("'lifted' expression of type '%s' incompatible with right-hand side type '%s'",result.type,context.type),result.loc);
-				result.setSemError();
+				result.setSemForceError();
 			}
 		}
 	}
@@ -2453,8 +2474,11 @@ Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsC
 	static if(!isPresemantic) scope(success){
 		assert(!!r);
 		if(!r.isSemError()){
-			assert(!!r.type);
-			r.setSemCompleted();
+			enum flags=LowerDefineFlags.createFresh, unchecked=false;
+			if(validDefLhs!flags(r,context.sc,unchecked)){
+				assert(!!r.type);
+				r.setSemCompleted();
+			}
 			r.constLookup=context.constResult;
 		}
 	}
@@ -2630,13 +2654,25 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
-	if(sc.allowsLinear){
+	bool success=true;
+	DefineExp de=null;
+	enum flags=LowerDefineFlags.createFresh, unchecked=false;
+	bool attemptLowering=sc.allowsLinear;
+	void updateLhs(){
+		assert(!de);
+		de=cast(DefineExp)makeDeclaration(be,success,sc,attemptLowering);
+		if(be.e2.type){
+			auto dcontext=defineLhsContext(econtext,be.e2.type,be.e2);
+			be.e1=defineLhsSemantic(be.e1,dcontext);
+		}
+	}
+	if(attemptLowering){
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 		propErr(be.e2,be);
 		checkIndexReplacement(be,sc);
+		updateLhs();
 		if(!be.isSemError()){
-			enum flags=LowerDefineFlags.createFresh, unchecked=false;
 			if(auto e=lowerDefine!flags(be,sc,unchecked)){
 				if(!e.isSemError()){
 					sc.restoreStateSnapshot(preState);
@@ -2662,11 +2698,10 @@ Expression defineSemantic(DefineExp be,Scope sc){
 		}
 	}else{
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
+		updateLhs();
 	}
-	bool success=true;
 	auto e2orig=be.e2;
 	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
-	auto de=cast(DefineExp)makeDeclaration(be,success,sc);
 	static if(language==silq){
 		if(be.e2.isSemCompleted()&&sc.getFunction()){
 			//getIndexDependency(be.e1)
@@ -2749,10 +2784,6 @@ Expression defineSemantic(DefineExp be,Scope sc){
 	auto isBottom=be.e2.type&&isEmpty(be.e2.type);
 	if(be.e2.isSemCompleted()){
 		auto tpl=cast(TupleExp)be.e1;
-		if(be.e2.type){
-			auto dcontext=defineLhsContext(econtext,be.e2.type,be.e2);
-			defineLhsSemantic(be.e1,dcontext);
-		}
 		if(de){
 			if(be.e1.isSemError()) de.setSemError();
 			if(!de.isSemError()){
@@ -3991,7 +4022,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		assert(!!e);
 	}do{
 		static if(!isRhs){
-			if(context.constResult) return expressionSemantic(e,context.expSem);
+			static if(!isPresemantic){
+				if(context.constResult) return expressionSemantic(e,context.expSem);
+			}else{
+				if(context.constResult) return e;
+			}
 			return defineLhsSemantic!isPresemantic(e,context);
 		}else return expressionSemantic(e,context);
 	}
@@ -4055,6 +4090,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
+		bool error=false;
 		void checkArg(size_t i,Expression exp)in{
 			assert(exp.isSemFinal(),text(exp));
 		}do{
@@ -4069,6 +4105,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 					}
 					ce.setSemError();
+					error=true;
 				}
 			}else static if(language==psi){
 				bool pure_=exp.isPure();
@@ -4076,6 +4113,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 					sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					ce.setSemError();
+					error=true;
 				}
 			}
 		}
@@ -4086,6 +4124,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
 					sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
 					tpl.setSemError();
+					error=true;
 				}
 				bool defaultIsConst=true;
 				if(ft.nargs!=tpl.length){
@@ -4147,7 +4186,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
 					ce.setSemError();
-					return true;
+					error=true;
 				}
 			}
 		}else{
@@ -4164,7 +4203,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			assert(ft.names.length==1);
 			static if(isRhs) checkArg(0,ce.arg);
 		}
-		return false;
+		propErr(ce.arg,ce);
+		return error;
 	}
 	Expression checkFunCall(FunTy ft){
 		void checkArg(Expression arg,Expression paramTy){
@@ -4188,27 +4228,24 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				if(auto codft=cast(ProductTy)nft.cod){
 					if(codft.isSquare) return false;
+					bool canMatch=isRhs||!isPresemantic&&codft.isConstForReverse.all;
+					if(!canMatch) return true; // TODO: matching based on return type
 					if(matchArg(codft)) return true;
 					propErr(ce.arg,ce);
 					if(ce.arg.isSemError()) return true;
-					if(isRhs||codft.isConstForReverse.all){
-						Expression garg;
-						auto tt=nft.tryMatch(ce.arg,garg);
-						if(!tt) return false;
-						Expression.CopyArgs cargs={ preserveMeanings: true };
-						auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
-						nce.loc=ce.loc;
-						auto nnce=new CallExp(nce,ce.arg,false,false);
-						nnce.loc=ce.loc;
-						static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
-						else nnce=cast(CallExp)callSemantic(nnce,context.expSem.nestConsumed);
-						assert(!!nnce);
-						ce=nnce;
-						return true;
-					}else{
-						// TODO: analyze arguments?
-						return true;
-					}
+					Expression garg;
+					auto tt=nft.tryMatch(ce.arg,garg);
+					if(!tt) return false;
+					Expression.CopyArgs cargs={ preserveMeanings: true };
+					auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
+					nce.loc=ce.loc;
+					auto nnce=new CallExp(nce,ce.arg,false,false);
+					nnce.loc=ce.loc;
+					static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
+					else nnce=cast(CallExp)callSemantic(nnce,context.expSem.nestConsumed);
+					assert(!!nnce);
+					ce=nnce;
+					return true;
 				}
 			}
 			if(ft.isSquare!=ce.isSquare) return false;
@@ -5594,7 +5631,6 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	propErr(ce.e2,ce);
 	if(ce.isSemError())
 		return ce;
-	assert(!ce.type);
 	ce.type=concatType(ce.e1.type,ce.e2.type);
 	if(!ce.type){
 		sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
