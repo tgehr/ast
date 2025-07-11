@@ -5007,11 +5007,15 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		}
 	}
 	if(next){
-		auto se=new NSubExp(rval,lval);
-		se.type=nSubType(sl.r.type,sl.l.type);
-		assert(!!se.type);
-		se.setSemCompleted();
-		sl.type=vectorTy(next,se.eval());
+		if(lval.isDeterministic()&&rval.isDeterministic()){
+			auto se=new NSubExp(rval,lval);
+			se.type=nSubType(sl.r.type,sl.l.type);
+			assert(!!se.type);
+			se.setSemCompleted();
+			sl.type=vectorTy(next,se.eval());
+		}else{
+			sl.type=arrayTy(next);
+		}
 		import util.maybe:Maybe,just;
 		auto mnum=vt?vt.num.asIntegerConstant():tt?just(ℤ(tt.length)):Maybe!ℤ();
 		if(mlc&&mlc.get()<0){
