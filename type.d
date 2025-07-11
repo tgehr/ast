@@ -1021,7 +1021,7 @@ class ProductTy: Type{
 		if(!r) return false;
 		if(isConst.length!=r.isConst.length) return false;
 		if(isSquare!=r.isSquare||annotation>r.annotation||
-		   isClassical_!=r.isClassical_||nargs!=r.nargs)
+		   isClassical_&&!r.isClassical_||nargs!=r.nargs)
 			return false;
 		if(names.any!(name=>r.hasFreeVar(name)))
 			return false;
