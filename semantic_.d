@@ -4032,7 +4032,17 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
 	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestConsumed);
-	else ce.e=expressionSemantic(ce.e,context.expSem.nestConsumed);
+	else static if(!isPresemantic){
+		ce.e=expressionSemantic(ce.e,context.expSem.nestConsumed);
+	}else{
+		auto state=context.sc.getStateSnapshot(true);
+		auto analyzedFun=expressionSemantic(ce.e.copy(),context.expSem.nestConsumed);
+		if(analyzedFun.isSemError()) ce.e=analyzedFun;
+		else{
+			ce.e.type=analyzedFun.type;
+			context.sc.restoreStateSnapshot(state);
+		}
+	}
 	propErr(ce.e,ce);
 	if(ce.isSemError())
 		return ce;
