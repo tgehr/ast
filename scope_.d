@@ -1246,6 +1246,7 @@ abstract class Scope{
 			assert(state.prevCapturedDecls.length<=fd.capturedDecls.length);
 			assert(state.prevCapturedDecls==fd.capturedDecls[0..state.prevCapturedDecls.length]);
 			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$]){
+				if(!fd.isConsumedCapture(decl)) continue;
 				if(decl.getId !in state.rnsymtab||cast(DeadDecl)state.rnsymtab[decl.getId]){
 					if(decl.name.id !in state.symtab||cast(DeadDecl)state.symtab[decl.name.id])
 						state.symtab[decl.name.id]=decl;
