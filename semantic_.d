@@ -3136,6 +3136,7 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
 
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc){
 	decl.typeConstBlocker=blocker;
+	sc.pinLastUse(decl);
 	assert(!isAssignable(decl,sc));
 }
 
@@ -3164,7 +3165,11 @@ void typeConstBlockNote(Declaration decl,Scope sc)in{
 	if(name){
 		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",decl.name,name),decl.typeConstBlocker.loc);
 	}else{
-		sc.note(format("'%s' was made 'const' because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
+		if(cast(Declaration)decl.typeConstBlocker||cast(DefineExp)decl.typeConstBlocker){
+			sc.note(format("'%s' was made 'const' because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
+		}else{
+			sc.note(format("'%s' was made 'const' because it appeared in type of expression",decl.name),decl.typeConstBlocker.loc);
+		}
 	}
 }
 
@@ -4039,6 +4044,10 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 
 }
 
+Expression prepareForSubstitutionIntoType(Expression parent,FunTy ft,Expression exp,Scope sc,ref bool error){
+	return exp;
+}
+
 Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
 	enum isRhs=is(T==ExpSemContext);
 	static argSemantic(Expression e,T context)in{
@@ -4124,29 +4133,49 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
 		bool error=false;
-		void checkArg(size_t i,Expression exp)in{
+		void checkArg(size_t i,ref Expression exp)in{
 			assert(exp.isSemFinal(),text(exp));
 		}do{
 			if(exp.isSemError()) return;
-			static if(language==silq){
-				bool classical=exp.type.isClassical(), qfree=exp.isQfree();
-				if((!classical||!qfree)&&i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
-					if(classical){ // TODO: could just automatically deduce existential type
+			if(i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
+				void report()(){
+					static if(language==silq){
 						sc.error(format("argument must be 'qfree' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
-					}else{
-						sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
-					}
-					ce.setSemError();
-					error=true;
+					}else static if(language==psi){
+						sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
+					}else static assert(0);
 				}
-			}else static if(language==psi){
-				bool pure_=exp.isPure();
-				if(!pure_&&i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
-					sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
-					sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
-					ce.setSemError();
-					error=true;
+				static if(language==silq){
+					bool classical=exp.type.isClassical(), qfree=exp.isQfree();
+					if((!classical||!qfree)){
+						if(classical){ // TODO: could just automatically deduce existential type
+							report();
+						}else{
+							sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						}
+						ce.setSemError();
+						error=true;
+					}
+				}else static if(language==psi){
+					bool pure_=exp.isPure();
+					if(!isPure()){
+						report();
+						ce.setSemError();
+						error=true;
+					}
+				}
+				foreach(id;exp.freeVars){
+					if(!id.meaning) continue;
+					if(id.constLookup||id.implicitDup){
+						typeConstBlockDecl(id.meaning,ce,sc);
+					}else{
+						sc.error(format("cannot consume '%s'",id),id.loc);
+						sc.note(format("return type '%s' of function call depends on parameter '%s'",ft.cod,ft.names[i]),ce.loc);
+						ce.setSemError();
+						error=true;
+					}
 				}
 			}
 		}
@@ -5940,8 +5969,10 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 						sc.error("cannot consume variables within types",expr.loc);
 						expr.setSemError();
 					}
-					if(id.meaning&&id.implicitDup)
-						context.sc.trackTemporary(id); // TODO: ok?
+					if(id.meaning){
+						if(id.implicitDup)context.sc.trackTemporary(id); // TODO: ok?
+						if(context.inType) context.sc.pinLastUse(id.meaning); // TODO: sufficient?
+					}
 				}else{
 					expr.constLookup=context.constResult;
 					if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
