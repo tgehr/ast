@@ -339,6 +339,9 @@ abstract class Scope{
 			}
 			return true;
 		}
+		void pinLastUse(Declaration decl){
+			lastUses.pin(decl,true);
+		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
 			assert(read.scope_);
