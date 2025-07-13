@@ -217,8 +217,10 @@ abstract class Scope{
 				capturers~=nested.capturers;
 			}
 			void replaceDecl(Declaration splitFrom,Declaration splitInto){
-				foreach(id;accesses) // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+				foreach(id;accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
 					id.meaning=splitInto;
+					if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
+				}
 				foreach(capturer;capturers){
 					void doIt(T)(T capturer){
 						if(splitFrom !in capturer.captures) return;
