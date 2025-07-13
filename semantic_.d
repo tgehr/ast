@@ -3633,6 +3633,27 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		// TODO: assignments to fields
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
+			if(cast(AndAssignExp)be||cast(OrAssignExp)be){
+				auto cond=be.e1.copy();
+				if(cast(OrAssignExp)be){
+					auto ncond=new UNotExp(cond);
+					ncond.loc=cond.loc;
+					cond=ncond;
+				}
+				be.e2.implicitDup=true;
+				auto set=new AssignExp(be.e1,be.e2);
+				set.loc=be.loc;
+				auto bdy=new CompoundExp([set]);
+				bdy.loc=set.loc;
+				Expression result=new IteExp(cond,bdy,null);
+				result.loc=be.loc;
+				result=statementSemantic(result,sc); // TODO: better error messages
+				if(result.isSemCompleted&&!logicType(be.e1.type,be.e2.type)){
+					sc.error(format("incompatible types '%s' and '%s' for %s",be.e1.type,be.e2.type,cast(OrAssignExp)be?"disjunction":"conjunction"),be.loc);
+					result.setSemForceError();
+				}
+				return result;
+			}
 			id.byRef=true;
 			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc,false,null);
 			if(id.meaning){
@@ -5545,7 +5566,7 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 		e.type = logicType(e1.type,e2.type);
 		if(!e.type){
 			if(e1.type&&e2.type)
-				sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+				sc.error(format("incompatible types '%s' and '%s' for %s",e1.type,e2.type,name),e.loc);
 			e.setSemError();
 		}
 	}
