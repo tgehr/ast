@@ -1049,7 +1049,10 @@ abstract class Scope{
 			}
 		}
 		foreach(_,dm;deadMerges){
-			symtabInsert(dm);
+			if(dm.mergedFrom.empty) continue;
+			if(cast(DeadDecl)dm.mergedFrom[0]&&this.isNestedIn(dm.mergedFrom[0].scope_)&&dm.mergedFrom.all!(d=>d is dm.mergedFrom[0])){ // TODO: avoid making dm in the first place?
+				symtabInsert(dm.mergedFrom[0]);
+			}else symtabInsert(dm);
 		}
 		foreach(sc;scopes){
 			static if(language==silq) sc.dependencies.clear();
