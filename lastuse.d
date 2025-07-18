@@ -118,20 +118,21 @@ final class LastUse{
 				assert(*d is decl,text(*d," ",decl));
 				//imported!"util.io".writeln("FOUND: ",decl," ",csc.getFunction()," ",csc.rnsymtab);
 			}else{
-				csc.symtabInsert(decl); // TODO: use insertCapture?
+				csc.reinsert(decl);
 				//imported!"util.io".writeln("INSERTED: ",decl," ",csc.getFunction()," ",csc.rnsymtab);
 			}
 			if(csc is decl.scope_) break;
 		}
 		Declaration result=decl;
-		if(kind==Kind.lazySplit){
-			scope_.symtabRemove(result);
-		}else result=scope_.consume(result,use);
+		result=scope_.consume(result,use);
 		assert(scope_.getSplit(decl) is result);
 		assert(!use||use.meaning is result);
 		result.scope_.unsplit(result);
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){
+				if(nested.forgottenVarsOnEntry.canFind(result)){
+					nested.forgottenVarsOnEntry=nested.forgottenVarsOnEntry.filter!(d=>d!is result).array; // TODO: make more efficient
+				}
 				if(nested.rnsymtab.get(result.getId,null) is result){
 					nested.symtabRemove(result);
 					if(use&&!use.constLookup&&!use.implicitDup)
@@ -207,10 +208,13 @@ final class LastUse{
 			case lazySplit:
 				auto lu=getSplitFrom();
 				assert(lu&&lu.numPendingSplits>0);
-				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed))
+				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed)){
+					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu);
 					return lu.forget(forceConsumed);
+				}
 				assert(!dep.isTop);
 				assert(!forceConsumed);
+				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",lu," ",lu.canForget(forceConsumed));
 				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:

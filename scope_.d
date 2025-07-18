@@ -591,20 +591,27 @@ abstract class Scope{
 		assert(this is decl.scope_);
 	}do{
 		foreach(split;decl.splitInto){
-			assert(split !in split.scope_.lastUses.lastUses);
+			// assert(split !in split.scope_.lastUses.lastUses,text(split," ",split.scope_.lastUses.lastUses[split]));
 			split.scope_.unsplit(split);
 			if(split.scope_.forgottenVarsOnEntry.canFind(split)){
 				split.scope_.forgottenVarsOnEntry=split.scope_.forgottenVarsOnEntry.filter!(d=>d!is split).array; // TODO: make more efficient
+			}
+			if(split.scope_.splitVars.canFind(split)){
+				split.scope_.splitVars=split.scope_.splitVars.filter!(d=>d!is split).array; // TODO: make more efficient
 			}
 			split.scope_.consume(split,null);
 		}
 		decl.splitInto=[];
 	}
+	final void reinsert(Declaration decl){
+		if(toRemove.canFind(decl))
+			toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array; // TODO: make more efficient
+		symtabInsert(decl);
+	}
 	final void unconsume(Declaration decl)in{
 		assert(decl.scope_ is null||decl.scope_ is this||decl.isSemError(),text(decl," ",decl.loc));
 	}do{
-		toRemove=toRemove.filter!(pdecl=>pdecl!is decl).array;
-		symtabInsert(decl);
+		reinsert(decl);
 		decl.scope_=this;
 	}
 	Declaration[] consumedOuter;
@@ -884,6 +891,7 @@ abstract class Scope{
 		activeNestedScopes=[];
 		allowMerge=false;
 		foreach(_,d;rnsymtab.dup){
+			if(cast(DeadDecl)d) continue;
 			if(d.isLinear()||d.scope_ is this){
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
@@ -979,6 +987,7 @@ abstract class Scope{
 		final Declaration forgetOnEntry(Declaration decl)in{
 			assert(canSplit(decl));
 		}do{
+			decl=split(decl,null);
 			forgottenVarsOnEntry~=decl;
 			return decl;
 		}

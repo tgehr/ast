@@ -210,10 +210,15 @@ class Checker {
 		assert(to.type && from.type == to.type);
 		return to;
 	}
-	
+
 	void visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) {
 		assert(e.blscope_ is nscope);
 		assert(e.s.length > 0);
+
+		foreach(decl; e.blscope_.forgottenVarsOnEntry) {
+			getVar(decl, false, "forgottenVarsOnEntry ("~causeType~")", e);
+		}
+
 		foreach(stmt; e.s[0..$-1]) {
 			StmtResult r = visStmt(stmt);
 			assert(!(r & StmtResult.MayReturn), "early return in compound expression ("~causeType~")");
@@ -272,6 +277,11 @@ class Checker {
 	}
 
 	StmtResult visCompoundStmt(ast_exp.CompoundExp e) {
+		if(e.blscope_) {
+			foreach(decl; e.blscope_.forgottenVarsOnEntry) {
+				getVar(decl, false, "forgottenVarsOnEntry", e);
+			}
+		}
 		StmtResult r = StmtResult.MayPass;
 		foreach(i, sube; e.s) {
 			StmtResult sub = visStmt(sube);
