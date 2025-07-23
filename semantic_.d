@@ -1355,7 +1355,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 			}
 		}else sc.merge(false,fesc,state.forgetScope);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||state.converged;
+		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in for loop",fe.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",fe.loc);
@@ -1410,7 +1410,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 			}
 		}else sc.merge(false,bdy.blscope_,state.forgetScope);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||state.converged;
+		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in while loop",we.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",we.loc);
@@ -1467,7 +1467,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 			}
 		}else sc.merge(false,bdy.blscope_,state.forgetScope);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||state.converged;
+		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in repeat loop",re.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",re.loc);
