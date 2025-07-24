@@ -51,6 +51,7 @@ final class LastUse{
 	Expression parent=null;
 	static if(language==silq)
 		ast.scope_.Dependency dep;
+	LastUse splitFrom=null;
 	NestedScope[] nestedScopes;
 	LastUse prev=null,next=null;
 	int numPendingSplits=0;
@@ -58,6 +59,7 @@ final class LastUse{
 	LastUse getSplitFrom()in{
 		assert(kind==Kind.lazySplit);
 	}do{
+		if(splitFrom) return splitFrom;
 		auto nsc=cast(NestedScope)scope_;
 		assert(!!nsc);
 		auto ndecl=nsc.parent.getSplit(decl);
@@ -65,7 +67,7 @@ final class LastUse{
 			ndecl=ndecl.splitFrom;
 		auto plu=nsc.parent.lastUses.lastUses.get(ndecl,null);
 		assert(!!plu,text(ndecl," ",nsc.parent.lastUses.lastUses));
-		return plu;
+		return splitFrom=plu;
 	}
 
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
@@ -81,10 +83,9 @@ final class LastUse{
 	bool pin(){
 		if(kind==Kind.consumption) return false;
 		if(kind==Kind.lazySplit){
-			auto plu=getSplitFrom();
-			assert(plu&&plu.numPendingSplits>0);
-			plu.pin();
-			--plu.numPendingSplits;
+			assert(splitFrom&&splitFrom.numPendingSplits>0);
+			splitFrom.pin();
+			--splitFrom.numPendingSplits;
 		}
 		kind=Kind.constPinned;
 		return true;
@@ -166,11 +167,10 @@ final class LastUse{
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
-				auto plu=getSplitFrom();
-				assert(!!plu&&plu.numPendingSplits>0);
-				return (plu.numPendingSplits==1||forceConsumed)&&plu.canForget(forceConsumed)||!forceConsumed&&!dep.isTop&&scope_.canSplit(decl);
+				assert(!!splitFrom&&splitFrom.numPendingSplits>0);
+				return (splitFrom.numPendingSplits==1||forceConsumed)&&splitFrom.canForget(forceConsumed)||!forceConsumed&&!dep.isTop&&scope_.canSplit(decl);
 			case lazyMerge:
-				return canForgetMerge(decl,nestedScopes,true,false);
+				return canForgetMerge(decl,nestedScopes,true,forceConsumed);
 			case implicitForget:
 				return false; // TODO
 			case implicitDup:
@@ -236,9 +236,10 @@ final class LastUse{
 					auto ndecl=decl;
 					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 						ndecl=decl.mergedFrom[i];
+					assert(nsc.lastUses.canForget(ndecl,false,forceConsumed));
 					nsc.lastUses.forget(ndecl,forceConsumed);
 				}
-				break;
+				return;
 			case implicitForget:
 				assert(0); // TODO
 				break;
