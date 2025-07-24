@@ -1225,6 +1225,7 @@ abstract class Scope{
 		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
+		lastUses.merge(this,scopes);
 		return errors;
 	}
 
