@@ -19,6 +19,10 @@ final class LastUse{
 		this(kind,scope_,decl,use,parent);
 		this.dep=dep;
 	}
+	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent,NestedScope[] nestedScopes){
+		this(kind,scope_,decl,use,parent);
+		this.nestedScopes=nestedScopes;
+	}
 	override string toString(){
 		string r="LastUse(";
 		static foreach(i,alias m;this.tupleof){
@@ -47,6 +51,7 @@ final class LastUse{
 	Expression parent=null;
 	static if(language==silq)
 		ast.scope_.Dependency dep;
+	NestedScope[] nestedScopes;
 	LastUse prev=null,next=null;
 	int numPendingSplits=0;
 
@@ -61,6 +66,16 @@ final class LastUse{
 		auto plu=nsc.parent.lastUses.lastUses.get(ndecl,null);
 		assert(!!plu,text(ndecl," ",nsc.parent.lastUses.lastUses));
 		return plu;
+	}
+
+	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
+		//imported!"util.io".writeln("CAN FORGET MERGE: ",decl," ",cast(void*)decl.scope_," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
+		return iota(nestedScopes.length)
+			.all!(i=>
+			      decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i] ?
+			      nestedScopes[i].lastUses.canForget(decl.mergedFrom[i],forceHere,forceConsumed) :
+			      nestedScopes[i].lastUses.canForget(decl,forceHere,forceConsumed)
+			);
 	}
 
 	bool pin(){
@@ -155,7 +170,7 @@ final class LastUse{
 				assert(!!plu&&plu.numPendingSplits>0);
 				return (plu.numPendingSplits==1||forceConsumed)&&plu.canForget(forceConsumed)||!forceConsumed&&!dep.isTop&&scope_.canSplit(decl);
 			case lazyMerge:
-				return false; // TODO
+				return canForgetMerge(decl,nestedScopes,true,false);
 			case implicitForget:
 				return false; // TODO
 			case implicitDup:
@@ -163,8 +178,7 @@ final class LastUse{
 			case constUse:
 				return false; // TODO
 			case consumption:
-				assert(decl.isSemError(),text(this));
-				return true;
+				return false;
 		}
 	}
 	bool canRedefine(){
@@ -174,13 +188,13 @@ final class LastUse{
 			case lazySplit:
 				return canForget(true);
 			case lazyMerge:
-				return false; // TODO
+				return canForget(true);
 			case implicitDup:
 				return canForget(true);
 			case constUse:
 				return false;
 			case implicitForget,consumption:
-				assert(0);
+				return true;
 		}
 	}
 
@@ -218,7 +232,12 @@ final class LastUse{
 				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
-				assert(0); // TODO
+				foreach(i,nsc;nestedScopes){
+					auto ndecl=decl;
+					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
+						ndecl=decl.mergedFrom[i];
+					nsc.lastUses.forget(ndecl,forceConsumed);
+				}
 				break;
 			case implicitForget:
 				assert(0); // TODO
@@ -319,11 +338,10 @@ struct LastUses{
 		++lu.getSplitFrom().numPendingSplits;
 		add(lu);
 	}
-	void lazyMerge(Declaration decl,Scope sc)in{
-		assert(!!sc);
-		assert(decl.mergedFrom.length);
+	void lazyMerge(Declaration decl,Scope sc,NestedScope[] nestedScopes)in{
+		assert(sc&&nestedScopes.length);
 	}do{
-		add(new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null));
+		add(new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null,nestedScopes));
 	}
 	void implicitForget(Identifier use,Expression forgetExp,Dependency forgetDep)in{
 		assert(!!use);
@@ -423,6 +441,21 @@ struct LastUses{
 	void pushDependencies(Declaration decl,Scope sc){
 		foreach(d,ref lu;lastUses){
 			lu.pushDependencies(decl,sc);
+		}
+	}
+
+	void merge(Scope parent,scope NestedScope[] nestedScopes){
+		foreach(k,decl;parent.rnsymtab){
+			bool isMerged(){
+				if(cast(DeadDecl)decl) return false;
+				if(decl.scope_ !is parent) return false;
+				if(LastUse.canForgetMerge(decl,nestedScopes,true,false)) return true;
+				return false;
+			}
+			if(!isMerged()) continue;
+			pin(decl,true);
+			lazyMerge(decl,parent,nestedScopes.dup);
+			//imported!"util.io".writeln("MERGED: ",decl," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
 		}
 	}
 }
