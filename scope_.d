@@ -593,11 +593,14 @@ abstract class Scope{
 		foreach(split;decl.splitInto){
 			// assert(split !in split.scope_.lastUses.lastUses,text(split," ",split.scope_.lastUses.lastUses[split]));
 			split.scope_.unsplit(split);
+			if(split.scope_.splitVars.canFind(split)){
+				split.scope_.splitVars=split.scope_.splitVars.filter!(d=>d!is split).array; // TODO: make more efficient
+			}
 			if(split.scope_.forgottenVarsOnEntry.canFind(split)){
 				split.scope_.forgottenVarsOnEntry=split.scope_.forgottenVarsOnEntry.filter!(d=>d!is split).array; // TODO: make more efficient
 			}
-			if(split.scope_.splitVars.canFind(split)){
-				split.scope_.splitVars=split.scope_.splitVars.filter!(d=>d!is split).array; // TODO: make more efficient
+			if(split.scope_.forgottenVars.canFind(split)){
+				split.scope_.forgottenVars=split.scope_.forgottenVars.filter!(d=>d!is split).array; // TODO: make more efficient
 			}
 			split.scope_.consume(split,null);
 		}
@@ -835,7 +838,7 @@ abstract class Scope{
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
-				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
+				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
 				if(d.scope_.getFunction() !is getFunction()) continue;
 				//d=split(d,null);
 				//assert(d.scope_ is this);
@@ -937,8 +940,13 @@ abstract class Scope{
 				}
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
-				foreach(odecl;dep.dependencies)
-					assert(dependencyTracked(odecl)||odecl.isSemError(),text(dependencies," ",decl," ",dep," ",odecl));
+				bool ok=true;
+				foreach(odecl;dep.dependencies){
+					if(odecl.isSemError()) continue;
+					//assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl)); // TODO?
+					if(!dependencyTracked(odecl)) ok=false;
+				}
+				if(!ok) continue;
 				dependencies.dependencies[decl]=dep;
 			}
 		}
@@ -1562,14 +1570,47 @@ class NestedScope: Scope{
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=Dependency(true);
+		Declaration result=ndecl;
+		void processCurrent(){
+			result=ndecl;
+			if(type){
+				symtabRemove(odecl);
+				if(dependencyTracked(odecl)){
+					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
+					pushDependencies(odecl,true);
+				}
+				// TODO: backtrace forgets and last usages
+				if(auto added=addVariable(ndecl,type,true)){
+					if(ndecl.isSemError()) added.setSemForceError();
+					result=added;
+					assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
+					splitVar(ndecl,result);
+					static if(language==silq){
+						if(remove){ // TODO: can we get rid of this?
+							if(parent.getFunction() is getFunction()){
+								if(dependencyTracked(odecl))
+									removeDependency(odecl);
+								addDependency(odecl,pdep.dup);
+							}
+							assert(odecl !is result);
+							replaceDecl(odecl,result);
+						}
+					}
+				}
+			}
+		}
 		if(remove){
 			assert(odecl is ndecl);
 			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true,use)){
 				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
+				if(!parent.activeNestedScopes.length) processCurrent(); // TODO: get rid of this
 				foreach(sc;parent.activeNestedScopes){
-					if(this is sc) continue;
+					if(this is sc){
+						processCurrent();
+						continue;
+					}
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
@@ -1582,34 +1623,12 @@ class NestedScope: Scope{
 						}
 					}
 				}
-			}
-		}else consumedOuter~=ndecl;
-		Declaration result=ndecl;
-		if(type){
-			symtabRemove(odecl);
-			if(dependencyTracked(odecl)){
-				// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
-				pushDependencies(odecl,true);
-			}
-			// TODO: backtrace forgets and last usages
-			if(auto added=addVariable(ndecl,type,true)){
-				if(ndecl.isSemError()) added.setSemForceError();
-				result=added;
-				assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
-				splitVar(ndecl,result);
-				static if(language==silq){
-					if(remove){ // TODO: can we get rid of this?
-						if(parent.getFunction() is getFunction()){
-							if(dependencyTracked(odecl))
-								removeDependency(odecl);
-							addDependency(odecl,pdep.dup);
-						}
-						assert(odecl !is result);
-						replaceDecl(odecl,result);
-					}
-				}
-			}
-		}else if(remove){
+			}else processCurrent();
+		}else{
+			consumedOuter~=ndecl;
+			processCurrent();
+		}
+		if(!type&&remove){
 			symtabRemove(odecl);
 			static if(language==silq){
 				if(dependencyTracked(odecl))

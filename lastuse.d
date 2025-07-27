@@ -130,12 +130,13 @@ final class LastUse{
 		auto csc=cast(NestedScope)scope_;
 		assert(csc&&csc.isNestedIn(decl.scope_));
 		for(;csc;csc=cast(NestedScope)csc.parent){
-			if(auto d=decl.getId in csc.rnsymtab){
-				assert(*d is decl,text(*d," ",decl));
-				//imported!"util.io".writeln("FOUND: ",decl," ",csc.getFunction()," ",csc.rnsymtab);
-			}else{
-				csc.reinsert(decl);
-				//imported!"util.io".writeln("INSERTED: ",decl," ",csc.getFunction()," ",csc.rnsymtab);
+			auto cdecl=csc.getSplit(decl);
+			if(auto d=csc.rnsymtab.get(decl.getId,null)){
+				if(d !is cdecl){
+					csc.symtabRemove(d);
+					csc.reinsert(cdecl);
+					csc.replaceDecl(d,cdecl);
+				}
 			}
 			if(csc is decl.scope_) break;
 		}
@@ -153,6 +154,9 @@ final class LastUse{
 					nested.symtabRemove(result);
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
+				}
+				if(nested.forgottenVars.canFind(result)){
+					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
 				removeCopies(nested);
 			}
@@ -216,6 +220,7 @@ final class LastUse{
 	}
 
 	void forget(bool forceConsumed){
+		//imported!"util.io".writeln("FORGETTING: ",this);
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
@@ -233,12 +238,15 @@ final class LastUse{
 				break;
 			case lazyMerge:
 				foreach(i,nsc;nestedScopes){
+					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
+						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 					auto ndecl=decl;
 					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 						ndecl=decl.mergedFrom[i];
 					assert(nsc.lastUses.canForget(ndecl,false,forceConsumed));
 					nsc.lastUses.forget(ndecl,forceConsumed);
 				}
+				kind=Kind.consumption;
 				return;
 			case implicitForget:
 				assert(0); // TODO

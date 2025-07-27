@@ -476,7 +476,7 @@ class Checker {
 			auto outer1 = inner1.mergedInto;
 			assert(outer1.mergedFrom.length == 2);
 			// assert(outer1.mergedFrom[0] is outer0);
-			assert(outer1.mergedFrom[0] is inner1);
+			assert(outer1.mergedFrom[1] is inner1);
 			sub.getVar(inner1, false, "mergedVars", bdy);
 			defineVar(outer1, "mergedVars", bdy);
 		}
