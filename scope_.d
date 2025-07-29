@@ -918,10 +918,13 @@ abstract class Scope{
 			controlDependency.joinWith(dep);
 		}
 
+		static Dependency getDefaultDependency(Declaration decl){
+			return Dependency(!decl.isSemError()&&decl.isLinear);
+		}
 		void addDefaultDependency(Declaration decl)in{
 			assert(!dependencyTracked(decl));
 		}do{
-			addDependency(decl,Dependency(!decl.isSemError()&&decl.isLinear));
+			addDependency(decl,getDefaultDependency(decl));
 			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
 			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
 			//assert(decl.getName!="rrr");
@@ -934,7 +937,6 @@ abstract class Scope{
 			dependencies.dependencies.remove(decl);
 		}
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
-			//imported!"util.io".writeln("ADDING: ",this,"(",cast(void*)this,") ",deps);
 			foreach(i,ref dep;deps){
 				assert(!!dep[0]);
 				if(dep[0] in dependencies.dependencies){
@@ -947,7 +949,7 @@ abstract class Scope{
 				foreach(odecl;dep.dependencies){
 					if(odecl.isSemError()) continue;
 					//assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl)); // TODO?
-					if(!dependencyTracked(odecl)) ok=false;
+					if(!dependencyTracked(odecl)&&getDefaultDependency(odecl).isTop) ok=false;
 				}
 				if(!ok) continue;
 				dependencies.dependencies[decl]=dep;
@@ -1203,7 +1205,11 @@ abstract class Scope{
 							sc.pushDependencies(osym,false);
 						}
 					}
-				}else sym.scope_=this;
+				}else{
+					//auto dep=sym.scope_.getDependency(sym);
+					sym.scope_=this;
+					//addDependency(sym,dep);
+				}
 				producedOuter~=sym;
 			}
 		}
@@ -1603,12 +1609,16 @@ class NestedScope: Scope{
 					result=added;
 					assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 					splitVar(ndecl,result);
+					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)parent," ",cast(void*)this);
 					static if(language==silq){
 						if(remove){ // TODO: can we get rid of this?
 							if(parent.getFunction() is getFunction()){
 								if(dependencyTracked(odecl))
 									removeDependency(odecl);
+								//imported!"util.io".writeln("DEPS: ",dependencies);
+								//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)this);
 								addDependency(odecl,pdep.dup);
+								//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
 							}
 							assert(odecl !is result);
 							replaceDecl(odecl,result);
@@ -1634,7 +1644,10 @@ class NestedScope: Scope{
 							if(parent.getFunction() is sc.getFunction()){
 								if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
 									sc.removeDependency(odecl);
+								//imported!"util.io".writeln("DEPS: ",sc.dependencies);
+								//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)sc);
 								sc.addDependency(odecl,pdep.dup);
+								//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
 							}
 							if(odecl !is cdecl)
 								sc.replaceDecl(odecl,cdecl);
