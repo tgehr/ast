@@ -1046,7 +1046,16 @@ abstract class Scope{
 		lastUses.nest(r);
 	}
 
-	bool merge(bool quantumControl,NestedScope[] scopes...)in{
+	final bool merge(bool quantumControl,NestedScope[] scopes...)in{
+		assert(scopes.length);
+	}do{
+		return merge(quantumControl,false,scopes);
+	}
+	final bool mergeLoop(NestedScope forgetScope,NestedScope loopScope){
+		return merge(false,true,forgetScope,loopScope);
+	}
+
+	bool merge(bool quantumControl,bool isLoop,NestedScope[] scopes...)in{
 		assert(scopes.length);
 		//debug assert(allowMerge);
 	}do{
@@ -1233,7 +1242,7 @@ abstract class Scope{
 		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
-		lastUses.merge(this,scopes);
+		lastUses.merge(isLoop,this,scopes);
 		return errors;
 	}
 

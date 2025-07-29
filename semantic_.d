@@ -1342,7 +1342,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		assert(!!bdy);
 		propErr(bdy,fe);
 		static if(language==silq){
-			if(sc.merge(false,state.forgetScope,fesc)){
+			if(sc.mergeLoop(state.forgetScope,fesc)){
 				sc.note("possibly consumed in for loop", fe.loc);
 				fe.setSemError();
 				converged=true;
@@ -1354,7 +1354,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 				fe.setSemError();
 				converged=true;
 			}
-		}else sc.merge(false,state.forgetScope,fesc);
+		}else sc.mergeLoop(state.forgetScope,fesc);
 		state.endIteration(sc);
 		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
@@ -1397,7 +1397,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 		if(condSucceeded&&ncond.isSemError())
 			sc.note("variable declaration may be missing in while loop body", we.loc);
 		static if(language==silq){
-			if(sc.merge(false,state.forgetScope,bdy.blscope_)){
+			if(sc.mergeLoop(state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in while loop", we.loc);
 				we.setSemError();
 				converged=true;
@@ -1409,7 +1409,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 				we.setSemError();
 				converged=true;
 			}
-		}else sc.merge(false,state.forgetScope,bdy.blscope_);
+		}else sc.mergeLoop(state.forgetScope,bdy.blscope_);
 		state.endIteration(sc);
 		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
@@ -1454,7 +1454,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 		bdy=compoundExpSemantic(bdy,sc);
 		propErr(bdy,re);
 		static if(language==silq){
-			if(sc.merge(false,state.forgetScope,bdy.blscope_)){
+			if(sc.mergeLoop(state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in repeat loop", re.loc);
 				re.setSemError();
 				converged=true;
@@ -1466,7 +1466,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 				re.setSemError();
 				converged=true;
 			}
-		}else sc.merge(false,state.forgetScope,bdy.blscope_);
+		}else sc.mergeLoop(state.forgetScope,bdy.blscope_);
 		state.endIteration(sc);
 		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){

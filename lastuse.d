@@ -70,14 +70,27 @@ final class LastUse{
 		return splitFrom=plu;
 	}
 
+	static bool isNontrivialMerge(Declaration decl,scope NestedScope[] nestedScopes){
+		return iota(nestedScopes.length).any!((i){
+			auto nsc=nestedScopes[i];
+			auto cdecl=decl;
+			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
+				cdecl=decl.mergedFrom[i];
+			auto nlu=nsc.lastUses.lastUses.get(decl,null);
+			if(!nlu) return false;
+			if(nlu.kind!=Kind.lazySplit) return true;
+			return false;
+		});
+	}
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		//imported!"util.io".writeln("CAN FORGET MERGE: ",decl," ",cast(void*)decl.scope_," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
-		return iota(nestedScopes.length)
-			.all!(i=>
-			      decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i] ?
-			      nestedScopes[i].lastUses.canForget(decl.mergedFrom[i],forceHere,forceConsumed) :
-			      nestedScopes[i].lastUses.canForget(decl,forceHere,forceConsumed)
-			);
+		return iota(nestedScopes.length).all!((i){
+			auto nsc=nestedScopes[i];
+			auto cdecl=decl;
+			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
+				cdecl=decl.mergedFrom[i];
+			return nestedScopes[i].lastUses.canForget(cdecl,forceHere,forceConsumed);
+		});
 	}
 
 	bool pin(){
@@ -453,8 +466,12 @@ struct LastUses{
 		}
 	}
 
-	void merge(Scope parent,scope NestedScope[] nestedScopes){
+	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes){
 		foreach(k,decl;parent.rnsymtab){
+			if(!LastUse.isNontrivialMerge(decl,nestedScopes))
+			   continue;
+			pin(decl,true);
+			if(isLoop) continue;
 			bool isMerged(){
 				if(cast(DeadDecl)decl) return false;
 				if(decl.scope_ !is parent) return false;
@@ -462,7 +479,6 @@ struct LastUses{
 				return false;
 			}
 			if(!isMerged()) continue;
-			pin(decl,true);
 			lazyMerge(decl,parent,nestedScopes.dup);
 			//imported!"util.io".writeln("MERGED: ",decl," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
 		}
