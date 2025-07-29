@@ -1341,8 +1341,9 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 		bdy=compoundExpSemantic(bdy,sc);
 		assert(!!bdy);
 		propErr(bdy,fe);
+		bool returns=definitelyReturns(bdy);
 		static if(language==silq){
-			if(sc.mergeLoop(state.forgetScope,fesc)){
+			if(sc.mergeLoop(returns,state.forgetScope,fesc)){
 				sc.note("possibly consumed in for loop", fe.loc);
 				fe.setSemError();
 				converged=true;
@@ -1354,9 +1355,9 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 				fe.setSemError();
 				converged=true;
 			}
-		}else sc.mergeLoop(state.forgetScope,fesc);
+		}else sc.mergeLoop(returns,state.forgetScope,fesc);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
+		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in for loop",fe.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",fe.loc);
@@ -1396,8 +1397,9 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 		propErr(bdy,we);
 		if(condSucceeded&&ncond.isSemError())
 			sc.note("variable declaration may be missing in while loop body", we.loc);
+		auto returns=definitelyReturns(bdy);
 		static if(language==silq){
-			if(sc.mergeLoop(state.forgetScope,bdy.blscope_)){
+			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in while loop", we.loc);
 				we.setSemError();
 				converged=true;
@@ -1409,9 +1411,9 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 				we.setSemError();
 				converged=true;
 			}
-		}else sc.mergeLoop(state.forgetScope,bdy.blscope_);
+		}else sc.mergeLoop(returns,state.forgetScope,bdy.blscope_);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
+		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in while loop",we.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",we.loc);
@@ -1453,8 +1455,9 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 		bdy.blscope_=state.makeScopes(sc);
 		bdy=compoundExpSemantic(bdy,sc);
 		propErr(bdy,re);
+		auto returns=definitelyReturns(bdy);
 		static if(language==silq){
-			if(sc.mergeLoop(state.forgetScope,bdy.blscope_)){
+			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in repeat loop", re.loc);
 				re.setSemError();
 				converged=true;
@@ -1466,9 +1469,9 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 				re.setSemError();
 				converged=true;
 			}
-		}else sc.mergeLoop(state.forgetScope,bdy.blscope_);
+		}else sc.mergeLoop(returns,state.forgetScope,bdy.blscope_);
 		state.endIteration(sc);
-		converged|=bdy.isSemError()||definitelyReturns(bdy)||state.converged;
+		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in repeat loop",re.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",re.loc);

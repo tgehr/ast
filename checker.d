@@ -232,7 +232,6 @@ class Checker {
 				expectMoved(e.s[$-1], causeType);
 			}
 		}
-
 		foreach(decl; e.blscope_.forgottenVars) {
 			getVar(decl, false, "forgottenVars ("~causeType~")", e);
 		}
@@ -416,6 +415,7 @@ class Checker {
 		expectConst(e.cond, "while condition");
 		auto retBdy = visLoop(e.bdy, null, e.cond);
 		if(ast_exp.isTrue(e.cond)) return StmtResult.Diverges;
+		else retBdy |= StmtResult.MayPass;
 		return retBdy;
 	}
 
@@ -468,7 +468,20 @@ class Checker {
 		}
 
 		StmtResult r = sub.visCompoundStmt(bdy);
-		if(!(r & StmtResult.MayPass)) return r;
+		bool returns = !(r & StmtResult.MayPass);
+
+		if(returns) {
+			foreach(inner0; sc.splitVars) {
+				auto outer0 = inner0.splitFrom;
+				assert(!!outer0 && outer0.splitInto.length==2);
+				auto inner1 = outer0.splitInto[0];
+				assert(!!inner1);
+				auto outer1 = inner1.mergedInto;
+				assert(!!outer1);
+				defineVar(outer0, "mergedVars", bdy);
+			}
+			return r;
+		}
 
 		foreach(inner1; sc.mergedVars) {
 			auto id = inner1.getId;
