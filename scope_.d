@@ -593,6 +593,9 @@ abstract class Scope{
 		foreach(split;decl.splitInto){
 			// assert(split !in split.scope_.lastUses.lastUses,text(split," ",split.scope_.lastUses.lastUses[split]));
 			split.scope_.unsplit(split);
+			if(split.scope_.consumedOuter.canFind(decl)){
+				split.scope_.consumedOuter=split.scope_.consumedOuter.filter!(d=>d!is decl).array; // TODO: make more efficient
+			}
 			if(split.scope_.splitVars.canFind(split)){
 				split.scope_.splitVars=split.scope_.splitVars.filter!(d=>d!is split).array; // TODO: make more efficient
 			}
