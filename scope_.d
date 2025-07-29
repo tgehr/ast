@@ -1054,7 +1054,13 @@ abstract class Scope{
 	}do{
 		return merge(quantumControl,false,scopes);
 	}
-	final bool mergeLoop(NestedScope forgetScope,NestedScope loopScope){
+	final bool mergeLoop(bool returns,NestedScope forgetScope,NestedScope loopScope)in{
+		assert(equal(activeNestedScopes,only(forgetScope,loopScope)));
+	}do{
+		if(returns){
+			activeNestedScopes.length=1;
+			return merge(false,true,forgetScope);
+		}
 		return merge(false,true,forgetScope,loopScope);
 	}
 
