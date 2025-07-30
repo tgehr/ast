@@ -97,7 +97,13 @@ bool isEmptyTuple(Expression e){
 
 bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked,bool noImplicitDup){
 	bool validDefEntry(Expression e){
-		if(e.implicitDup&&!noImplicitDup) return false;
+		if(e.implicitDup){
+			if(noImplicitDup){
+				if(auto id=cast(Identifier)olhs)
+					if(id.meaning.isConst)
+						return false;
+			}else return false;
+		}
 		return cast(Identifier)e||cast(IndexExp)e||cast(SliceExp)e;
 	}
 	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
