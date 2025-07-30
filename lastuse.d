@@ -76,7 +76,7 @@ final class LastUse{
 			auto cdecl=decl;
 			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 				cdecl=decl.mergedFrom[i];
-			auto nlu=nsc.lastUses.lastUses.get(decl,null);
+			auto nlu=nsc.lastUses.lastUses.get(cdecl,null);
 			if(!nlu) return false;
 			if(nlu.kind!=Kind.lazySplit) return true;
 			return false;
