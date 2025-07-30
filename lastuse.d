@@ -150,14 +150,15 @@ final class LastUse{
 					csc.reinsert(cdecl);
 					csc.replaceDecl(d,cdecl);
 				}
-			}
+			}else csc.reinsert(cdecl);
 			if(csc is decl.scope_) break;
 		}
-		Declaration result=decl;
+		Declaration result=scope_.getSplit(decl);
 		result=scope_.consume(result,use);
+		assert(!!result);
+		scope_.unsplit(result);
 		assert(scope_.getSplit(decl) is result);
 		assert(!use||use.meaning is result);
-		result.scope_.unsplit(result);
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){
 				if(nested.forgottenVarsOnEntry.canFind(result)){
