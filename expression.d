@@ -1716,7 +1716,7 @@ class WithExp: Expression{
 		if(isIndices&&itrans) r.itrans=itrans.copy(args);
 		return r;
 	}
-	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()); }
+	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()~(itrans?" /+ "~itrans.toString()~"+/":"")); }
 	override @property string kind(){ return "with"; }
 	override bool isCompound(){ return true; }
 
