@@ -242,9 +242,11 @@ final class LastUse{
 				auto lu=getSplitFrom();
 				assert(lu&&lu.numPendingSplits>0);
 				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed)){
-					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu," ",lu.decl.splitInto);
+					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
 					lu.forget(forceConsumed);
-					//imported!"util.io".writeln("FORGOT NOT ON ENTRY: ",decl," ",lu," ",lu.decl.splitInto);
+					//imported!"util.io".writeln("FORGOT NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
+					if(scope_.rnsymtab.get(decl.getId,null) is decl)
+						scope_.symtabRemove(decl);
 					return;
 				}
 				assert(!dep.isTop);
@@ -267,6 +269,7 @@ final class LastUse{
 					nsc.lastUses.forget(cdecl,forceConsumed);
 					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 				}
+				//imported!"util.io".writeln("AFTER LMERGE: ",scope_.rnsymtab);
 				if(scope_.rnsymtab.get(decl.getId,null) is decl)
 					scope_.symtabRemove(decl);
 				kind=Kind.consumption;
