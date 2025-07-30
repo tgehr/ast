@@ -160,7 +160,7 @@ final class LastUse{
 		assert(scope_.getSplit(decl) is result);
 		assert(!use||use.meaning is result);
 		void removeCopies(Scope sc){
-			foreach(nested;sc.activeNestedScopes){
+			foreach(nested;sc.activeNestedScopes){ // TODO: need to consider nested scopes at correct time
 				if(nested.forgottenVarsOnEntry.canFind(result)){
 					nested.forgottenVarsOnEntry=nested.forgottenVarsOnEntry.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
@@ -234,7 +234,7 @@ final class LastUse{
 	}
 
 	void forget(bool forceConsumed){
-		//imported!"util.io".writeln("FORGETTING: ",this);
+		//imported!"util.io".writeln("FORGETTING: ",this," ",canForget(forceConsumed)," ",use?text(use.loc):"?");
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
@@ -242,8 +242,10 @@ final class LastUse{
 				auto lu=getSplitFrom();
 				assert(lu&&lu.numPendingSplits>0);
 				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed)){
-					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu);
-					return lu.forget(forceConsumed);
+					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu," ",lu.decl.splitInto);
+					lu.forget(forceConsumed);
+					//imported!"util.io".writeln("FORGOT NOT ON ENTRY: ",decl," ",lu," ",lu.decl.splitInto);
+					return;
 				}
 				assert(!dep.isTop);
 				assert(!forceConsumed);
@@ -254,12 +256,19 @@ final class LastUse{
 				foreach(i,nsc;nestedScopes){
 					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
 						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
-					auto ndecl=decl;
+					auto cdecl=decl;
 					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
-						ndecl=decl.mergedFrom[i];
-					assert(nsc.lastUses.canForget(ndecl,false,forceConsumed));
-					nsc.lastUses.forget(ndecl,forceConsumed);
+						cdecl=decl.mergedFrom[i];
+					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
+						cdecl=decl.splitInto[i];
+					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
+					assert(nsc.lastUses.canForget(cdecl,false,forceConsumed));
+					auto declBefore=decl;
+					nsc.lastUses.forget(cdecl,forceConsumed);
+					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 				}
+				if(scope_.rnsymtab.get(decl.getId,null) is decl)
+					scope_.symtabRemove(decl);
 				kind=Kind.consumption;
 				return;
 			case implicitForget:

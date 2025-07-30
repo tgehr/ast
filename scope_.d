@@ -147,6 +147,7 @@ abstract class Scope{
 		if(auto d=symtabLookup(decl.name,false,null)){
 			if(!tryPrepareRedefine(decl,d))
 				return false;
+			//assert(!symtabLookup(decl.name,false,null));
 		}
 		rename(decl);
 		symtabInsert(decl);
@@ -891,11 +892,13 @@ abstract class Scope{
 		return Scope.close(this);
 	}
 
+	bool diverges=false;
 	final bool closeUnreachable(Scope mergeScope){
 		static if(language==silq)
 			clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
+		diverges=true;
 		foreach(_,d;rnsymtab.dup){
 			if(cast(DeadDecl)d) continue;
 			if(d.isLinear()||d.scope_ is this){
@@ -1059,10 +1062,7 @@ abstract class Scope{
 	final bool mergeLoop(bool returns,NestedScope forgetScope,NestedScope loopScope)in{
 		assert(equal(activeNestedScopes,only(forgetScope,loopScope)));
 	}do{
-		if(returns){
-			activeNestedScopes.length=1;
-			return merge(false,true,forgetScope);
-		}
+		if(returns) loopScope.closeUnreachable(this);
 		return merge(false,true,forgetScope,loopScope);
 	}
 
@@ -1077,6 +1077,13 @@ abstract class Scope{
 			clearConsumed();
 		}
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
+		foreach(sc;scopes){
+			sc.siblingScopes=activeNestedScopes;
+			sc.siblingsFinal=true;
+		}
+		if(scopes.any!(sc=>sc.diverges))
+			scopes=scopes.filter!(sc=>!sc.diverges).array;
+		if(!scopes.length) return false;
 		activeNestedScopes=[];
 		allowMerge=false;
 		symtab=scopes[0].symtab.dup;
@@ -1633,8 +1640,9 @@ class NestedScope: Scope{
 				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
-				if(!parent.activeNestedScopes.length) processCurrent(); // TODO: get rid of this
-				foreach(sc;parent.activeNestedScopes){
+				auto siblings=getSiblingScopes();
+				if(!siblings.length) processCurrent(); // TODO: get rid of this
+				foreach(sc;siblings){
 					if(this is sc){
 						processCurrent();
 						continue;
@@ -1688,7 +1696,7 @@ class NestedScope: Scope{
 
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
 		if(this is outermost) return true;
-		foreach(sc;parent.activeNestedScopes){
+		foreach(sc;getSiblingScopes()){
 			if(meaning.getId in sc.rnsymtab) // TODO: make sure captures are inserted only once, remove this
 				sc.symtabRemove(sc.rnsymtab[meaning.getId]);
 			sc.symtabInsert(meaning);
@@ -1698,6 +1706,13 @@ class NestedScope: Scope{
 
 	override FunctionDef getFunction(){ return parent.getFunction(); }
 	override DatDecl getDatDecl(){ return parent.getDatDecl(); }
+
+	NestedScope[] siblingScopes;
+	bool siblingsFinal;
+	NestedScope[] getSiblingScopes(){
+		if(siblingsFinal) return siblingScopes;
+		return parent.activeNestedScopes;
+	}
 }
 
 class RawProductScope: NestedScope{
