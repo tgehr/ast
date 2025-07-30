@@ -710,14 +710,11 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
-	NestedScope[] scs;
-	assert(equal(sc.activeNestedScopes,only(ite.then.blscope_,ite.othw.blscope_)));
 	foreach(branch;only(ite.then,ite.othw)){
-		if(!definitelyReturns(branch)) scs~=branch.blscope_;
-		else branch.blscope_.closeUnreachable(sc);
+		if(definitelyReturns(branch))
+			branch.blscope_.closeUnreachable(sc);
 	}
-	sc.activeNestedScopes=scs;
-	if(scs.length && sc.merge(quantumControl,scs)){
+	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
