@@ -1325,14 +1325,15 @@ abstract class Scope{
 			assert(!!newOuter);
 			assert(newOuter.splitInto.length==2);
 			assert(!newOuter.scope_||newOuter.scope_ is this);
-			assert(outer.getId in prevStateSnapshot.rnsymtab);
-			auto prevOuter=adaptOuter(prevStateSnapshot.rnsymtab[nonZeroIters.getId]);
-			assert(prevOuter.splitInto.length==2);
-			foreach(k;0..2){
-				newOuter.splitInto[k]=prevOuter.splitInto[k];
-				newOuter.splitInto[k].splitFrom=newOuter;
+			if(outer.getId in prevStateSnapshot.rnsymtab){ // TODO: make this always hold, even if there are errors?
+				auto prevOuter=adaptOuter(prevStateSnapshot.rnsymtab[nonZeroIters.getId]);
+				assert(prevOuter.splitInto.length==2);
+				foreach(k;0..2){
+					newOuter.splitInto[k]=prevOuter.splitInto[k];
+					newOuter.splitInto[k].splitFrom=newOuter;
+				}
+				outer=newOuter;
 			}
-			outer=newOuter;
 		}
 	}
 //private: // !!!
