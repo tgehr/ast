@@ -94,6 +94,7 @@ final class LastUse{
 	}
 
 	bool pin(){
+		//imported!"util.io".writeln("PINNING: ",this," ",decl," ",decl.mergedFrom," ",decl.splitInto);
 		if(kind==Kind.consumption) return false;
 		if(kind==Kind.lazySplit){
 			assert(splitFrom&&splitFrom.numPendingSplits>0);
@@ -166,6 +167,7 @@ final class LastUse{
 				}
 				if(nested.rnsymtab.get(result.getId,null) is result){
 					nested.symtabRemove(result);
+					nested.removeDependency(result);
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
 				}
@@ -235,6 +237,7 @@ final class LastUse{
 
 	void forget(bool forceConsumed){
 		//imported!"util.io".writeln("FORGETTING: ",this," ",canForget(forceConsumed)," ",use?text(use.loc):"?");
+		//imported!"util.io".writeln("FORGETTING: ",use);
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
@@ -245,8 +248,10 @@ final class LastUse{
 					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
 					lu.forget(forceConsumed);
 					//imported!"util.io".writeln("FORGOT NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
-					if(scope_.rnsymtab.get(decl.getId,null) is decl)
+					if(scope_.rnsymtab.get(decl.getId,null) is decl){
 						scope_.symtabRemove(decl);
+						scope_.removeDependency(decl);
+					}
 					return;
 				}
 				assert(!dep.isTop);
@@ -270,8 +275,10 @@ final class LastUse{
 					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 				}
 				//imported!"util.io".writeln("AFTER LMERGE: ",scope_.rnsymtab);
-				if(scope_.rnsymtab.get(decl.getId,null) is decl)
+				if(scope_.rnsymtab.get(decl.getId,null) is decl){
 					scope_.symtabRemove(decl);
+					scope_.removeDependency(decl);
+				}
 				kind=Kind.consumption;
 				return;
 			case implicitForget:
@@ -326,10 +333,15 @@ struct LastUses{
 			assert(!lastLastUse);
 		}
 	}do{
-		//imported!"util.io".writeln("NESTING IN: ",r.lastUses);
+		//imported!"util.io".writeln("NESTING IN: ",lastUses);
+		//imported!"util.io".writeln("NESTING IN: ",r.parent.dependencies," ",r.dependencies);
 		r.lastUses.parent=&this;
-		foreach(d,ref lu;lastUses){
+		foreach(k,d;r.parent.rnsymtab){
+			auto lu=lastUses.get(d,null);
+			if(!lu) continue; // TODO: ok?
+			if(d.sstate!=SemState.completed) continue;
 			if(lu.kind==LastUse.Kind.consumption) continue;
+			//imported!"util.io".writeln("SPLITTING: ",d," ",d.mergedFrom," ",d.splitInto);
 			r.lastUses.lazySplit(d,r);
 		}
 	}
@@ -372,6 +384,7 @@ struct LastUses{
 		static if(language==silq) lu.dep=sc.getDependency(decl);
 		++lu.getSplitFrom().numPendingSplits;
 		add(lu);
+		//imported!"util.io".writeln("SPLITTED: ",lu.getSplitFrom()," ",lu);
 	}
 	void lazyMerge(Declaration decl,Scope sc,NestedScope[] nestedScopes)in{
 		assert(sc&&nestedScopes.length);
@@ -481,18 +494,14 @@ struct LastUses{
 
 	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes){
 		foreach(k,decl;parent.rnsymtab){
-			if(!LastUse.isNontrivialMerge(decl,nestedScopes))
-			   continue;
-			pin(decl,true);
-			if(isLoop) continue;
-			bool isMerged(){
-				if(cast(DeadDecl)decl) return false;
-				if(decl.scope_ !is parent) return false;
-				if(LastUse.canForgetMerge(decl,nestedScopes,true,false)) return true;
-				return false;
-			}
-			if(!isMerged()) continue;
+			if(cast(DeadDecl)decl) continue;
+			if(decl.scope_ !is parent) continue;
+			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",isMerged()," ",decl.mergedFrom," ",decl.splitInto," ",lastUses);
+			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
+			if(isLoop) pin(decl,true);
+			if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
 			lazyMerge(decl,parent,nestedScopes.dup);
+			if(isLoop) pin(decl,true);
 			//imported!"util.io".writeln("MERGED: ",decl," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
 		}
 	}
