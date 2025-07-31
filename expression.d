@@ -1616,7 +1616,10 @@ class IteExp: Expression{
 	override IteExp copyImpl(CopyArgs args){
 		return new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
 	}
-	override string toString(){return _brk("if "~cond.toString() ~ " " ~ then.toString() ~ (othw&&othw.s.length?" else " ~ (othw.s.length==1&&cast(IteExp)othw.s[0]?othw.s[0].toString():othw.toString()):""));}
+	override string toString(){
+		bool othwForgets=othw&&othw.blscope_&&(othw.blscope_.forgottenVars.length||othw.blscope_.forgottenVarsOnEntry.length);
+		return _brk("if "~cond.toString() ~ " " ~ then.toString() ~ (othw&&othw.s.length||othwForgets?" else " ~ (!othwForgets&&othw.s.length==1&&cast(IteExp)othw.s[0]?othw.s[0].toString():othw.toString()):""));
+	}
 	override bool isCompound(){ return true; }
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
@@ -1839,7 +1842,9 @@ class CompoundExp: Expression{
 		return new CompoundExp(s.map!(e=>e.copy(args)).array);
 	}
 
-	override string toString(){return "{\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(s),"\n"))~"\n}";}
+	override string toString(){
+		return "{"~(blscope_&&blscope_.forgottenVarsOnEntry.length?text(" // ",blscope_.forgottenVarsOnEntry):"")~"\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(s),"\n"))~"\n}"~(blscope_&&blscope_.forgottenVars.length?text(" // ",blscope_.forgottenVars):"");
+	}
 	string toStringFunctionDef(){
 		if(s.length==1)
 			if(auto ret=cast(ReturnExp)s[0]){
