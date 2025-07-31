@@ -152,6 +152,7 @@ abstract class Scope{
 		rename(decl);
 		symtabInsert(decl);
 		decl.scope_=this;
+		lastUses.definition(decl,null);
 		return true;
 	}
 
@@ -578,7 +579,7 @@ abstract class Scope{
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
-		assert(decl.scope_&&this.isNestedIn(decl.scope_));
+		assert(decl.scope_&&this.isNestedIn(decl.scope_),text(decl));
 	}do{
 		if(decl.scope_ is this) return decl;
 		if(!canSplit(decl)) return decl;
@@ -940,6 +941,7 @@ abstract class Scope{
 			dependencies.dependencies.remove(decl);
 		}
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
+			//imported!"util.io".writeln("ADDING: ",deps);
 			foreach(i,ref dep;deps){
 				assert(!!dep[0]);
 				if(dep[0] in dependencies.dependencies){
@@ -1072,6 +1074,7 @@ abstract class Scope{
 	}do{
 		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
 		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.rnsymtab));
+		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.dependencies));
 		foreach(sc;scopes) sc.clearConsumed();
 		static if(language==silq){
 			clearConsumed();
