@@ -571,7 +571,7 @@ abstract class Scope{
 		return consumeImpl(decl,decl,type,true,use); // TODO: separate splitting and consuming
 	}
 	final bool canSplit(Declaration decl)in{
-		if(!decl.isToplevelDeclaration())
+		if(!decl.isToplevelDeclaration()&&!decl.isSemError)
 			assert(decl.scope_&&this.isNestedIn(decl.scope_));
 	}do{
 		if(decl.scope_ is this) return true;
@@ -580,7 +580,8 @@ abstract class Scope{
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
-		assert(decl.scope_&&this.isNestedIn(decl.scope_),text(decl));
+		if(!decl.isToplevelDeclaration()&&!decl.isSemError)
+			assert(decl.scope_&&this.isNestedIn(decl.scope_),text(decl));
 	}do{
 		if(decl.scope_ is this) return decl;
 		if(!canSplit(decl)) return decl;
