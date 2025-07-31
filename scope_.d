@@ -609,6 +609,13 @@ abstract class Scope{
 			if(split.scope_.forgottenVars.canFind(split)){
 				split.scope_.forgottenVars=split.scope_.forgottenVars.filter!(d=>d!is split).array; // TODO: make more efficient
 			}
+			if(split.scope_.mergedVars.canFind(split)){
+				split.scope_.mergedVars=split.scope_.mergedVars.filter!(d=>d!is split).array; // TODO: make more efficient
+				if(split.mergedInto&&split.mergedInto.scope_){
+					split.mergedInto.scope_.unsplit(split.mergedInto);
+					split.mergedInto.scope_.consume(split.mergedInto,null);
+				}
+			}
 			split.scope_.consume(split,null);
 		}
 		decl.splitInto=[];

@@ -76,6 +76,7 @@ final class LastUse{
 			auto cdecl=decl;
 			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 				cdecl=decl.mergedFrom[i];
+			if(decl !is cdecl) return true;
 			auto nlu=nsc.lastUses.lastUses.get(cdecl,null);
 			if(!nlu) return false;
 			if(nlu.kind!=Kind.lazySplit) return true;
@@ -260,9 +261,8 @@ final class LastUse{
 				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
+				consume();
 				foreach(i,nsc;nestedScopes){
-					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
-						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 					auto cdecl=decl;
 					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 						cdecl=decl.mergedFrom[i];
@@ -273,13 +273,10 @@ final class LastUse{
 					auto declBefore=decl;
 					nsc.lastUses.forget(cdecl,forceConsumed);
 					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
+					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
+						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 				}
 				//imported!"util.io".writeln("AFTER LMERGE: ",scope_.rnsymtab);
-				if(scope_.rnsymtab.get(decl.getId,null) is decl){
-					scope_.symtabRemove(decl);
-					scope_.removeDependency(decl);
-				}
-				kind=Kind.consumption;
 				return;
 			case implicitForget:
 				assert(0); // TODO
@@ -445,6 +442,7 @@ struct LastUses{
 		return lastUse&&lastUse.canForget(forceConsumed);
 	}
 	bool canRedefine(Declaration decl){
+		//imported!"util.io".writeln("CAN REDEFINE: ",decl," ",lastUses," ",lastUses.get(decl,null));
 		if(auto lastUse=lastUses.get(decl,null))
 			return lastUse.canRedefine();
 		return parent&&parent.canRedefine(decl);
@@ -509,7 +507,7 @@ struct LastUses{
 		foreach(k,decl;parent.rnsymtab){
 			if(cast(DeadDecl)decl) continue;
 			if(decl.scope_ !is parent) continue;
-			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",isMerged()," ",decl.mergedFrom," ",decl.splitInto," ",lastUses);
+			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes));
 			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
 			if(isLoop) pin(decl,true);
 			if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
