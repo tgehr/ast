@@ -219,9 +219,10 @@ abstract class Scope{
 				capturers~=nested.capturers;
 			}
 			void replaceDecl(Declaration splitFrom,Declaration splitInto){
-				foreach(id;accesses){ // foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+				foreach(id;accesses){ // TODO: avoid considering the same access multiple times in different scopes
+					// foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
 					id.meaning=splitInto;
-					if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
+					//if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
 				}
 				foreach(capturer;capturers){
 					void doIt(T)(T capturer){
@@ -643,6 +644,10 @@ abstract class Scope{
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		assert(splitFrom !is splitInto);
 	}do{
+		foreach(scopes;mergedNestedScopes){
+			foreach(sc;scopes)
+				sc.replaceDecl(splitFrom,splitInto);
+		}
 		if(language==silq){
 			if(dependencyTracked(splitFrom))
 				replaceDependencies(splitFrom,splitInto);
@@ -1056,6 +1061,8 @@ abstract class Scope{
 		lastUses.nest(r);
 	}
 
+	NestedScope[][] mergedNestedScopes;
+
 	final bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
 	}do{
@@ -1084,6 +1091,7 @@ abstract class Scope{
 			sc.siblingScopes=activeNestedScopes;
 			sc.siblingsFinal=true;
 		}
+		mergedNestedScopes~=activeNestedScopes;
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
@@ -1204,6 +1212,7 @@ abstract class Scope{
 						auto osym=sc.rnsymtab[sym.getId];
 						sc.mergeVar(osym,sym);
 						if(osym.loc.rep.ptr>sym.loc.rep.ptr) sym.loc=osym.loc; // TODO: this is a bit hacky
+						//imported!"util.io".writeln("MAKING MERGE: ",osym," ",sym," ",cast(void*)osym," ",cast(void*)sym);
 						static if(language==silq){
 							if(!sc.dependencyTracked(osym))
 								sc.addDefaultDependency(osym); // TODO: ideally can be removed
@@ -1619,7 +1628,7 @@ class NestedScope: Scope{
 					result=added;
 					assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 					splitVar(ndecl,result);
-					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)parent," ",cast(void*)this);
+					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 					static if(language==silq){
 						if(remove){ // TODO: can we get rid of this?
 							if(parent.getFunction() is getFunction()){

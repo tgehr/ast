@@ -66,7 +66,7 @@ final class LastUse{
 		while(ndecl.splitFrom&&ndecl.splitFrom.scope_.isNestedIn(nsc.parent))
 			ndecl=ndecl.splitFrom;
 		auto plu=nsc.parent.lastUses.lastUses.get(ndecl,null);
-		assert(!!plu,text(ndecl," ",nsc.parent.lastUses.lastUses));
+		assert(!!plu,text(ndecl," ",decl," ",nsc.parent.lastUses.lastUses," ",nsc.parent.lastUses.lastUses.get(decl,null)," ",cast(void*)decl," ",cast(void*)ndecl));
 		return splitFrom=plu;
 	}
 
@@ -325,6 +325,7 @@ final class LastUse{
 struct LastUses{
 	LastUses* parent;
 	LastUse[Declaration] lastUses;
+	LastUse[][Declaration] retired;
 	LastUse lastLastUse;
 	void nest(NestedScope r)return in{
 		with(r.lastUses){
@@ -345,6 +346,9 @@ struct LastUses{
 			r.lastUses.lazySplit(d,r);
 		}
 	}
+	private void retire(LastUse lastUse){
+		retired[lastUse.decl]~=lastUse;
+	}
 	private void add(LastUse lastUse)in{
 		assert(!!lastUse.scope_);
 		with(LastUse.Kind){
@@ -364,6 +368,7 @@ struct LastUses{
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			prevLastUse.remove();
 			lastUses.remove(lastUse.decl);
+			retire(lastUse);
 		}
 		lastUses[lastUse.decl]=lastUse;
 		auto newLastLastUse=lastUses.get(lastUse.decl,null);
@@ -468,6 +473,7 @@ struct LastUses{
 		if(lastUse&&!lastUse.pin()){
 			lastUse.remove();
 			lastUses.remove(decl);
+			retire(lastUse);
 			lastUse=null;
 		}
 		//decl.scope_.lastUses.lastUses.remove(decl);
@@ -480,10 +486,17 @@ struct LastUses{
 	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		// assert(splitInto !in lastUses); // TODO
 	}do{
-		if(splitFrom !in lastUses) return;
-		lastUses[splitInto]=lastUses[splitFrom];
-		lastUses.remove(splitFrom);
-		lastUses[splitInto].replaceDecl(splitFrom,splitInto);
+		if(splitFrom in lastUses){
+			lastUses[splitInto]=lastUses[splitFrom];
+			lastUses.remove(splitFrom);
+			lastUses[splitInto].replaceDecl(splitFrom,splitInto);
+		}
+		if(splitFrom in retired){
+			retired[splitInto]=retired[splitFrom];
+			retired.remove(splitFrom);
+			foreach(ref r;retired[splitInto])
+				r.replaceDecl(splitFrom,splitInto);
+		}
 	}
 
 	void pushDependencies(Declaration decl,Scope sc){
