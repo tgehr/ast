@@ -88,16 +88,16 @@ final class LastUse{
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
 			auto cdecl=decl;
-			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
+			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nsc)
 				cdecl=decl.mergedFrom[i];
-			//imported!"util.io".writeln("CHECKING: ",decl," ",nestedScopes[i].lastUses.getForgettability(cdecl,forceHere,false)," ",nestedScopes[i].lastUses.getForgettability(decl,forceHere,false));
-			return nestedScopes[i].lastUses.getForgettability(cdecl,forceHere,false);
-			}).fold!((a,b){
-				auto r=min(a,b);
-				if(r==Forgettability.none) return r;
-				if(a==Forgettability.consumable||b==Forgettability.consumable) return Forgettability.consumable;
-				return r;
-			})(Forgettability.max);
+			//imported!"util.io".writeln("CHECKING: ",decl," ",nsc.lastUses.getForgettability(cdecl,forceHere,false)," ",nsc.lastUses.getForgettability(decl,forceHere,false)," ",nsc.lastUses.lastUses.get(cdecl,null)," ",cdecl is decl);
+			return nsc.lastUses.getForgettability(cdecl,forceHere,false);
+		}).fold!((a,b){
+			auto r=min(a,b);
+			if(r==Forgettability.none) return r;
+			if(a==Forgettability.consumable||b==Forgettability.consumable) return Forgettability.consumable;
+			return r;
+		})(Forgettability.max);
 	}
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
@@ -453,6 +453,7 @@ struct LastUses{
 		auto lu=new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null);
 		static if(language==silq) lu.dep=use.scope_.getDependency(use.meaning);
 		add(lu);
+		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
 	void constUse(Identifier use,Expression parent)in{
 		assert(!!use);
@@ -548,9 +549,9 @@ struct LastUses{
 	}
 
 	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes){
+		//imported!"util.io".writeln("MERGING: ",parent," ",nestedScopes);
 		foreach(k,decl;parent.rnsymtab){
 			if(cast(DeadDecl)decl) continue;
-			if(decl.scope_ !is parent) continue;
 			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes)," ",LastUse.canForgetMerge(decl,nestedScopes,true,false));
 			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
 			if(isLoop) pin(decl,true);

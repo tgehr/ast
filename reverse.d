@@ -800,6 +800,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 			auto scope_=meaning.scope_;
 			meaning.scope_=null;
 			meaning.rename=null;
+			scope_.clearConsumed(); // TODO: get rid of this
 			if(!scope_.insert(meaning,true))
 				fd.setSemError();
 		}
