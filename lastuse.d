@@ -90,8 +90,14 @@ final class LastUse{
 			auto cdecl=decl;
 			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 				cdecl=decl.mergedFrom[i];
+			//imported!"util.io".writeln("CHECKING: ",decl," ",nestedScopes[i].lastUses.getForgettability(cdecl,forceHere,false)," ",nestedScopes[i].lastUses.getForgettability(decl,forceHere,false));
 			return nestedScopes[i].lastUses.getForgettability(cdecl,forceHere,false);
-		}).fold!min(Forgettability.max);
+			}).fold!((a,b){
+				auto r=min(a,b);
+				if(r==Forgettability.none) return r;
+				if(a==Forgettability.consumable||b==Forgettability.consumable) return Forgettability.consumable;
+				return r;
+			})(Forgettability.max);
 	}
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
@@ -202,8 +208,10 @@ final class LastUse{
 		foreach(ssc;siblings){
 			if(ssc is nsc) continue;
 			auto ndecl=decl;
-			if(decl.scope_ is this && decl.splitFrom && decl.splitFrom is nsc.parent)
-				ndecl=ssc.getSplit(decl);
+			if(decl.scope_ is scope_ && decl.splitFrom && decl.splitFrom.scope_ is nsc.parent)
+				ndecl=decl.splitFrom;
+			ndecl=ssc.getSplit(ndecl);
+			//imported!"util.io".writeln("CHECKING SIBLINGS: ",ssc.forgottenVarsOnEntry," ",decl," ",ndecl," ",ssc.forgottenVarsOnEntry.canFind(ndecl)," ",ssc.forgottenVarsOnEntry.canFind(decl)," ",decl.scope_ is this," ",decl.splitFrom," ",decl.splitFrom&&decl.splitFrom.scope_ is nsc.parent);
 			if(!ssc.forgottenVarsOnEntry.canFind(ndecl)) return false;
 		}
 		return true;
@@ -302,9 +310,9 @@ final class LastUse{
 					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
 						cdecl=decl.splitInto[i];
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
-					assert(nsc.lastUses.canForget(cdecl,false,forceConsumed));
+					assert(nsc.lastUses.canForget(cdecl,false,false));
 					auto declBefore=decl;
-					nsc.lastUses.forget(cdecl,forceConsumed);
+					nsc.lastUses.forget(cdecl,false);
 					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
 						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
@@ -543,7 +551,7 @@ struct LastUses{
 		foreach(k,decl;parent.rnsymtab){
 			if(cast(DeadDecl)decl) continue;
 			if(decl.scope_ !is parent) continue;
-			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes));
+			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes)," ",LastUse.canForgetMerge(decl,nestedScopes,true,false));
 			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
 			if(isLoop) pin(decl,true);
 			if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
