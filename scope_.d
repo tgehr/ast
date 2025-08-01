@@ -221,6 +221,7 @@ abstract class Scope{
 			void replaceDecl(Declaration splitFrom,Declaration splitInto){
 				foreach(id;accesses){ // TODO: avoid considering the same access multiple times in different scopes
 					// foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+					//imported!"util.io".writeln("ADJUSTING: ",id.loc," ",id.meaning is splitFrom," ",id.meaning is splitInto);
 					id.meaning=splitInto;
 					//if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
 				}
@@ -265,6 +266,7 @@ abstract class Scope{
 				if(auto declProp=tryGet(splitFrom)){
 					declProp.replaceDecl(splitFrom,splitInto);
 					props[splitInto]=declProp.move();
+					props.remove(splitFrom);
 				}
 			}
 		}
