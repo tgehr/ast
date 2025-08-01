@@ -83,15 +83,18 @@ final class LastUse{
 			return false;
 		});
 	}
-	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
+	static Forgettability getMergeForgettability(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere){
 		//imported!"util.io".writeln("CAN FORGET MERGE: ",decl," ",cast(void*)decl.scope_," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
-		return iota(nestedScopes.length).all!((i){
+		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
 			auto cdecl=decl;
 			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
 				cdecl=decl.mergedFrom[i];
-			return nestedScopes[i].lastUses.canForget(cdecl,forceHere,forceConsumed);
-		});
+			return nestedScopes[i].lastUses.getForgettability(cdecl,forceHere,false);
+		}).fold!min(Forgettability.max);
+	}
+	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
+		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 
 	bool pin(){
@@ -182,24 +185,55 @@ final class LastUse{
 		// TODO: perform necessary updates
 	}
 
+	static enum Forgettability{
+		none,
+		forgettable,
+		consumable,
+	}
+
 	bool canForget(bool forceConsumed){
-		if(use&&!scope_.canSplit(use.meaning)) return false;
+		return getForgettability(forceConsumed)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
+	}
+
+	bool isLastSplitSibling(){
+		auto nsc=cast(NestedScope)scope_;
+		assert(!!nsc);
+		auto siblings=nsc.getSiblingScopes();
+		foreach(ssc;siblings){
+			if(ssc is nsc) continue;
+			auto ndecl=decl;
+			if(decl.scope_ is this && decl.splitFrom && decl.splitFrom is nsc.parent)
+				ndecl=ssc.getSplit(decl);
+			if(!ssc.forgottenVarsOnEntry.canFind(ndecl)) return false;
+		}
+		return true;
+	}
+
+	Forgettability getForgettability(bool forceConsumed){
+		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
+		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
-				assert(!!splitFrom&&splitFrom.numPendingSplits>0);
-				return (splitFrom.numPendingSplits==1||forceConsumed)&&splitFrom.canForget(forceConsumed)||!forceConsumed&&!dep.isTop&&scope_.canSplit(decl);
+				assert(!!splitFrom);
+				auto r=Forgettability.none;
+				if(forceConsumed||isLastSplitSibling())
+					r=max(r,splitFrom.getForgettability(forceConsumed));
+				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl))
+					r=Forgettability.forgettable;
+				//imported!"util.io".writeln("RESULT: ",r," ",splitFrom.numPendingSplits);
+				return r;
 			case lazyMerge:
-				return canForgetMerge(decl,nestedScopes,true,forceConsumed);
+				return getMergeForgettability(decl,nestedScopes,true);
 			case implicitForget:
-				return false; // TODO
+				return Forgettability.none; // TODO
 			case implicitDup:
-				return true;
+				return Forgettability.consumable;
 			case constUse:
-				return false; // TODO
+				return Forgettability.none; // TODO
 			case consumption:
-				return false;
+				return Forgettability.none;
 		}
 	}
 	bool canRedefine(){
@@ -243,21 +277,20 @@ final class LastUse{
 			case definition,constPinned:
 				goto case constUse;
 			case lazySplit:
-				auto lu=getSplitFrom();
-				assert(lu&&lu.numPendingSplits>0);
-				if((lu.numPendingSplits==1||forceConsumed)&&lu.canForget(forceConsumed)){
-					//imported!"util.io".writeln("FORGETTING NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
-					lu.forget(forceConsumed);
-					//imported!"util.io".writeln("FORGOT NOT ON ENTRY: ",decl," ",lu," ",lu.decl.mergedFrom," ",lu.decl.splitInto);
-					if(scope_.rnsymtab.get(decl.getId,null) is decl){
-						scope_.symtabRemove(decl);
-						scope_.removeDependency(decl);
+				assert(!!splitFrom);
+				if(forceConsumed||isLastSplitSibling()){
+					if(splitFrom.canForget(forceConsumed)){
+						splitFrom.forget(forceConsumed);
+						if(scope_.rnsymtab.get(decl.getId,null) is decl){
+							scope_.symtabRemove(decl);
+							scope_.removeDependency(decl);
+						}
+						return;
 					}
-					return;
 				}
 				assert(!dep.isTop);
 				assert(!forceConsumed);
-				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",lu," ",lu.canForget(forceConsumed));
+				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",splitFrom," ",splitFrom.canForget(forceConsumed));
 				scope_.forgetOnEntry(decl);
 				break;
 			case lazyMerge:
@@ -436,10 +469,13 @@ struct LastUses{
 	}
 
 	bool canForget(Declaration decl,bool forceHere,bool forceConsumed){
+		return getForgettability(decl,forceHere,forceConsumed)>=(forceConsumed?LastUse.Forgettability.consumable:LastUse.Forgettability.forgettable);
+	}
+	private LastUse.Forgettability getForgettability(Declaration decl,bool forceHere,bool forceConsumed){
 		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&!forceHere&&parent)
-			return parent.canForget(decl,false,forceConsumed);
-		return lastUse&&lastUse.canForget(forceConsumed);
+			return parent.getForgettability(decl,false,forceConsumed);
+		return lastUse?lastUse.getForgettability(forceConsumed):LastUse.Forgettability.none;
 	}
 	bool canRedefine(Declaration decl){
 		//imported!"util.io".writeln("CAN REDEFINE: ",decl," ",lastUses," ",lastUses.get(decl,null));
