@@ -56,6 +56,10 @@ final class LastUse{
 	LastUse prev=null,next=null;
 	int numPendingSplits=0;
 
+	bool isConsumption(){
+		return !!kind.among(Kind.consumption,Kind.implicitForget);
+	}
+
 	LastUse getSplitFrom()in{
 		assert(kind==Kind.lazySplit);
 	}do{
@@ -475,6 +479,13 @@ struct LastUses{
 		auto lastUse=lastUses.get(decl,null);
 		assert(!!lastUse);
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
+	}
+
+	LastUse get(Declaration decl,bool forceHere){
+		if(auto lu=lastUses.get(decl,null))
+			return lu;
+		if(forceHere||!parent) return null;
+		return parent.get(decl,false);
 	}
 
 	bool canForget(Declaration decl,bool forceHere,bool forceConsumed){

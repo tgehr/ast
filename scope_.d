@@ -857,6 +857,7 @@ abstract class Scope{
 			foreach(_,d;rnsymtab.dup){
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
+				if(rnsymtab.get(d.getId,null) is null) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
 				if(d.scope_.getFunction() !is getFunction()) continue;
@@ -1423,7 +1424,6 @@ abstract class Scope{
 			return r;
 		}
 	private:
-		// LastUses lastUses; // TODO: needed?
 		static if(language==silq){
 			Dependencies dependencies;
 			DeclProps declProps;
@@ -1432,12 +1432,14 @@ abstract class Scope{
 		}
 		Declaration[Id] symtab;
 		Declaration[Id] rnsymtab;
+		LastUse[Declaration] lastUses;
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		Declaration[Id] nsymtab=symtab.dup;
 		Declaration[Id] nrnsymtab=rnsymtab.dup;
+		LastUse[Declaration] nlastUses;
 		static if(language==silq){
 			DeclProps declProps;
 			TrackedTemporary[] trackedTemporaries;
@@ -1448,13 +1450,17 @@ abstract class Scope{
 				declProps=saveDeclProps();
 				trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			}
+			foreach(k,decl;rnsymtab){
+				if(auto lu=lastUses.get(decl,false))
+					nlastUses[decl]=lu;
+			}
 			if(auto fd=getFunction())
 				prevCapturedDecls=fd.capturedDecls;
 		}
 		static if(language==silq){
-			return ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,prevCapturedDecls,restoreable);
+			return ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		}else{
-			return ScopeState(nsymtab,nrnsymtab,prevCaptures,restoreable);
+			return ScopeState(nsymtab,nrnsymtab,nlastUses,prevCaptures,restoreable);
 		}
 	}
 	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
@@ -1507,9 +1513,23 @@ abstract class Scope{
 			toRemove=state.toRemove;
 		}
 		symtab.clear();
-		foreach(_,decl;state.symtab) symtab[decl.name.id]=updateDecl(decl);
+		foreach(_,decl;state.symtab){
+			if(auto lu=state.lastUses.get(decl,null))
+				if(lu.isConsumption())
+					continue;
+			symtab[decl.name.id]=updateDecl(decl);
+		}
 		rnsymtab.clear();
-		foreach(_,decl;state.rnsymtab) rnsymtab[decl.getId]=updateDecl(decl);
+		foreach(_,decl;state.rnsymtab){
+			if(auto lu=state.lastUses.get(decl,null)){
+				if(lu.isConsumption()){
+					pushDependencies(lu.decl,false);
+					recordConsumption(lu.decl,lu.use);
+					continue;
+				}
+			}
+			rnsymtab[decl.getId]=updateDecl(decl);
+		}
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
