@@ -2060,7 +2060,7 @@ class ReturnExp: Expression{
 		r.expected=expected;
 		return r;
 	}
-	override string toString(){ return "return"~(e?" "~e.toString():""); }
+	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" // ",forgottenVars):""); }
 	override @property string kind(){ return "return statement"; }
 
 	string expected;
