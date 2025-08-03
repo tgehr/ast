@@ -999,6 +999,7 @@ abstract class Scope{
 						assert(sym.getId in sc.rnsymtab);
 						auto osym=sc.rnsymtab[sym.getId];
 						sc.mergeVar(osym,sym);
+						if(osym.loc.rep.ptr>sym.loc.rep.ptr) sym.loc=osym.loc; // TODO: this is a bit hacky
 						static if(language==silq){
 							if(!sc.dependencyTracked(osym))
 								sc.addDefaultDependency(osym); // TODO: ideally can be removed
