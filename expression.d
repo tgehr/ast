@@ -1719,7 +1719,7 @@ class WithExp: Expression{
 		if(isIndices&&itrans) r.itrans=itrans.copy(args);
 		return r;
 	}
-	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()~(itrans?" /+ "~itrans.toString()~"+/":"")); }
+	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()~(itrans?" /+"~itrans.toString()~"+/":"")); }
 	override @property string kind(){ return "with"; }
 	override bool isCompound(){ return true; }
 
@@ -1843,7 +1843,7 @@ class CompoundExp: Expression{
 	}
 
 	override string toString(){
-		return "{"~(blscope_&&blscope_.forgottenVarsOnEntry.length?text(" // ",blscope_.forgottenVarsOnEntry):"")~"\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(s),"\n"))~"\n}"~(blscope_&&blscope_.forgottenVars.length?text(" // ",blscope_.forgottenVars):"");
+		return "{"~(blscope_&&blscope_.forgottenVarsOnEntry.length?text(" /+",blscope_.forgottenVarsOnEntry,"+/"):"")~"\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(s),"\n"))~"\n}"~(blscope_&&blscope_.forgottenVars.length?text(" /+",blscope_.forgottenVars,"+/"):"");
 	}
 	string toStringFunctionDef(){
 		if(s.length==1)
@@ -2060,7 +2060,7 @@ class ReturnExp: Expression{
 		r.expected=expected;
 		return r;
 	}
-	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" // ",forgottenVars):""); }
+	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" /+",forgottenVars,"+/"):""); }
 	override @property string kind(){ return "return statement"; }
 
 	string expected;
