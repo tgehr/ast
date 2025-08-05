@@ -857,7 +857,7 @@ abstract class Scope{
 			foreach(_,d;rnsymtab.dup){
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
-				if(rnsymtab.get(d.getId,null) is null) continue;
+				if(rnsymtab.get(d.getId,null) !is d) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
 				if(d.scope_.getFunction() !is getFunction()) continue;

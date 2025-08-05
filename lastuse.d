@@ -278,7 +278,7 @@ final class LastUse{
 			case constUse:
 				return false;
 			case implicitForget,consumption:
-				assert(0);
+				assert(0,text(this," ",sc.getFunction()));
 		}
 	}
 
