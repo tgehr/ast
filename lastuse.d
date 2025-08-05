@@ -181,7 +181,7 @@ final class LastUse{
 				}
 				if(nested.rnsymtab.get(result.getId,null) is result){
 					nested.symtabRemove(result);
-					nested.removeDependency(result);
+					nested.pushDependencies(result,false);
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
 				}
@@ -295,7 +295,7 @@ final class LastUse{
 						splitFrom.forget(forceConsumed);
 						if(scope_.rnsymtab.get(decl.getId,null) is decl){
 							scope_.symtabRemove(decl);
-							scope_.removeDependency(decl);
+							scope_.pushDependencies(decl,false);
 						}
 						return;
 					}
