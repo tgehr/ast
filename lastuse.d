@@ -54,7 +54,6 @@ final class LastUse{
 	LastUse splitFrom=null;
 	NestedScope[] nestedScopes;
 	LastUse prev=null,next=null;
-	int numPendingSplits=0;
 
 	bool isConsumption(){
 		return !!kind.among(Kind.consumption,Kind.implicitForget);
@@ -111,9 +110,8 @@ final class LastUse{
 		//imported!"util.io".writeln("PINNING: ",this," ",decl," ",decl.mergedFrom," ",decl.splitInto);
 		if(kind==Kind.consumption) return false;
 		if(kind==Kind.lazySplit){
-			assert(splitFrom&&splitFrom.numPendingSplits>0);
+			assert(!!splitFrom);
 			splitFrom.pin();
-			--splitFrom.numPendingSplits;
 		}
 		kind=Kind.constPinned;
 		return true;
@@ -148,8 +146,7 @@ final class LastUse{
 		if(kind==Kind.consumption) return;
 		if(kind==Kind.lazySplit){
 			auto lu=getSplitFrom();
-			assert(lu&&lu.numPendingSplits>0);
-			--lu.numPendingSplits;
+			assert(!!lu);
 		}
 		/+imported!"util.io".writeln("CONSUMING: ",this);
 		scope(exit) imported!"util.io".writeln("CONSUMED: ",this);+/
@@ -234,7 +231,7 @@ final class LastUse{
 					r=max(r,splitFrom.getForgettability(forceConsumed));
 				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl))
 					r=Forgettability.forgettable;
-				//imported!"util.io".writeln("RESULT: ",r," ",splitFrom.numPendingSplits);
+				//imported!"util.io".writeln("RESULT: ",r);
 				return r;
 			case lazyMerge:
 				return getMergeForgettability(decl,nestedScopes,true);
@@ -429,7 +426,7 @@ struct LastUses{
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
 		static if(language==silq) lu.dep=sc.getDependency(decl);
-		++lu.getSplitFrom().numPendingSplits;
+		lu.getSplitFrom();
 		add(lu);
 		//imported!"util.io".writeln("SPLITTED: ",lu.getSplitFrom()," ",lu);
 	}
