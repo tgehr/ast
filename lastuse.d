@@ -410,9 +410,8 @@ struct LastUses{
 			retire(lastUse);
 		}
 		lastUses[lastUse.decl]=lastUse;
-		auto newLastLastUse=lastUses.get(lastUse.decl,null);
-		if(lastLastUse) lastLastUse.append(newLastLastUse);
-		lastLastUse=newLastLastUse;
+		if(lastLastUse) lastLastUse.append(lastUse);
+		lastLastUse=lastUse;
 	}
 	void definition(Declaration decl,Expression defExp)in{
 		assert(!!decl.scope_);
@@ -545,13 +544,13 @@ struct LastUses{
 		if(splitFrom in retired){
 			retired[splitInto]=retired[splitFrom];
 			retired.remove(splitFrom);
-			foreach(ref r;retired[splitInto])
+			foreach(r;retired[splitInto])
 				r.replaceDecl(splitFrom,splitInto);
 		}
 	}
 
 	void pushDependencies(Declaration decl,Scope sc){
-		foreach(d,ref lu;lastUses){
+		foreach(d,lu;lastUses){
 			lu.pushDependencies(decl,sc);
 		}
 	}
