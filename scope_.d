@@ -1067,6 +1067,7 @@ abstract class Scope{
 		}
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
+		if(!allowMerge) lastUses.prepareNesting(this);
 		allowMerge=true;
 		activeNestedScopes~=r;
 		lastUses.nest(r);
