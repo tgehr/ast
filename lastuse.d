@@ -462,7 +462,7 @@ struct LastUses{
 		assert(sc.isNestedIn(decl.scope_));
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
-		static if(language==silq) lu.dep=sc.getDependency(decl);
+		static if(language==silq) lu.dep=sc.getDependency(decl).dup;
 		auto splitFrom=lu.getSplitFrom();
 		assert(splitFrom.kind==LastUse.Kind.lazySplitSource);
 		add(lu);
@@ -480,7 +480,7 @@ struct LastUses{
 		assert(!!use.meaning);
 		assert(!!use.scope_);
 	}do{
-		add(new LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep));
+		add(new LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep.dup));
 	}
 	void implicitDup(Identifier use)in{
 		assert(!!use);
@@ -490,7 +490,7 @@ struct LastUses{
 		assert(!!use.scope_);
 	}do{
 		auto lu=new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null);
-		static if(language==silq) lu.dep=use.scope_.getDependency(use.meaning);
+		static if(language==silq) lu.dep=use.scope_.getDependency(use.meaning).dup;
 		add(lu);
 		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
