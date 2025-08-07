@@ -59,6 +59,7 @@ final class LastUse{
 
 	bool isConsumption(){
 		if(forwardTo) return forwardTo.isConsumption();
+		if(kind==Kind.lazySplit) return splitFrom.isConsumption();
 		return !!kind.among(Kind.consumption,Kind.implicitForget);
 	}
 
@@ -152,7 +153,7 @@ final class LastUse{
 		if(kind==Kind.consumption) return;
 		if(kind==Kind.lazySplit){
 			auto lu=getSplitFrom();
-			assert(lu/+&&lu.kind==LastUse.kind.lazySplitSource,text(lu)+/);
+			assert(!!lu);
 		}
 		/+imported!"util.io".writeln("CONSUMING: ",this);
 		scope(exit) imported!"util.io".writeln("CONSUMED: ",this);+/
@@ -295,7 +296,14 @@ final class LastUse{
 	}
 
 	void forget(bool forceConsumed){
-		if(forwardTo) return forwardTo.forget(forceConsumed);
+		if(forwardTo){
+			forwardTo.forget(forceConsumed);
+			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
+			assert(isConsumption(),text(this," ",forwardTo));
+			if(scope_.lastUses.lastUses.get(decl,null) is this)
+				scope_.lastUses.lastUses[decl]=forwardTo;
+			return;
+		}
 		//imported!"util.io".writeln("FORGETTING: ",this," ",canForget(forceConsumed)," ",use?text(use.loc):"?");
 		//imported!"util.io".writeln("FORGETTING: ",use);
 		final switch(kind)with(Kind){
