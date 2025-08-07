@@ -359,6 +359,7 @@ final class LastUse{
 	void replaceDecl(Declaration splitFrom,Declaration splitInto){
 		if(forwardTo) forwardTo.replaceDecl(splitFrom,splitInto);
 		if(decl is splitFrom) decl=splitInto;
+		if(splitFrom in dep.dependencies) dep.replace(splitFrom,splitInto);
 	}
 
 	void pushDependencies(Declaration decl,Scope sc){
@@ -389,6 +390,7 @@ struct LastUses{
 
 	void prepareNesting(Scope parent)do{
 		foreach(k,d;parent.rnsymtab){
+			if(cast(DeadDecl)d) continue;
 			lazySplitSource(d,parent);
 		}
 	}
@@ -403,6 +405,7 @@ struct LastUses{
 		//imported!"util.io".writeln("NESTING IN: ",r.parent.dependencies," ",r.dependencies);
 		r.lastUses.parent=&this;
 		foreach(k,d;r.parent.rnsymtab){
+			if(cast(DeadDecl)d) continue;
 			if(d.sstate!=SemState.completed) continue;
 			auto lu=lastUses.get(d,null);
 			if(!lu) continue; // TODO: ok?

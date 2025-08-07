@@ -966,6 +966,7 @@ abstract class Scope{
 				}
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
+				assert(decl&&!cast(DeadDecl)decl);
 				bool ok=true;
 				foreach(odecl;dep.dependencies){
 					if(odecl.isSemError()) continue;
