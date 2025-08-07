@@ -5970,7 +5970,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 						expr.setSemError();
 					}
 					if(id.meaning){
-						if(id.implicitDup)context.sc.trackTemporary(id); // TODO: ok?
+						if(id.implicitDup) context.sc.trackTemporary(id); // TODO: ok?
 						if(context.inType) context.sc.pinLastUse(id.meaning); // TODO: sufficient?
 					}
 				}else{

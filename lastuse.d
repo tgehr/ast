@@ -135,16 +135,16 @@ final class LastUse{
 		// TODO: perform necessary updates
 	}
 
-	bool pin(){
+	void pin(){
 		//imported!"util.io".writeln("PINNING: ",this," ",decl," ",decl.mergedFrom," ",decl.splitInto);
-		if(forwardTo) return forwardTo.pin();
-		if(kind==Kind.consumption) return false;
-		if(kind==Kind.lazySplit){
-			assert(!!splitFrom);
-			splitFrom.pin();
+		if(forwardTo){
+			forwardTo.pin();
+			forwardTo=null;
 		}
+		if(splitFrom) splitFrom.pin();
+		//if(kind==Kind.lazySplit) return; // TODO
+		if(isConsumption()) return;
 		kind=Kind.constPinned;
-		return true;
 	}
 
 	void consume(){
@@ -442,14 +442,18 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
-		if(lastUse.kind!=LastUse.Kind.lazySplitSource){
-			if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
+		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
+			if(lastUse.kind!=LastUse.Kind.lazySplitSource){
 				if(prevLastUse.forwardTo)
 					prevLastUse.forwardTo.remove();
 				prevLastUse.remove();
 				lastUses.remove(lastUse.decl);
-				retire(lastUse);
 			}
+			if(prevLastUse.kind==LastUse.Kind.lazySplit){
+				if(!lastUse.splitFrom)
+					lastUse.splitFrom=prevLastUse.splitFrom;
+			}
+			retire(prevLastUse); // TODO: needed?
 		}
 		lastUses[lastUse.decl]=lastUse;
 		if(lastLastUse) lastLastUse.append(lastUse);
@@ -522,8 +526,6 @@ struct LastUses{
 			assert(use.scope_ is sc);
 		}
 	}do{
-		auto lastUse=lastUses.get(decl,null);
-		assert(!!lastUse);
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
 	}
 
@@ -567,17 +569,8 @@ struct LastUses{
 	}
 	void pin(Declaration decl,bool forceHere){
 		if(!decl.scope_) return;
-		auto lastUse=lastUses.get(decl,null);
-		if(!lastUse&&!forceHere&&parent)
-			parent.pin(decl,false);
-		if(lastUse&&!lastUse.pin()){
-			if(lastUse.forwardTo)
-				lastUse.forwardTo.remove();
-			lastUse.remove();
-			lastUses.remove(decl);
-			retire(lastUse);
-			lastUse=null;
-		}
+		if(auto lastUse=lastUses.get(decl,null)) lastUse.pin();
+		else if(!forceHere&&parent) parent.pin(decl,false);
 		//decl.scope_.lastUses.lastUses.remove(decl);
 		foreach(split;decl.splitInto){
 			assert(!!split.scope_);
