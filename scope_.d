@@ -482,8 +482,11 @@ abstract class Scope{
 			return success;
 		}
 		final bool resetConst(Expression parent){
-			foreach(decl,ref prop;declProps.props)
+			foreach(decl,ref prop;declProps.props){
+				if(!prop.constBlock) continue;
+				lastUses.constUse(prop.constBlock,parent);
 				prop.constBlock=null;
+			}
 			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
 			trackedTemporaries=[];
 			return success;

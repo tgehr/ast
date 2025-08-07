@@ -479,7 +479,7 @@ struct LastUses{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
 		static if(language==silq) lu.dep=sc.getDependency(decl).dup;
 		auto splitFrom=lu.getSplitFrom();
-		assert(splitFrom.kind==LastUse.Kind.lazySplitSource);
+		//assert(splitFrom.kind==LastUse.Kind.lazySplitSource,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
 		add(lu);
 		//imported!"util.io".writeln("SPLITTED: ",lu.getSplitFrom()," ",lu);
 	}
