@@ -152,7 +152,6 @@ abstract class Scope{
 		rename(decl);
 		symtabInsert(decl);
 		decl.scope_=this;
-		lastUses.definition(decl,null);
 		return true;
 	}
 

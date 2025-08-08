@@ -2794,6 +2794,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					if(vd){
 						auto nvd=varDeclSemantic(vd,sc);
 						assert(nvd is vd);
+						sc.lastUses.definition(nvd,be);
 					}else if(tpl&&tt){
 						if(tpl.e.length>i&&tpl.e[i].type&&tt.length>i){
 							if(!isSubtype(tt[i],tpl.e[i].type)){
@@ -6251,6 +6252,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	finalize(fd);
+	sc.lastUses.definition(fd,fd);
 	return fd;
 }
 
