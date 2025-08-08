@@ -60,7 +60,6 @@ final class LastUse{
 
 	bool isConsumption(){
 		if(forwardTo) return forwardTo.isConsumption();
-		if(kind==Kind.lazySplit) return splitFrom.isConsumption();
 		return !!kind.among(Kind.consumption,Kind.implicitForget);
 	}
 
@@ -134,24 +133,25 @@ final class LastUse{
 		// TODO: perform necessary updates
 	}
 
-	void pinSplits(){
-		//imported!"util.io".writeln("PIN SPLITS: ",this);
-		for(auto prev=this;prev;prev=prev.splitFrom){
-			//imported!"util.io".writeln("PINNING SPLIT: ",prev);
-			prev.kind=Kind.constPinned;
-		}
-	}
-
-	void pin(){
+	void pinSplits(){ return pinImpl(true); }
+	void pin(){ return pinImpl(false); }
+	void pinImpl(bool includingSplits){
 		if(forwardTo){
 			forwardTo.pin();
 			forwardTo=null;
 		}
 		if(splitFrom) splitFrom.pin();
-		if(kind==Kind.lazySplit) return; // TODO
+		if(!includingSplits&&kind==Kind.lazySplit) return;
 		if(isConsumption()) return;
 		kind=Kind.constPinned;
 		if(splitFrom) splitFrom.pinSplits();
+	}
+
+	private void markConsumed(){
+		if(isConsumption()) return;
+		if(splitFrom) splitFrom.markConsumed();
+		kind=Kind.consumption;
+		// TODO: perform necessary updates
 	}
 
 	void consume(){
@@ -164,7 +164,6 @@ final class LastUse{
 		}
 		/+imported!"util.io".writeln("CONSUMING: ",this);
 		scope(exit) imported!"util.io".writeln("CONSUMED: ",this);+/
-		scope(exit) kind=Kind.consumption;
 		assert(!use||use.meaning is decl);
 		auto csc=cast(NestedScope)scope_;
 		assert(csc&&csc.isNestedIn(decl.scope_));
@@ -203,7 +202,7 @@ final class LastUse{
 			}
 		}
 		removeCopies(scope_);
-		// TODO: perform necessary updates
+		markConsumed();
 	}
 
 	static enum Forgettability{
@@ -333,6 +332,7 @@ final class LastUse{
 							scope_.symtabRemove(decl);
 							scope_.pushDependencies(decl,false);
 						}
+						markConsumed();
 						return;
 					}
 				}
