@@ -471,21 +471,30 @@ abstract class Scope{
 			foreach(decl,ref prop;declProps.props) constBlock[decl]=prop.constBlock;
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
+		private void recordResetConst(Declaration decl,Identifier constBlock,Expression parent){
+			if(auto lu=lastUses.get(decl,true)) if(lu.isConsumption()||lu.kind==LastUse.Kind.implicitDup) return;
+			if(constBlock.scope_&&constBlock.meaning)
+				lastUses.constUse(constBlock,parent);
+		}
 		final bool resetConst(ConstBlockContext context,Expression parent){
 			foreach(decl,constBlock;context.constBlock)
 				updateDeclProps(decl).constBlock=constBlock;
-			foreach(decl,ref prop;declProps.props)
-				if(decl !in context.constBlock)
+			foreach(decl,ref prop;declProps.props){
+				if(prop.constBlock&&decl !in context.constBlock){
+					recordResetConst(decl,prop.constBlock,parent);
 					prop.constBlock=null;
+				}
+			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
 			return success;
 		}
 		final bool resetConst(Expression parent){
 			foreach(decl,ref prop;declProps.props){
-				if(!prop.constBlock) continue;
-				lastUses.constUse(prop.constBlock,parent);
-				prop.constBlock=null;
+				if(prop.constBlock){
+					recordResetConst(decl,prop.constBlock,parent);
+					prop.constBlock=null;
+				}
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
 			trackedTemporaries=[];
@@ -799,10 +808,8 @@ abstract class Scope{
 				}
 			}
 			static if(language==silq)
-			if(kind==Lookup.constant&&meaning.isLinear()){
-				if(!isConstHere(meaning))
-					blockConst(meaning,id);
-			}
+			if(kind==Lookup.constant&&!meaning.isConst)
+				blockConst(meaning,id);
 		}
 		if(kind!=Lookup.probing&&meaning){
 			recordAccess(id,meaning);
@@ -1801,6 +1808,7 @@ class CapturingScope(T): NestedScope{
 					if(capture.isSplitFrom(decl)) continue;
 					auto recapture=new Identifier(capture.getId);
 					recapture.loc=id.loc;
+					recapture.scope_=origin;
 					bool isConsuming=decl.isConsumedCapture(capture);
 					DeadDecl[] failures;
 					recapture.meaning=origin.lookup(recapture,true,false,isConsuming?Lookup.consuming:Lookup.constant,&failures);
@@ -1922,8 +1930,9 @@ class CapturingScope(T): NestedScope{
 					updateFunctionDependency(decl);
 					id.meaning=origMeaning; // TODO: this is a hack
 				}
-				if(!consumed) parent.recordAccess(id,meaning);
+				parent.recordAccess(id,meaning);
 				parent.recordCapturer(decl,meaning);
+				parent.lastUses.capture(meaning,id,parent,decl);
 			}
 		}
 		return meaning;

@@ -44,6 +44,7 @@ final class LastUse{
 		implicitDup,
 		constUse,
 		consumption,
+		capture,
 	}
 	Kind kind; // TODO: sum type?
 	Scope scope_;
@@ -51,7 +52,7 @@ final class LastUse{
 	Identifier use=null;
 	Expression parent=null;
 	static if(language==silq)
-		ast.scope_.Dependency dep;
+		auto dep=Dependency(true);
 	LastUse forwardTo=null;
 	LastUse splitFrom=null;
 	NestedScope[] nestedScopes;
@@ -111,9 +112,7 @@ final class LastUse{
 		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 
-	void remove()in{
-		assert(kind==Kind.constPinned||kind==Kind.consumption||kind==Kind.lazySplitSource);
-	}do{
+	void remove(){
 		if(prev) prev.next=next;
 		if(next) next.prev=prev;
 		prev=next=null;
@@ -135,16 +134,24 @@ final class LastUse{
 		// TODO: perform necessary updates
 	}
 
+	void pinSplits(){
+		//imported!"util.io".writeln("PIN SPLITS: ",this);
+		for(auto prev=this;prev;prev=prev.splitFrom){
+			//imported!"util.io".writeln("PINNING SPLIT: ",prev);
+			prev.kind=Kind.constPinned;
+		}
+	}
+
 	void pin(){
-		//imported!"util.io".writeln("PINNING: ",this," ",decl," ",decl.mergedFrom," ",decl.splitInto);
 		if(forwardTo){
 			forwardTo.pin();
 			forwardTo=null;
 		}
 		if(splitFrom) splitFrom.pin();
-		//if(kind==Kind.lazySplit) return; // TODO
+		if(kind==Kind.lazySplit) return; // TODO
 		if(isConsumption()) return;
 		kind=Kind.constPinned;
+		if(splitFrom) splitFrom.pinSplits();
 	}
 
 	void consume(){
@@ -253,6 +260,8 @@ final class LastUse{
 				return Forgettability.none; // TODO
 			case consumption:
 				return Forgettability.none;
+			case capture:
+				return Forgettability.none; // TODO
 		}
 	}
 	bool canRedefine(){
@@ -272,6 +281,8 @@ final class LastUse{
 				return false;
 			case implicitForget,consumption:
 				return true;
+			case capture:
+				return false; // TODO?
 		}
 	}
 
@@ -292,6 +303,8 @@ final class LastUse{
 				return false;
 			case implicitForget,consumption:
 				assert(0,text(this," ",sc.getFunction()));
+			case capture:
+				return false;
 		}
 	}
 
@@ -360,6 +373,9 @@ final class LastUse{
 				break;
 			case consumption:
 				assert(0);
+			case capture:
+				assert(0); // TODO
+				break;
 		}
 		consume();
 	}
@@ -431,18 +447,19 @@ struct LastUses{
 		with(LastUse.Kind){
 			assert(!lastUse.kind.among(implicitForget,constUse)||lastUse.parent);
 		}
-		if(lastUse.use){
+		if(lastUse.use&&lastUse.kind!=LastUse.Kind.capture){
 			assert(lastUse.use.scope_ is lastUse.scope_);
 			assert(!!lastUse.use.meaning);
 		}else{
 			with(LastUse.Kind){
-				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge));
+				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge,capture));
 			}
 		}
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
+			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			if(lastUse.kind!=LastUse.Kind.lazySplitSource){
 				if(prevLastUse.forwardTo)
 					prevLastUse.forwardTo.remove();
@@ -450,8 +467,14 @@ struct LastUses{
 				lastUses.remove(lastUse.decl);
 			}
 			if(prevLastUse.kind==LastUse.Kind.lazySplit){
-				if(!lastUse.splitFrom)
+				assert(!!prevLastUse.splitFrom);
+				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
+				if(lastUse.kind!=LastUse.Kind.lazySplitSource)
+					prevLastUse.pinSplits();
+				if(!lastUse.splitFrom){
 					lastUse.splitFrom=prevLastUse.splitFrom;
+					//imported!"util.io".writeln("INHERINTING SPLIT FROM: ",lastUse," ",lastUse.splitFrom);
+				}
 			}
 			retire(prevLastUse); // TODO: needed?
 		}
@@ -510,10 +533,11 @@ struct LastUses{
 		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
 	void constUse(Identifier use,Expression parent)in{
-		assert(!!use);
+		assert(use&&use.meaning);
 		assert(use.constLookup||use.implicitDup);
-		assert(!!use.scope_);
+		assert(!!use.scope_,text(use.loc," ",parent));
 	}do{
+		//imported!"util.io".writeln("CONST USE: ",use.loc," ",parent);
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
 	void consume(Declaration decl,Identifier use,Scope sc)in{
@@ -527,6 +551,9 @@ struct LastUses{
 		}
 	}do{
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
+	}
+	void capture(Declaration decl,Identifier use,Scope sc,Declaration parent){
+		add(new LastUse(LastUse.Kind.capture,sc,decl,use,parent));
 	}
 
 	LastUse get(Declaration decl,bool forceHere){
