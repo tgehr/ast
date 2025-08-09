@@ -2794,7 +2794,7 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					if(vd){
 						auto nvd=varDeclSemantic(vd,sc);
 						assert(nvd is vd);
-						sc.lastUses.definition(nvd,be);
+						if(nvd.scope_) sc.lastUses.definition(nvd,be);
 					}else if(tpl&&tt){
 						if(tpl.e.length>i&&tpl.e[i].type&&tt.length>i){
 							if(!isSubtype(tt[i],tpl.e[i].type)){
@@ -3559,6 +3559,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								}
 								defined[decl.getId]=[];
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
+								if(var.scope_) sc.lastUses.definition(var,ae);
 							}
 							break;
 					}
@@ -3767,6 +3768,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
 				be.setSemError();
 			}
+			if(var.scope_) sc.lastUses.definition(var,be);
 		}
 		static if(language==silq){
 			bool ok=false;
@@ -4788,6 +4790,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		if(id.meaning) setImplicitDup();
 		auto lookup=context.constResult||id.implicitDup?Lookup.constant:Lookup.consuming;
 		DeadDecl[] failures;
+		id.meaning=null;
 		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
 		if(id.isSemError()) return id;
 		if(!id.meaning){
@@ -6252,7 +6255,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	finalize(fd);
-	sc.lastUses.definition(fd,fd);
+	if(fd.name&&fd.scope_) sc.lastUses.definition(fd,fd);
 	return fd;
 }
 

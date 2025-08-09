@@ -472,7 +472,7 @@ abstract class Scope{
 		}
 		private void recordResetConst(Declaration decl,Identifier constBlock,Expression parent){
 			if(auto lu=lastUses.get(decl,true)) if(lu.isConsumption()||lu.kind==LastUse.Kind.implicitDup) return;
-			if(constBlock.scope_&&constBlock.meaning)
+			if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
 				lastUses.constUse(constBlock,parent);
 		}
 		final bool resetConst(ConstBlockContext context,Expression parent){
@@ -997,7 +997,7 @@ abstract class Scope{
 			return getDependency(id.meaning);
 		}
 		final Dependency getDependency(Declaration decl,bool pushed=false)in{
-			assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl,text(decl," ",decl.sstate));
+			assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl||cast(Parameter)decl,text(decl," ",decl.sstate));
 		}do{
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return dependencies.dependencies[decl];

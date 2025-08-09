@@ -15,10 +15,6 @@ final class LastUse{
 		this.use=use;
 		this.parent=parent;
 	}
-	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent,Dependency dep){
-		this(kind,scope_,decl,use,parent);
-		this.dep=dep;
-	}
 	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent,NestedScope[] nestedScopes){
 		this(kind,scope_,decl,use,parent);
 		this.nestedScopes=nestedScopes;
@@ -449,7 +445,7 @@ struct LastUses{
 		}
 		if(lastUse.use&&lastUse.kind!=LastUse.Kind.capture){
 			assert(lastUse.use.scope_ is lastUse.scope_);
-			assert(!!lastUse.use.meaning);
+			assert(!lastUse.use.meaning||lastUse.use.meaning is lastUse.decl);
 		}else{
 			with(LastUse.Kind){
 				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge,capture));
@@ -457,6 +453,10 @@ struct LastUses{
 		}
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
+		static if(language==silq){
+			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
+			assert(lastUse.kind!=LastUse.kind.implicitForget||!lastUse.dep.isTop);
+		}
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
@@ -500,7 +500,6 @@ struct LastUses{
 		assert(sc.isNestedIn(decl.scope_));
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
-		static if(language==silq) lu.dep=sc.getDependency(decl).dup;
 		auto splitFrom=lu.getSplitFrom();
 		//assert(splitFrom.kind==LastUse.Kind.lazySplitSource,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
 		add(lu);
@@ -511,14 +510,14 @@ struct LastUses{
 	}do{
 		add(new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null,nestedScopes));
 	}
-	void implicitForget(Identifier use,Expression forgetExp,Dependency forgetDep)in{
+	void implicitForget(Identifier use,Expression forgetExp)in{
 		assert(!!use);
 		assert(use.byRef);
 		assert(!use.constLookup);
 		assert(!!use.meaning);
 		assert(!!use.scope_);
 	}do{
-		add(new LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp,forgetDep.dup));
+		add(new LastUse(LastUse.Kind.implicitForget,use.scope_,use.meaning,use,forgetExp));
 	}
 	void implicitDup(Identifier use)in{
 		assert(!!use);
@@ -527,9 +526,7 @@ struct LastUses{
 		assert(!!use.meaning);
 		assert(!!use.scope_);
 	}do{
-		auto lu=new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null);
-		static if(language==silq) lu.dep=use.scope_.getDependency(use.meaning).dup;
-		add(lu);
+		add(new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null));
 		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
 	void constUse(Identifier use,Expression parent)in{
@@ -540,11 +537,11 @@ struct LastUses{
 		//imported!"util.io".writeln("CONST USE: ",use.loc," ",parent);
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
-	void consume(Declaration decl,Identifier use,Scope sc)in{
-		assert(decl in lastUses);
+	void consumption(Declaration decl,Identifier use,Scope sc)in{
+		assert(decl in lastUses,text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
 		assert(!!sc);
 		if(use){
-			assert(use.meaning is decl);
+			assert(!use.meaning||use.meaning is decl,text(use," ",decl," ",use.meaning));
 			assert(!use.constLookup);
 			assert(!use.implicitDup);
 			assert(use.scope_ is sc);
