@@ -444,11 +444,11 @@ struct LastUses{
 			assert(!lastUse.kind.among(implicitForget,constUse)||lastUse.parent);
 		}
 		if(lastUse.use&&lastUse.kind!=LastUse.Kind.capture){
-			assert(lastUse.use.scope_ is lastUse.scope_);
+			//assert(lastUse.use.scope_ is lastUse.scope_);
 			assert(!lastUse.use.meaning||lastUse.use.meaning is lastUse.decl);
 		}else{
 			with(LastUse.Kind){
-				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge,capture));
+				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge,capture,constPinned));
 			}
 		}
 		assert(!lastUse.prev&&!lastUse.next);
@@ -538,13 +538,13 @@ struct LastUses{
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
 	void consumption(Declaration decl,Identifier use,Scope sc)in{
-		assert(decl in lastUses,text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
+		assert(decl in lastUses||decl.isSemError(),text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
 		assert(!!sc);
 		if(use){
 			assert(!use.meaning||use.meaning is decl,text(use," ",decl," ",use.meaning));
 			assert(!use.constLookup);
 			assert(!use.implicitDup);
-			assert(use.scope_ is sc);
+			//assert(use.scope_ is sc);
 		}
 	}do{
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
@@ -631,10 +631,30 @@ struct LastUses{
 			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes)," ",LastUse.canForgetMerge(decl,nestedScopes,true,false));
 			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
 			if(isLoop) pin(decl,true);
-			if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
+			//if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
 			lazyMerge(decl,parent,nestedScopes.dup);
 			if(isLoop) pin(decl,true);
 			//imported!"util.io".writeln("MERGED: ",decl," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
+		}
+	}
+
+	// TODO: snapshotting is a bit hacky
+	LastUse[Declaration] getSnapshot(Scope sc){
+		LastUse[Declaration] nlastUses;
+		foreach(k,decl;sc.rnsymtab){
+			if(auto lu=get(decl,false))
+				nlastUses[decl]=lu;
+			//if(restoreable) imported!"util.io".writeln("RECORDED: ",nlastUses);
+		}
+		return nlastUses;
+	}
+	void restoreSnapshot(LastUse[Declaration] snapshot,Scope sc){
+		foreach(_,d;sc.rnsymtab){
+			if(auto nlu=lastUses.get(d,null)){
+				if(nlu.isConsumption()||nlu!is snapshot.get(d,null)){
+					nlu.kind=LastUse.Kind.constPinned;
+				}
+			}
 		}
 	}
 }

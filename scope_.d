@@ -307,8 +307,11 @@ abstract class Scope{
 			return &declProps.set(decl,DeclProp.default_());
 		}
 		final void recordAccess(Identifier id,Declaration meaning){
-			if(!meaning.isToplevelDeclaration())
+			if(!meaning.isToplevelDeclaration()){
 				lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
+				if(!id.constLookup&&!id.implicitDup)
+					lastUses.consumption(meaning,id,this); // TODO: ok?
+			}
 			updateDeclProps(meaning).accesses~=id;
 		}
 		final void recordCapturer(Declaration capturer,Declaration meaning){
@@ -1461,10 +1464,7 @@ abstract class Scope{
 				declProps=saveDeclProps();
 				trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			}
-			foreach(k,decl;rnsymtab){
-				if(auto lu=lastUses.get(decl,false))
-					nlastUses[decl]=lu;
-			}
+			nlastUses=lastUses.getSnapshot(this);
 			if(auto fd=getFunction())
 				prevCapturedDecls=fd.capturedDecls;
 		}
@@ -1534,13 +1534,15 @@ abstract class Scope{
 		foreach(_,decl;state.rnsymtab){
 			if(auto lu=state.lastUses.get(decl,null)){
 				if(lu.isConsumption()){
-					pushDependencies(lu.decl,false);
+					if(!toRemove.canFind(lu.decl)) // TODO: make more efficient
+						toRemove~=lu.decl;
 					recordConsumption(lu.decl,lu.use);
 					continue;
 				}
 			}
 			rnsymtab[decl.getId]=updateDecl(decl);
 		}
+		lastUses.restoreSnapshot(state.lastUses,this);
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
@@ -1753,7 +1755,10 @@ class NestedScope: Scope{
 			if(meaning.getId in sc.rnsymtab) // TODO: make sure captures are inserted only once, remove this
 				sc.symtabRemove(sc.rnsymtab[meaning.getId]);
 			sc.symtabInsert(meaning);
+			sc.lastUses.definition(meaning,null);
 		}
+		lastUses.definition(meaning,null);
+		//if(rnsymtab.get(meaning.getId,null) !is meaning) lastUses.consumption(meaning,id,this);
 		return parent.insertCaptureImpl(id,meaning,type,outermost);
 	}
 
@@ -1871,8 +1876,10 @@ class CapturingScope(T): NestedScope{
 		bool isConstLookup=kind==Lookup.constant||isConstDecl;
 		static if(language==silq)
 		if(type.hasQuantumComponent()){
-			if(origin.componentReplacements(meaning).length)
+			if(origin.componentReplacements(meaning).length){
+				origin.lastUses.definition(meaning,null);
 				return null; // not captured, will be replaced (TODO: ok?)
+			}
 			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
 				if(isConstDecl){
 					origin.error(text("cannot capture 'const' quantum ",meaning.kind), id.loc);
@@ -1929,11 +1936,14 @@ class CapturingScope(T): NestedScope{
 					updateFunctionDependency(decl);
 					id.meaning=origMeaning; // TODO: this is a hack
 				}
-				parent.recordAccess(id,meaning);
-				parent.recordCapturer(decl,meaning);
-				parent.lastUses.capture(meaning,id,parent,decl);
 			}
-		}
+		}else origin.lastUses.definition(meaning,null);
+		auto pmeaning=meaning;
+		while(pmeaning.splitFrom&&pmeaning.splitFrom.scope_.isNestedIn(parent))
+			pmeaning=pmeaning.splitFrom;
+		parent.lastUses.capture(pmeaning,id,parent,decl);
+		parent.recordAccess(id,pmeaning);
+		if(!id.lazyCapture) parent.recordCapturer(decl,pmeaning);
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){

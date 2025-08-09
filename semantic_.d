@@ -90,6 +90,7 @@ void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if
 		assert(!!p);
 		propErr(p,parent);
 		sc.addDefaultDependency(p);
+		if(p.scope_) sc.lastUses.definition(p,null);
 	}
 }
 
@@ -775,7 +776,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			assert(idx.byRef);
 			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no));
 		}
-		consumer.redefineArrays(with_.loc,sc);
+		consumer.redefineArrays(with_,sc); // TODO: fix
 	}
 	if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
@@ -1335,6 +1336,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 			fe.setSemError();
 		}
 		vd.setSemCompleted();
+		if(vd.scope_) fesc.lastUses.definition(vd,null);
 		bdy=compoundExpSemantic(bdy,sc);
 		assert(!!bdy);
 		propErr(bdy,fe);
@@ -2530,7 +2532,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 		//imported!"util.io".writeln("!!! ",idx2[0]," ",idx2[0].sstate);
 		Expression.CopyArgs cargs={ preserveMeanings: true };
 		consumer.consumeArray(idx2[0].copy(),econtext);
-		consumer.redefineArrays(be.loc,sc);
+		consumer.redefineArrays(be,sc);
 	}
 	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.type,be.e2));
 	propErr(be.e1,be);
@@ -2973,16 +2975,17 @@ struct ArrayConsumer{
 		}
 		doIt(e);
 	}
-	void redefineArrays(Location loc,Scope sc){
+	void redefineArrays(Expression parent,Scope sc){
 		SetX!Id added;
 		foreach(origId,id;ids.map!(t=>t)){
 			if(id&&id.meaning&&id.type&&origId !in added){
-				auto var=addVar(origId,id.type,loc,sc);
+				auto var=addVar(origId,id.type,parent.loc,sc);
 				if(origId in consumed)
 					sc.addDependency(var,consumed[origId][2]);
 				else sc.addDefaultDependency(var);
 				added.insert(origId);
 				if(replacements) *replacements~=AAssignExp.Replacement(id.meaning,var);
+				sc.lastUses.definition(var,parent);
 			}
 		}
 	}
@@ -3031,7 +3034,7 @@ void finishIndexReplacement(Expression be,Scope sc){
 	ArrayConsumer consumer;
 	foreach(theIndex;indicesToReplace)
 		consumer.consumeArray(theIndex,context);
-	consumer.redefineArrays(be.loc,sc);
+	consumer.redefineArrays(be,sc);
 	foreach(theIndex;indicesToReplace)
 		if(!theIndex.isSemError())
 			theIndex.sstate = SemState.completed; // TODO
