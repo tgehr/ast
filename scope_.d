@@ -773,17 +773,18 @@ abstract class Scope{
 			typeConstBlockNote(meaning,this);
 			return false;
 		}
-		if(canRecompute(meaning))
-			return true;
-		if(auto read=isConst(meaning)){
+		if(meaning.isConst){
 			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			note(format("%s was made 'const' here", meaning.kind), read.loc);
+			note("declared 'const' here", meaning.loc);
 			id.setSemForceError();
 			meaning.setSemForceError();
 			return false;
-		}else if(meaning.isConst){
+		}
+		if(auto read=isConst(meaning)){
+			if(canRecompute(meaning))
+				return true;
 			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			note("declared 'const' here", meaning.loc);
+			note(format("%s was made 'const' here", meaning.kind), read.loc);
 			id.setSemForceError();
 			meaning.setSemForceError();
 			return false;
@@ -1052,6 +1053,8 @@ abstract class Scope{
 				decl=split(decl,null);
 				assert(decl.scope_ is this);
 				cause.forgottenVars~=decl;
+				static if(is(T:Expression)) lastUses.synthesizedForget(decl,null,this,cause);
+				else lastUses.synthesizedForget(decl,null,this,null);
 				return true;
 			}
 			return false;

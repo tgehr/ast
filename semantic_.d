@@ -2723,13 +2723,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
 						if(id.meaning){
-							if(rhs[i].isQfree()){
-								auto dep=rhs[i].getDependency(sc);
-								dep.joinWith(getIndexDependency(lhs[i]));
-								dependencies~=q(id.meaning,dep);
-							}else{
-								dependencies~=q(id.meaning,Dependency(true));
-							}
+							auto dep=rhs[i].getDependency(sc);
+							dep.joinWith(getIndexDependency(lhs[i]));
+							dependencies~=q(id.meaning,dep);
 						}else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
@@ -4683,45 +4679,92 @@ Expression expressionSemanticImpl(PlaceholderExp pl,ExpSemContext context){
 
 Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
-	bool checkImplicitForget(Expression var){
-		if(var.implicitDup) return true;
-		if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkImplicitForget;
-		auto id=cast(Identifier)var;
-		if(!id) return false;
-		static if(language==silq){
-			if(auto meaning=sc.lookup(id,false,true,Lookup.probing,null)){
-				if(!sc.dependencyTracked(meaning)) return false;
-				return sc.canForget(meaning,true);
-			}else return false;
-		}else return true;
-	}
-	auto canForgetImplicitly=checkImplicitForget(fe.var);
-	void setByRef(Expression var){
-		if(var.implicitDup) return;
-		if(auto tpl=cast(TupleExp)var)
-			tpl.e.each!setByRef;
-		if(auto id=cast(Identifier)var)
-			id.byRef=true;
-	}
-	setByRef(fe.var);
-	fe.var=expressionSemantic(fe.var,context.nestConsumed);
-	propErr(fe.var,fe);
-	void classicalForget(Expression var){
-		if(auto tpl=cast(TupleExp)var){
-			tpl.e.each!classicalForget;
-			return;
+	if(!fe.val){
+		bool checkImplicitForget(Expression var){
+			var.constLookup=false;
+			if(auto tpl=cast(TupleExp)var){
+				auto success=tpl.e.all!checkImplicitForget;
+				if(tpl.e.all!(e=>!!e.type))
+					tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+				if(success) tpl.setSemCompleted();
+				else tpl.setSemError();
+				return success;
+			}
+			auto id=cast(Identifier)var;
+			if(!id||var.implicitDup){
+				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
+				return false;
+			}
+			if(id.isSemError()) return false;
+			if(id.sstate==SemState.started){
+				sc.error("invalid forward reference",id.loc);
+				id.setSemError();
+				return false;
+			}
+			id.sstate=SemState.started;
+			DeadDecl[] failures;
+			if(auto meaning=sc.lookup(id,false,true,Lookup.probing,&failures)){
+				/+if(!checkNonConstDecl!("forget","forgetting")(meaning,id.loc,sc)) // TODO: improve diagnostic
+				 return false;+/
+				if(!sc.checkConsumable(id,meaning)){
+					id.setSemError();
+					return false;
+				}
+				meaning=sc.consume(meaning,id);
+				static if(language==silq){
+					if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
+						id.scope_=sc;
+						id.byRef=true;
+						assert(!!meaning);
+						id.meaning=meaning;
+						id.type=id.typeFromMeaning;
+						if(!id.type||meaning.isSemError()){
+							if(!meaning.isSemError())
+								context.sc.error(format("cannot determine type for '%s",id),id.loc);
+							id.setSemError();
+							return false;
+						}else id.setSemCompleted();
+						sc.lastUses.synthesizedForget(meaning,id,sc,fe);
+						return true;
+					}else{
+						sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
+						id.setSemError();
+						return false;
+					}
+				}else return true;
+			}else{
+				undefinedIdentifierError(id,failures,sc);
+				return false;
+			}
 		}
-		auto id=cast(Identifier)var;
-		if(!id) return;
-		auto meaning=id.meaning;
-		if(!meaning) return;
-		if(!checkNonConstDecl!("forget","forgetting")(meaning,id.loc,sc)){
+		if(!checkImplicitForget(fe.var))
 			fe.setSemError();
-			return;
+	}else{
+		void setByRef(Expression var){
+			if(var.implicitDup) return;
+			if(auto tpl=cast(TupleExp)var)
+				tpl.e.each!setByRef;
+			if(auto id=cast(Identifier)var)
+				id.byRef=true;
 		}
-	}
-	classicalForget(fe.var);
-	if(fe.val){
+		setByRef(fe.var);
+		fe.var=expressionSemantic(fe.var,context.nestConsumed);
+		propErr(fe.var,fe);
+		void classicalForget(Expression var){
+			if(auto tpl=cast(TupleExp)var){
+				tpl.e.each!classicalForget;
+				return;
+			}
+			auto id=cast(Identifier)var;
+			if(!id) return;
+			auto meaning=id.meaning;
+			if(!meaning) return;
+			if(!checkNonConstDecl!("forget","forgetting")(meaning,id.loc,sc)){
+				fe.setSemError();
+				return;
+			}
+		}
+		classicalForget(fe.var);
 		if(fe.var.type){
 			auto nval=new TypeAnnotationExp(fe.val,fe.var.type,TypeAnnotationType.coercion);
 			nval.loc=fe.val.loc;
@@ -4732,18 +4775,16 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		if(!fe.isSemError()&&fe.var.type&&fe.val.type)
 			assert(fe.var.type==fe.val.type);
 		static if(language!=silq){
-			if(!canForgetImplicitly){
+			bool checkVar(Expression var){
+				if(cast(Identifier)var) return true;
+				if(te=cast(TupleExp)var) return tpl.e.all!checkVar;
+				return false;
+			}
+			if(!checkVar(fe.var)){
 				sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
 				fe.setSemError();
 			}
 		}
-	}else if(!canForgetImplicitly&&!fe.isSemError()){
-		static if(language==silq){
-			sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
-		}else{
-			sc.error("forget expression should be variable or tuple of variables",fe.var.loc);
-		}
-		fe.setSemError();
 	}
 	fe.type=unit;
 	return fe;
