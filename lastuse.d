@@ -3,7 +3,7 @@
 module ast.lastuse;
 import astopt;
 
-import std.range, std.algorithm, std.conv;
+import std.range, std.algorithm, std.conv, std.format;
 import ast.expression,ast.declaration,ast.scope_;
 
 
@@ -151,6 +151,28 @@ final class LastUse{
 			kind=Kind.synthesizedForget;
 		}else kind=Kind.consumption;
 		// TODO: perform necessary updates
+		auto cdep=dep.dup;
+		for(auto lu=next;lu;lu=lu.next){ // TODO: have to start where it is split
+			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep);
+			lu.dep.replace(decl,cdep);
+			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)){
+				cdep.replace(lu.decl,lu.dep);
+				if(lu.kind==Kind.synthesizedForget&&lu.dep.isTop){
+					if(lu.use && lu.use.scope_){
+						lu.scope_.error(format("cannot synthesize forget expression for '%s'",lu.use),lu.use.loc);
+					}else if(lu.decl.scope_){
+						auto d=lu.decl,sc=lu.decl.scope_;
+						if(cast(Parameter)d) sc.error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+						else sc.error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+						if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
+					}
+					lu.decl.setSemForceError();
+					if(lu.use) lu.use.setSemForceError();
+					if(lu.parent) lu.parent.setSemForceError();
+					// TODO: the error has to be propagated out further
+				}
+			}
+		}
 	}
 
 	void consume(bool isForget){
@@ -385,25 +407,6 @@ final class LastUse{
 		if(decl is splitFrom) decl=splitInto;
 		if(splitFrom in dep.dependencies) dep.replace(splitFrom,splitInto);
 	}
-
-	void pushDependencies(Declaration decl,Scope sc){
-		if(forwardTo) return forwardTo.pushDependencies(decl,sc);
-		if(kind==Kind.implicitDup){
-			//imported!"util.io".writeln("BEFORE PUSH: ",use.loc," ",decl," ",dep);
-			if(dep.isTop) return; // might reenter during cancelImplicitDup
-			sc.pushUp(dep,decl);
-			//imported!"util.io".writeln("AFTER PUSH: ",use.loc," ",decl," ",dep);
-			if(dep.isTop){
-				assert(use&&use.meaning is this.decl);
-				//imported!"util.io".writeln("BEFORE CANCEL: ",sc.rnsymtab," ",sc.lastUses.lastUses);
-				if(sc.cancelImplicitDup(use)){
-					assert(kind==LastUse.Kind.consumption);
-				}else{
-					// TODO
-				}
-			}
-		}
-	}
 }
 
 struct LastUses{
@@ -620,12 +623,6 @@ struct LastUses{
 			retired.remove(splitFrom);
 			foreach(r;retired[splitInto])
 				r.replaceDecl(splitFrom,splitInto);
-		}
-	}
-
-	void pushDependencies(Declaration decl,Scope sc){
-		foreach(d,lu;lastUses){
-			lu.pushDependencies(decl,sc);
 		}
 	}
 

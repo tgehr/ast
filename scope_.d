@@ -354,11 +354,9 @@ abstract class Scope{
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
 			assert(read.scope_);
-			assert(read.scope_.canRecompute(read.meaning),text(read.loc," ",use.loc));
 		}do{
 			import ast.semantic_:getDependency;
-			auto dep=getDependency(read,read.scope_);
-			assert(!dep.isTop);
+			auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
 		}
 		final void recordImplicitDup(Identifier id)in{
@@ -1010,11 +1008,26 @@ abstract class Scope{
 			dependencies.replace(decl,rhs);
 		}
 		final void pushDependencies(Declaration decl,bool keep){
+			if(getDependency(decl).isTop){
+				foreach(ndecl,ref v;dependencies.dependencies){
+					if(decl in v.dependencies){
+						if(auto lu=lastUses.get(ndecl,true)){
+							while(lu.forwardTo) lu=lu.forwardTo;
+							if(lu.kind==LastUse.Kind.implicitDup){
+								if(cancelImplicitDup(lu.use)){
+									assert(lu.kind==LastUse.Kind.consumption);
+								}else{
+									// TODO
+								}
+							}
+						}
+					}
+				}
+			}
 			dependencies.pushUp(decl,keep);
 			if(keep) toRemove~=decl;
 			this.pushUp(controlDependency,decl);
 			pushTrackedTemporaryDependencies(decl);
-			lastUses.pushDependencies(decl,this);
 		}
 
 		bool canForget(Declaration decl,bool forceHere=false){
