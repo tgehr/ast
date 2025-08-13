@@ -468,7 +468,9 @@ abstract class Scope{
 		}
 		final ConstBlockContext saveConst(){
 			Identifier[Declaration] constBlock;
-			foreach(decl,ref prop;declProps.props) constBlock[decl]=prop.constBlock;
+			foreach(decl,ref prop;declProps.props)
+				if(prop.constBlock)
+					constBlock[decl]=prop.constBlock;
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
 		private void recordResetConst(Declaration decl,Identifier constBlock,Expression parent){
@@ -477,13 +479,14 @@ abstract class Scope{
 				lastUses.constUse(constBlock,parent);
 		}
 		final bool resetConst(ConstBlockContext context,Expression parent){
-			foreach(decl,constBlock;context.constBlock)
-				updateDeclProps(decl).constBlock=constBlock;
 			foreach(decl,ref prop;declProps.props){
-				if(prop.constBlock&&decl !in context.constBlock){
-					recordResetConst(decl,prop.constBlock,parent);
-					prop.constBlock=null;
-				}
+				if(prop.constBlock) recordResetConst(decl,prop.constBlock,parent);
+				auto nconstBlock=context.constBlock.get(decl,null);
+				prop.constBlock=nconstBlock;
+			}
+			foreach(decl,constBlock;context.constBlock){
+				auto prop=declProps.tryGet(decl);
+				assert(prop&&prop.constBlock is constBlock);
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];

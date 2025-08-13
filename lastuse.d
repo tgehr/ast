@@ -51,6 +51,7 @@ final class LastUse{
 		auto dep=Dependency(true);
 	LastUse forwardTo=null;
 	LastUse splitFrom=null;
+	LastUse splitSource=null;
 	NestedScope[] nestedScopes;
 	LastUse prev=null,next=null;
 
@@ -150,11 +151,17 @@ final class LastUse{
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
 		}else kind=Kind.consumption;
+		updateDependenciesOnConsumption();
+	}
+	private void updateDependenciesOnConsumption(){
+		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
-		for(auto lu=next;lu;lu=lu.next){ // TODO: have to start where it is split
+		for(auto lu=splitSource?splitSource:next;lu;lu=lu.next){
+			if(lu is this) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep);
 			lu.dep.replace(decl,cdep);
+			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)){
 				cdep.replace(lu.decl,lu.dep);
 				if(lu.kind==Kind.synthesizedForget&&lu.dep.isTop){
@@ -215,6 +222,8 @@ final class LastUse{
 					nested.pushDependencies(result,false);
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
+					if(auto lu=nested.lastUses.get(result,true))
+						lu.markConsumed(isForget);
 				}
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
@@ -333,7 +342,7 @@ final class LastUse{
 		if(forwardTo){
 			forwardTo.forget(forceConsumed);
 			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
-			assert(isConsumption(),text(this," ",forwardTo));
+			assert(isConsumption(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption()));
 			if(scope_.lastUses.lastUses.get(decl,null) is this)
 				scope_.lastUses.lastUses[decl]=forwardTo;
 			return;
@@ -403,6 +412,7 @@ final class LastUse{
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto){
+		//imported!"util.io".writeln("REPLACING: ",this," ",splitFrom," ",splitInto);
 		if(forwardTo) forwardTo.replaceDecl(splitFrom,splitInto);
 		if(decl is splitFrom) decl=splitInto;
 		if(splitFrom in dep.dependencies) dep.replace(splitFrom,splitInto);
@@ -467,27 +477,31 @@ struct LastUses{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
-			if(lastUse.kind!=LastUse.Kind.lazySplitSource){
-				if(prevLastUse.forwardTo)
-					prevLastUse.forwardTo.remove();
-				prevLastUse.remove();
-				lastUses.remove(lastUse.decl);
-			}
 			if(prevLastUse.kind==LastUse.Kind.lazySplit){
 				assert(!!prevLastUse.splitFrom);
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
 				if(lastUse.kind!=LastUse.Kind.lazySplitSource)
 					prevLastUse.pinSplits();
-				if(!lastUse.splitFrom){
-					lastUse.splitFrom=prevLastUse.splitFrom;
-					//imported!"util.io".writeln("INHERINTING SPLIT FROM: ",lastUse," ",lastUse.splitFrom);
+				lastUse.splitSource=prevLastUse;
+			}else{
+				if(lastUse.kind!=LastUse.Kind.lazySplitSource){
+					if(prevLastUse.forwardTo)
+						prevLastUse.forwardTo.remove();
+					prevLastUse.remove();
+				}
+				if(prevLastUse.splitSource){
+					lastUse.splitSource=prevLastUse.splitSource;
 				}
 			}
+			lastUses.remove(lastUse.decl);
 			retire(prevLastUse); // TODO: needed?
 		}
 		lastUses[lastUse.decl]=lastUse;
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
+		if(lastUse.isConsumption()&&lastUse.splitSource){
+			lastUse.splitSource.updateDependenciesOnConsumption();
+		}
 	}
 	void definition(Declaration decl,Expression defExp)in{
 		assert(!!decl.scope_);
@@ -613,17 +627,19 @@ struct LastUses{
 	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		// assert(splitInto !in lastUses); // TODO
 	}do{
+		//imported!"util.io".writeln("REPLACING: ",splitFrom," ",splitInto);
 		if(splitFrom in lastUses){
 			lastUses[splitInto]=lastUses[splitFrom];
 			lastUses.remove(splitFrom);
-			lastUses[splitInto].replaceDecl(splitFrom,splitInto);
 		}
+		foreach(lu;lastUses) lu.replaceDecl(splitFrom,splitInto);
 		if(splitFrom in retired){
 			retired[splitInto]=retired[splitFrom];
 			retired.remove(splitFrom);
-			foreach(r;retired[splitInto])
-				r.replaceDecl(splitFrom,splitInto);
 		}
+		foreach(lus;retired)
+			foreach(lu;lus)
+				lu.replaceDecl(splitFrom,splitInto);
 	}
 
 	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes){
