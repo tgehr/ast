@@ -33,7 +33,7 @@ final class LastUse{
 	enum Kind{
 		definition,
 		constPinned,
-		lazySplitSource,
+		lazySplitSink,
 		lazySplit,
 		lazyMerge,
 		synthesizedForget,
@@ -274,7 +274,7 @@ final class LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
-			case lazySplitSource:
+			case lazySplitSink:
 				return Forgettability.none;
 			case lazySplit:
 				assert(!!splitFrom);
@@ -304,7 +304,7 @@ final class LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				return false;
-			case lazySplitSource:
+			case lazySplitSink:
 				return false;
 			case lazySplit:
 				return canForget(true);
@@ -326,7 +326,7 @@ final class LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				return false;
-			case lazySplitSource:
+			case lazySplitSink:
 				return false;
 			case lazySplit:
 				return false; // TODO
@@ -358,7 +358,7 @@ final class LastUse{
 		final switch(kind)with(Kind){
 			case definition,constPinned:
 				goto case constUse;
-			case lazySplitSource:
+			case lazySplitSink:
 				assert(0); // always forwarded
 			case lazySplit:
 				assert(!!splitFrom);
@@ -434,7 +434,7 @@ struct LastUses{
 	void prepareNesting(Scope parent)do{
 		foreach(k,d;parent.rnsymtab){
 			if(cast(DeadDecl)d) continue;
-			lazySplitSource(d,parent);
+			lazySplitSink(d,parent);
 		}
 	}
 	void nest(NestedScope r)in{
@@ -471,7 +471,7 @@ struct LastUses{
 			assert(!lastUse.use.meaning||lastUse.use.meaning is lastUse.decl);
 		}else{
 			with(LastUse.Kind){
-				assert(lastUse.kind.among(definition,lazySplitSource,lazySplit,lazyMerge,capture,constPinned,synthesizedForget));
+				assert(lastUse.kind.among(definition,lazySplitSink,lazySplit,lazyMerge,capture,constPinned,synthesizedForget));
 			}
 		}
 		assert(!lastUse.prev&&!lastUse.next);
@@ -485,11 +485,11 @@ struct LastUses{
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
-				if(lastUse.kind!=LastUse.Kind.lazySplitSource)
+				if(lastUse.kind!=LastUse.Kind.lazySplitSink)
 					prevLastUse.pinSplits();
 				lastUse.splitSource=prevLastUse;
 			}else{
-				if(lastUse.kind!=LastUse.Kind.lazySplitSource){
+				if(lastUse.kind!=LastUse.Kind.lazySplitSink){
 					if(prevLastUse.forwardTo)
 						prevLastUse.forwardTo.remove();
 					prevLastUse.remove();
@@ -515,10 +515,10 @@ struct LastUses{
 		Identifier use=null;
 		add(new LastUse(LastUse.Kind.definition,decl.scope_,decl,use,defExp));
 	}
-	void lazySplitSource(Declaration decl,Scope sc)in{
+	void lazySplitSink(Declaration decl,Scope sc)in{
 		assert(decl.scope_&&sc);
 	}do{
-		auto lu=new LastUse(LastUse.Kind.lazySplitSource,sc,decl,null,null);
+		auto lu=new LastUse(LastUse.Kind.lazySplitSink,sc,decl,null,null);
 		lu.forwardTo=sc.lastUses.lastUses.get(decl,null);
 		add(lu);
 	}
@@ -528,7 +528,7 @@ struct LastUses{
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
 		auto splitFrom=lu.getSplitFrom();
-		//assert(splitFrom.kind==LastUse.Kind.lazySplitSource,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
+		//assert(splitFrom.kind==LastUse.Kind.lazySplitSink,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
 		add(lu);
 		//imported!"util.io".writeln("SPLITTED: ",lu.getSplitFrom()," ",lu);
 	}
