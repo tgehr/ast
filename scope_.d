@@ -41,8 +41,10 @@ struct Dependency{
 	private Q!(bool,SetX!Id) getIds(){
 		SetX!Id result;
 		foreach(decl;dependencies){
-			assert(decl.getId !in result);
-			result.insert(decl.getId);
+			auto id=decl.getId;
+			if(id==Id()) continue;
+			assert(id !in result);
+			result.insert(id);
 		}
 		return q(isTop,result);
 	}
@@ -100,8 +102,10 @@ struct Dependencies{
 	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
 		foreach(decl,ref dependency;dependencies){
-			assert(decl.getId !in result);
-			result[decl.getId]=dependency.getIds();
+			auto id=decl.getId;
+			if(id==Id()) continue;
+			assert(id !in result,text(decl," ",dependencies," ",result));
+			result[id]=dependency.getIds();
 		}
 		return result;
 	}
@@ -981,6 +985,7 @@ abstract class Scope{
 			addDependency(decl,getDefaultDependency(decl));
 			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
 			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
+			//imported!"util.io".writeln(dependencies.getIds());
 			//assert(decl.getName!="rrr");
 		}
 
@@ -988,6 +993,8 @@ abstract class Scope{
 			addDependencies([q(decl,dep)]);
 		}
 		void removeDependency(Declaration decl){
+			//imported!"util.io".writeln("REMOVING: ",decl," ",cast(void*)decl);
+			static int counter=0;
 			dependencies.dependencies.remove(decl);
 		}
 		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
@@ -1147,9 +1154,6 @@ abstract class Scope{
 		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.rnsymtab));
 		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.dependencies));
 		foreach(sc;scopes) sc.clearConsumed();
-		static if(language==silq){
-			clearConsumed();
-		}
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
 		foreach(sc;scopes){
 			sc.siblingScopes=activeNestedScopes;
@@ -1163,6 +1167,9 @@ abstract class Scope{
 		allowMerge=false;
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
+		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
+		Dependency[Declaration] carryOverDependencies;
+		foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
 		dependencies=scopes[0].dependencies.dup;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
@@ -1340,6 +1347,10 @@ abstract class Scope{
 		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
+		foreach(decl,ref dep;carryOverDependencies){
+			if(decl !in dependencies.dependencies)
+				dependencies.dependencies[decl]=dep;
+		}
 		lastUses.merge(isLoop,this,scopes);
 		return errors;
 	}

@@ -706,8 +706,9 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 		ite.othw.loc=ite.loc;
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_);
-	ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,restriction_);
-	ite.othw=controlledCompoundExpSemantic(ite.othw,sc,ite.cond,restriction_);
+	auto dep=ite.cond.getDependency(sc);
+	ite.then=controlledCompoundExpSemantic(ite.then,sc,ite.cond,dep,restriction_);
+	ite.othw=controlledCompoundExpSemantic(ite.othw,sc,ite.cond,dep,restriction_);
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
@@ -825,6 +826,7 @@ struct FixedPointIterState{
 		return loopScope;
 	}
 	void endIteration(Scope sc){
+		sc.clearConsumed();
 		sc.updateStateSnapshot(origStateSnapshot);
 		sc.updateStateSnapshot(prevStateSnapshot);
 		nextStateSnapshot=sc.getStateSnapshot(true);
@@ -1556,13 +1558,13 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	return e;
 }
 
-CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression control,Annotation restriction_)in{
+CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression control,Dependency controlDependency,Annotation restriction_)in{
 	//assert(!ce.blscope_);
 }do{
 	static if(language==silq){
 		if(control.type&&!control.type.isClassical()){
 			if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
-			if(control.isQfree()) ce.blscope_.addControlDependency(control.getDependency(ce.blscope_));
+			if(control.isQfree()) ce.blscope_.addControlDependency(controlDependency);
 			else ce.blscope_.addControlDependency(Dependency(true));
 		}
 	}
