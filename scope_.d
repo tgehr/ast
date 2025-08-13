@@ -40,7 +40,10 @@ struct Dependency{
 	}
 	private Q!(bool,SetX!Id) getIds(){
 		SetX!Id result;
-		foreach(decl;dependencies) result.insert(decl.getId);
+		foreach(decl;dependencies){
+			assert(decl.getId !in result);
+			result.insert(decl.getId);
+		}
 		return q(isTop,result);
 	}
 	bool matches(Dependency rhs){ // TODO: make faster?
@@ -96,8 +99,10 @@ struct Dependencies{
 	}
 	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
-		foreach(decl,ref dependency;dependencies)
+		foreach(decl,ref dependency;dependencies){
+			assert(decl.getId !in result);
 			result[decl.getId]=dependency.getIds();
+		}
 		return result;
 	}
 	bool matches(Dependencies rhs){ // TODO: make faster?
