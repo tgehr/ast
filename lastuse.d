@@ -140,6 +140,7 @@ final class LastUse{
 		if(splitFrom) splitFrom.pin();
 		if(!includingSplits&&kind==Kind.lazySplit) return;
 		if(isConsumption()) return;
+		//imported!"util.io".writeln("PINNING: ",this);
 		kind=Kind.constPinned;
 		if(splitFrom) splitFrom.pinSplits();
 	}
@@ -157,7 +158,12 @@ final class LastUse{
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
-		for(auto lu=splitSource?splitSource:next;lu;lu=lu.next){
+		auto start=next;
+		if(splitFrom){
+			for(start=this;start&&start.prev&&start.prev.splitFrom;)
+				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
+		}
+		for(auto lu=start;lu;lu=lu.next){
 			if(lu is this) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep);
 			lu.dep.replace(decl,cdep);
@@ -477,8 +483,7 @@ struct LastUses{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
-			if(prevLastUse.kind==LastUse.Kind.lazySplit){
-				assert(!!prevLastUse.splitFrom);
+			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
 				if(lastUse.kind!=LastUse.Kind.lazySplitSource)
 					prevLastUse.pinSplits();
@@ -490,6 +495,7 @@ struct LastUses{
 					prevLastUse.remove();
 				}
 				if(prevLastUse.splitSource){
+					assert(!!prevLastUse.splitSource.splitFrom);
 					lastUse.splitSource=prevLastUse.splitSource;
 				}
 			}
