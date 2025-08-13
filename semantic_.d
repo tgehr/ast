@@ -4710,7 +4710,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					id.setSemError();
 					return false;
 				}
-				meaning=sc.consume(meaning,id);
+				if(auto nmeaning=sc.consume(meaning,id))
+					meaning=nmeaning;
 				static if(language==silq){
 					if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
 						id.scope_=sc;
@@ -4727,7 +4728,10 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						sc.lastUses.synthesizedForget(meaning,id,sc,fe);
 						return true;
 					}else{
-						sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
+						if(!meaning.isSemError()){
+							sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
+							meaning.setSemForceError();
+						}
 						id.setSemError();
 						return false;
 					}

@@ -355,6 +355,7 @@ abstract class Scope{
 			assert(read.meaning&&read is isConst(read.meaning));
 			assert(read.scope_);
 		}do{
+			if(read.meaning.isSemError()) return;
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
@@ -766,28 +767,42 @@ abstract class Scope{
 		if(!meaning) meaning=id.meaning;
 		if(!meaning) return true;
 		assert(!!meaning);
+		if(meaning.isToplevelDeclaration()){
+			if(!meaning.isSemError()){
+				error(format("cannot consume top-level '%s' '%s'",meaning.kind,id), id.loc);
+				note("declared here",meaning.loc);
+				id.setSemForceError();
+			}
+			return false;
+		}
 		if(meaning.typeConstBlocker){
-			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			id.setSemForceError();
-			meaning.setSemForceError();
+			if(!meaning.isSemError()){
+				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+				meaning.setSemForceError();
+			}
 			import ast.semantic_:typeConstBlockNote;
 			typeConstBlockNote(meaning,this);
+			id.setSemForceError();
 			return false;
 		}
 		if(meaning.isConst){
-			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			note("declared 'const' here", meaning.loc);
+			if(!meaning.isSemError()){
+				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+				note("declared 'const' here", meaning.loc);
+				meaning.setSemForceError();
+			}
 			id.setSemForceError();
-			meaning.setSemForceError();
 			return false;
 		}
 		if(auto read=isConst(meaning)){
 			if(canRecompute(meaning))
 				return true;
-			error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-			note(format("%s was made 'const' here", meaning.kind), read.loc);
+			if(!meaning.isSemError()){
+				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+				note(format("%s was made 'const' here", meaning.kind), read.loc);
+				meaning.setSemForceError();
+			}
 			id.setSemForceError();
-			meaning.setSemForceError();
 			return false;
 		}
 		return true;
@@ -1690,6 +1705,8 @@ class NestedScope: Scope{
 					result=added;
 					assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 					splitVar(ndecl,result);
+					import ast.semantic_:propErr;
+					propErr(ndecl,result);
 					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 					static if(language==silq){
 						if(remove){ // TODO: can we get rid of this?
