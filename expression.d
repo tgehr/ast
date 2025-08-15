@@ -275,7 +275,6 @@ abstract class Expression: Node{
 	void setConstLookup(bool constLookup){ this.constLookup=constLookup; }
 	bool byRef=false;
 	bool implicitDup=false;
-	//Identifier[] forgottenConstUses; // TODO: can we avoid some space overhead from this?
 }
 
 mixin template VariableFree(){
@@ -1998,6 +1997,55 @@ class LambdaExp: Expression{
 	override Annotation getAnnotation(){ return pure_; }
 }
 
+class LetExp: Expression{
+	CompoundExp s;
+	Expression e;
+	this(CompoundExp s,Expression e){
+		this.s=s;
+		this.e=e;
+	}
+	override LetExp copyImpl(CopyArgs args){
+		return new LetExp(s.copy(args),e.copy(args));
+	}
+	Expression isForward(bool allowForgets=false){
+		if(s.blscope_) return null;
+		if(allowForgets?s.s.length==0||s.s.length>2:s.s.length!=1) return null;
+		auto de=cast(DefineExp)s.s[0];
+		if(!de) return null;
+		auto id=cast(Identifier)e;
+		if(!id||id.implicitDup) return null;
+		auto dId=cast(Identifier)de.e1;
+		if(!dId||dId.implicitDup) return null;
+		if(id.id!=dId.id) return null;
+		if(s.s.length>=2){
+			assert(allowForgets);
+			if(!s.s[1..$].all!((cs){
+				auto fe=cast(ForgetExp)cs;
+				if(!fe) return false;
+				if(!!fe.val) return false;
+				return true;
+			}))
+				return null;
+		}
+		return de.e2;
+	}
+	override string toString(){
+		if(auto fwd=isForward()) return fwd.toString();
+		if(s.s.length==1) return _brk(text("let ",s.s[0]," in ",e));
+		return _brk(text("let",s," in ",e));
+	}
+
+	mixin VariableFree; // TODO!
+	override int componentsImpl(scope int delegate(Expression) dg){
+		foreach(cs;s.components)
+			if(auto r=dg(cs))
+				return r; // TODO: improve
+		return dg(e);
+	}
+	override Expression evalImpl(){ return this; }
+	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
+}
+
 class VectorExp: Expression{
 	Expression[] e;
 	this(Expression[] e){
@@ -2306,6 +2354,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	if(auto ite=cast(IteExp)e) return f(ite,forward!args);
 	if(auto ae=cast(AssertExp)e) return f(ae,forward!args);
 	if(auto le=cast(LiteralExp)e) return f(le,forward!args);
+	if(auto le=cast(LetExp)e) return f(le,forward!args);
 	if(auto le=cast(LambdaExp)e) return f(le,forward!args);
 	if(auto ce=cast(CallExp)e) return f(ce,forward!args);
 	static if(language==psi) if(auto pl=cast(PlaceholderExp)e) return f(pl,forward!args);

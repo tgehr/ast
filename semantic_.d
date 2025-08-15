@@ -103,7 +103,7 @@ VarDecl addVar(Id name,Expression ty,Location loc,Scope sc){
 	if(var.vtype){
 		if(!sc) var.setSemCompleted();
 		else var=varDeclSemantic(var,sc);
-		assert(!!var && var.isSemCompleted());
+		assert(!!var);
 	}else var.setSemError();
 	return var;
 }
@@ -1769,6 +1769,9 @@ Expression defineLhsSemanticImpl(AssertExp ae,DefineLhsContext context){
 
 Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(lit,context);
+}
+Expression defineLhsSemanticImpl(LetExp let,DefineLhsContext context){
+	return defineLhsSemanticImplUnsupported(let,context);
 }
 Expression defineLhsSemanticImpl(LambdaExp le,DefineLhsContext context){
 	return defineLhsSemanticImplUnsupported(le,context);
@@ -4640,6 +4643,44 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 		return le;
 	}
 	return expressionSemanticImplDefault(le,context);
+}
+
+Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
+	if(!le.isForward(true)||context.constResult){
+		context.sc.error("currently not supported",le.loc);
+		le.setSemError();
+		return le;
+	}
+	auto de=cast(DefineExp)le.s.s[0];
+	assert(!!de);
+	de.e2=expressionSemantic(de.e2,context);
+	auto dId=cast(Identifier)de.e1;
+	assert(!!dId);
+	dId.scope_=context.sc;
+	auto var=addVar(dId.id,de.e2.type,de.e1.loc,context.sc);
+	dId.meaning=var;
+	dId.type=dId.typeFromMeaning;
+	dId.constLookup=false;
+	dId.byRef=true;
+	propErr(var,dId);
+	if(!var.isSemError()) dId.setSemCompleted();
+	if(var.scope_) context.sc.lastUses.definition(var,de);
+	propErr(de.e1,de);
+	propErr(de.e2,de);
+	de.type=unit;
+	if(!de.isSemError()) de.setSemCompleted();
+	propErr(de,le);
+	foreach(ref s;le.s.s[1..$]){
+		assert(!!cast(ForgetExp)s);
+		s=expressionSemantic(s,context.nestConst);
+		propErr(s,le);
+	}
+	le.e.byRef=true;
+	le.e=expressionSemantic(le.e,context);
+	propErr(le.e,le);
+	le.type=le.e.type;
+	if(!le.isSemError()) le.setSemCompleted();
+	return le;
 }
 
 Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){

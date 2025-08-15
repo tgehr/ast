@@ -483,6 +483,8 @@ struct Parser{
 				case Tok!"lambda",Tok!"λ": // TODO: add support in PSI as well?
 					return parseLambdaExp();
 			}
+			case Tok!"let":
+				return parseLetExp();
 			case Tok!"(",Tok!"[":
 				if(allowLambda){
 					auto state=saveState();
@@ -582,6 +584,20 @@ struct Parser{
 		mixin(SetLoc!LambdaExp);
 		static if(language==silq) if(util.among(ttype,Tok!"lambda",Tok!"λ")) nextToken(); // TODO: add support in PSI as well?
 		return res=New!LambdaExp(parseFunctionDef!(true,semicolon));
+	}
+
+	LetExp parseLetExp(){
+		mixin(SetLoc!LetExp);
+		expect(Tok!"let");
+		CompoundExp s;
+		if(ttype!=Tok!"{"){
+			auto se=parseExpression();
+			s=new CompoundExp([se]);
+			s.loc=se.loc;
+		}else s=parseCompoundExp();
+		expect(Tok!"in");
+		auto e=parseExpression();
+		return res=New!LetExp(s,e);
 	}
 
 	// left denotation
@@ -1169,7 +1185,7 @@ struct Parser{
 				tpl~=parseExpression(rbp!(Tok!","));
 			}
 			var=New!TupleExp(tpl);
-			//var.loc=varBegin.to(tok.loc);
+			var.loc=varBegin.to(tok.loc);
 		}
 		expect(Tok!")");
 		return res=New!ForgetExp(var,val);

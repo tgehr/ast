@@ -628,6 +628,8 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.Identifier e) {
+		// assert(!!e.scope_, format("%s %s",e,e.loc)); // TODO
+
 		switch(ast_sem.isBuiltIn(e)) {
 			case ast_sem.BuiltIn.none:
 				break;
@@ -644,6 +646,13 @@ class Checker {
 		if(!decl) return; // TODO
 		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
 		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
+	}
+
+	void implExpr(ast_exp.LetExp e) {
+		assert(e.isForward(true), format("let expression %s is not from supported subset at %s", e, e.loc));
+		auto r = visStmt(e.s);
+		assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
+		visExpr(e.e);
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {
