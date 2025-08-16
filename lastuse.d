@@ -604,7 +604,9 @@ struct LastUses{
 			finish(le);
 			return le;
 		}
-		if(!inType){
+		static if(language==silq) auto depOk=!use.scope_.getDependency(use.meaning).isTop;
+		else enum depOk=true;
+		if(!inType&&depOk){
 			if(isStatement){
 				import ast.semantic_:definitelyReturns;
 				if(!definitelyReturns(parent)){
