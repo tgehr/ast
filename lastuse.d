@@ -616,7 +616,7 @@ struct LastUses{
 					else s.setSemCompleted();
 					parent=s;
 				}
-			}else if(!parent.constLookup)
+			}else if(!parent.constLookup&&!cast(Identifier)parent)
 				parent=getLet();
 		}
 		//imported!"util.io".writeln("MADE: ",parent);

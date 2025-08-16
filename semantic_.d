@@ -6084,7 +6084,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
 			expr.setSemForceError();
 		}
-		if(!context.constResult&&!cast(LiteralExp)expr&&!expr.byRef||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
+		if(!context.constResult&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
 			if(!sc.resetConst(constSave,expr,false,context.inType))
 				expr.setSemForceError();
 		}
