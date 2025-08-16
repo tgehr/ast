@@ -1739,7 +1739,7 @@ class WithExp: Expression{
 		foreach(e;(old?trans:itrans).s){
 			import ast.semantic_:unwrap,getIdFromIndex;
 			auto de=cast(DefineExp)e;
-			assert(!!de);
+			assert(!!de,text(this," ",e," ",typeid(e)));
 			auto idx=cast(IndexExp)unwrap(old?de.e2:de.e1);
 			assert(idx&&idx.byRef);
 			auto id=getIdFromIndex(idx);
@@ -2030,19 +2030,47 @@ class LetExp: Expression{
 		return de.e2;
 	}
 	override string toString(){
-		if(auto fwd=isForward()) return fwd.toString();
+		//if(auto fwd=isForward()) return fwd.toString()~"/+*+/";
 		if(s.s.length==1) return _brk(text("let ",s.s[0]," in ",e));
 		return _brk(text("let",s," in ",e));
 	}
 
-	mixin VariableFree; // TODO!
-	override int componentsImpl(scope int delegate(Expression) dg){
-		foreach(cs;s.components)
-			if(auto r=dg(cs))
-				return r; // TODO: improve
-		return dg(e);
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		if(auto fwd=isForward(true)){
+			if(auto r=fwd.freeVarsImpl(dg))
+				return r;
+			foreach(cs;s.s[1..$])
+				if(auto r=cs.freeVarsImpl(dg))
+					return r;
+			return 0;
+		}else{
+			assert(0); // TODO
+		}
 	}
-	override Expression evalImpl(){ return this; }
+	override int componentsImpl(scope int delegate(Expression) dg){
+		if(auto fwd=isForward(true)){
+			if(auto r=dg(fwd)) return r;
+			foreach(cs;s.s[1..$])
+				if(auto r=dg(cs))
+					return r;
+			return 0;
+		}else{
+			foreach(cs;s.components)
+				if(auto r=dg(cs))
+					return r; // TODO: improve
+			return dg(e);
+		}
+	}
+	override Expression substituteImpl(Expression[Id] subst){
+		assert(0,"TODO");
+	}
+	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+		return this is rhs; // TODO
+	}
+	override Expression evalImpl(){
+		if(auto fwd=isForward()) return fwd;
+		return this;
+	}
 	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
 }
 
@@ -2242,6 +2270,8 @@ class ForgetExp: Expression{
 		if(!val) return 0;
 		return dg(val);
 	}
+	// semantic information
+	bool isStatement=false; // TODO: get rid of this
 }
 
 alias CommaExp=BinaryExp!(Tok!",");

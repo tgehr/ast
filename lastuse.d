@@ -4,7 +4,7 @@ module ast.lastuse;
 import astopt;
 
 import std.range, std.algorithm, std.conv, std.format;
-import ast.expression,ast.declaration,ast.scope_;
+import ast.expression,ast.type,ast.declaration,ast.scope_;
 
 
 final class LastUse{
@@ -557,12 +557,69 @@ struct LastUses{
 		add(new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null));
 		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
-	void constUse(Identifier use,Expression parent)in{
+	void constUse(Identifier use,ref Expression parent,bool isStatement,bool inType)in{
 		assert(use&&use.meaning);
 		assert(use.constLookup||use.implicitDup);
 		assert(!!use.scope_,text(use.loc," ",parent));
+		assert(!!parent&&(parent.isSemError()||parent.isSemCompleted()),text(parent));
 	}do{
-		//imported!"util.io".writeln("CONST USE: ",use.loc," ",parent);
+		//imported!"util.io".writeln("CONST USE: ",use.loc," ",parent," ",use.meaning);
+		void finish(Expression e){
+			if(parent.isSemError()) e.setSemError();
+			else e.setSemCompleted();
+		}
+		LetExp getLet(){
+			if(auto le=cast(LetExp) parent) return le;
+			import ast.type:unit;
+			import ast.semantic_:freshName;
+			auto name=new Identifier(freshName());
+			auto var=new VarDecl(name);
+			var.loc=parent.loc;
+			var.scope_=use.scope_;
+			var.vtype=parent.type;
+			finish(var);
+			auto makeId(){
+				auto id=name.copy();
+				id.loc=parent.loc;
+				id.scope_=use.scope_;
+				id.byRef=true;
+				id.constLookup=false;
+				id.meaning=var;
+				id.type=parent.type;
+				finish(id);
+				return id;
+			}
+			auto def=new DefineExp(makeId,parent);
+			def.loc=parent.loc;
+			def.type=unit;
+			finish(def);
+			auto s=new CompoundExp([def]);
+			s.loc=def.loc;
+			s.type=unit;
+			finish(s);
+			auto le=new LetExp(s,makeId);
+			le.loc=parent.loc;
+			le.type=parent.type;
+			le.constLookup=false;
+			finish(le);
+			return le;
+		}
+		if(!inType){
+			if(isStatement){
+				import ast.semantic_:definitelyReturns;
+				if(!definitelyReturns(parent)){
+					auto s=new CompoundExp([parent]);
+					s.loc=parent.loc;
+					s.type=unit;
+					finish(s);
+					if(parent.isSemError()) s.setSemError();
+					else s.setSemCompleted();
+					parent=s;
+				}
+			}else if(!parent.constLookup)
+				parent=getLet();
+		}
+		//imported!"util.io".writeln("MADE: ",parent);
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
 	void consumption(Declaration decl,Identifier use,Scope sc)in{

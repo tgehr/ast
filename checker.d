@@ -530,6 +530,16 @@ class Checker {
 		return ast_exp.dispatchExp!((auto ref e) => this.implLhs(e))(e);
 	}
 
+	void implLhs(ast_exp.LetExp e) {
+		assert(e.isForward(false), format("LHS let expression %s is not from supported subset at %s", e, e.loc));
+		auto prevStrictScope = strictScope;
+		strictScope = false; // e.g. a && let x := 0 in x
+		auto r = visStmt(e.s);
+		assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
+		visExpr(e.e);
+		strictScope = prevStrictScope;
+	}
+
 	void implLhs(ast_exp.Identifier e) {
 		assert(!e.constLookup);
 		auto var = e.meaning;
@@ -650,9 +660,12 @@ class Checker {
 
 	void implExpr(ast_exp.LetExp e) {
 		assert(e.isForward(true), format("let expression %s is not from supported subset at %s", e, e.loc));
+		auto prevStrictScope = strictScope;
+		strictScope = false; // e.g. a && let x := 0 in x
 		auto r = visStmt(e.s);
 		assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
 		visExpr(e.e);
+		strictScope = prevStrictScope;
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {

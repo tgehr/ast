@@ -686,8 +686,8 @@ Expression statementSemanticImpl(TypeAnnotationExp tae,Scope sc){
 	return expressionSemantic(tae,context.nestConst);
 }
 
-CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc){
-	return compoundExpSemantic(ce, sc, blscope: false);
+CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc,bool resetConst=true){
+	return compoundExpSemantic(ce, sc, blscope: false, resetConst: resetConst);
 }
 
 Expression statementSemanticImpl(IteExp ite,Scope sc){
@@ -1523,6 +1523,7 @@ Expression statementSemanticImpl(AssertExp ae,Scope sc){
 
 Expression statementSemanticImpl(ForgetExp fe,Scope sc){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	fe.isStatement=true;
 	return expressionSemantic(fe,context.nestConst);
 }
 
@@ -1536,18 +1537,10 @@ Expression statementSemanticImplDefault(Expression e,Scope sc){
 	return e;
 }
 
-Expression statementSemantic(Expression e,Scope sc)in{
+Expression statementSemantic(Expression e,Scope sc,bool resetConst=true)in{
 	assert(sc.allowsLinear());
 }do{
 	if(e.isSemCompleted()) return e;
-	static if(language==silq){
-		scope(exit){
-			//imported!"util.io".writeln("RESETTING AFTER: ",e);
-			if(!sc.resetConst(e))
-				e.setSemForceError();
-			sc.clearConsumed();
-		}
-	}
 	if(isDefineOrAssign(e)) {
 		e = defineOrAssignSemantic(e,sc);
 	} else {
@@ -1555,6 +1548,11 @@ Expression statementSemantic(Expression e,Scope sc)in{
 	}
 	if(!e.type) e.type=unit;
 	e.setSemCompleted();
+	static if(language==silq){
+		if(resetConst&&!sc.resetConst(e,true,InType.no))
+			e.setSemForceError();
+		sc.clearConsumed();
+	}
 	return e;
 }
 
@@ -1571,7 +1569,7 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 	return compoundExpSemantic(ce,sc,restriction_);
 }
 
-CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, Annotation restriction_=Annotation.none, bool blscope=true){
+CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, Annotation restriction_=Annotation.none, bool blscope=true, bool resetConst=true){
 	auto bsc = sc;
 	if(blscope) {
 		if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
@@ -1579,7 +1577,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, Annotation restriction
 	}
 	foreach(ref e;ce.s){
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
-		e=statementSemantic(e,bsc);
+		e=statementSemantic(e,bsc,resetConst:resetConst);
 		//imported!"util.io".	writeln("AFTER: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
 		propErr(e,ce);
 	}
@@ -1771,6 +1769,7 @@ Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(lit,context);
 }
 Expression defineLhsSemanticImpl(LetExp let,DefineLhsContext context){
+	if(auto fwd=let.isForward(false)) return defineLhsSemantic(fwd,context);
 	return defineLhsSemanticImplUnsupported(let,context);
 }
 Expression defineLhsSemanticImpl(LambdaExp le,DefineLhsContext context){
@@ -2574,7 +2573,7 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 		auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 		auto prologue=new CompoundExp(reads);
 		prologue.loc=loc;
-		prologue=statementSemanticImpl(prologue,sc);
+		prologue=statementSemanticImpl(prologue,sc,resetConst:false);
 		if(prologue.isSemError()){
 			foreach(i,ref crepl;crepls){
 				propErr(reads[i],crepl.write);
@@ -2612,7 +2611,7 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 	assert(r&&r.isSemFinal());
 	Expression current=r;
 	foreach_reverse(eplg;epilogues){
-		eplg=statementSemanticImpl(eplg,sc);
+		eplg=statementSemanticImpl(eplg,sc,resetConst:false);
 		eplg.setSemCompleted();
 	}
 	foreach_reverse(prlg,eplg;zip(prologues,epilogues)){
@@ -2684,7 +2683,9 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			if(auto e=lowerDefine!flags(be,sc,unchecked,noImplicitDup)){
 				if(!e.isSemError()){
 					sc.restoreStateSnapshot(preState);
+					//imported!"util.io".writeln("SEMANTIC ON: ",e);
 					auto r=statementSemantic(e,sc);
+					//imported!"util.io".writeln("SEMANTIC OFF: ",r);
 					static if(language==silq){
 						finishIndexReplacement(be,sc);
 					}
@@ -3017,6 +3018,7 @@ void checkIndexReplacement(Expression be,Scope sc){
 		foreach(i;0..crepls.length){
 			if(!crepls[i].read){
 				sc.error("replaced component must be consumed in right-hand side", indicesToReplace[i].loc);
+				imported!"util.io".writeln("??? ",indicesToReplace[i]," ",be);
 				indicesToReplace[i].setSemError();
 				be.setSemError();
 			}
@@ -3396,6 +3398,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	}
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	propErr(ae.e2,ae);
+	sc.resetConst(ae.e2,false,false);
 	void prepareLhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
 			id.byRef=true;
@@ -3439,7 +3442,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 			checkLhs(tae.e,indexed);
 		}else{
 		LbadAssgnmLhs:
-			sc.error(format("cannot assign to %s",lhs),ae.e1.loc);
+			sc.error(format("cannot assign to %s",lhs),lhs.loc);
 			ae.setSemError();
 		}
 	}
@@ -3734,11 +3737,11 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	}
 	assert(!!ce);
 	auto nce=expressionSemantic(ce,context.nestConsumed);
+	assert(nce is ce||cast(LetExp)nce&&(cast(LetExp)nce).isForward(true) is ce);
 	if(auto id=cast(Identifier)be.e1)
 		if(auto nid=cast(Identifier)ce.e1)
 			if(nid.meaning)
 				id.meaning=nid.meaning;
-	assert(nce is ce);
 	propErr(ce, be);
 	checkULhs(be.e1);
 	static if(language==silq){
@@ -4310,6 +4313,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					nce.loc=ce.loc;
 					auto nnce=new CallExp(nce,ce.arg,false,false);
 					nnce.loc=ce.loc;
+					// TODO: this semantic analysis is out-of-order with the one for the arguments
 					static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
 					else nnce=cast(CallExp)callSemantic(nnce,context.expSem.nestConsumed);
 					assert(!!nnce);
@@ -4482,6 +4486,9 @@ enum InType:bool{
 Expression unwrap(Expression e){
 	if(auto tae=cast(TypeAnnotationExp)e)
 		return unwrap(tae.e);
+	if(auto let=cast(LetExp)e)
+		if(auto fwd=let.isForward(false))
+			return fwd;
 	return e;
 }
 
@@ -4673,8 +4680,11 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 	foreach(ref s;le.s.s[1..$]){
 		assert(!!cast(ForgetExp)s);
 		s=expressionSemantic(s,context.nestConst);
-		propErr(s,le);
+		propErr(s,le.s);
 	}
+	le.s.type=unit;
+	if(!le.s.isSemError()) le.s.setSemCompleted();
+	propErr(le.s,le);
 	le.e.byRef=true;
 	le.e=expressionSemantic(le.e,context);
 	propErr(le.e,le);
@@ -6050,42 +6060,41 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	if(expr.isSemCompleted()||expr.isSemError()) return expr;
 	assert(expr.sstate==SemState.initial||cast(Identifier)expr&&expr.sstate==SemState.started);
 	auto constSave=sc.saveConst(); // TODO: make this faster?
-	scope(success){
-		static if(language==silq){
-			if(!context.constResult||!expr.type||expr.type.isClassical()){
-				if(!sc.resetConst(constSave,expr))
+	expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault,true)(context);
+	static if(language==silq){
+		if(!expr.isSemError()){
+			assert(!!expr.type,text(expr," ",expr.type));
+			if(auto id=cast(Identifier)expr){
+				auto consumesIdentifier=!id.constLookup&&!id.implicitDup&&id.meaning;
+				if(context.inType&&consumesIdentifier){
+					sc.error("cannot consume variables within types",expr.loc);
 					expr.setSemError();
-			}
-			if(!expr.isSemError()){
-				assert(!!expr.type,text(expr," ",expr.type));
-				if(auto id=cast(Identifier)expr){
-					auto consumesIdentifier=!id.constLookup&&!id.implicitDup&&id.meaning;
-					if(context.inType&&consumesIdentifier){
-						sc.error("cannot consume variables within types",expr.loc);
-						expr.setSemError();
-					}
-					if(id.meaning){
-						if(id.implicitDup) context.sc.trackTemporary(id); // TODO: ok?
-						if(context.inType) context.sc.pinLastUse(id.meaning); // TODO: sufficient?
-					}
-				}else{
-					expr.constLookup=context.constResult;
-					if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
 				}
-				expr.setSemCompleted();
-			}else expr.constLookup=context.constResult;
-			if(expr.type&&unrealizable(expr.type)){
-				sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
+				if(id.meaning){
+					if(id.implicitDup) context.sc.trackTemporary(id); // TODO: ok?
+					if(context.inType) context.sc.pinLastUse(id.meaning); // TODO: sufficient?
+				}
+			}else{
+				expr.constLookup=context.constResult;
+				if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
+			}
+			expr.setSemCompleted();
+		}else expr.constLookup=context.constResult;
+		if(expr.type&&unrealizable(expr.type)){
+			sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
+			expr.setSemForceError();
+		}
+		if(!context.constResult&&!cast(LiteralExp)expr&&!expr.byRef||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
+			if(!sc.resetConst(constSave,expr,false,context.inType))
 				expr.setSemForceError();
-			}
-		}else{
-			if(expr&&!expr.isSemError()){
-				assert(!!expr.type);
-				expr.setSemCompleted();
-			}
+		}
+	}else{
+		if(expr&&!expr.isSemError()){
+			assert(!!expr.type);
+			expr.setSemCompleted();
 		}
 	}
-	return expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault,true)(context);
+	return expr;
 }
 
 
@@ -6150,6 +6159,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 
 
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
+	//scope(exit) imported!"util.io".writeln("RETURNED: ",fd);
 	if(fd.isSemCompleted()||fd.isSemError()) return fd;
 	if(!fd.fscope_) fd=cast(FunctionDef)presemantic(fd,sc); // TODO: why does checking for fd.scope_ not work? (test3.slq)
 	if(fd.isSemCompleted()||fd.body_&&fd.body_.isSemCompleted()) return fd;

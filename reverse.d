@@ -40,6 +40,7 @@ enum LowerDefineFlags{
 Expression knownLength(Expression e,bool ignoreType){ // TODO: version that returns bool
 	Expression res;
 	scope(exit) if(res) res.loc=e.loc;
+	if(auto let=cast(LetExp)e) if(auto fwd=let.isForward(false)) return fwd;
 	if(auto vec=cast(VectorExp)e) return res=constantExp(vec.e.length);
 	if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
 	if(auto cat=cast(CatExp)e){
@@ -337,6 +338,14 @@ static if(language==silq):
 Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,Location loc,Scope sc,bool unchecked,bool noImplicitDup)in{
 	assert(loc.line);
 }do{
+	if(auto le=cast(LetExp)olhs){
+		if(auto fwd=le.isForward(false))
+			return lowerDefine!flags(fwd,orhs,loc,sc,unchecked,noImplicitDup);
+	}
+	if(auto le=cast(LetExp)orhs){
+		if(auto fwd=le.isForward(false))
+			return lowerDefine!flags(olhs,fwd,loc,sc,unchecked,noImplicitDup);
+	}
 	enum createFresh=!!(flags&LowerDefineFlags.createFresh); // TODO: can we get rid of this?
 	enum reverseMode=!!(flags&LowerDefineFlags.reverseMode);
 	Expression res;
@@ -353,6 +362,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 					else if(auto tpl=cast(TupleExp)e)
 						foreach(ne;tpl.e)
 							removeImplicitDup(ne);
+					else if(auto let=cast(LetExp)e)
+						if(auto fwd=let.isForward(false))
+							removeImplicitDup(fwd);
 				}
 				removeImplicitDup(nlhs);
 			}

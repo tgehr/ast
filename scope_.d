@@ -483,29 +483,30 @@ abstract class Scope{
 					constBlock[decl]=prop.constBlock;
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
-		private void recordResetConst(Declaration decl,Identifier constBlock,Expression parent){
+		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType){
+			if(constBlock is parent&&!(!constBlock.type||constBlock.type.isClassical())) return; // TODO: would be nice if we would not need this, can happen e.g. in consumeArray
 			if(auto lu=lastUses.get(decl,true)) if(lu.isConsumption()||lu.kind==LastUse.Kind.implicitDup) return;
 			if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
-				lastUses.constUse(constBlock,parent);
+				lastUses.constUse(constBlock,parent,isStatement,inType);
 		}
-		final bool resetConst(ConstBlockContext context,Expression parent){
+		final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
 			foreach(decl,ref prop;declProps.props){
-				if(prop.constBlock) recordResetConst(decl,prop.constBlock,parent);
 				auto nconstBlock=context.constBlock.get(decl,null);
+				if(prop.constBlock !is nconstBlock) recordResetConst(decl,prop.constBlock,parent,isStatement,inType);
 				prop.constBlock=nconstBlock;
 			}
 			foreach(decl,constBlock;context.constBlock){
 				auto prop=declProps.tryGet(decl);
-				assert(prop&&prop.constBlock is constBlock);
+				assert(prop&&prop.constBlock is constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
 			return success;
 		}
-		final bool resetConst(Expression parent){
+		final bool resetConst(ref Expression parent,bool isStatement,bool inType){
 			foreach(decl,ref prop;declProps.props){
 				if(prop.constBlock){
-					recordResetConst(decl,prop.constBlock,parent);
+					recordResetConst(decl,prop.constBlock,parent,isStatement,inType);
 					prop.constBlock=null;
 				}
 			}
@@ -836,7 +837,7 @@ abstract class Scope{
 				}
 			}
 			static if(language==silq)
-			if(kind==Lookup.constant&&!meaning.isConst)
+			if(kind==Lookup.constant&&!meaning.isConst&&!meaning.isToplevelDeclaration())
 				blockConst(meaning,id);
 		}
 		if(kind!=Lookup.probing&&meaning){
