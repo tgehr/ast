@@ -608,15 +608,18 @@ struct LastUses{
 		else enum depOk=true;
 		if(!inType&&depOk){
 			if(isStatement){
-				import ast.semantic_:definitelyReturns;
-				if(!definitelyReturns(parent)){
-					auto s=new CompoundExp([parent]);
-					s.loc=parent.loc;
-					s.type=unit;
-					finish(s);
-					if(parent.isSemError()) s.setSemError();
-					else s.setSemCompleted();
-					parent=s;
+				auto ce=cast(CompoundExp)parent;
+				if(!ce||ce.blscope_){
+					import ast.semantic_:definitelyReturns;
+					if(!definitelyReturns(parent)){
+						auto s=new CompoundExp([parent]);
+						s.loc=parent.loc;
+						s.type=unit;
+						finish(s);
+						if(parent.isSemError()) s.setSemError();
+						else s.setSemCompleted();
+						parent=s;
+					}
 				}
 			}else if(!parent.constLookup&&!cast(Identifier)parent)
 				parent=getLet();
