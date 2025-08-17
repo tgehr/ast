@@ -50,6 +50,7 @@ final class LastUse{
 	static if(language==silq)
 		auto dep=Dependency(true);
 	LastUse forwardTo=null;
+	LastUse constConsume=null;
 	LastUse splitFrom=null;
 	LastUse splitSource=null;
 	NestedScope[] nestedScopes;
@@ -292,7 +293,11 @@ final class LastUse{
 			case implicitDup:
 				return Forgettability.consumable;
 			case constUse:
-				return Forgettability.none; // TODO
+				if(dep.isTop) return Forgettability.none;
+				if(constConsume&&constConsume.canForget(true))
+					return Forgettability.consumable;
+				//return Forgettability.forgettable; // TODO
+				return Forgettability.none;
 			case consumption:
 				return Forgettability.none;
 			case capture:
@@ -313,7 +318,7 @@ final class LastUse{
 			case implicitDup:
 				return canForget(true);
 			case constUse:
-				return false;
+				return canForget(true);
 			case synthesizedForget,consumption:
 				return true;
 			case capture:
@@ -406,6 +411,12 @@ final class LastUse{
 				//assert(!scope_.isConst(decl));
 				break;
 			case constUse:
+				assert(!dep.isTop);
+				if(constConsume&&constConsume.canForget(true)){
+					constConsume.forget(true);
+					markConsumed(false);
+					return;
+				}
 				assert(0); // TODO
 				break;
 			case consumption:
@@ -483,21 +494,29 @@ struct LastUses{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
+			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;;
+			if(lastUse.kind==LastUse.Kind.constUse){
+				lastUse.constConsume=prevLastUse;
+				keep=true;
+			}
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
 				if(lastUse.kind!=LastUse.Kind.lazySplitSink)
 					prevLastUse.pinSplits();
 				lastUse.splitSource=prevLastUse;
-			}else{
-				if(lastUse.kind!=LastUse.Kind.lazySplitSink){
-					if(prevLastUse.forwardTo)
-						prevLastUse.forwardTo.remove();
-					prevLastUse.remove();
-				}
-				if(prevLastUse.splitSource){
-					assert(!!prevLastUse.splitSource.splitFrom);
-					lastUse.splitSource=prevLastUse.splitSource;
-				}
+				keep=true;
+			}else if(prevLastUse.splitSource){
+				assert(!!prevLastUse.splitSource.splitFrom);
+				lastUse.splitSource=prevLastUse.splitSource;
+			}
+			if(!keep){
+				if(prevLastUse.forwardTo)
+					prevLastUse.forwardTo.remove();
+				if(prevLastUse.constConsume)
+					prevLastUse.constConsume.remove();
+				if(prevLastUse.splitSource)
+					prevLastUse.splitSource.remove();
+				prevLastUse.remove();
 			}
 			lastUses.remove(lastUse.decl);
 			retire(prevLastUse); // TODO: needed?
