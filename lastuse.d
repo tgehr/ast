@@ -6,6 +6,67 @@ import astopt;
 import std.range, std.algorithm, std.conv, std.format;
 import ast.expression,ast.type,ast.declaration,ast.scope_;
 
+bool canAddForget(Expression e){
+	if(auto le=cast(LetExp)e)
+		return !!le.isForward(true);
+	if(auto ce=cast(CompoundExp)e)
+		return !ce.blscope_;
+	return false;
+}
+
+void addForget(Expression e,Declaration decl,Scope sc){
+	void addToCompound(CompoundExp ce){
+		assert(!ce.blscope_);
+		if(ce.s.length==1){
+			ForgetExp makeForget(){
+				auto tpl=new TupleExp([]);
+				tpl.loc=e.loc;
+				tpl.constLookup=false;
+				tpl.type=unit;
+				tpl.setSemCompleted();
+				auto fe=new ForgetExp(tpl,null);
+				fe.loc=e.loc;
+				fe.constLookup=true;
+				fe.type=unit;
+				fe.setSemCompleted();
+				return fe;
+			}
+			ce.s~=makeForget();
+		}
+		assert(ce.s.length==2);
+		auto fe=cast(ForgetExp)ce.s[1];
+		assert(fe&&!fe.val);
+		auto id=new Identifier(decl.getId);
+		id.loc=e.loc;
+		id.scope_=sc;
+		id.meaning=decl;
+		id.byRef=true;
+		id.constLookup=false;
+		id.type=id.typeFromMeaning;
+		import ast.semantic_:propErr;
+		propErr(decl,id);
+		id.setSemCompleted();
+		auto tpl=cast(TupleExp)fe.var;
+		assert(!!tpl);
+		tpl.e~=id;
+		if(id.type&&tpl.type){
+			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array); // TODO: avoid quadratic scaling
+        }else tpl.type=null;
+		assert(id.type||id.isSemError());
+		if(id.isSemError())
+			tpl.setSemForceError();
+		if(tpl.isSemError())
+			fe.setSemForceError();
+		if(fe.isSemError())
+			e.setSemForceError();
+	}
+	if(auto le=cast(LetExp)e){
+		assert(!!le.isForward(true));
+		addToCompound(le.s);
+	}
+	if(auto ce=cast(CompoundExp)e)
+		addToCompound(ce);
+}
 
 final class LastUse{
 	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent){
@@ -103,7 +164,7 @@ final class LastUse{
 			if(r==Forgettability.none) return r;
 			if(a==Forgettability.consumable||b==Forgettability.consumable) return Forgettability.consumable;
 			return r;
-		})(Forgettability.max);
+		})(Forgettability.forgettable);
 	}
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
@@ -273,8 +334,10 @@ final class LastUse{
 		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
 		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
 		final switch(kind)with(Kind){
-			case definition,constPinned:
+			case definition:
 				goto case constUse;
+			case constPinned:
+				return Forgettability.none;
 			case lazySplitSink:
 				return Forgettability.none;
 			case lazySplit:
@@ -296,7 +359,8 @@ final class LastUse{
 				if(dep.isTop) return Forgettability.none;
 				if(constConsume&&constConsume.canForget(true))
 					return Forgettability.consumable;
-				//return Forgettability.forgettable; // TODO
+				if(canAddForget(parent))
+					return Forgettability.forgettable;
 				return Forgettability.none;
 			case consumption:
 				return Forgettability.none;
@@ -361,8 +425,10 @@ final class LastUse{
 		//imported!"util.io".writeln("FORGETTING: ",this," ",canForget(forceConsumed)," ",use?text(use.loc):"?");
 		//imported!"util.io".writeln("FORGETTING: ",use);
 		final switch(kind)with(Kind){
-			case definition,constPinned:
+			case definition:
 				goto case constUse;
+			case constPinned:
+				assert(0);
 			case lazySplitSink:
 				assert(0); // always forwarded
 			case lazySplit:
@@ -417,7 +483,9 @@ final class LastUse{
 					markConsumed(false);
 					return;
 				}
-				assert(0); // TODO
+				assert(canAddForget(parent));
+				addForget(parent,decl,scope_);
+				isForget=true;
 				break;
 			case consumption:
 				assert(0);

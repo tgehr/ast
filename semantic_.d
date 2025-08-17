@@ -665,12 +665,12 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	return cd;
 }
 
-Expression statementSemanticImpl(CallExp ce,Scope sc){
+Expression statementSemanticImpl(CallExp ce,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	return callSemantic(ce,context.nestConst);
 }
 
-Expression statementSemanticImpl(IndexExp idx,Scope sc){
+Expression statementSemanticImpl(IndexExp idx,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	idx.e=expressionSemantic(idx.e,context.nestConst);
 	if(auto ft=cast(FunTy)idx.e.type){
@@ -680,7 +680,7 @@ Expression statementSemanticImpl(IndexExp idx,Scope sc){
 	}else return statementSemanticImplDefault(idx,sc);
 }
 
-Expression statementSemanticImpl(TypeAnnotationExp tae,Scope sc){
+Expression statementSemanticImpl(TypeAnnotationExp tae,Scope sc,bool resetConst=true){
 	tae.e=statementSemantic(tae.e,sc);
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	return expressionSemantic(tae,context.nestConst);
@@ -690,7 +690,7 @@ CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc,bool resetConst=true){
 	return compoundExpSemantic(ce, sc, blscope: false, resetConst: resetConst);
 }
 
-Expression statementSemanticImpl(IteExp ite,Scope sc){
+Expression statementSemanticImpl(IteExp ite,Scope sc,bool resetConst=true){
 	ite.cond=conditionSemantic!true(ite,ite.cond,sc,InType.no);
 	static if(language==silq){
 		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
@@ -725,7 +725,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc){
 }
 
 static if(language==silq)
-Expression statementSemanticImpl(WithExp with_,Scope sc){
+Expression statementSemanticImpl(WithExp with_,Scope sc,bool resetConst=true){
 	if(with_.bdy.s.length){
 		if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
 			if(ret.e.sstate==SemState.initial){
@@ -754,7 +754,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 			setDefLhsByRef(idx);
 		}
 	}
-	with_.trans=compoundExpSemantic(with_.trans, sc, Annotation.mfree, blscope: !with_.isIndices);
+	with_.trans=compoundExpSemantic(with_.trans, sc, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	if(auto ret=mayReturn(with_.trans)){
 		sc.error("cannot return from within `with` transformation",ret.loc);
@@ -772,7 +772,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	if(with_.isIndices&&with_.sstate!=SemState.error){
 		foreach(e;with_.trans.s){
 			auto de=cast(DefineExp)e;
-			assert(!!de);
+			assert(!!de,text(e," ",typeid(e)));
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(idx.byRef);
 			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no));
@@ -781,14 +781,14 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	}
 	if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
-			with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices);
+			with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.isSemCompleted()){
 		enum unchecked=false,noImplicitDup=true;
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,unchecked,noImplicitDup)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
-		with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices);
+		with_.itrans=compoundExpSemantic(with_.itrans, sc, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		if(with_.itrans.isSemError()){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
@@ -800,17 +800,27 @@ Expression statementSemanticImpl(WithExp with_,Scope sc){
 	return with_;
 }
 
-Expression statementSemanticImpl(ReturnExp ret,Scope sc){
+Expression statementSemanticImpl(ReturnExp ret,Scope sc,bool resetConst=true){
 	return returnExpSemantic(ret,sc);
 }
-Expression statementSemanticImpl(FunctionDef fd,Scope sc){
-	return functionDefSemantic(fd,sc);
+Expression statementSemanticImpl(FunctionDef fd,Scope sc,bool resetConst=true){
+	fd=functionDefSemantic(fd,sc);
+	Expression r=fd;
+	if(fd.isSemCompleted()){
+		auto ce=new CompoundExp([fd]);
+		ce.loc=fd.loc;
+		ce.type=fd.type;
+		ce.setSemCompleted();
+		r=ce;
+	}
+	sc.lastUses.definition(fd,r);
+	return r;
 }
-Expression statementSemanticImpl(DatDecl dd,Scope sc){
+Expression statementSemanticImpl(DatDecl dd,Scope sc,bool resetConst=true){
 	return datDeclSemantic(dd,sc);
 }
-Expression statementSemanticImpl(CommaExp ce,Scope sc){
-	return expectDefineOrAssignSemantic(ce,sc);
+Expression statementSemanticImpl(CommaExp ce,Scope sc,bool resetConst=true){
+	return expectDefineOrAssignSemantic(ce,sc,resetConst);
 }
 
 struct FixedPointIterState{
@@ -1286,7 +1296,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 }
 
 // TODO: supertypes for define and assign?
-Expression statementSemanticImpl(ForExp fe,Scope sc){
+Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	assert(!fe.bdy.blscope_);
 	fe.left=expressionSemantic(fe.left,context.nestConst);
@@ -1375,7 +1385,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc){
 	return fe;
 }
 
-Expression statementSemanticImpl(WhileExp we,Scope sc){
+Expression statementSemanticImpl(WhileExp we,Scope sc,bool resetConst=true){
 	Expression.CopyArgs cargs={preserveSemantic: true};
 	static if(language==silq) sc.clearConsumed();
 	CompoundExp bdy;
@@ -1436,7 +1446,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc){
 	return we;
 }
 
-Expression statementSemanticImpl(RepeatExp re,Scope sc){
+Expression statementSemanticImpl(RepeatExp re,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	re.num=expressionSemantic(re.num,context.nestConst);
 	static if(language==silq) sc.clearConsumed();
@@ -1489,14 +1499,14 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc){
 	return re;
 }
 
-Expression statementSemanticImpl(ObserveExp oe,Scope sc){
+Expression statementSemanticImpl(ObserveExp oe,Scope sc,bool resetConst=true){
 	oe.e=conditionSemantic(oe,oe.e,sc,InType.no);
 	propErr(oe.e,oe);
 	oe.type=isFalse(oe.e)?bottom:unit;
 	return oe;
 }
 
-Expression statementSemanticImpl(CObserveExp oe,Scope sc){
+Expression statementSemanticImpl(CObserveExp oe,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	oe.var=expressionSemantic(oe.var,context.nestConst);
 	oe.val=expressionSemantic(oe.val,context.nestConst);
@@ -1514,20 +1524,20 @@ Expression statementSemanticImpl(CObserveExp oe,Scope sc){
 	return oe;
 }
 
-Expression statementSemanticImpl(AssertExp ae,Scope sc){
+Expression statementSemanticImpl(AssertExp ae,Scope sc,bool resetConst=true){
 	ae.e=conditionSemantic(ae,ae.e,sc,InType.no);
 	propErr(ae.e,ae);
 	ae.type=isFalse(ae.e)?bottom:unit;
 	return ae;
 }
 
-Expression statementSemanticImpl(ForgetExp fe,Scope sc){
+Expression statementSemanticImpl(ForgetExp fe,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	fe.isStatement=true;
 	return expressionSemantic(fe,context.nestConst);
 }
 
-Expression statementSemanticImplDefault(Expression e,Scope sc){
+Expression statementSemanticImplDefault(Expression e,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no),oe=e;
 	e=expressionSemantic(e,context);
 	if(!e.isSemError()){
@@ -1542,9 +1552,9 @@ Expression statementSemantic(Expression e,Scope sc,bool resetConst=true)in{
 }do{
 	if(e.isSemCompleted()) return e;
 	if(isDefineOrAssign(e)) {
-		e = defineOrAssignSemantic(e,sc);
+		e = defineOrAssignSemantic(e,sc,resetConst:resetConst);
 	} else {
-		e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc);
+		e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,resetConst);
 	}
 	if(!e.type) e.type=unit;
 	e.setSemCompleted();
@@ -2634,11 +2644,10 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 		with_.setSemCompleted();
 		current=with_;
 	}
-	//imported!"util.io".writeln(current);
 	return current;
 }
 
-Expression defineSemantic(DefineExp be,Scope sc){
+Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
@@ -2798,7 +2807,6 @@ Expression defineSemantic(DefineExp be,Scope sc){
 					if(vd){
 						auto nvd=varDeclSemantic(vd,sc);
 						assert(nvd is vd);
-						if(nvd.scope_) sc.lastUses.definition(nvd,be);
 					}else if(tpl&&tt){
 						if(tpl.e.length>i&&tpl.e[i].type&&tt.length>i){
 							if(!isSubtype(tt[i],tpl.e[i].type)){
@@ -2824,10 +2832,20 @@ Expression defineSemantic(DefineExp be,Scope sc){
 			}
 		}
 	}else if(de) de.setSemError();
-	auto r=de?de:be;
+	Expression r=de?de:be;
 	typeConstBlock(be.e2.type,r,sc);
 	be.type=isBottom?bottom:unit;
 	r.setSemCompleted();
+	if(r.isSemCompleted()&&resetConst&&cast(NestedScope)sc){
+		auto ce=new CompoundExp([r]);
+		ce.loc=r.loc;
+		ce.type=be.type;
+		ce.setSemCompleted();
+		r=ce;
+	}
+	if(de) foreach(vd;&de.varDecls)
+		if(vd&&vd.scope_)
+			sc.lastUses.definition(vd,r);
 	return lowerIndexReplacement(prologues,epilogues,r,sc);
 }
 
@@ -3501,7 +3519,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 		int curDependency;
 	}
 	Declaration[Declaration] consumed;
-	void[0][Id] defined;
+	Declaration[Id] defined;
 	void updateVars(Expression lhs,Expression rhs,Stage stage){
 		Dependency rhsdep(){
 			if(stage!=Stage.collectDeps||!rhs.isQfree()) return Dependency(true);
@@ -3564,9 +3582,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								static if(language==silq){
 									if(rhs.isQfree()) sc.addDependency(var,dependencies[decl]);
 								}
-								defined[decl.getId]=[];
+								defined[decl.getId]=var;
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
-								if(var.scope_) sc.lastUses.definition(var,ae);
 							}
 							break;
 					}
@@ -3622,7 +3639,19 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 		// TODO: clean up other temporaries
 	}
 	ae.setSemCompleted();
-	return lowerIndexReplacement(prologues,epilogues,ae,sc);
+	Expression r=ae;
+	if(ae.isSemCompleted()){
+		auto ce=new CompoundExp([ae]);
+		ce.loc=ae.loc;
+		ce.type=ae.type;
+		ce.setSemCompleted();
+		r=ce;
+	}
+	foreach(_,var;defined){
+		if(var&&var.scope_)
+			sc.lastUses.definition(var,r);
+	}
+	return lowerIndexReplacement(prologues,epilogues,r,sc);
 }
 
 AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssignExp)e; }
@@ -3756,6 +3785,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			}
 		}
 	}
+	Declaration var=null;
 	auto id=cast(Identifier)be.e1;
 	if(id&&id.meaning&&id.meaning.name){
 		void consume(){
@@ -3766,7 +3796,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		}
 		void define(Dependency dependency){
 			auto origId=id.meaning.name.id;
-			auto var=addVar(origId,ce.type,be.loc,sc);
+			assert(!var);
+			var=addVar(origId,ce.type,be.loc,sc);
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			sc.addDependency(var,dependency);
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
@@ -3775,7 +3806,6 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
 				be.setSemError();
 			}
-			if(var.scope_) sc.lastUses.definition(var,be);
 		}
 		static if(language==silq){
 			bool ok=false;
@@ -3810,7 +3840,16 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				sc.consume(repl.new_,null);
 	}
 	be.setSemCompleted();
-	return lowerIndexReplacement(prologues,epilogues,be,sc);
+	Expression r=be;
+	if(be.isSemCompleted()){
+		auto ce2=new CompoundExp([be]);
+		ce2.loc=be.loc;
+		ce2.type=be.type;
+		ce2.setSemCompleted();
+		r=ce2;
+	}
+	if(var&&var.scope_) sc.lastUses.definition(var,r);
+	return lowerIndexReplacement(prologues,epilogues,r,sc);
 }
 
 bool isAssignment(Expression e){
@@ -3829,25 +3868,34 @@ bool isDefineOrAssign(Expression e){
 	return isAssignment(e)||cast(DefineExp)e;
 }
 
-Expression defineOrAssignSemantic(Expression e,Scope sc)in{
+Expression defineOrAssignSemantic(Expression e,Scope sc,bool resetConst=true)in{
 	assert(isDefineOrAssign(e));
 }do{
 	if(isAssignment(e)) return assignSemantic(e,sc);
-	if(auto be=cast(DefineExp)e) return defineSemantic(be,sc);
+	if(auto be=cast(DefineExp)e) return defineSemantic(be,sc,resetConst:resetConst);
 	assert(0);
 }
 
-Expression expectDefineOrAssignSemantic(Expression e,Scope sc){
+Expression expectDefineOrAssignSemantic(Expression e,Scope sc,bool resetConst=true){
 	if(auto ce=cast(CommaExp)e){
-		ce.e1=expectDefineOrAssignSemantic(ce.e1,sc);
+		ce.e1=expectDefineOrAssignSemantic(ce.e1,sc,resetConst);
 		propErr(ce.e1,ce);
-		ce.e2=expectDefineOrAssignSemantic(ce.e2,sc);
+		ce.e2=expectDefineOrAssignSemantic(ce.e2,sc,resetConst);
 		propErr(ce.e2,ce);
-		ce.type=unit;
+		ce.type=definitelyReturns(ce.e1)||definitelyReturns(ce.e2)?bottom:unit;
 		ce.setSemCompleted();
 		return ce;
 	}
-	if(isDefineOrAssign(e)) return defineOrAssignSemantic(e,sc);
+	if(auto ce=cast(CompoundExp)e){
+		foreach(ref s;ce.s){
+			s=expectDefineOrAssignSemantic(s,sc,resetConst);
+			propErr(s,ce);
+		}
+		ce.type=definitelyReturns(ce)?bottom:unit;
+		ce.setSemCompleted();
+		return ce;
+	}
+	if(isDefineOrAssign(e)) return defineOrAssignSemantic(e,sc,resetConst);
 	sc.error("expected assignment or variable declaration",e.loc);
 	e.setSemError();
 	return e;
@@ -6356,7 +6404,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	finalize(fd);
-	if(fd.name&&fd.scope_) sc.lastUses.definition(fd,fd);
 	return fd;
 }
 

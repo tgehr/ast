@@ -820,6 +820,7 @@ class Identifier: Expression{
 		return true;
 	}
 	Expression getInitializer(){
+		if(byRef) return null; // TODO: why is this suddenly needed?
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
 		assert(vd.isSemFinal());
@@ -1842,7 +1843,20 @@ class CompoundExp: Expression{
 	}
 
 	override string toString(){
-		return "{"~(blscope_&&blscope_.forgottenVarsOnEntry.length?text(" /+",blscope_.forgottenVarsOnEntry,"+/"):"")~"\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(s),"\n"))~"\n}"~(blscope_&&blscope_.forgottenVars.length?text(" /+",blscope_.forgottenVars,"+/"):"");
+		Expression[] flat;
+		void rec(Expression[] s){
+			foreach(e;s){
+				if(auto ce=cast(CompoundExp)e){
+					if(!ce.blscope_){
+						rec(ce.s);
+						continue;
+					}
+				}
+				flat~=e;
+			}
+		}
+		rec(s);
+		return "{"~(blscope_&&blscope_.forgottenVarsOnEntry.length?text(" /+",blscope_.forgottenVarsOnEntry,"+/"):"")~"\n"~indent(join(map!(a=>a.toString()~(a.isCompound()?"":";"))(flat),"\n"))~"\n}"~(blscope_&&blscope_.forgottenVars.length?text(" /+",blscope_.forgottenVars,"+/"):"");
 	}
 	string toStringFunctionDef(){
 		if(s.length==1)

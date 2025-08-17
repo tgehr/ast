@@ -575,6 +575,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	if(auto fe=cast(ForgetExp)olhs){
 		if(!fe.val){
+			if(fe.var.type&&fe.var.type.isClassical()){
+				return res=new CompoundExp([]); // TODO: this is a hack
+			}
 			sc.error("reversal of implicit forget not supported",fe.loc);
 			return error();
 		}
