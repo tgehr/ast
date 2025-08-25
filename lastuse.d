@@ -214,9 +214,21 @@ final class LastUse{
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
 		}else kind=Kind.consumption;
-		updateDependenciesOnConsumption();
+		updateDependenciesOnConsumptionLocal();
 	}
 	private void updateDependenciesOnConsumption(){
+		if(auto parent=decl.splitFrom){
+			assert(parent.splitInto.canFind(decl));
+			foreach(split;parent.splitInto){
+				if(auto lu=split.scope_.lastUses.get(split,true)){
+					if(auto source=lu.splitSource)
+						lu=source;
+					lu.updateDependenciesOnConsumptionLocal();
+				}
+			}
+		}else updateDependenciesOnConsumptionLocal();
+	}
+	private void updateDependenciesOnConsumptionLocal(){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
@@ -232,7 +244,7 @@ final class LastUse{
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)){
 				cdep.replace(lu.decl,lu.dep);
-				if(lu.kind==Kind.synthesizedForget&&lu.dep.isTop){
+				if(!lu.decl.isSemError()&&lu.kind==Kind.synthesizedForget&&lu.dep.isTop){
 					if(lu.use && lu.use.scope_){
 						lu.scope_.error(format("cannot synthesize forget expression for '%s'",lu.use),lu.use.loc);
 					}else if(lu.decl.scope_){
