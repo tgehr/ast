@@ -616,8 +616,8 @@ struct LastUses{
 		lastUses[lastUse.decl]=lastUse;
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
-		if(lastUse.isConsumption()&&lastUse.splitSource){
-			lastUse.splitSource.updateDependenciesOnConsumption();
+		if(lastUse.isConsumption()){
+			lastUse.updateDependenciesOnConsumption();
 		}
 	}
 	void definition(Declaration decl,Expression defExp)in{
