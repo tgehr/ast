@@ -171,6 +171,8 @@ final class LastUse{
 	}
 
 	void remove(){
+		assert(!prev||prev.next is this);
+		assert(!next||next.prev is this);
 		if(prev) prev.next=next;
 		if(next) next.prev=prev;
 		prev=next=null;
@@ -190,6 +192,7 @@ final class LastUse{
 		this.next=next;
 		next.prev=this;
 		// TODO: perform necessary updates
+		//imported!"util.io".writeln("APPENDING: ",this," ⇒ ",next);
 	}
 
 	void pinSplits(){ return pinImpl(true); }
@@ -217,6 +220,7 @@ final class LastUse{
 		updateDependenciesOnConsumptionLocal();
 	}
 	private void updateDependenciesOnConsumption(){
+		//imported!"util.io".writeln("UPDATING ALL: ",this);
 		if(auto parent=decl.splitFrom){
 			assert(parent.splitInto.canFind(decl));
 			foreach(split;parent.splitInto){
@@ -239,7 +243,7 @@ final class LastUse{
 		}
 		for(auto lu=start;lu;lu=lu.next){
 			if(lu is this) continue;
-			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep);
+			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)){
@@ -590,12 +594,20 @@ struct LastUses{
 				lastUse.splitSource=prevLastUse.splitSource;
 			}
 			if(!keep){
-				if(prevLastUse.forwardTo)
+				if(prevLastUse.forwardTo){
+					assert(prevLastUse.forwardTo !is lastLastUse);
 					prevLastUse.forwardTo.remove();
-				if(prevLastUse.constConsume)
+				}
+				if(prevLastUse.constConsume){
+					assert(prevLastUse.constConsume !is lastLastUse);
 					prevLastUse.constConsume.remove();
-				if(prevLastUse.splitSource)
+				}
+				if(prevLastUse.splitSource){
+					assert(prevLastUse.splitSource !is lastLastUse);
 					prevLastUse.splitSource.remove();
+				}
+				if(lastLastUse is prevLastUse)
+					lastLastUse=prevLastUse.prev;
 				prevLastUse.remove();
 			}
 			lastUses.remove(lastUse.decl);
@@ -644,6 +656,7 @@ struct LastUses{
 			assert(use.scope_ is sc);
 		}
 	}do{
+		//imported!"util.io".writeln("SYNTHESIZEDFORGET: ",use?text(use.loc):"<?>");
 		add(new LastUse(LastUse.Kind.synthesizedForget,sc,decl,use,parent));
 	}
 	void implicitDup(Identifier use)in{
