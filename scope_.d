@@ -380,28 +380,23 @@ abstract class Scope{
 				if(isConsumable(id)) lastUses.implicitDup(id);
 			}
 		}
-		final bool cancelImplicitDup(Identifier id)in{
-			assert(id.implicitDup);
-			assert(id.meaning);
+
+		final bool checkImplicitDupCancel(Identifier id)in{
+			assert(!!id.meaning);
 			assert(!id.constLookup);
 		}do{
-			bool error=false;
-			if(!checkConsumable(id)){
-				error=true;
-				id.setSemForceError();
-				id.meaning.setSemForceError();
-			}else if(lastUses.canForget(id.meaning,true,true)){
-				lastUses.forget(id.meaning,true);
-			}else if(auto declProp=declProps.tryGet(id.meaning)){
+			if(id.isSemError()) return false;
+			bool ok=true;
+			if(auto declProp=declProps.tryGet(id.meaning)){
 				bool seen=false;
 				DeadDecl[] failures;
 				foreach(access;declProp.accesses){
 					if(seen&&access !is id){
-						if(!error){
+						if(ok){
 							if(auto cd=recordConsumption(id.meaning,id))
 								failures~=cd;
 						}
-						error=true;
+						ok=false;
 						id.setSemForceError();
 						id.meaning.setSemForceError();
 						access.setSemForceError();
@@ -414,7 +409,24 @@ abstract class Scope{
 			}else{
 				// TODO: can this happen?
 			}
-			return !error;
+			return ok;
+		}
+
+		final bool cancelImplicitDup(Identifier id)in{
+			assert(!!id.implicitDup);
+			assert(!!id.meaning);
+			assert(!id.constLookup);
+		}do{
+			bool ok=false;
+			if(!checkConsumable(id)){
+				ok=false;
+				id.setSemForceError();
+				id.meaning.setSemForceError();
+			}else if(lastUses.canForget(id.meaning,true,true)){
+				lastUses.forget(id.meaning,true);
+			}
+			ok&=checkImplicitDupCancel(id);
+			return ok;
 		}
 		final void pushTrackedTemporaryDependencies(Declaration decl){
 			foreach(ref tt;trackedTemporaries){
@@ -453,6 +465,7 @@ abstract class Scope{
 				}
 			}
 			foreach(ref tt;trackedTemporaries){
+				//imported!"util.io".writeln("CHECKING TRACKED TEMPORARY: ",tt);
 				if(!tt.dep.isTop) continue;
 				if(auto id=cast(Identifier)tt.expr){
 					if(id.isSemError()) parent.setSemForceError();

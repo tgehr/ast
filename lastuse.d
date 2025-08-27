@@ -246,21 +246,27 @@ final class LastUse{
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
-			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)){
+			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.kind==Kind.constPinned&&lu.use&&lu.use.implicitDup){
 				cdep.replace(lu.decl,lu.dep);
-				if(!lu.decl.isSemError()&&lu.kind==Kind.synthesizedForget&&lu.dep.isTop){
-					if(lu.use && lu.use.scope_){
-						lu.scope_.error(format("cannot synthesize forget expression for '%s'",lu.use),lu.use.loc);
-					}else if(lu.decl.scope_){
-						auto d=lu.decl,sc=lu.decl.scope_;
-						if(cast(Parameter)d) sc.error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-						else sc.error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-						if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
+				if(!lu.decl.isSemError()&&lu.dep.isTop){
+					if(lu.kind==Kind.synthesizedForget){
+						if(lu.use && lu.use.scope_){
+							lu.scope_.error(format("cannot synthesize forget expression for '%s'",lu.use),lu.use.loc);
+						}else if(lu.decl.scope_){
+							auto d=lu.decl,sc=lu.decl.scope_;
+							if(cast(Parameter)d) sc.error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
+							else sc.error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+							if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
+						}
+						lu.decl.setSemForceError();
+						if(lu.use) lu.use.setSemForceError();
+						if(lu.parent) lu.parent.setSemForceError();
+						// TODO: the error has to be propagated out further
+					}else if(!lu.decl.isSemError()&&lu.kind==Kind.constPinned&&lu.use&&lu.use.implicitDup){
+						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
+						lu.use.implicitDup=false;
+						lu.scope_.checkImplicitDupCancel(lu.use);
 					}
-					lu.decl.setSemForceError();
-					if(lu.use) lu.use.setSemForceError();
-					if(lu.parent) lu.parent.setSemForceError();
-					// TODO: the error has to be propagated out further
 				}
 			}
 		}
@@ -490,6 +496,7 @@ final class LastUse{
 				assert(use.implicitDup);
 				use.implicitDup=false;
 				assert(!use.constLookup);
+				scope_.checkImplicitDupCancel(use);
 				//assert(!scope_.isConst(decl));
 				break;
 			case constUse:
@@ -582,6 +589,10 @@ struct LastUses{
 			if(lastUse.kind==LastUse.Kind.constUse){
 				lastUse.constConsume=prevLastUse;
 				keep=true;
+			}
+			if(prevLastUse.kind==LastUse.Kind.constPinned){
+				if(prevLastUse.use&&prevLastUse.use.implicitDup)
+					keep=true;
 			}
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
