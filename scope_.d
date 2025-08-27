@@ -424,8 +424,9 @@ abstract class Scope{
 				id.meaning.setSemForceError();
 			}else if(lastUses.canForget(id.meaning,true,true)){
 				lastUses.forget(id.meaning,true);
+			}else{
+				// TODO: can this happen?
 			}
-			ok&=checkImplicitDupCancel(id);
 			return ok;
 		}
 		final void pushTrackedTemporaryDependencies(Declaration decl){
