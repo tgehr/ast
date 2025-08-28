@@ -198,10 +198,7 @@ final class LastUse{
 	void pinSplits(){ return pinImpl(true); }
 	void pin(){ return pinImpl(false); }
 	void pinImpl(bool includingSplits){
-		if(forwardTo){
-			forwardTo.pin();
-			forwardTo=null;
-		}
+		if(forwardTo) forwardTo.pin();
 		if(splitFrom) splitFrom.pin();
 		if(!includingSplits&&kind==Kind.lazySplit) return;
 		if(isConsumption()) return;
@@ -246,7 +243,7 @@ final class LastUse{
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
-			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.kind==Kind.constPinned&&lu.use&&lu.use.implicitDup){
+			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				cdep.replace(lu.decl,lu.dep);
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
@@ -262,10 +259,9 @@ final class LastUse{
 						if(lu.use) lu.use.setSemForceError();
 						if(lu.parent) lu.parent.setSemForceError();
 						// TODO: the error has to be propagated out further
-					}else if(!lu.decl.isSemError()&&lu.kind==Kind.constPinned&&lu.use&&lu.use.implicitDup){
+					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup){
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
-						lu.use.implicitDup=false;
-						lu.scope_.checkImplicitDupCancel(lu.use);
+						lu.cancelImplicitDup();
 					}
 				}
 			}
@@ -318,6 +314,7 @@ final class LastUse{
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
+				nested.checkDeclarationCancel(result,use);
 				removeCopies(nested);
 			}
 		}
@@ -494,11 +491,10 @@ final class LastUse{
 				assert(0);
 			case implicitDup:
 				assert(use.implicitDup);
-				use.implicitDup=false;
 				assert(!use.constLookup);
-				scope_.checkImplicitDupCancel(use);
+				cancelImplicitDup();
 				//assert(!scope_.isConst(decl));
-				break;
+				return;
 			case constUse:
 				assert(!dep.isTop);
 				if(constConsume&&constConsume.canForget(true)){
@@ -517,6 +513,15 @@ final class LastUse{
 				break;
 		}
 		consume(isForget);
+	}
+	bool cancelImplicitDup(){
+		if(forwardTo) return forwardTo.cancelImplicitDup();
+		if(!use) return false;
+		if(!use.implicitDup) return false;
+		use.implicitDup=false;
+		auto ok=scope_.checkImplicitDupCancel(use);
+		consume(false);
+		return ok;
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto){
@@ -813,6 +818,11 @@ struct LastUses{
 			assert(!!split.scope_);
 			split.scope_.lastUses.pin(split,true);
 		}
+	}
+	bool cancelImplicitDup(Declaration decl){
+		if(auto lastUse=lastUses.get(decl,null))
+			return lastUse.cancelImplicitDup();
+		return false;
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{

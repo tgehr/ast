@@ -382,32 +382,34 @@ abstract class Scope{
 		}
 
 		final bool checkImplicitDupCancel(Identifier id)in{
-			assert(!!id.meaning);
-			assert(!id.constLookup);
+			assert(id&&id.meaning);
 		}do{
-			if(id.isSemError()) return false;
+			return checkDeclarationCancel(id.meaning,id);
+		}
+		final bool checkDeclarationCancel(Declaration decl,Identifier use)in{
+			assert(!!decl);
+		}do{
+			if(use&&use.isSemError()) return false;
 			bool ok=true;
-			if(auto declProp=declProps.tryGet(id.meaning)){
+			if(auto declProp=declProps.tryGet(decl)){
 				bool seen=false;
 				DeadDecl[] failures;
 				foreach(access;declProp.accesses){
-					if(seen&&access !is id){
-						if(ok){
-							if(auto cd=recordConsumption(id.meaning,id))
+					if((!use||use.scope_!is this||seen)&&access !is use){
+						if(ok&&use){
+							if(auto cd=recordConsumption(decl,use))
 								failures~=cd;
 						}
 						ok=false;
-						id.setSemForceError();
-						id.meaning.setSemForceError();
+						if(use) use.setSemForceError();
+						decl.setSemForceError();
 						access.setSemForceError();
 						import ast.semantic_:undefinedIdentifierError;
 						undefinedIdentifierError(access,failures,this);
 					}
-					if(access is id) seen=true;
+					if(use&&access is use) seen=true;
 				}
-				// TODO: can we have `id.sstate != SemState.error` here?
-			}else{
-				// TODO: can this happen?
+				// TODO: can we have `use.sstate != SemState.error` here?
 			}
 			return ok;
 		}
@@ -417,16 +419,12 @@ abstract class Scope{
 			assert(!!id.meaning);
 			assert(!id.constLookup);
 		}do{
-			bool ok=false;
+			bool ok=true;
 			if(!checkConsumable(id)){
 				ok=false;
 				id.setSemForceError();
 				id.meaning.setSemForceError();
-			}else if(lastUses.canForget(id.meaning,true,true)){
-				lastUses.forget(id.meaning,true);
-			}else{
-				// TODO: can this happen?
-			}
+			}else lastUses.cancelImplicitDup(id.meaning); // TOOD: what if this fails?
 			return ok;
 		}
 		final void pushTrackedTemporaryDependencies(Declaration decl){
@@ -1058,7 +1056,7 @@ abstract class Scope{
 					if(decl in v.dependencies){
 						if(auto lu=lastUses.get(ndecl,true)){
 							while(lu.forwardTo) lu=lu.forwardTo;
-							if(lu.kind==LastUse.Kind.implicitDup){
+							if(lu.use&&lu.use.implicitDup){
 								if(cancelImplicitDup(lu.use)){
 									assert(lu.kind==LastUse.Kind.consumption);
 								}else{
