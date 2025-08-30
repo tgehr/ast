@@ -345,6 +345,7 @@ class FunctionConversion: Conversion{
 		assert(isNoOpConversion(cod.from,from.cod.substitute(subst)),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
 		assert(from.isConstCompatible(to)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
+		assert(captureAnnotationSubtype(from.captureAnnotation,to.captureAnnotation));
 		assert(from.annotation>=to.annotation);
 		assert(from.isClassical==to.isClassical);
 	}do{

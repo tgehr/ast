@@ -1392,22 +1392,26 @@ template BinaryExpParent(TokenType op)if(isAssignToken(op)){ alias BinaryExpPare
 template BinaryExpParent(TokenType op)if(!isAssignToken(op)&&!isLogicToken(op)){ alias BinaryExpParent = ABinaryExp; }
 class BinaryExp(TokenType op): BinaryExpParent!op{
 	static if(op==Tok!"→"){
+		CaptureAnnotation captureAnnotation;
 		Annotation annotation;
 		bool isLifted;
-		this(Expression left, Expression right,Annotation annotation,bool isLifted){
-			super(left,right); this.annotation=annotation; this.isLifted=isLifted;
+		this(Expression left, Expression right,CaptureAnnotation captureAnnotation, Annotation annotation,bool isLifted){
+			super(left,right); this.captureAnnotation=captureAnnotation; this.annotation=annotation; this.isLifted=isLifted;
 		}
 		override BinaryExp!op copyImpl(CopyArgs args){
-			return new BinaryExp!op(e1.copy(args),e2.copy(args),annotation,isLifted);
+			return new BinaryExp!op(e1.copy(args),e2.copy(args),captureAnnotation,annotation,isLifted);
+		}
+		override string toString(){
+			return _brk(e1.toString() ~ " "~captureAnnotationToString(captureAnnotation)~TokChars!op~annotationToString(annotation)~" "~e2.toString());
 		}
 	}else{
 		this(Expression left, Expression right){super(left,right);}
 		override BinaryExp!op copyImpl(CopyArgs args){
 			return new BinaryExp!op(e1.copy(args),e2.copy(args));
 		}
-	}
-	override string toString(){
-		return _brk(e1.toString() ~ " "~TokChars!op~" "~e2.toString());
+		override string toString(){
+			return _brk(e1.toString() ~ " "~TokChars!op~" "~e2.toString());
+		}
 	}
 	override bool isTotal(){
 		static if(op==Tok!"sub"||op==Tok!"sub←"){
@@ -1490,7 +1494,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		auto ne2=e2.substitute(subst);
 		if(ne1==e1&&ne2==e2) return this;
 		static if(op==Tok!"→"){
-			auto r=new BinaryExp!op(ne1,ne2,annotation,isLifted);
+			auto r=new BinaryExp!op(ne1,ne2,captureAnnotation,annotation,isLifted);
 		}else{
 			auto r=new BinaryExp!op(ne1,ne2);
 		}
@@ -1536,7 +1540,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		}
 		if(ne1 is e1 && ne2 is e1) return this;
 		static if(op == Tok!"→") {
-			return new BinaryExp!op(ne1, ne2, annotation, isLifted);
+			return new BinaryExp!op(ne1, ne2, captureAnnotation, annotation, isLifted);
 		} else {
 			return new BinaryExp!op(ne1, ne2);
 		}

@@ -4,6 +4,14 @@ module ast.type;
 import astopt;
 import std.format: format;
 
+enum CaptureAnnotation{
+	none,
+	const_,
+	moved,
+	once, // (unsupported)
+	spent, // (unsupported)
+}
+
 static if(language==silq){
 	enum Annotation{
 		none,
@@ -814,6 +822,52 @@ StringTy stringTy(bool classical=true){
 	else return memoize!(()=>new StringTy(true));
 }
 
+string captureAnnotationToString(CaptureAnnotation captureAnnotation){
+	return captureAnnotation?captureAnnotation==CaptureAnnotation.const_?"const":text(captureAnnotation):"";
+}
+
+bool captureAnnotationSubtype(CaptureAnnotation captureAnnotation1,CaptureAnnotation captureAnnotation2){
+	if(captureAnnotation1==captureAnnotation2) return true;
+	if(!captureAnnotation1) return true;
+	if(!captureAnnotation2) return false;
+	if(captureAnnotation1==CaptureAnnotation.const_||captureAnnotation1==CaptureAnnotation.moved)
+		if(captureAnnotation2==CaptureAnnotation.once)
+			return true;
+	return false;
+}
+bool captureAnnotationCombinable(CaptureAnnotation captureAnnotation1,CaptureAnnotation captureAnnotation2,bool meet){
+	if(captureAnnotation1==captureAnnotation2) return true;
+	if(!meet){
+		if(!captureAnnotation1||!captureAnnotation2) return true;
+		if(captureAnnotation1==CaptureAnnotation.spent||captureAnnotation2==CaptureAnnotation.spent) return false;
+		return true; // const, moved, once are intercombinable
+	}else{
+		// if(!captureAnnotation1||!captureAnnotation2) return true; // TODO?
+		if(!captureAnnotation1||!captureAnnotation2) return false;
+		if(captureAnnotation1==CaptureAnnotation.spent||captureAnnotation2==CaptureAnnotation.spent) return false;
+		if(captureAnnotation1==CaptureAnnotation.once||captureAnnotation2==CaptureAnnotation.once) return true;
+		return false; // TODO: combine `const` and `moved` to `none`?
+	}
+}
+CaptureAnnotation combineCaptureAnnotation(CaptureAnnotation captureAnnotation1,CaptureAnnotation captureAnnotation2,bool meet)in{
+	assert(captureAnnotationCombinable(captureAnnotation1,captureAnnotation2,meet));
+}do{
+	if(captureAnnotation1==captureAnnotation2) return captureAnnotation1;
+	if(!meet){
+		if(!captureAnnotation1) return captureAnnotation2;
+		if(!captureAnnotation2) return captureAnnotation1;
+		assert(captureAnnotation1!=CaptureAnnotation.spent&&captureAnnotation2!=CaptureAnnotation.spent);
+		return CaptureAnnotation.once;
+	}else{
+		if(!captureAnnotation1||!captureAnnotation2) return CaptureAnnotation.none;
+		assert(captureAnnotation1!=CaptureAnnotation.spent&&captureAnnotation2!=CaptureAnnotation.spent);
+		assert(captureAnnotation1==CaptureAnnotation.once||captureAnnotation2==CaptureAnnotation.once);
+		if(captureAnnotation1==CaptureAnnotation.once) return captureAnnotation2;
+		if(captureAnnotation2==CaptureAnnotation.once) return captureAnnotation1;
+		assert(0);
+	}
+}
+
 string annotationToString(Annotation annotation){
 	static if(language==silq) return annotation?text(annotation):"";
 	static if(language==psi){
@@ -830,12 +884,13 @@ class ProductTy: Type{
 	Id[] names;
 	Expression dom, cod; // `dom` set by semantic analysis
 	bool isSquare,isTuple;
+	CaptureAnnotation captureAnnotation;
 	Annotation annotation;
 	static if(language==silq){
 		private ProductTy classicalTy;
 		bool isClassical_;
 	}else enum isClassical_=true;
-	this(Parameter[] params, Expression cod, bool isSquare, bool isTuple, Annotation annotation, bool isClassical_)in{
+	this(Parameter[] params, Expression cod, bool isSquare, bool isTuple, CaptureAnnotation captureAnnotation, Annotation annotation, bool isClassical_)in{
 		assert(cod);
 		// TODO: assert that all names are distinct
 	}do{
@@ -845,6 +900,7 @@ class ProductTy: Type{
 		this.isSquare = isSquare;
 		this.isTuple = isTuple;
 		this.cod = cod;
+		this.captureAnnotation = captureAnnotation;
 		this.annotation = annotation;
 		static if(language==silq){
 			this.isClassical_=isClassical_;
@@ -856,7 +912,7 @@ class ProductTy: Type{
 		super.setSemCompleted();
 	}
 	override ProductTy copyImpl(CopyArgs args){
-		auto r = new ProductTy(params.map!(p=>p.copy(args)).array, cod.copy(args), isSquare, isTuple, annotation, isClassical_);
+		auto r = new ProductTy(params.map!(p=>p.copy(args)).array, cod.copy(args), isSquare, isTuple, captureAnnotation, annotation, isClassical_);
 		if(args.preserveSemantic) {
 			r.dom = dom;
 		}
@@ -902,7 +958,7 @@ class ProductTy: Type{
 			static if(language==silq) auto arrow=(isClassical_?"!":"")~"→";
 			else enum arrow="→";
 			if(isSquare) d=del[0]~d~del[1];
-			r=d~" "~arrow~(annotation?annotationToString(annotation):"")~" "~c;
+			r=d~" "~(captureAnnotation!=CaptureAnnotation.const_?captureAnnotationToString(captureAnnotation):"")~arrow~(annotation?annotationToString(annotation):"")~" "~c;
 		}else{
 			string args;
 			args=params.map!((p){
@@ -912,7 +968,8 @@ class ProductTy: Type{
 			}).join(",");
 			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
-			r=pi~del[0]~args~del[1]~annotationToString(annotation)~". "~c;
+			r=pi~del[0]~args~del[1]~(captureAnnotation!=CaptureAnnotation.const_?captureAnnotationToString(captureAnnotation):"")
+				~(captureAnnotation!=CaptureAnnotation.const_&&annotation?" ":"")~annotationToString(annotation)~". "~c;
 		}
 		return r;
 	}
@@ -962,7 +1019,7 @@ class ProductTy: Type{
 		auto nnames=names.dup;
 		nnames[i]=nname;
 		auto nvar=varTy(nname,argTy(i));
-		return productTy(isConst,nnames,dom,cod.substitute(oname,nvar),isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,nnames,dom,cod.substitute(oname,nvar),isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 	private ProductTy relabelAway(Id oname)in{
 		assert(names.canFind(oname));
@@ -995,7 +1052,7 @@ class ProductTy: Type{
 		if(nnames==names) return this;
 		Expression[Id] subst;
 		foreach(i;0..names.length) subst[names[i]]=varTy(nnames[i],argTy(i));
-		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 	override ProductTy substituteImpl(Expression[Id] subst){
 		foreach(n;names){
@@ -1011,7 +1068,7 @@ class ProductTy: Type{
 		auto nsubst=subst.dup;
 		foreach(n;names) nsubst.remove(n);
 		auto ncod=cod.substitute(nsubst);
-		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto r=cast(ProductTy)rhs; // TODO: get rid of duplication (same code in opEquals)
@@ -1020,7 +1077,7 @@ class ProductTy: Type{
 		r=r.setTuple(isTuple);
 		if(!r) return false;
 		if(isConst.length!=r.isConst.length) return false;
-		if(isSquare!=r.isSquare||annotation>r.annotation||
+		if(isSquare!=r.isSquare||annotation>r.annotation||!captureAnnotationSubtype(r.captureAnnotation,captureAnnotation)||
 		   isClassical_&&!r.isClassical_||nargs!=r.nargs)
 			return false;
 		if(names.any!(name=>r.hasFreeVar(name)))
@@ -1096,7 +1153,7 @@ class ProductTy: Type{
 		r=r.setTuple(isTuple);
 		if(!r) return false;
 		assert(isTuple==r.isTuple);
-		if(isConst!=r.isConst||isSquare!=r.isSquare||annotation!=r.annotation||
+		if(isConst!=r.isConst||isSquare!=r.isSquare||annotation!=r.annotation||captureAnnotation!=r.captureAnnotation||
 		   isClassical_!=r.isClassical_||nargs!=r.nargs)
 			return false;
 		return this.isSubtypeImpl(r)&&r.isSubtypeImpl(this);
@@ -1125,7 +1182,7 @@ class ProductTy: Type{
 		if(!r) return false;
 		if(isSquare!=r.isSquare||nargs!=r.nargs||!isConstCompatible(r))
 			return false;
-		if(annotation<r.annotation||!isClassical_&&r.isClassical_)
+		if(annotation<r.annotation||!captureAnnotationSubtype(captureAnnotation,r.captureAnnotation)||!isClassical_&&r.isClassical_)
 			return false;
 		auto name=freshName(Id(),r);
 		auto vars=varTy(name,r.dom);
@@ -1138,6 +1195,8 @@ class ProductTy: Type{
 	override Expression combineTypesImpl(Expression rhs,bool meet){
 		auto r=cast(ProductTy)rhs;
 		if(!r) return null;
+		if(!captureAnnotationCombinable(captureAnnotation,r.captureAnnotation,meet)) return null;
+		auto ncaptureAnnotation=combineCaptureAnnotation(captureAnnotation,r.captureAnnotation,meet);
 		auto nannotation=meet?max(annotation,r.annotation):min(annotation,r.annotation);
 		auto nisClassical=meet?isClassical_||r.isClassical_:isClassical_&&r.isClassical_;
 		auto ndom=combineTypes(dom,r.dom,!meet);
@@ -1164,7 +1223,7 @@ class ProductTy: Type{
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
-			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
 		}else{
 			Expression lCod,rCod;
 			if(names[0]!=Id()||r.names[0]!=Id()){
@@ -1179,11 +1238,14 @@ class ProductTy: Type{
 			assert(lCod&&rCod);
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
-			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,nannotation,nisClassical);
+			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
 		}
 	}
+	final ProductTy setCaptureAnnotation(CaptureAnnotation captureAnnotation){
+		return productTy(isConst,names,dom,cod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
+	}
 	final ProductTy setAnnotation(Annotation annotation){
-		return productTy(isConst,names,dom,cod,isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,names,dom,cod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 	ProductTy setTuple(bool tuple)in{
 		assert(!tuple||dom.isTupleTy());
@@ -1220,13 +1282,13 @@ class ProductTy: Type{
 		}
 		auto ncod=tryApply(narg,isSquare);
 		assert(!!ncod);
-		return productTy(nIsConst,nnames,dom,ncod,isSquare,tuple,annotation,isClassical(this));
+		return productTy(nIsConst,nnames,dom,ncod,isSquare,tuple,captureAnnotation, annotation,isClassical(this));
 	}
 	override ProductTy getClassical(){
 		static if(language==silq) {
 			if(classicalTy) return classicalTy;
 			if(isClassical_) return classicalTy=this;
-			return classicalTy=productTy(isConst, names, dom, cod, isSquare, isTuple, annotation, true);
+			return classicalTy=productTy(isConst, names, dom, cod, isSquare, isTuple, captureAnnotation, annotation, true);
 		} else {
 			return this;
 		}
@@ -1238,11 +1300,11 @@ class ProductTy: Type{
 		assert(isTypeTy(type));
 		auto ndom=dom;
 		auto ncod=cod.eval();
-		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,annotation,isClassical_);
+		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 }
 
-ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
+ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,CaptureAnnotation captureAnnotation,Annotation annotation,bool isClassical)in{
 	assert(dom && dom.isSemEvaluated(), format("function domain not analyzed: %s", dom));
 	assert(cod && cod.isSemEvaluated());
 	if(isTuple){
@@ -1250,7 +1312,7 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 		assert(tdom&&names.length==tdom.length&&isConst.length==tdom.length);
 	}else assert(names.length==1&&isConst.length==1);
 }do{
-	return memoize!((bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
+	return memoize!((bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,CaptureAnnotation captureAnnotation, Annotation annotation,bool isClassical){
 		Expression[] types;
 		if(isTuple) {
 			auto tdom = dom.isTupleTy;
@@ -1274,12 +1336,12 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 			p.setSemEvaluated();
 		}
 		cod = cod.substitute(subst);
-		auto r = new ProductTy(params, cod, isSquare, isTuple, annotation, isClassical);
+		auto r = new ProductTy(params, cod, isSquare, isTuple, captureAnnotation, annotation, isClassical);
 		r.dom = dom;
-		r.type = typeOfProductTy(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
+		r.type = typeOfProductTy(isConst, names, dom, cod, isSquare, isTuple, captureAnnotation, annotation, isClassical);
 		r.setSemEvaluated();
 		return r;
-	})(isConst, names, dom, cod, isSquare, isTuple, annotation, isClassical);
+	})(isConst, names, dom, cod, isSquare, isTuple, captureAnnotation, annotation, isClassical);
 }
 
 alias FunTy=ProductTy;
@@ -1292,7 +1354,7 @@ FunTy funTy(bool[] isConst,Expression dom,Expression cod,bool isSquare,bool isTu
 }do{
 	auto nargs=1+[].length;
 	if(isTuple) if(auto tpl=dom.isTupleTy()) nargs=tpl.length;
-	return productTy(isConst,iota(nargs).map!(_=>Id()).array,dom,cod,isSquare,isTuple,annotation,isClassical);
+	return productTy(isConst,iota(nargs).map!(_=>Id()).array,dom,cod,isSquare,isTuple,CaptureAnnotation.const_,annotation,isClassical);
 }
 
 FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical)in{
@@ -1709,6 +1771,6 @@ Expression typeOfVectorTy(Expression e,Expression num)in{
 
 Expression typeOfStringTy(bool classical){ return classical?ctypeTy:typeTy; }
 
-Expression typeOfProductTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,Annotation annotation,bool isClassical){
+Expression typeOfProductTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool isSquare,bool isTuple,CaptureAnnotation captureAnnotation,Annotation annotation,bool isClassical){
 	return isClassical?ctypeTy:typeTy;
 }

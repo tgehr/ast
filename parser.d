@@ -29,6 +29,8 @@ bool isRelationalOp(TokenType op){
 		default: return false;
 	}
 }
+bool isArrow(TokenType t){ return t==Tok!"→"||t==Tok!"->"; }
+bool isCaptureAnnotation(TokenType t){ return util.among(t,Tok!"const",Tok!"moved",Tok!"once",Tok!"spent"); }
 
 // expression parser:
 
@@ -74,7 +76,7 @@ int getLbp(TokenType type) pure{ // operator precedence
 	// shift operators
 	case Tok!">>", Tok!"<<":
 	case Tok!">>>": return 110;
-	case Tok!"->",Tok!"→": // exponential type
+	case Tok!"->",Tok!"→",Tok!"const",Tok!"moved",Tok!"once",Tok!"spent": // exponential type
 	static if(language==silq) case Tok!"!",Tok!"classical":{}
 	// case Tok!"⇒",Tok!"↦",Tok!"=>": return 115; // goesto
 	// additive operators
@@ -523,9 +525,23 @@ struct Parser{
 					expect(isSquare?Tok!"]":Tok!")");
 					paramLoc=paramLoc.to(ptok.loc);
 					Expression cod;
+					auto captureAnnotation=CaptureAnnotation.none;
+					void parseCaptureAnnotation(){
+						if(isCaptureAnnotation(ttype)&&captureAnnotation==CaptureAnnotation.none){
+							switch(ttype){
+								case Tok!"const": captureAnnotation=CaptureAnnotation.const_; break;
+								case Tok!"moved": captureAnnotation=CaptureAnnotation.moved; break;
+								case Tok!"once": captureAnnotation=CaptureAnnotation.once; break;
+								case Tok!"spent": captureAnnotation=CaptureAnnotation.spent; break;
+								default: assert(0);
+							}
+							nextToken();
+						}
+					}
 					auto annotation=Annotation.none;
 					bool isLifted=false;
 					if(ttype!=Tok!"["&&ttype!=Tok!"("){
+						parseCaptureAnnotation();
 						static if(language==silq){
 							if(ttype==Tok!"lifted"||ttype==Tok!"qfree"){
 								isLifted=ttype==Tok!"lifted";
@@ -545,11 +561,13 @@ struct Parser{
 								annotation=Annotation.pure_;
 							}
 						}
+						parseCaptureAnnotation();
 						expect(Tok!".");
 						cod = parseType();
 					}else cod=parseProduct();
 					auto isTuple=params[1]||params[0].length!=1;
-					return res=New!ProductTy(cast(Parameter[])params[0],cod,isSquare,isTuple,annotation,false);
+					if(!captureAnnotation) captureAnnotation=CaptureAnnotation.const_;
+					return res=New!ProductTy(cast(Parameter[])params[0],cod,isSquare,isTuple,captureAnnotation,annotation,false);
 				}
 				return parseProduct();
 			case Tok!"∏",Tok!"cprod":
@@ -661,7 +679,7 @@ struct Parser{
 				return res;
 			}mixin({string r;
 				foreach(x;binaryOps)
-					if(!util.among(x,"=>",".","!","classical","?",":","as","coerce","pun","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&","&=","&←","∧=","|","|=","|←","∨=")){
+					if(!util.among(x,"=>",".","!","classical","const","moved","once","spent","?",":","as","coerce","pun","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&","&=","&←","∧=","|","|=","|←","∨=")){
 						r~=mixin(X!q{case Tok!"@(x)":
 							nextToken();
 							static if("@(x)"=="->"||"@(x)"=="→"){
@@ -690,7 +708,7 @@ struct Parser{
 							static if("@(x)"=="->")
 								alias BE=BinaryExp!(Tok!"→");
 							else alias BE=BinaryExp!(Tok!"@(x)");
-							static if(is(typeof(annotation))) return New!BE(left,right,annotation,isLifted);
+							static if(is(typeof(annotation))) return New!BE(left,right,CaptureAnnotation.const_,annotation,isLifted);
 							else return res=New!BE(left,right);
 						});
 					}
@@ -715,11 +733,45 @@ struct Parser{
 			static if(language==silq){
 				case Tok!"!",Tok!"classical":
 					auto next=peek.type;
-					if(next==Tok!"→"||next==Tok!"->"){
+					auto nnext=peek(2).type;
+					if(isArrow(next)||isCaptureAnnotation(next)&&isArrow(nnext)){
 						nextToken();
 						return res=New!(UnaryExp!(Tok!"¬"))(led(left,statement));
 					}else goto default;
 			}
+			case Tok!"const",Tok!"moved",Tok!"once",Tok!"spent":
+				auto pttype=ttype;
+				auto next=peek.type;
+				BinaryExp!(Tok!"→") arrow=null;
+				static if(language==silq){
+					auto nnext=peek(2).type;
+					if(next==Tok!"!"||next==Tok!"classical"){
+						if(isArrow(nnext)){
+							nextToken();
+							res=led(left,statement);
+							auto classical=cast(UnaryExp!(Tok!"¬"))res;
+							assert(!!classical);
+							arrow=cast(BinaryExp!(Tok!"→"))classical.e;
+							imported!"util.io".writeln(classical," ",typeid(classical.e)," ",arrow);
+						}
+					}
+				}
+				if(!arrow){
+					if(isArrow(next)){
+						nextToken();
+						res=led(left,statement);
+						arrow=cast(BinaryExp!(Tok!"→"))res;
+					}else goto default;
+				}
+				assert(!!arrow);
+				switch(pttype){
+					case Tok!"const": arrow.captureAnnotation=CaptureAnnotation.const_; break;
+					case Tok!"moved": arrow.captureAnnotation=CaptureAnnotation.moved; break;
+					case Tok!"once": arrow.captureAnnotation=CaptureAnnotation.once; break;
+					case Tok!"spent": arrow.captureAnnotation=CaptureAnnotation.spent; break;
+					default: assert(0);
+				}
+				return res;
 			case Tok!"&": goto case Tok!"∧";
 			case Tok!"&←",Tok!"∧=": goto case Tok!"∧←";
 			case Tok!"|": goto case Tok!"∨";

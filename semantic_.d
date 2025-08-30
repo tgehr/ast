@@ -4341,7 +4341,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(auto constructor=decl.constructor){
 							if(auto cty=cast(FunTy)typeForDecl(constructor)){
 								assert(isTypeTy(ft.cod));
-								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.annotation,true);
+								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.captureAnnotation,ft.annotation,true);
 							}
 						}
 					}
@@ -4506,7 +4506,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			//imported!"util.io".writeln(ce.arg," ",ce.arg.type);
 			auto argTy=ce.arg.type;
 			if(!argTy) argTy=bottom;
-			auto nfunTy=new BinaryExp!(Tok!"→")(argTy,bottom,Annotation.qfree,false);
+			auto nfunTy=new BinaryExp!(Tok!"→")(argTy,bottom,CaptureAnnotation.none,Annotation.qfree,false);
 			nfunTy.loc=ce.e.loc;
 			auto cnfunTy=new UnaryExp!(Tok!"¬")(nfunTy);
 			cnfunTy.loc=nfunTy.loc;
@@ -5988,7 +5988,7 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"→") ex,ExpSemContext context
 		params = getParam(ex.e1);
 	}
 
-	auto r = new ProductTy(params, ex.e2, false, isTuple, ex.annotation, false);
+	auto r = new ProductTy(params, ex.e2, false, isTuple, ex.captureAnnotation, ex.annotation, false);
 	r.loc = ex.loc;
 	return expressionSemantic(r, context);
 }
@@ -6008,7 +6008,9 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	auto cod = typeSemantic(fa.cod, fsc);
 	if(cod) fa.cod = cod;
 	propErr(fa.cod, fa);
-	fa.type=typeOfProductTy(fa.isConst,fa.names,fa.dom,fa.cod,fa.isSquare,fa.isTuple,fa.annotation,fa.isClassical_);
+	auto captureAnnotation=fa.captureAnnotation;
+	if(!captureAnnotation) captureAnnotation=CaptureAnnotation.const_;
+	fa.type=typeOfProductTy(fa.isConst,fa.names,fa.dom,fa.cod,fa.isSquare,fa.isTuple,captureAnnotation,fa.annotation,fa.isClassical_);
 	return fa;
 }
 
@@ -6167,7 +6169,8 @@ bool setFtype(FunctionDef fd,bool force){
 	assert(fd.isTuple||pty.length==1);
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
 	auto ftypeBefore=fd.ftype;
-	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
+	auto captureAnnotation=CaptureAnnotation.none; // TODO !!!
+	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,captureAnnotation,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
 	if(fd.retNames.length!=fd.numReturns)
 		fd.retNames = new string[](fd.numReturns);
@@ -6624,7 +6627,7 @@ Expression typeForDecl(Declaration decl){
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?
 		assert(dat.isTuple||dat.params.length==1);
 		auto pt=dat.isTuple?tupleTy(dat.params.map!(p=>p.vtype).array):dat.params[0].vtype;
-		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getId).array,pt,ttype,true,dat.isTuple,pure_,true);
+		return productTy(dat.params.map!(p=>p.isConst).array,dat.params.map!(p=>p.getId).array,pt,ttype,true,dat.isTuple,CaptureAnnotation.const_,pure_,true);
 	}
 	if(auto vd=cast(VarDecl)decl){
 		return vd.vtype;
