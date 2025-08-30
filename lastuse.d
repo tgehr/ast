@@ -208,7 +208,10 @@ final class LastUse{
 	}
 
 	private void markConsumed(bool isForget){
+		//imported!"util.io".writeln("MARKING CONSUMED: ",this);
 		if(isConsumption()) return;
+		if(splitSource&&splitSource.splitFrom)
+			splitSource.splitFrom.markConsumed(false);
 		if(splitFrom) splitFrom.markConsumed(false);
 		if(isForget){
 			assert(!dep.isTop);
@@ -633,6 +636,8 @@ struct LastUses{
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
+			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
+				lastUse.splitSource.splitFrom.markConsumed(false);
 			lastUse.updateDependenciesOnConsumption();
 		}
 	}
