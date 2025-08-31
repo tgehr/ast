@@ -946,7 +946,7 @@ class ProductTy: Type{
 				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
 				return paramKind~a.toString();
 			}
-			d=params.empty?cod.toString():params.map!((p){
+			d=params.empty?dom.toString():params.map!((p){
 				auto paramKind=getParamKind(p.isConst);
 				auto pty = p.vtype ? p.vtype : p.dtype;
 				auto ptup = pty.isTupleTy();
