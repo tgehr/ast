@@ -1632,6 +1632,9 @@ Dependency getDependencyImpl(Identifier id,Scope sc){
 		result.replace(decl,sc.getDependency(decl));
 	return result;
 }
+Dependency getDependencyImpl(LambdaExp le,Scope sc){
+	return getFunctionDependency(le.fd,sc);
+}
 
 Dependency getDependencyImpl(CallExp ce,Scope sc){
 	auto result=Dependency(false);
@@ -1650,14 +1653,11 @@ Dependency getDependencyImpl(CallExp ce,Scope sc){
 Dependency getDependency(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
 	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
+	if(auto le=cast(LambdaExp)e) return getDependencyImpl(le,sc);
 	return getDependencyImpl(e,sc);
 }
 
-void updateFunctionDependency(FunctionDef fd){
-	auto sc=fd.scope_;
-	if(!sc) return;
-	if(fd.isToplevelDeclaration()) return;
-	if(sc.rnsymtab.get(fd.getId,null) !is fd) return;
+Dependency getFunctionDependency(FunctionDef fd,Scope sc){
 	auto dep=Dependency();
 	foreach(decl;fd.capturedDecls){
 		if(decl.isSemError()||fd.captures[decl][0].isSemError()) continue;
@@ -1666,7 +1666,15 @@ void updateFunctionDependency(FunctionDef fd){
 		if(fd.isConsumedCapture(decl)) dep.joinWith(sc.getDependency(decl));
 		else dep.dependencies.insert(decl);
 	}
-	sc.addDependency(fd,dep);
+	return dep;
+}
+
+void updateFunctionDependency(FunctionDef fd){
+	auto sc=fd.scope_;
+	if(!sc) return;
+	if(fd.isToplevelDeclaration()) return;
+	if(sc.rnsymtab.get(fd.getId,null) !is fd) return;
+	sc.addDependency(fd,getFunctionDependency(fd,sc));
 }
 
 Identifier consumes(Expression e){
@@ -1807,8 +1815,8 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					sc.error("reversed function must be 'mfree'",f.loc);
 					ok=false;
 				}
-				if(!ft.isClassical_){
-					sc.error("reversed function must be classical",f.loc);
+				if(ft.captureAnnotation!=CaptureAnnotation.const_){
+					sc.error("reversed function must be 'const'",f.loc);
 					ok=false;
 				}
 				if(ft.cod.hasAnyFreeVar(ft.names)){
@@ -4035,8 +4043,8 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		f.setSemForceError();
 		errors=true;
 	}
-	if(check && !ft.isClassical_){
-		sc.error("reversed function must be classical",f.loc);
+	if(check && ft.captureAnnotation!=CaptureAnnotation.const_){
+		sc.error("reversed function must be 'const'",f.loc);
 		f.setSemForceError();
 		errors=true;
 	}
@@ -4121,16 +4129,44 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}else return expressionSemantic(e,context);
 	}
 	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
-	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestConsumed);
-	else static if(!isPresemantic){
-		ce.e=expressionSemantic(ce.e,context.expSem.nestConsumed);
-	}else{
-		auto state=context.sc.getStateSnapshot(true);
-		auto analyzedFun=expressionSemantic(ce.e.copy(),context.expSem.nestConsumed);
-		if(analyzedFun.isSemError()) ce.e=analyzedFun;
-		else{
-			ce.e.type=analyzedFun.type;
-			context.sc.restoreStateSnapshot(state);
+	bool constantCall=true;
+	void analyzeFun(){
+		static if(isRhs) ce.e=expressionSemantic(ce.e,constantCall?context.nestConst:context.nestConsumed);
+		else static if(!isPresemantic){
+			ce.e=expressionSemantic(ce.e,constantCall?context.expSem.nestConst:context.expSem.nestConsumed);
+		}else{
+			auto state=context.sc.getStateSnapshot(true);
+			auto analyzedFun=expressionSemantic(ce.e.copy(),constantCall?context.expSem.nestConst:context.expSem.nestConsumed);
+			if(analyzedFun.isSemError()) ce.e=analyzedFun;
+			else{
+				ce.e.type=analyzedFun.type;
+				context.sc.restoreStateSnapshot(state);
+			}
+		}
+	}
+	Scope.ScopeState state;
+	if(context.sc) state=context.sc.getStateSnapshot(true); // TODO: avoidable?
+	analyzeFun();
+	if(ce.e.type){
+		if(auto ft=cast(FunTy)ce.e.type){
+			if(ft.captureAnnotation==CaptureAnnotation.moved){
+				ce.e.constLookup=false;
+				if(auto id=cast(Identifier)ce.e){ // TOOD: ok?
+					ce.e=id.copy();
+					if(context.sc) context.sc.restoreStateSnapshot(state);
+					constantCall=false;
+					analyzeFun();
+				}else if(auto idx=cast(IndexExp)ce.e){
+					idx.implicitDup=true; // TODO: ok?
+				}
+			}else if(ft.captureAnnotation==CaptureAnnotation.once){
+				// ...
+				context.sc.error("calling 'once' functions not yet supported",ce.e.loc);
+				ce.e.setSemForceError();
+			}else if(ft.captureAnnotation==CaptureAnnotation.spent){
+				context.sc.error("'moved' captures of 'spent' function were already consumed",ce.e.loc);
+				ce.e.setSemForceError();
+			}
 		}
 	}
 	propErr(ce.e,ce);
@@ -4358,12 +4394,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					if(!tt) return false;
 					Expression.CopyArgs cargs={ preserveMeanings: true };
 					auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
-					nce.loc=ce.loc;
+					nce.loc=ce.e.loc;
 					auto nnce=new CallExp(nce,ce.arg,false,false);
 					nnce.loc=ce.loc;
 					// TODO: this semantic analysis is out-of-order with the one for the arguments
-					static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context.nestConsumed);
-					else nnce=cast(CallExp)callSemantic(nnce,context.expSem.nestConsumed);
+					static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context);
+					else nnce=cast(CallExp)callSemantic(nnce,context.expSem);
 					assert(!!nnce);
 					ce=nnce;
 					return true;
@@ -6169,7 +6205,7 @@ bool setFtype(FunctionDef fd,bool force){
 	assert(fd.isTuple||pty.length==1);
 	auto pt=fd.isTuple?tupleTy(pty):pty[0];
 	auto ftypeBefore=fd.ftype;
-	auto captureAnnotation=CaptureAnnotation.none; // TODO !!!
+	auto captureAnnotation=fd.getCaptureAnnotation();
 	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,captureAnnotation,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
 	if(fd.retNames.length!=fd.numReturns)
@@ -6345,7 +6381,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			id.loc=loc;
 			id.meaning=fd.isConsumedCapture(capture)?newfscope_.split(capture,id):capture;
 			id.type=id.typeFromMeaning;
-			id.constLookup=false;
+			id.constLookup=!fd.isConsumedCapture(capture);
 			propErr(id.meaning, id);
 			id.setSemCompleted();
 			propErr(id,fd);

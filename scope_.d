@@ -1878,7 +1878,8 @@ class CapturingScope(T): NestedScope{
 					auto recapture=new Identifier(capture.getId);
 					recapture.loc=id.loc;
 					recapture.scope_=origin;
-					bool isConsuming=decl.isConsumedCapture(capture);
+					//imported!"util.io".writeln("RECAPTURING: ",capture," ",decl.isConsumedCapture(capture)," ",kind);
+					bool isConsuming=decl.isConsumedCapture(capture)&&kind==Lookup.consuming;
 					DeadDecl[] failures;
 					recapture.meaning=origin.lookup(recapture,true,false,isConsuming?Lookup.consuming:Lookup.constant,&failures);
 					bool callErrorShown=false;
@@ -1945,7 +1946,7 @@ class CapturingScope(T): NestedScope{
 				origin.lastUses.definition(meaning,null);
 				return null; // not captured, will be replaced (TODO: ok?)
 			}
-			if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
+			/+if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
 				if(isConstDecl){
 					origin.error(text("cannot capture 'const' quantum ",meaning.kind), id.loc);
 					if(meaning.typeConstBlocker){
@@ -1962,7 +1963,7 @@ class CapturingScope(T): NestedScope{
 						id.setSemError();
 					}
 				}
-			}
+			}+/
 			static if(is(T==FunctionDef)){
 				auto fd=decl;
 				if(fd&&fd.context&&fd.context.vtype==contextTy(true)){

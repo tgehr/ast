@@ -183,13 +183,25 @@ class FunctionDef: Declaration{
 		assert(!!fscope_);
 	}do{
 		auto id=captures[capture][0];
-		if(!id.meaning) return false;
-		assert(!!id.meaning);
-		if(id.meaning.isSemError()) return false;
-		assert(!!id.meaning.scope_);
+		if(!id.meaning||!id.meaning.scope_) return false;
 		return id.meaning.scope_.isNestedIn(fscope_);
 	}
 	@property string contextName()in{assert(!!context,text(this));}do{ return context.getName; }
+	final CaptureAnnotation getCaptureAnnotation(){
+		bool hasConsumed=false;
+		bool hasConst=false;
+		foreach(capture;capturedDecls){
+			import ast.semantic_:typeForDecl;
+			auto type=typeForDecl(capture);
+			if(!type||type.isClassical()) continue;
+			if(isConsumedCapture(capture)) hasConsumed=true;
+			else hasConst=true;
+		}
+		// if(!hasConsumed&&!hasConst) return CaptureAnnotation.none; // TODO?
+		if(!hasConsumed) return CaptureAnnotation.const_;
+		if(hasConst) return CaptureAnnotation.once;
+		return CaptureAnnotation.moved;
+	}
 	Expression ret; // return type
 	FunTy ftype;
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined

@@ -1196,7 +1196,14 @@ class ProductTy: Type{
 		auto r=cast(ProductTy)rhs;
 		if(!r) return null;
 		if(!captureAnnotationCombinable(captureAnnotation,r.captureAnnotation,meet)) return null;
-		auto ncaptureAnnotation=combineCaptureAnnotation(captureAnnotation,r.captureAnnotation,meet);
+		CaptureAnnotation ncaptureAnnotation;
+		// ignore const classical captures for combining capture annotations:
+		auto classicalConst1=isClassical_&&captureAnnotation==CaptureAnnotation.const_;
+		auto classicalConst2=r.isClassical_&&r.captureAnnotation==CaptureAnnotation.const_;
+		if(classicalConst1&&classicalConst2) ncaptureAnnotation=CaptureAnnotation.const_;
+		else if(classicalConst1) ncaptureAnnotation=r.captureAnnotation;
+		else if(classicalConst2) ncaptureAnnotation=captureAnnotation;
+		else ncaptureAnnotation=combineCaptureAnnotation(captureAnnotation,r.captureAnnotation,meet);
 		auto nannotation=meet?max(annotation,r.annotation):min(annotation,r.annotation);
 		auto nisClassical=meet?isClassical_||r.isClassical_:isClassical_&&r.isClassical_;
 		auto ndom=combineTypes(dom,r.dom,!meet);

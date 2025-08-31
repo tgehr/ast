@@ -802,7 +802,7 @@ private bool copyAttr(Id name) {
 
 static if(language==silq)
 FunctionDef reverseFunction(FunctionDef fd)in{
-	assert(fd.scope_&&fd.ftype&&fd.ftype.isClassical()&&fd.ftype.annotation>=Annotation.mfree);
+	assert(fd.scope_&&fd.ftype&&fd.ftype.captureAnnotation==CaptureAnnotation.const_&&fd.ftype.annotation>=Annotation.mfree);
 }do{
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	enum unchecked=true; // TODO: ok?

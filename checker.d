@@ -952,9 +952,11 @@ class Checker {
 		auto callTy = cast(ast_ty.ProductTy) targetExpr.type;
 		assert(!!callTy, format("ERROR: call target not a ProductTy on %s: << %s >>", targetExpr.loc, targetExpr));
 
-		if(!callTy.isClassical_) {
+		if(callTy.captureAnnotation == ast_ty.CaptureAnnotation.moved) {
 			expectMoved(targetExpr, "quantum call target");
-			assert(!isReversed, format("ERROR: Reversed quantum call on %s: << %s >>", targetExpr.loc, targetExpr));
+			assert(!isReversed, format("ERROR: Reversed moved call on %s: << %s >>", targetExpr.loc, targetExpr));
+		} else {
+			expectConst(targetExpr, "call target");
 		}
 
 		visExpr(targetExpr);
