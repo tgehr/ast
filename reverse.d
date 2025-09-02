@@ -649,7 +649,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				auto argt = cast(TupleExp)ce.arg;
 				if(!argt) {
 					// TODO unpack?
-					sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
+					sc.error(format("cannot reverse primitive `%s`",prim),oce.e.loc);
 					return error();
 				}
 				auto args = argt.e;
@@ -666,7 +666,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				auto argt = cast(TupleExp)oce.arg;
 				if(!argt) {
 					// TODO unpack?
-					sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
+					sc.error(format("cannot reverse primitive `%s`",prim),oce.e.loc);
 					return error();
 				}
 				auto args = argt.e;
@@ -678,7 +678,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				newrhs.loc=olhs.loc;
 				break; // DMD bug: does not detect if this is missing
 			default:
-				sc.error(format("cannot reverse primitive '%s'",prim),oce.e.loc);
+				sc.error(format("cannot reverse primitive `%s`",prim),oce.e.loc);
 				return error();
 		}
 		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked,noImplicitDup);
@@ -705,7 +705,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 		}
 		if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
-			sc.error("reversed function must be 'mfree'",ce.e.loc);
+			sc.error("reversed function must be `mfree`",ce.e.loc);
 			return error();
 		}
 		if(!unchecked&&!needWrapper&&!ft.isClassical){
@@ -715,7 +715,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		auto f=ce.e;
 		auto r=reverseCallRewriter(ft,f.loc);
 		if(!unchecked&&!needWrapper&&r.movedType.hasClassicalComponent()){
-			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+			sc.error("reversed function cannot have classical components in `moved` arguments", f.loc);
 			return error();
 		}
 		Expression newlhs;
@@ -754,7 +754,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				return error();
 			}
 		}else{
-			sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
+			sc.error("cannot match single tuple to function with mixed `const` and consumed parameters",ce.loc);
 			return error();
 		}
 		auto checked=!unchecked;

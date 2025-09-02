@@ -467,7 +467,7 @@ class ConsumedDecl: DeadDecl{
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
-		sc.note(format("%s '%s' consumed here",kind,use.meaning),use.loc);
+		sc.note(format("%s `%s` consumed here",kind,use.meaning),use.loc);
 	}
 	override string toString(){
 		return text("consumed(",super.toString(),",",use.loc,")");
@@ -511,7 +511,7 @@ class DeadMerge: DeadDecl{
 					auto type=typeForDecl(d);
 					if(!type) continue;
 					if(!type.getQuantum){
-						sc.note(format("declaration under quantum 'if' has type '%s' which cannot be promoted to quantum",type),d.loc);
+						sc.note(format("declaration under quantum `if` has type `%s` which cannot be promoted to quantum",type),d.loc);
 						if(type.isSubtype(ℤt(true))){
 							sc.note("did you mean to use `int[n]` or `uint[n]`, with explicit bit width `n`?",d.loc);
 						}else if(cast(ArrayTy)type){
@@ -527,10 +527,10 @@ class DeadMerge: DeadDecl{
 				if(common&&!common.getQuantum){
 					foreach(d;mergedFrom){
 						auto type=typeForDecl(d);
-						sc.note(format("declared with type '%s' here",type),d.loc);
+						sc.note(format("declared with type `%s` here",type),d.loc);
 					}
 					auto d=mergedFrom[$-1];
-					sc.note(format("declarations under quantum 'if' have common type '%s' which cannot be promoted to quantum",common),d.loc);
+					sc.note(format("declarations under quantum `if` have common type `%s` which cannot be promoted to quantum",common),d.loc);
 					if(cast(ArrayTy)common){
 						sc.note("quantum-dependent tuple length not yet supported",d.loc);
 					}else if(cast(FunTy)type){
@@ -542,7 +542,7 @@ class DeadMerge: DeadDecl{
 			if(!common){
 				foreach(d;mergedFrom){
 					auto type=typeForDecl(d);
-					sc.note(format("declared with type '%s' here",type),d.loc);
+					sc.note(format("declared with type `%s` here",type),d.loc);
 				}
 				auto d=mergedFrom[$-1];
 				sc.note("declarations on different paths have incompatible types",d.loc);

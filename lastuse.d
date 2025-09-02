@@ -251,11 +251,11 @@ final class LastUse{
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
 						if(lu.use && lu.use.scope_){
-							lu.scope_.error(format("cannot synthesize forget expression for '%s'",lu.use),lu.use.loc);
+							lu.scope_.error(format("cannot synthesize forget expression for `%s`",lu.use),lu.use.loc);
 						}else if(lu.decl.scope_){
 							auto d=lu.decl,sc=lu.decl.scope_;
-							if(cast(Parameter)d) sc.error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-							else sc.error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+							if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+							else sc.error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 							if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
 						}
 						lu.decl.setSemForceError();

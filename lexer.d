@@ -252,7 +252,7 @@ struct Location{
 	// reference to the source the code belongs to
 	@property Source source()const{
 		auto src = Source.get(rep);
-		assert(src, "source for '"~rep~"' not found!");
+		assert(src, "source for `"~rep~"` not found!");
 		return src;
 	}
 	Location to(const(Location) end)const{// in{assert(end.source is source);}do{

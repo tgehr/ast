@@ -150,7 +150,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 				static if(language==psi) fd.contextVal=fd.context;
 			}
 			if(!fd.body_) return;
-			auto thisVar=addVar(Id.s!"this",ctxty,fd.loc,fd.body_.blscope_); // the 'this' variable
+			auto thisVar=addVar(Id.s!"this",ctxty,fd.loc,fd.body_.blscope_); // the `this` variable
 			fd.thisVar=thisVar;
 			if(!fd.body_.s.length||!cast(ReturnExp)fd.body_.s[$-1]){
 				auto thisid=new Identifier(thisVar.getName);
@@ -174,7 +174,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 		}
 		assert(dsc.decl.dtype);
 	}else if(auto nsc=cast(NestedScope)sc){
-		fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name 'outer' available
+		fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name `outer` available
 		static if(language==psi) fd.contextVal=fd.context;
 	}
 	if(fd.capturedDecls.any!(d=>d.isLinear)){
@@ -378,7 +378,7 @@ void checkNotLinear(Expression e,Scope sc){
 	if(sc.allowsLinear()) return;
 	if(auto decl=cast(Declaration)e){
 		if(decl.isLinear()){
-			sc.error(format("cannot make linear declaration '%s' at this location",e),e.loc);
+			sc.error(format("cannot make linear declaration `%s` at this location",e),e.loc);
 			e.setSemError();
 		}
 	}
@@ -529,7 +529,7 @@ Identifier getPreludeSymbol(string name,Location loc,Scope isc){
 	res.meaning=getPreludeScope(isc.handler, loc).lookup(res,false,false,Lookup.constant,null);
 	if(cast(DeadDecl)res.meaning) res.meaning=null;
 	if(!res.meaning){
-		isc.error(format("symbol '%s' not defined in prelude",name),loc);
+		isc.error(format("symbol `%s` not defined in prelude",name),loc);
 		res.setSemError();
 	}else{
 		res.type=res.typeFromMeaning;
@@ -1362,7 +1362,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in for loop",fe.loc);
 				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable '%s'",decl.name),decl.loc);
+					sc.note(format("variable `%s`",decl.name),decl.loc);
 				fe.setSemError();
 				converged=true;
 			}
@@ -1371,7 +1371,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in for loop",fe.loc);
-			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",fe.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",fe.loc);
 			fe.setSemError();
 			break;
 		}
@@ -1418,7 +1418,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,bool resetConst=true){
 			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in while loop", we.loc);
 				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable '%s'",decl.name),decl.loc);
+					sc.note(format("variable `%s`",decl.name),decl.loc);
 				we.setSemError();
 				converged=true;
 			}
@@ -1427,7 +1427,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,bool resetConst=true){
 		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in while loop",we.loc);
-			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",we.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",we.loc);
 			we.setSemError();
 			break;
 		}
@@ -1476,7 +1476,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,bool resetConst=true){
 			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
 				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable '%s'",decl.name),decl.loc);
+					sc.note(format("variable `%s`",decl.name),decl.loc);
 				re.setSemError();
 				converged=true;
 			}
@@ -1485,7 +1485,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,bool resetConst=true){
 		converged|=bdy.isSemError()||returns||state.converged;
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in repeat loop",re.loc);
-			sc.note("you may need to manually widen the type of loop-carried variables, increase the '--inference-limit=...', or write a different loop",re.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",re.loc);
 			re.setSemError();
 			break;
 		}
@@ -1812,11 +1812,11 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(ft&&ft.isSquare==ce.isSquare){
 				if(ft.annotation<Annotation.mfree){
-					sc.error("reversed function must be 'mfree'",f.loc);
+					sc.error("reversed function must be `mfree`",f.loc);
 					ok=false;
 				}
 				if(ft.captureAnnotation!=CaptureAnnotation.const_){
-					sc.error("reversed function must be 'const'",f.loc);
+					sc.error("reversed function must be `const`",f.loc);
 					ok=false;
 				}
 				if(ft.cod.hasAnyFreeVar(ft.names)){
@@ -1825,13 +1825,13 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 				}else{
 					auto r=reverseCallRewriter(ft,ce.loc);
 					if(ce.checkReverse&&r.movedType.hasClassicalComponent()){
-						sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+						sc.error("reversed function cannot have classical components in `moved` arguments", f.loc);
 						ok=false;
 					}
 					ce.type=ft.cod;
 					if(context.type&&!isSubtype(context.type,ce.type)){
 						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
-							sc.error(format("cannot call reversed function with return type '%s' with a result type of '%s'",ce.type,context.type),ce.loc);
+							sc.error(format("cannot call reversed function with return type `%s` with a result type of `%s`",ce.type,context.type),ce.loc);
 							ok=false;
 						}
 						auto nresult=new TypeAnnotationExp(result,context.type,TypeAnnotationType.coercion);
@@ -1872,7 +1872,7 @@ Expression defineLhsSemanticImpl(ForgetExp fe,DefineLhsContext context){
 		fe.type=unit;
 	}else{
 		if(context.type&&fe.type&&!isSubtype(context.type,fe.type)){
-			context.sc.error(format("cannot assign '%s' to '%s'",context.type,fe.type),fe.loc);
+			context.sc.error(format("cannot assign `%s` to `%s`",context.type,fe.type),fe.loc);
 			fe.setSemError();
 		}
 	}
@@ -1888,7 +1888,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 						vd.vtype=nt;
 						context.sc.updateType(vd);
 					}else{
-						context.sc.error(format("incompatible types '%s' and '%s' for variable '%s'",vd.vtype,context.type),id.loc);
+						context.sc.error(format("incompatible types `%s` and `%s` for variable `%s`",vd.vtype,context.type),id.loc);
 						id.setSemError();
 					}
 				}else vd.vtype=context.type;
@@ -1905,7 +1905,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 		}else if(context.type){
 			id.type=context.type;
 		}else if(!id.type){
-			context.sc.error(format("cannot determine type for '%s",id),id.loc);
+			context.sc.error(format("cannot determine type for `%s",id),id.loc);
 			id.setSemError();
 		}
 	}
@@ -1974,14 +1974,14 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		propErr(e.a,idx);
 		if(e.a.isSemCompleted()){
 			if(e.a.type&&!isBasicIndexType(e.a.type)){
-				sc.error(format("index for component replacement must be integer, not '%s'",e.a.type),e.a.loc);
+				sc.error(format("index for component replacement must be integer, not `%s`",e.a.type),e.a.loc);
 				idx.setSemError();
 			}else if(!e.a.isQfree()){
-				sc.error("index for component replacement must be 'qfree'",e.a.loc);
+				sc.error("index for component replacement must be `qfree`",e.a.loc);
 				idx.setSemError();
 			}else if(auto id=consumes(e.a)){
 				sc.error("index for component replacement cannot consume variables",e.a.loc); // TODO: support
-				sc.note(format("consumes '%s'",id.meaning?id.meaning:id),id.loc);
+				sc.note(format("consumes `%s`",id.meaning?id.meaning:id),id.loc);
 				idx.setSemError();
 			}
 		}
@@ -2015,7 +2015,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 					ok=false;
 				}
 				if(!ok){
-					context.sc.error(format("cannot assign '%s' to '%s'",context.type,result.type),result.loc);
+					context.sc.error(format("cannot assign `%s` to `%s`",context.type,result.type),result.loc);
 					result.setSemForceError();
 				}
 			}
@@ -2386,7 +2386,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 			ce.setSemError();
 		}else if(context.type&&!isSubtype(context.type,ce.type)){
 			if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){ // TODO: ok?
-				sc.error(format("incompatible types for split: '%s' vs '%s",ce.type,context.type),ce.loc);
+				sc.error(format("incompatible types for split: `%s` vs `%s",ce.type,context.type),ce.loc);
 				ce.setSemError();
 			}
 		}
@@ -2450,7 +2450,7 @@ Expression defineLhsSemanticImplLifted(Expression e,DefineLhsContext context){
 	static if(!isPresemantic){
 		if(context.type&&result.type){
 			if(!joinTypes(context.type,result.type)){ // TODO: generate coerce expression instead?
-				context.sc.error(format("'lifted' expression of type '%s' incompatible with right-hand side type '%s'",result.type,context.type),result.loc);
+				context.sc.error(format("`lifted` expression of type `%s` incompatible with right-hand side type `%s`",result.type,context.type),result.loc);
 				result.setSemForceError();
 			}
 		}
@@ -3196,12 +3196,12 @@ void typeConstBlockNote(Declaration decl,Scope sc)in{
 	string name;
 	if(auto blocker=cast(Declaration)decl.typeConstBlocker) name=blocker.getName;
 	if(name){
-		sc.note(format("'%s' was made 'const' because it appeared in type of '%s'",decl.name,name),decl.typeConstBlocker.loc);
+		sc.note(format("`%s` was made `const` because it appeared in type of `%s`",decl.name,name),decl.typeConstBlocker.loc);
 	}else{
 		if(cast(Declaration)decl.typeConstBlocker||cast(DefineExp)decl.typeConstBlocker){
-			sc.note(format("'%s' was made 'const' because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
+			sc.note(format("`%s` was made `const` because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
 		}else{
-			sc.note(format("'%s' was made 'const' because it appeared in type of expression",decl.name),decl.typeConstBlocker.loc);
+			sc.note(format("`%s` was made `const` because it appeared in type of expression",decl.name),decl.typeConstBlocker.loc);
 		}
 	}
 }
@@ -3217,9 +3217,9 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 	if(!meaning) return false;
 	if(isNonConstDecl(meaning,sc)) return true;
 	if(!meaning.isSemError()){
-		sc.error(text("cannot "~action~" 'const' ",meaning.kind," ",meaning.name),loc);
+		sc.error(text("cannot "~action~" `const` ",meaning.kind," ",meaning.name),loc);
 		if(meaning.typeConstBlocker) typeConstBlockNote(meaning,sc);
-		else if(auto read=sc.isConst(meaning)) sc.note(text(meaning.kind," was made 'const' here"), read.loc);
+		else if(auto read=sc.isConst(meaning)) sc.note(text(meaning.kind," was made `const` here"), read.loc);
 	}
 	return false;
 }
@@ -3231,12 +3231,12 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
 		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canRecompute(meaning)){
-			sc.error(format("cannot assign to quantum variable '%s'",meaning.name), loc);
+			sc.error(format("cannot assign to quantum variable `%s`",meaning.name), loc);
 			return false;
 		}
 	}
 	if(isTypeTy(vd.vtype)&&!isEmpty(vd.vtype)){
-		sc.error(format("cannot assign to type variable '%s'",meaning.name), loc);
+		sc.error(format("cannot assign to type variable `%s`",meaning.name), loc);
 		return false;
 	}
 	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
@@ -3245,7 +3245,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 			// TODO: method calls are also implicit assignments.
 			auto crepls=meaning.scope_.componentReplacements(meaning);
 			if(crepls.length){
-				sc.error(format("cannot access aggregate '%s' while its components are being replaced",meaning.getName),loc);
+				sc.error(format("cannot access aggregate `%s` while its components are being replaced",meaning.getName),loc);
 				if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
 				return false;
 			}else{
@@ -3314,7 +3314,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 				if(auto qty=next.getQuantum()){
 					return qty;
 				}else{
-					if(sc) sc.error(format("cannot use quantum index to index aggregate whose elements of type '%s' have classical components",next),indexLoc);
+					if(sc) sc.error(format("cannot use quantum index to index aggregate whose elements of type `%s` have classical components",next),indexLoc);
 					return null;
 				}
 			}
@@ -3348,7 +3348,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 		if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
 			auto c=lit.get();
 			if(c<0||c>=len){
-				if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",aty,len),index.loc);
+				if(sc) sc.error(format("index for type `%s` is out of bounds [0..%s)",aty,len),index.loc);
 				return false;
 			}
 		}
@@ -3377,7 +3377,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 			if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
-					if(sc) sc.error(format("index for type '%s' is out of bounds [0..%s)",tt,tt.types.length),index.loc);
+					if(sc) sc.error(format("index for type `%s` is out of bounds [0..%s)",tt,tt.types.length),index.loc);
 					return null;
 				}else{
 					return tt.types[cast(size_t)c.toLong()];
@@ -3403,7 +3403,7 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 			sc.error(format("type %s is not indexable",aty),idx.loc);
 			if(isType(idx.e)||isQNumeric(idx.e)){
 				if(index.type?isBasicIndexType(index.type):!cast(TupleExp)index&&!cast(CatExp)index)
-					sc.note(format("did you mean to write '%s^%s'?",idx.e,index),idx.loc);
+					sc.note(format("did you mean to write `%s^%s`?",idx.e,index),idx.loc);
 			}
 		}
 		return null;
@@ -3496,13 +3496,13 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 			}
 		}else if(auto idx=cast(IndexExp)lhs){
 			if(!joinTypes(type,lhs.type)){
-				sc.error(format("cannot assign '%s' to array entry '%s' of type '%s'",type,lhs,lhs.type),lhs.loc);
+				sc.error(format("cannot assign `%s` to array entry `%s` of type `%s`",type,lhs,lhs.type),lhs.loc);
 				ae.setSemError();
 			}
 		}else if(auto fe=cast(FieldExp)lhs){
 			// TODO: add strong field updates
 			if(!isSubtype(type,lhs.type)){
-				sc.error(format("cannot assign '%s' to field '%s' of type '%s'",type,lhs,lhs.type),lhs.loc);
+				sc.error(format("cannot assign `%s` to field `%s` of type `%s`",type,lhs,lhs.type),lhs.loc);
 				ae.setSemError();
 			}
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
@@ -3701,7 +3701,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				result.loc=be.loc;
 				result=statementSemantic(result,sc); // TODO: better error messages
 				if(result.isSemCompleted&&!logicType(be.e1.type,be.e2.type)){
-					sc.error(format("incompatible types '%s' and '%s' for %s",be.e1.type,be.e2.type,cast(OrAssignExp)be?"disjunction":"conjunction"),be.loc);
+					sc.error(format("incompatible types `%s` and `%s` for %s",be.e1.type,be.e2.type,cast(OrAssignExp)be?"disjunction":"conjunction"),be.loc);
 					result.setSemForceError();
 				}
 				return result;
@@ -3810,8 +3810,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			sc.addDependency(var,dependency);
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
 			if(to&&isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
-				sc.error(format("operator assign from type '%s' to type '%s' is disallowed",from,to),be.loc);
-				sc.note(format("change the type of '%s' or use a regular assignment",id.meaning),id.meaning.loc);
+				sc.error(format("operator assign from type `%s` to type `%s` is disallowed",from,to),be.loc);
+				sc.note(format("change the type of `%s` or use a regular assignment",id.meaning),id.meaning.loc);
 				be.setSemError();
 			}
 		}
@@ -4039,12 +4039,12 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		return le;
 	}
 	if(check && ft.annotation<Annotation.mfree){
-		sc.error("reversed function must be 'mfree'",f.loc);
+		sc.error("reversed function must be `mfree`",f.loc);
 		f.setSemForceError();
 		errors=true;
 	}
 	if(check && ft.captureAnnotation!=CaptureAnnotation.const_){
-		sc.error("reversed function must be 'const'",f.loc);
+		sc.error("reversed function must be `const`",f.loc);
 		f.setSemForceError();
 		errors=true;
 	}
@@ -4078,7 +4078,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 			return null;
 		}
 		if(check&&r.movedType.hasClassicalComponent()){
-			sc.error("reversed function cannot have classical components in 'moved' arguments", f.loc);
+			sc.error("reversed function cannot have classical components in `moved` arguments", f.loc);
 			errors=true;
 		}
 		if(errors) return null;
@@ -4161,10 +4161,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 			}else if(ft.captureAnnotation==CaptureAnnotation.once){
 				// ...
-				context.sc.error("calling 'once' functions not yet supported",ce.e.loc);
+				context.sc.error("calling `once` functions not yet supported",ce.e.loc);
 				ce.e.setSemForceError();
 			}else if(ft.captureAnnotation==CaptureAnnotation.spent){
-				context.sc.error("'moved' captures of 'spent' function were already consumed",ce.e.loc);
+				context.sc.error("`moved` captures of `spent` function were already consumed",ce.e.loc);
 				ce.e.setSemForceError();
 			}
 		}
@@ -4179,12 +4179,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				if(inType){
 					static if(language==silq){
 						if(ft.annotation<Annotation.qfree){
-							sc.error(format("function called within type must be 'qfree'"),ce.loc);
+							sc.error(format("function called within type must be `qfree`"),ce.loc);
 							ce.setSemError();
 						}
 					}else static if(language==psi){
 						if(ft.annotation<Annotation.pure_){
-							sc.error(format("function called within type must be 'pure'"),ce.loc);
+							sc.error(format("function called within type must be `pure`"),ce.loc);
 							ce.setSemError();
 						}
 					}
@@ -4203,9 +4203,9 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 					if(!fixed){
 						if(ft.annotation==Annotation.none){
-							sc.error(format("cannot call function '%s' in '%s' context", ce.e, annotationToString(restriction)), ce.loc);
+							sc.error(format("cannot call function `%s` in `%s` context", ce.e, annotationToString(restriction)), ce.loc);
 						}else{
-							sc.error(format("cannot call '%s' function '%s' in '%s' context", ft.annotation, ce.e, annotationToString(restriction)), ce.loc);
+							sc.error(format("cannot call `%s` function `%s` in `%s` context", ft.annotation, ce.e, annotationToString(restriction)), ce.loc);
 						}
 						// TODO: inference trace
 						ce.setSemError();
@@ -4234,10 +4234,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			if(i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
 				void report()(){
 					static if(language==silq){
-						sc.error(format("argument must be 'qfree' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						sc.error(format("argument must be `qfree` (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					}else static if(language==psi){
-						sc.error(format("argument must be 'pure' (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+						sc.error(format("argument must be `pure` (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
 					}else static assert(0);
 				}
@@ -4247,7 +4247,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(classical){ // TODO: could just automatically deduce existential type
 							report();
 						}else{
-							sc.error(format("argument must be classical (return type '%s' depends on parameter '%s')",ft.cod,ft.names[i]),exp.loc);
+							sc.error(format("argument must be classical (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
 						}
 						ce.setSemError();
 						error=true;
@@ -4265,8 +4265,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					if(id.constLookup||id.implicitDup){
 						typeConstBlockDecl(id.meaning,ce,sc);
 					}else{
-						sc.error(format("cannot consume '%s'",id),id.loc);
-						sc.note(format("return type '%s' of function call depends on parameter '%s'",ft.cod,ft.names[i]),ce.loc);
+						sc.error(format("cannot consume `%s`",id),id.loc);
+						sc.note(format("return type `%s` of function call depends on parameter `%s`",ft.cod,ft.names[i]),ce.loc);
 						ce.setSemError();
 						error=true;
 					}
@@ -4340,7 +4340,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.arg=argSemantic(ce.arg,ncontext);
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
-					sc.error("cannot match single tuple to function with mixed 'const' and consumed parameters",ce.loc);
+					sc.error("cannot match single tuple to function with mixed `const` and consumed parameters",ce.loc);
 					ce.setSemError();
 					error=true;
 				}
@@ -4365,7 +4365,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	Expression checkFunCall(FunTy ft){
 		void checkArg(Expression arg,Expression paramTy){
 			if(arg.type&&!isSubtype(arg.type,paramTy)){
-				sc.error(format("cannot pass argument of type '%s' to parameter of type '%s'",arg.type,paramTy),arg.loc);
+				sc.error(format("cannot pass argument of type `%s` to parameter of type `%s`",arg.type,paramTy),arg.loc);
 				ce.setSemError();
 			}
 		}
@@ -4686,7 +4686,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 			ite.setSemError();
 		}
 		if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
-			sc.error(format("type '%s' of if expression with quantum control has classical components",ite.type),ite.loc);
+			sc.error(format("type `%s` of if expression with quantum control has classical components",ite.type),ite.loc);
 			ite.setSemError();
 		}
 	}
@@ -4858,7 +4858,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						id.type=id.typeFromMeaning;
 						if(!id.type||meaning.isSemError()){
 							if(!meaning.isSemError())
-								context.sc.error(format("cannot determine type for '%s",id),id.loc);
+								context.sc.error(format("cannot determine type for `%s`",id),id.loc);
 							id.setSemError();
 							return false;
 						}else id.setSemCompleted();
@@ -4866,7 +4866,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						return true;
 					}else{
 						if(!meaning.isSemError()){
-							sc.error(format("cannot synthesize forget expression for '%s'",fe.var),fe.var.loc);
+							sc.error(format("cannot synthesize forget expression for `%s`",fe.var),fe.var.loc);
 							meaning.setSemForceError();
 						}
 						id.setSemError();
@@ -4994,7 +4994,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				if(!id.indexedDirectly && !id.meaning.isSemError()) {
 					auto crepls=sc.componentReplacements(id.meaning);
 					if(crepls.length){
-						sc.error(format("cannot access aggregate '%s' while its components are being replaced",id.meaning.getName),id.loc);
+						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
 						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
 						id.setSemError();
 					}
@@ -5261,7 +5261,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		import util.maybe:Maybe,just;
 		auto mnum=vt?vt.num.asIntegerConstant():tt?just(ℤ(tt.length)):Maybe!ℤ();
 		if(mlc&&mlc.get()<0){
-			sc.error(format("slice lower bound for type '%s' cannot be negative",sl.e.type),sl.loc);
+			sc.error(format("slice lower bound for type `%s` cannot be negative",sl.e.type),sl.loc);
 			sl.setSemError();
 		}
 		if(mlc&&mrc){
@@ -5282,33 +5282,33 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 			}
 			if(mlc&&mnum){
 				if(mlc.get()>mnum.get()){
-					sc.error(format("slice lower bound for type '%s' exceeds length of %s",sl.e.type,mnum.get()),sl.l.loc);
+					sc.error(format("slice lower bound for type `%s` exceeds length of %s",sl.e.type,mnum.get()),sl.l.loc);
 					sl.setSemError();
 				}
 			}
 			if(mrc&&mrc.get()<0){
-				sc.error(format("slice upper bound for type '%s' cannot be negative",sl.e.type),sl.r.loc);
+				sc.error(format("slice upper bound for type `%s` cannot be negative",sl.e.type),sl.r.loc);
 				sl.setSemError();
 			}
 		}
 		if(mrc&&mnum&&mrc.get()>mnum.get()){
-			sc.error(format("slice upper bound for type '%s' exceeds length of %s",sl.e.type,mnum.get()),sl.r.loc);
+			sc.error(format("slice upper bound for type `%s` exceeds length of %s",sl.e.type,mnum.get()),sl.r.loc);
 			sl.setSemError();
 		}
 	}else if(tt){
 		if(!mlc){
-			sc.error(format("slice lower bound for type '%s' should be integer constant",cast(Expression)tt),sl.l.loc);
+			sc.error(format("slice lower bound for type `%s` should be integer constant",cast(Expression)tt),sl.l.loc);
 			sl.setSemError();
 		}
 		if(!mrc){
-			sc.error(format("slice upper bound for type '%s' should be integer constant",cast(Expression)tt),sl.r.loc);
+			sc.error(format("slice upper bound for type `%s` should be integer constant",cast(Expression)tt),sl.r.loc);
 			sl.setSemError();
 		}
 		if(sl.isSemError())
 			return sl;
 		auto lc=mlc.get(), rc=mrc.get();
 		if(lc<0){
-			sc.error(format("slice lower bound for type '%s' cannot be negative",tt),sl.l.loc);
+			sc.error(format("slice lower bound for type `%s` cannot be negative",tt),sl.l.loc);
 			sl.setSemError();
 		}
 		if(lc>rc){
@@ -5316,7 +5316,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 			sl.setSemError();
 		}
 		if(rc>tt.length){
-			sc.error(format("slice upper bound for type '%s' exceeds length of %s",tt,tt.length),sl.r.loc);
+			sc.error(format("slice upper bound for type `%s` exceeds length of %s",tt,tt.length),sl.r.loc);
 			sl.setSemError();
 		}
 		if(!sl.isSemError()){
@@ -5397,7 +5397,7 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 			case TypeAnnotationType.annotation:
 				sc.error(format("type is %s, not %s",tae.e.type,tae.type),tae.loc);
 				if(explicitConversion(tae.e,tae.type,TypeAnnotationType.conversion))
-					sc.note(format("explicit conversion possible, use '%s as %s'",tae.e,tae.type),tae.loc);
+					sc.note(format("explicit conversion possible, use `%s as %s`",tae.e,tae.type),tae.loc);
 				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
 					sc.note(format("(unsafe type coercion possible)"),tae.loc);
 				break;
@@ -5787,7 +5787,7 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 		e.type = logicType(e1.type,e2.type);
 		if(!e.type){
 			if(e1.type&&e2.type)
-				sc.error(format("incompatible types '%s' and '%s' for %s",e1.type,e2.type,name),e.loc);
+				sc.error(format("incompatible types `%s` and `%s` for %s",e1.type,e2.type,name),e.loc);
 			e.setSemError();
 		}
 	}
@@ -5810,22 +5810,22 @@ Expression expressionSemanticImpl(OrExp oe,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(LtExp le,ExpSemContext context){
-	return handleBinary!cmpType("'<'",le,le.e1,le.e2,context);
+	return handleBinary!cmpType("`<`",le,le.e1,le.e2,context);
 }
 Expression expressionSemanticImpl(LeExp le,ExpSemContext context){
-	return handleBinary!cmpType("'≤'",le,le.e1,le.e2,context);
+	return handleBinary!cmpType("`≤`",le,le.e1,le.e2,context);
 }
 Expression expressionSemanticImpl(GtExp ge,ExpSemContext context){
-	return handleBinary!cmpType("'>'",ge,ge.e1,ge.e2,context);
+	return handleBinary!cmpType("`>`",ge,ge.e1,ge.e2,context);
 }
 Expression expressionSemanticImpl(GeExp ge,ExpSemContext context){
-	return handleBinary!cmpType("'≥'",ge,ge.e1,ge.e2,context);
+	return handleBinary!cmpType("`≥`",ge,ge.e1,ge.e2,context);
 }
 Expression expressionSemanticImpl(EqExp eq,ExpSemContext context){
-	return handleBinary!cmpType("'='",eq,eq.e1,eq.e2,context);
+	return handleBinary!cmpType("`=`",eq,eq.e1,eq.e2,context);
 }
 Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
-	return handleBinary!cmpType("'≠'",ne,ne.e1,ne.e2,context);
+	return handleBinary!cmpType("`≠`",ne,ne.e1,ne.e2,context);
 }
 
 Expression concatType(Expression t1,Expression t2){
@@ -6057,22 +6057,22 @@ Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){
 	if(auto tpl=cast(TupleTy)next.type){
 		if(!tpl.types.all!(t=>isType(t)||isQNumeric(t))){
 			sc.error("argument to variadic type must be a tuple of types",va.loc);
-			sc.note(format("type of argument is '%s'",next.type),va.next.loc);
-			sc.note(format("a '%s' is not a type",tpl.types.filter!(t=>!(isType(t)||isQNumeric(t)))),va.loc);
+			sc.note(format("type of argument is `%s`",next.type),va.next.loc);
+			sc.note(format("a `%s` is not a type",tpl.types.filter!(t=>!(isType(t)||isQNumeric(t)))),va.loc);
 			va.setSemError();
 			return va;
 		}
 	}else if(auto et=elementType(next.type)){
 		if(!(isType(et)||isQNumeric(et))){
 			sc.error("argument to variadic type must have element type that is a type",va.loc);
-			sc.note(format("type of argument is '%s'",next.type),va.next.loc);
-			sc.note(format("a '%s' is not a type",et),va.loc);
+			sc.note(format("type of argument is `%s`",next.type),va.next.loc);
+			sc.note(format("a `%s` is not a type",et),va.loc);
 			va.setSemError();
 			return va;
 		}
 	}else{
 		sc.error("argument to variadic type must be a tuple, vector, or array",va.loc);
-		sc.note(format("type of argument is '%s'",next.type),va.next.loc);
+		sc.note(format("type of argument is `%s`",next.type),va.next.loc);
 		va.setSemError();
 		return va;
 	}
@@ -6111,11 +6111,11 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	static if(language==silq){
 		if(!ok){
 			if(auto ce=cast(UnaryExp!(Tok!"const"))expr){
-				sc.error("invalid 'const' annotation (note that 'const' goes before parameter names)", ce.loc);
+				sc.error("invalid `const` annotation (note that `const` goes before parameter names)", ce.loc);
 				ok=true;
 			}
 			if(auto ce=cast(UnaryExp!(Tok!"moved"))expr){
-				sc.error("invalid 'moved' annotation (note that 'moved' goes before parameter names)", ce.loc);
+				sc.error("invalid `moved` annotation (note that `moved` goes before parameter names)", ce.loc);
 				ok=true;
 			}
 		}
@@ -6129,7 +6129,7 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 }
 
 void nonLiftedError(Expression expr,Scope sc){
-	sc.error("quantum control expression must be 'lifted'",expr.loc);
+	sc.error("quantum control expression must be `lifted`",expr.loc);
 	expr.setSemForceError();
 }
 
@@ -6167,7 +6167,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			expr.setSemCompleted();
 		}else expr.constLookup=context.constResult;
 		if(expr.type&&unrealizable(expr.type)){
-			sc.error(format("instances of type '%s' not realizable (did you mean to use '!%s'?)",expr.type,expr.type),expr.loc);
+			sc.error(format("instances of type `%s` not realizable (did you mean to use `!%s`?)",expr.type,expr.type),expr.loc);
 			expr.setSemForceError();
 		}
 		if(!context.constResult&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
@@ -6297,7 +6297,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			assert(!!id.meaning,text(id));
 			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
 			if(id.meaning.scope_.isNestedIn(fsc)){
-				fsc.error(format("local variable '%s' appears in return type '%s'%s (maybe declare '%s' in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function '%s'",fd.name):"",id.name), fd.loc);
+				fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), fd.loc);
 				fd.setSemError();
 			}
 			typeConstBlockDecl(id.meaning,fd,sc);
@@ -6314,7 +6314,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.unsealed=false;
 		if(++fd.numInferenceRepetitions>astopt.inferenceLimit){ // TODO: make configurable
 			sc.error("unable to determine return type for function",fd.loc);
-			sc.note("you may need to manually annotate the return type, increase the '--inference-limit=...', or write a different function",fd.loc);
+			sc.note("you may need to manually annotate the return type, increase the `--inference-limit=...`, or write a different function",fd.loc);
 			fd.setSemError();
 		}
 	}else{
@@ -6628,20 +6628,20 @@ Expression typeSemantic(Expression expr, Scope sc, bool allowQNumeric=false)in{a
 	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return unwrap(expr.eval());
 	if(!isType(expr)&&!(allowQNumeric&&isQNumeric(expr))){
 		if(!allowQNumeric&&isQNumeric(expr)){
-			sc.error(format("quantum '%s' cannot be used as a type",expr),expr.loc);
+			sc.error(format("quantum `%s` cannot be used as a type",expr),expr.loc);
 			if(auto ce=expr.eval().getClassical())
-				sc.note(format("did you mean to write '%s'?",ce),expr.loc);
+				sc.note(format("did you mean to write `%s`?",ce),expr.loc);
 		}else{
 			auto id=cast(Identifier)expr;
 			if(id&&id.meaning){
 				auto decl=id.meaning;
-				sc.error(format("%s '%s' is not a type",decl.kind,decl.name),id.loc);
+				sc.error(format("%s `%s` is not a type",decl.kind,decl.name),id.loc);
 				sc.note("declared here",decl.loc);
 			}else{
-				sc.error(format("expression of type '%s' cannot be used as a type",expr.type),expr.loc);
+				sc.error(format("expression of type `%s` cannot be used as a type",expr.type),expr.loc);
 				if(auto tpl=cast(TupleExp)expr){
 					if(tpl.e.all!(e=>(isType(e)||isQNumeric(e)))){
-						sc.note(format("did you mean to write '%s'?",new TupleTy(tpl.e)),expr.loc);
+						sc.note(format("did you mean to write `%s`?",new TupleTy(tpl.e)),expr.loc);
 					}
 				}
 			}
@@ -6876,7 +6876,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 	switch(literal.get()){
 		case "dep":
 			if(args.length!=2||!cast(Identifier)args[1]){
-				sc.error("expected single variable as argument to 'dep' query", ce.loc);
+				sc.error("expected single variable as argument to \"dep\" query", ce.loc);
 				ce.setSemError();
 				break;
 			}else{
@@ -6893,7 +6893,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 			}
 		case "type":
 			if(args.length!=2){
-				sc.error("expected single expression as argument to 'type' query", ce.loc);
+				sc.error("expected single expression as argument to \"type\" query", ce.loc);
 				ce.setSemError();
 				break;
 			}else{
@@ -6902,7 +6902,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 			}
 		case "conversion":
 			if(args.length!=3){
-				sc.error("expected two expressions as arguments to 'conversion' query", ce.loc);
+				sc.error("expected two expressions as arguments to \"conversion\" query", ce.loc);
 				ce.setSemError();
 				break;
 			}else{
@@ -6911,7 +6911,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 				return makeStrLit(text(typeExplicitConversion!true(args[1], args[2], TypeAnnotationType.coercion)));
 			}
 		default:
-			sc.error(format("unknown query '%s'",literal.get()),args[0].loc);
+			sc.error(format("unknown query \"%s\"",literal.get()),args[0].loc);
 			ce.setSemError();
 			break;
 	}

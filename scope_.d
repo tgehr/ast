@@ -791,7 +791,7 @@ abstract class Scope{
 		assert(!!meaning);
 		if(meaning.isToplevelDeclaration()){
 			if(!meaning.isSemError()){
-				error(format("cannot consume top-level '%s' '%s'",meaning.kind,id), id.loc);
+				error(format("cannot consume top-level %s `%s`",meaning.kind,id), id.loc);
 				note("declared here",meaning.loc);
 				id.setSemForceError();
 			}
@@ -799,7 +799,7 @@ abstract class Scope{
 		}
 		if(meaning.typeConstBlocker){
 			if(!meaning.isSemError()){
-				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
+				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
 				meaning.setSemForceError();
 			}
 			import ast.semantic_:typeConstBlockNote;
@@ -809,8 +809,8 @@ abstract class Scope{
 		}
 		if(meaning.isConst){
 			if(!meaning.isSemError()){
-				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-				note("declared 'const' here", meaning.loc);
+				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
+				note("declared `const` here", meaning.loc);
 				meaning.setSemForceError();
 			}
 			id.setSemForceError();
@@ -820,8 +820,8 @@ abstract class Scope{
 			if(canRecompute(meaning))
 				return true;
 			if(!meaning.isSemError()){
-				error(format("cannot consume 'const' %s '%s'",meaning.kind,id), id.loc);
-				note(format("%s was made 'const' here", meaning.kind), read.loc);
+				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
+				note(format("%s was made `const` here", meaning.kind), read.loc);
 				meaning.setSemForceError();
 			}
 			id.setSemForceError();
@@ -923,16 +923,16 @@ abstract class Scope{
 						bool done=false;
 						if(!canSplit(d)){
 							if(auto read=isConst(d)){
-								error(format("cannot forget 'const' variable '%s'",d), d.loc);
-								note("variable was made 'const' here", read.loc);
+								error(format("cannot forget `const` variable `%s`",d), d.loc);
+								note("variable was made `const` here", read.loc);
 								errors=true;
 								done=true;
 							}else continue; // TODO: catch this early
 						}
 						if(!done) done=lastUses.betterUnforgettableError(d,this);
 						if(!done){
-							if(cast(Parameter)d) error(format("%s '%s' is not consumed (perhaps return it or annotate it 'const')",d.kind,d.getName),d.loc);
-							else error(format("%s '%s' is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+							if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+							else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 							errors=true;
 							done=true;
 						}
@@ -1254,7 +1254,7 @@ abstract class Scope{
 					static if(language==silq){
 						splitSym();
 						if(!scopes[0].canForgetAppend(sym)){
-							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
+							error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 							errors=true;
 						}
 					}
@@ -1275,8 +1275,8 @@ abstract class Scope{
 									splitSym(), sc.split(osym,null);
 									if(sym.isSemCompleted()&&osym.isSemCompleted()){
 										if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
-											error(format("variable '%s' is not consumed", sym.getName), sym.loc);
-											if(!nt) note(format("declared with incompatible types '%s' and '%s' in different branches",ot,st), osym.loc);
+											error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+											if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
 											errors=true;
 										}
 									}
@@ -1328,7 +1328,7 @@ abstract class Scope{
 					if(sym.getId !in rnsymtab){
 						sym=sc.split(sym,null);
 						if(!sc.canForgetAppend(sym)){
-							error(format("variable '%s' is not consumed", sym.getName), sym.loc);
+							error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 							errors=true;
 						}
 						static if(language==silq){
@@ -1886,12 +1886,12 @@ class CapturingScope(T): NestedScope{
 					void callError(){
 						if(callErrorShown) return;
 						callErrorShown=true;
-						origin.error(format("cannot recursively call function '%s' at this location",decl.name),id.loc);
+						origin.error(format("cannot recursively call function `%s` at this location",decl.name),id.loc);
 						id.setSemError();
 					}
 					if(!recapture.meaning){
 						callError();
-						origin.note(format("capture '%s' is missing",capture),capture.loc);
+						origin.note(format("capture `%s` is missing",capture),capture.loc);
 						if(failures.length){
 							if(auto cd=cast(ConsumedDecl)failures[0]) cd.explain("capture",origin);
 							else origin.note("captures cannot be modified on a path leading to a recursive call",id.loc);
@@ -1907,7 +1907,7 @@ class CapturingScope(T): NestedScope{
 						if(!isSubtype(recapture.type,oldType)){
 							if(!recapture.isSemError()){
 								callError();
-								origin.note(format("capture '%s' changed type from '%s' to '%s'",capture.name,oldType,recapture.type),capture.loc);
+								origin.note(format("capture `%s` changed type from `%s` to `%s`",capture.name,oldType,recapture.type),capture.loc);
 								if(recapture.meaning)
 									origin.note("capture is redeclared here",recapture.meaning.loc);
 								recapture.setSemError();
@@ -1915,7 +1915,7 @@ class CapturingScope(T): NestedScope{
 						}+/
 						if(!recapture.meaning.isDerivedFrom(capture)){
 							callError();
-							origin.note(format("capture '%s' was modified",capture),capture.loc);
+							origin.note(format("capture `%s` was modified",capture),capture.loc);
 							// TODO: show first modification instead?
 							origin.note("last modification is here",recapture.meaning.loc);
 						}
@@ -1948,13 +1948,13 @@ class CapturingScope(T): NestedScope{
 			}
 			/+if(isConstLookup&&!astopt.allowUnsafeCaptureConst){
 				if(isConstDecl){
-					origin.error(text("cannot capture 'const' quantum ",meaning.kind), id.loc);
+					origin.error(text("cannot capture `const` quantum ",meaning.kind), id.loc);
 					if(meaning.typeConstBlocker){
 						import ast.semantic_:typeConstBlockNote;
 						typeConstBlockNote(meaning,this);
 					}
 					if(auto read=origin.isConst(meaning))
-						origin.note(text(meaning.kind,"variable was made 'const' here"), read.loc);
+						origin.note(text(meaning.kind,"variable was made `const` here"), read.loc);
 					id.setSemError();
 					return null;
 				}else{
