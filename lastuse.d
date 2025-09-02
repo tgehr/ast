@@ -408,7 +408,7 @@ final class LastUse{
 			case constUse:
 				return canForget(true);
 			case synthesizedForget,consumption:
-				return true;
+				return false; // (not handled by `forget`)
 			case capture:
 				return false; // TODO?
 		}
