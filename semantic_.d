@@ -3445,7 +3445,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	checkIndexReplacement(ae,sc);
 	void checkLhs(Expression lhs,bool indexed){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,ae.loc,sc,false)){
+			if(!checkAssignable(id.meaning,id.loc,sc,false)){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
@@ -3746,7 +3746,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,be.loc,sc,!!isInvertibleOpAssignExp(be))){
+			if(!checkAssignable(id.meaning,id.loc,sc,!!isInvertibleOpAssignExp(be))){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				be.setSemError();
