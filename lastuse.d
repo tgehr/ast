@@ -14,8 +14,8 @@ bool canAddForget(Expression e){
 	return false;
 }
 
-void addForget(Expression e,Declaration decl,Scope sc){
-	void addToCompound(CompoundExp ce){
+Identifier addForget(Expression e,Declaration decl,Scope sc){
+	Identifier addToCompound(CompoundExp ce){
 		assert(!ce.blscope_);
 		if(ce.s.length==1){
 			ForgetExp makeForget(){
@@ -59,13 +59,15 @@ void addForget(Expression e,Declaration decl,Scope sc){
 			fe.setSemForceError();
 		if(fe.isSemError())
 			e.setSemForceError();
+		return id;
 	}
 	if(auto le=cast(LetExp)e){
 		assert(!!le.isForward(true));
-		addToCompound(le.s);
+		return addToCompound(le.s);
 	}
 	if(auto ce=cast(CompoundExp)e)
-		addToCompound(ce);
+		return addToCompound(ce);
+	return null;
 }
 
 final class LastUse{
@@ -506,7 +508,9 @@ final class LastUse{
 					return;
 				}
 				assert(canAddForget(parent));
-				addForget(parent,decl,scope_);
+				use=addForget(parent,decl,scope_);
+				assert(!!use);
+				scope_.updateDeclProps(decl).accesses~=use; // TODO: this is out of order, ok?
 				isForget=true;
 				break;
 			case consumption:
