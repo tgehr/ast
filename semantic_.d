@@ -6292,16 +6292,19 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!setFtype(fd,true))
 		fd.setSemError();
 	static if(language==silq) fsc.clearConsumed();
-	if(fd.ftype&&!fd.isSemError()){
-		foreach(id;fd.ftype.freeIdentifiers){
-			assert(!!id.meaning,text(id));
+	if(bdy&&bdy.blscope_&&!fd.isSemError()){
+		if(fd.ret) foreach(id;fd.ret.freeIdentifiers){
+			if(!id.meaning) continue;
 			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
-			if(id.meaning.scope_.isNestedIn(fsc)){
+			if(id.meaning.scope_&&id.meaning.scope_.isNestedIn(bdy.blscope_)){
 				fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), fd.loc);
+				fsc.note("variable declared here",id.meaning.loc);
 				fd.setSemError();
 			}
-			typeConstBlockDecl(id.meaning,fd,sc);
 		}
+	}
+	if(fd.ftype) foreach(id;fd.ftype.freeIdentifiers){
+		typeConstBlockDecl(id.meaning,fd,sc);
 	}
 	if(bdy){
 		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(fd.scope_)) fd.setSemError();
