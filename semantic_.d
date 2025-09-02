@@ -3217,7 +3217,7 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 	if(!meaning) return false;
 	if(isNonConstDecl(meaning,sc)) return true;
 	if(!meaning.isSemError()){
-		sc.error(text("cannot "~action~" 'const' ",meaning.kind,"s"),loc);
+		sc.error(text("cannot "~action~" 'const' ",meaning.kind," ",meaning.name),loc);
 		if(meaning.typeConstBlocker) typeConstBlockNote(meaning,sc);
 		else if(auto read=sc.isConst(meaning)) sc.note(text(meaning.kind," was made 'const' here"), read.loc);
 	}
@@ -3226,17 +3226,17 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible){
 	if(!meaning||meaning.isSemError()) return false;
-	if(!checkNonConstDecl!("reassign","reassigning")(meaning,loc,sc))
+	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc))
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
 		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canRecompute(meaning)){
-			sc.error("cannot reassign quantum variable", loc);
+			sc.error(format("cannot assign to quantum variable '%s'",meaning.name), loc);
 			return false;
 		}
 	}
 	if(isTypeTy(vd.vtype)&&!isEmpty(vd.vtype)){
-		sc.error("cannot reassign type variables", loc);
+		sc.error(format("cannot assign to type variable '%s'",meaning.name), loc);
 		return false;
 	}
 	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
