@@ -45,7 +45,7 @@ Expression dupExp(Expression e, Location loc, ExpSemContext context){
 			auto r=new CallExp(getTypedDup(e.type, loc, context.sc), e, false, false);
 			r.loc = loc;
 			r.type = e.type;
-			r.constLookup = context.constResult;
+			r.constLookup = context.constResult!=ConstResult.no;
 			r.setSemCompleted();
 			return r;
 		}
@@ -672,7 +672,7 @@ Expression statementSemanticImpl(CallExp ce,Scope sc,bool resetConst=true){
 
 Expression statementSemanticImpl(IndexExp idx,Scope sc,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
-	idx.e=expressionSemantic(idx.e,context.nestConst);
+	idx.e=expressionSemantic(idx.e,context.nestIndexed);
 	if(auto ft=cast(FunTy)idx.e.type){
 		auto ce=new CallExp(idx.e,idx.a,true,false);
 		ce.loc=idx.loc;
@@ -1927,7 +1927,6 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			return e;
 		if(auto id=cast(Identifier)next){
 			id.byRef=true;
-			id.indexedDirectly=true;
 			id.scope_=context.sc;
 			DeadDecl[] failures;
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc,false,&failures);
@@ -2504,7 +2503,7 @@ Expression defineLhsSemantic(bool isPresemantic=false)(Expression lhs,DefineLhsC
 				assert(!!r.type);
 				r.setSemCompleted();
 			}
-			r.constLookup=context.constResult;
+			r.constLookup=context.constResult!=ConstResult.no;
 		}
 	}
 	if(context.constResult) return r=expressionSemantic(lhs,context.expSem);
@@ -2982,19 +2981,20 @@ struct ArrayConsumer{
 				return;
 			}
 			if(id.meaning) id.id=id.meaning.name.id;
-			auto oldMeaning=id.meaning;
-			id.meaning=null;
-			//assert(!id.isSemCompleted());
-			id.sstate=SemState.initial;
-			e.e=expressionSemantic(e.e,context.nestConsumed); // consume array
-			auto dep=getDependency(e.e,context.sc);
-			if(!e.e.isSemCompleted())
-				return;
-			if(oldMeaning){
-				// assert(id.meaning is oldMeaning); // TODO. (id.meaning should already move into local scope earlier)
-				assert(id.meaning is oldMeaning||oldMeaning.scope_!is context.sc&&id.meaning.scope_ is context.sc,text(id.meaning," ",oldMeaning," ",id.loc));
-				assert(id.name==oldMeaning.getName);
+			if(id.meaning){
+				if(!context.sc.checkConsumable(id,id.meaning))
+					return;
+				if(auto nmeaning=context.sc.consume(id.meaning,id)){ // consume array
+					id.meaning=nmeaning;
+					id.constLookup=false; // TODO: this is a bit hacky
+					context.sc.lastUses.consumption(nmeaning,id,context.sc);
+				}
+			}else{
+				e.e=expressionSemantic(e.e,context.nestConsumed);
+				if(!e.e.isSemCompleted())
+					return;
 			}
+			auto dep=getDependency(e.e,context.sc);
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
@@ -3044,7 +3044,6 @@ void checkIndexReplacement(Expression be,Scope sc){
 		foreach(i;0..crepls.length){
 			if(!crepls[i].read){
 				sc.error("replaced component must be consumed in right-hand side", indicesToReplace[i].loc);
-				imported!"util.io".writeln("??? ",indicesToReplace[i]," ",be);
 				indicesToReplace[i].setSemError();
 				be.setSemError();
 			}
@@ -4128,38 +4127,21 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			return defineLhsSemantic!isPresemantic(e,context);
 		}else return expressionSemantic(e,context);
 	}
-	if(auto id=cast(Identifier)ce.e) id.calledDirectly=true;
-	bool constantCall=true;
-	void analyzeFun(){
-		static if(isRhs) ce.e=expressionSemantic(ce.e,constantCall?context.nestConst:context.nestConsumed);
-		else static if(!isPresemantic){
-			ce.e=expressionSemantic(ce.e,constantCall?context.expSem.nestConst:context.expSem.nestConsumed);
-		}else{
-			auto state=context.sc.getStateSnapshot(true);
-			auto analyzedFun=expressionSemantic(ce.e.copy(),constantCall?context.expSem.nestConst:context.expSem.nestConsumed);
-			if(analyzedFun.isSemError()) ce.e=analyzedFun;
-			else{
-				ce.e.type=analyzedFun.type;
-				context.sc.restoreStateSnapshot(state);
-			}
+	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestCalled);
+	else static if(!isPresemantic){
+		ce.e=expressionSemantic(ce.e,context.expSem.nestCalled);
+	}else{
+		auto state=context.sc.getStateSnapshot(true);
+		auto analyzedFun=expressionSemantic(ce.e.copy(),context.expSem.nestCalled);
+		if(analyzedFun.isSemError()) ce.e=analyzedFun;
+		else{
+			ce.e.type=analyzedFun.type;
+			context.sc.restoreStateSnapshot(state);
 		}
 	}
-	Scope.ScopeState state;
-	if(context.sc) state=context.sc.getStateSnapshot(true); // TODO: avoidable?
-	analyzeFun();
 	if(ce.e.type){
 		if(auto ft=cast(FunTy)ce.e.type){
-			if(ft.captureAnnotation==CaptureAnnotation.moved){
-				ce.e.constLookup=false;
-				if(auto id=cast(Identifier)ce.e){ // TOOD: ok?
-					ce.e=id.copy();
-					if(context.sc) context.sc.restoreStateSnapshot(state);
-					constantCall=false;
-					analyzeFun();
-				}else if(auto idx=cast(IndexExp)ce.e){
-					idx.implicitDup=true; // TODO: ok?
-				}
-			}else if(ft.captureAnnotation==CaptureAnnotation.once){
+			if(ft.captureAnnotation==CaptureAnnotation.once){
 				// ...
 				context.sc.error("calling `once` functions not yet supported",ce.e.loc);
 				ce.e.setSemForceError();
@@ -4218,8 +4200,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(auto classical=ce.type.getClassical())
 							ce.type=classical;
 					}
-					ce.constLookup=constResult;
-					checkLifted(ce,context);
+					setConstResult(ce,context);
 				}
 			}
 		}
@@ -4558,9 +4539,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	return r;
 }
 
-enum ConstResult:bool{
+enum ConstResult:ubyte{
 	no,
 	yes,
+	indexed,
+	called,
 }
 enum InType:bool{
 	no,
@@ -4599,6 +4582,12 @@ auto nestConst(ref ExpSemContext context){
 }
 auto nestConsumed(ref ExpSemContext context){
 	return context.nest(ConstResult.no);
+}
+auto nestIndexed(ref ExpSemContext context){
+	return context.nest(ConstResult.indexed);
+}
+auto nestCalled(ref ExpSemContext context){
+	return context.nest(ConstResult.called);
 }
 auto nestType(ref ExpSemContext context){
 	return ExpSemContext.forType(context.sc);
@@ -4962,25 +4951,25 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		return id;
 	}
 	assert(id.sstate!=SemState.started);
-	id.constLookup=context.constResult;
 	id.sstate=SemState.started;
 	void setImplicitDup()in{
 		assert(!!id.meaning);
 	}do{
 		//id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||!id.meaning.isLinear)); // TODO: last-use analysis
-		id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||sc.canForget(id.meaning,true))); // TODO: last-use analysis
+		id.implicitDup=!id.constLookup&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||sc.canForget(id.meaning,true))); // TODO: last-use analysis
 	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
+		id.constLookup=isConstLookup(id,context);
 		if(id.meaning) setImplicitDup();
-		auto lookup=context.constResult||id.implicitDup?Lookup.constant:Lookup.consuming;
+		auto lookup=id.constLookup||id.implicitDup?Lookup.constant:Lookup.consuming;
 		DeadDecl[] failures;
 		id.meaning=null;
 		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
 		if(id.isSemError()) return id;
 		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
-				if(!id.calledDirectly&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
+				if(context.constResult!=ConstResult.called&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
 					sc.error("special operator must be called directly",id.loc);
 					id.setSemError();
 					r.setSemError();
@@ -4991,7 +4980,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return id;
 		}else{
 			static if(language==silq){
-				if(!id.indexedDirectly && !id.meaning.isSemError()) {
+				if(context.constResult!=ConstResult.indexed && !id.meaning.isSemError()) {
 					auto crepls=sc.componentReplacements(id.meaning);
 					if(crepls.length){
 						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
@@ -5002,6 +4991,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 		}
 	}else{
+		setConstResult(id,context);
 		setImplicitDup();
 		if(sc) sc.recordAccess(id,id.meaning);
 	}
@@ -5110,14 +5100,13 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
-	if(auto id=cast(Identifier)idx.e) id.indexedDirectly=true;
 	if(idx.byRef){
 		if(auto cid=getIdFromIndex(idx)){
 			auto meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc,false,null);
 			if(meaning) cid.meaning=sc.split(meaning,cid);
 		}
 	}
-	idx.e=expressionSemantic(idx.e,context.nestConst);
+	idx.e=expressionSemantic(idx.e,context.nestIndexed);
 	propErr(idx.e,idx);
 	if(auto ft=cast(FunTy)idx.e.type){
 		auto ce=new CallExp(idx.e,idx.a,true,false);
@@ -6140,6 +6129,26 @@ bool checkLifted(alias error=nonLiftedError)(Expression expr,ExpSemContext conte
 	nonLiftedError(expr,context.sc);
 	return false;
 }
+bool isConstLookup(Expression expr,ExpSemContext context){
+	if(context.constResult==ConstResult.called||context.constResult==ConstResult.indexed){
+		auto type=expr.type;
+		if(!type){
+			if(auto id=cast(Identifier)expr)
+				type=id.typeFromMeaning;
+		}
+		if(auto ft=cast(ProductTy)type){
+			if(ft.captureAnnotation==CaptureAnnotation.moved)
+				return false;
+		}
+		return true;
+	}
+	return context.constResult!=ConstResult.no;
+}
+void setConstResult(Expression expr,ExpSemContext context){
+	auto constResult=context.constResult;
+	expr.constLookup=isConstLookup(expr,context);
+	checkLifted(expr,context);
+}
 
 Expression expressionSemantic(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
@@ -6160,12 +6169,11 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 					if(id.implicitDup) context.sc.trackTemporary(id); // TODO: ok?
 					if(context.inType) context.sc.pinLastUse(id.meaning); // TODO: sufficient?
 				}
-			}else{
-				expr.constLookup=context.constResult;
-				if(!cast(CallExp)expr) checkLifted(expr,context); // (already checked in callSemantic)
+			}else if(!cast(CallExp)expr){ // (already done in callSemantic)
+				setConstResult(expr,context);
 			}
 			expr.setSemCompleted();
-		}else expr.constLookup=context.constResult;
+		}else expr.constLookup=context.constResult!=ConstResult.no;
 		if(expr.type&&unrealizable(expr.type)){
 			sc.error(format("instances of type `%s` not realizable (did you mean to use `!%s`?)",expr.type,expr.type),expr.loc);
 			expr.setSemForceError();

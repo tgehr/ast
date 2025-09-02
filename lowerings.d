@@ -387,7 +387,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression original,Expression[] args,Location loc,ExpSemContext context){
 	foreach(arg;args){
 		if(isEmpty(arg.type)){
-			arg.constLookup=context.constResult;
+			arg.constLookup=context.constResult!=ConstResult.no;
 			if(original&&original.type){
 				arg=new TypeAnnotationExp(arg,original.type,TypeAnnotationType.annotation);
 				arg=expressionSemantic(arg,context);

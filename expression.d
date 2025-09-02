@@ -631,8 +631,6 @@ class Identifier: Expression{
 		if(args.preserveSemantic){
 			r.meaning=meaning;
 			r.scope_=scope_;
-			r.calledDirectly=calledDirectly;
-			r.indexedDirectly=indexedDirectly;
 			static if(language==silq){
 				r.outerWanted=outerWanted;
 				r.classical=classical;
@@ -842,8 +840,6 @@ class Identifier: Expression{
 	Declaration meaning;
 	bool lazyCapture=false;
 	Scope scope_;
-	bool calledDirectly=false;
-	bool indexedDirectly=false;
 	static if(language==silq){
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
