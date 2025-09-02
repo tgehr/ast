@@ -1940,6 +1940,10 @@ class CapturingScope(T): NestedScope{
 		}
 		bool isConstDecl=meaning.isConst||meaning.typeConstBlocker||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstDecl;
+		static if(language==silq&&is(T==FunctionDef)){
+			auto captureAnnotation=decl.ftype?decl.ftype.captureAnnotation:CaptureAnnotation.const_; // TODO: store in function def
+			bool recomputeType=isConstLookup?captureAnnotation==CaptureAnnotation.moved:captureAnnotation==CaptureAnnotation.const_;
+		}
 		static if(language==silq)
 		if(type.hasQuantumComponent()){
 			if(origin.componentReplacements(meaning).length){
@@ -1976,9 +1980,7 @@ class CapturingScope(T): NestedScope{
 					}else{
 						if(fd.sealed) fd.unseal();
 						fd.context.vtype=contextTy(false);
-						fd.ftype=null;
-						import ast.semantic_:setFtype;
-						setFtype(fd,true);
+						recomputeType=true;
 					}
 				}
 			}
@@ -2010,6 +2012,17 @@ class CapturingScope(T): NestedScope{
 		parent.lastUses.capture(pmeaning,id,parent,decl);
 		parent.recordAccess(id,pmeaning);
 		if(!id.lazyCapture) parent.recordCapturer(decl,pmeaning);
+		static if(language==silq&&is(T==FunctionDef)){
+			auto fd=decl;
+			if(recomputeType){
+				fd.ftype=null;
+				auto origMeaning=id.meaning; // TODO: this is a hack
+				id.meaning=meaning;// TODO: this is a hack
+				import ast.semantic_:setFtype;
+				setFtype(fd,true);
+				id.meaning=origMeaning; // TODO: this is a hack
+			}
+		}
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
