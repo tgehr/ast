@@ -2756,10 +2756,12 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 				Q!(Declaration,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
-						if(id.meaning){
-							auto dep=dependency.dup;
-							dep.joinWith(getIndexDependency(lhs[i]));
-							dependencies~=q(id.meaning,dep);
+						if(id.meaning&&id.type){
+							if(!id.type.isClassical()){
+								auto dep=dependency.dup;
+								dep.joinWith(getIndexDependency(lhs[i]));
+								dependencies~=q(id.meaning,dep);
+							}
 						}else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
