@@ -122,8 +122,9 @@ bool isSubtype(Expression lhs,Expression rhs){
 }
 
 Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
-	if(!lhs||isEmpty(lhs)) return rhs;
-	if(!rhs||isEmpty(rhs)) return lhs;
+	if(!lhs||!rhs) return null;
+	if(isEmpty(lhs)) return meet?lhs:rhs;
+	if(isEmpty(rhs)) return meet?rhs:lhs;
 	if(lhs == rhs) return lhs;
 	auto l=lhs.eval(), r=rhs.eval();
 	if(isEmpty(lhs)) return meet?lhs:rhs;
@@ -487,6 +488,10 @@ class TupleTy: Type,ITupleTy{
 		if(!rarr&&!meet){
 			if(auto rvec=cast(VectorTy)r)
 				rarr=arrayTy(rvec.next);
+			if(rtup&&!meet){
+				if(auto next=chain(ltup.types,ltup.types).fold!((a,b)=>combineTypes(a,b,meet))(cast(Expression)bottom))
+					rarr=arrayTy(next);
+			}
 		}
 		if(rarr){
 			if(meet){

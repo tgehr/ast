@@ -1904,7 +1904,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 		}else if(context.type){
 			id.type=context.type;
 		}else if(!id.type){
-			context.sc.error(format("cannot determine type for `%s",id),id.loc);
+			context.sc.error(format("cannot determine type for `%s`",id),id.loc);
 			id.setSemError();
 		}
 	}
@@ -2143,7 +2143,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 		}else vec.setSemError(); // TODO: ok?
 		if(isBottom) vec.type=bottom;
 		if(vec.e.all!(e=>!!e.type)){
-			Expression t=null;
+			Expression t=bottom;
 			foreach(e;vec.e){
 				t=joinTypes(t,e.type);
 				if(!t) break;
@@ -2320,7 +2320,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 					ntype1=tupleTy(iota(0,mid).map!(i=>tt[i]).array);
 					ntype2=tupleTy(iota(mid,tt.length).map!(i=>tt[i]).array);
 				}else if(l1||l2){
-					Expression elemTy=null;
+					Expression elemTy=bottom;
 					foreach(i;0..tt.length){
 						elemTy=joinTypes(elemTy, tt[i]);
 						if(!elemTy) break;
@@ -5355,22 +5355,24 @@ Expression expressionSemanticImpl(TupleExp tpl,ExpSemContext context){
 
 Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 	auto sc=context.sc;
-	Expression t; bool tok=true;
+	Expression t=bottom; bool tok=true;
 	foreach(i,ref exp;vec.e){
 		exp=expressionSemantic(exp,context);
 		propErr(exp,vec);
 		auto nt = joinTypes(t, exp.type);
 		if(!nt&&tok){
-			Expression texp;
-			foreach(j,oexp;vec.e[0..i]){
-				if(!joinTypes(oexp, exp)){
-					texp=oexp;
-					break;
+			if(exp.type){
+				Expression texp;
+				foreach(j,oexp;vec.e[0..i]){
+					if(oexp.type&&!joinTypes(oexp.type, exp.type)){
+						texp=oexp;
+						break;
+					}
 				}
-			}
-			if(texp){
-				sc.error(format("incompatible types %s and %s in vector literal",t,exp.type),texp.loc);
-				sc.note("incompatible entry",exp.loc);
+				if(texp){
+					sc.error(format("incompatible types %s and %s in vector literal",t,exp.type),texp.loc);
+					sc.note("incompatible entry",exp.loc);
+				}
 			}
 			vec.setSemError();
 			tok=false;
@@ -5920,6 +5922,7 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 				if(pow.e2.asIntegerConstant().mfold!(z=>z==tpl.length,()=>false)){
 					return analyzed; // TODO: revisit
 				}
+				elemTy=bottom;
 				foreach(i;0..tpl.length){
 					elemTy=joinTypes(elemTy, tpl[i]);
 					if(!elemTy) break;
@@ -5939,6 +5942,7 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 			if(auto vty=cast(VectorTy)analyzed)
 				elemTy=vty.next;
 			if(auto tpl=analyzed.isTupleTy){
+				elemTy=bottom;
 				foreach(i;0..tpl.length){
 					elemTy=joinTypes(elemTy, tpl[i]);
 					if(!elemTy) break;
