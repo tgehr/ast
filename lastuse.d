@@ -383,8 +383,15 @@ final class LastUse{
 				if(dep.isTop) return Forgettability.none;
 				if(constConsume&&constConsume.canForget(true))
 					return Forgettability.consumable;
-				if(canAddForget(parent))
+				if(canAddForget(parent)){
+					import ast.semantic_:typeForDecl;
+					if(auto ft=cast(ProductTy)typeForDecl(decl)){
+						if(ft.captureAnnotation==CaptureAnnotation.spent){
+							return Forgettability.consumable;
+						}
+					}
 					return Forgettability.forgettable;
+				}
 				return Forgettability.none;
 			case consumption:
 				return Forgettability.none;

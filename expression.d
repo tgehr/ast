@@ -1339,6 +1339,7 @@ class CallExp: Expression{
 	static if(language==silq){
 		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 	}
+	Declaration newFunctionVar=null; // `once` → `spent` replacement
 }
 
 abstract class ABinaryExp: Expression{

@@ -4133,14 +4133,37 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			context.sc.restoreStateSnapshot(state);
 		}
 	}
+	static if(!isPresemantic)
 	if(ce.e.type){
 		if(auto ft=cast(FunTy)ce.e.type){
 			if(ft.captureAnnotation==CaptureAnnotation.once){
-				// ...
-				context.sc.error("calling `once` functions not yet supported",ce.e.loc);
-				ce.e.setSemForceError();
+				bool ok=false;
+				if(auto id=cast(Identifier)ce.e){
+					if(auto meaning=id.meaning){
+						auto dep=context.sc.getDependency(meaning);
+						auto nft=ft.setCaptureAnnotation(CaptureAnnotation.spent);
+						auto var=addVar(meaning.getId,nft,meaning.loc,context.sc);
+						context.sc.addDependency(var,dep);
+						context.sc.lastUses.definition(var,ce);
+						auto nid=new Identifier(var.getId);
+						nid.loc=id.loc;
+						nid.scope_=context.sc;
+						nid.meaning=var;
+						nid.constLookup=true;
+						nid.type=nft;
+						nid.sstate=SemState.completed;
+						context.sc.blockConst(var,nid);
+						ce.newFunctionVar=var;
+						ok=true;
+					}
+				}
+				if(!ok&&getDependency(ce.e,context.sc).isTop){
+					context.sc.error("unable to forget `const` captures of `once` function",ce.e.loc);
+					ce.e.setSemForceError();
+				}
 			}else if(ft.captureAnnotation==CaptureAnnotation.spent){
-				context.sc.error("`moved` captures of `spent` function were already consumed",ce.e.loc);
+				context.sc.error("cannot call `once` function again",ce.e.loc);
+				// TODO: show location of first call if possible
 				ce.e.setSemForceError();
 			}
 		}
@@ -6136,7 +6159,7 @@ bool isConstLookup(Expression expr,ExpSemContext context){
 				type=id.typeFromMeaning;
 		}
 		if(auto ft=cast(ProductTy)type){
-			if(ft.captureAnnotation==CaptureAnnotation.moved)
+			if(ft.captureAnnotation==CaptureAnnotation.moved||ft.captureAnnotation==CaptureAnnotation.once)
 				return false;
 		}
 		return true;

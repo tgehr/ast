@@ -568,7 +568,7 @@ class Checker {
 	void implLhs(ast_exp.CallExp e) {
 		assert(!e.isSquare);
 		assert(!e.isClassical_);
-		visCall(e.e, e.arg, true);
+		visCall(e, true);
 	}
 
 	void implLhs(ast_exp.IndexExp e) {
@@ -882,7 +882,7 @@ class Checker {
 
 	void implExpr(ast_exp.CallExp e) {
 		assert(!e.isClassical_ || ast_ty.isType(e), format("TODO: isClassical_ call on non-type << %s >> on %s", e, e.loc));
-		visCall(e.e, e.arg, false);
+		visCall(e, false);
 	}
 
 	void implExpr(ast_exp.ClassicalTy e) {
@@ -933,7 +933,8 @@ class Checker {
 		sc.visType(e.cod);
 	}
 
-	void visCall(ast_exp.Expression targetExpr, ast_exp.Expression argExpr, bool isReversed) {
+	void visCall(ast_exp.CallExp callExpr, bool isReversed) {
+		ast_exp.Expression targetExpr = callExpr.e, argExpr = callExpr.arg;
 		if(auto targetId = cast(ast_exp.Identifier) targetExpr) {
 			switch(ast_sem.isBuiltIn(targetId)) {
 				case ast_sem.BuiltIn.none:
@@ -952,7 +953,7 @@ class Checker {
 		auto callTy = cast(ast_ty.ProductTy) targetExpr.type;
 		assert(!!callTy, format("ERROR: call target not a ProductTy on %s: << %s >>", targetExpr.loc, targetExpr));
 
-		if(callTy.captureAnnotation == ast_ty.CaptureAnnotation.moved) {
+		if(callTy.captureAnnotation == ast_ty.CaptureAnnotation.moved || callTy.captureAnnotation == ast_ty.CaptureAnnotation.once) {
 			expectMoved(targetExpr, "quantum call target");
 			assert(!isReversed||ast_ty.isClassical(callTy), format("ERROR: Reversed moved call on %s: << %s >>", targetExpr.loc, targetExpr));
 		} else {
@@ -960,6 +961,10 @@ class Checker {
 		}
 
 		visExpr(targetExpr);
+		if(callExpr.newFunctionVar) {
+			assert(callTy.captureAnnotation == ast_ty.CaptureAnnotation.once, format("ERROR: call target not a `once` function on %s: << %s >>", targetExpr.loc, targetExpr));
+			defineVar(callExpr.newFunctionVar, "`spent` function definition", callExpr);
+		}
 
 		bool isTuple;
 		ast_exp.Expression[] paramTypes;
