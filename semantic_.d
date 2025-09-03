@@ -2379,9 +2379,10 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 	static if(!isPresemantic){
 		ce.type=ce.e1.type&&ce.e2.type?concatType(ce.e1.type,ce.e2.type):null;
 		if(!ce.type){
-			if(ce.e1.type&&ce.e2.type)
+			if(ce.e1.type&&ce.e2.type){
 				sc.error(format("incompatible types %s and %s for ~",ce.e1.type,ce.e2.type),ce.loc);
-			ce.setSemError();
+				ce.setSemError();
+			}
 		}else if(context.type&&!isSubtype(context.type,ce.type)){
 			if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){ // TODO: ok?
 				sc.error(format("incompatible types for split: `%s` vs `%s",ce.type,context.type),ce.loc);
