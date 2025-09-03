@@ -285,7 +285,7 @@ struct Location{
 			lastRep = rep[rep.lastIndexOf('\n') + 1..$];
 			l= source.getLineOf(lastRep);
 		}
-		r.endColumn = displayWidth(l[0..lastRep.ptr + lastRep.length - l.ptr], tabsize) - 1;
+		r.endColumn = displayWidth(l[0..min($, lastRep.ptr + lastRep.length - l.ptr)], tabsize) - 1;
 		return r;
 	}
 }
