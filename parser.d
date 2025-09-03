@@ -1256,6 +1256,10 @@ Expression parseExpression(Source source, ErrorHandler handler){
 	return Parser(lex(source),handler).parseExpression();
 }
 
+CompoundExp parseCompoundExp(Source source, ErrorHandler handler){
+	return Parser(lex(source),handler).parseCompoundExp();
+}
+
 Expression[] parseSource(Source source, ErrorHandler handler){
 	auto p=Parser(lex(source),handler);
 	auto s=appender!(Expression[])();
