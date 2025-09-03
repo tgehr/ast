@@ -4962,10 +4962,26 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
 		id.constLookup=isConstLookup(id,context);
 		if(id.meaning) setImplicitDup();
+		bool avoidCapture=false;
+		static if(language==silq){
+			if(id.meaning && !id.meaning.isSemError()) {
+				auto crepls=sc.componentReplacements(id.meaning);
+				if(crepls.length){
+					avoidCapture=true;
+					if(context.constResult!=ConstResult.indexed){
+						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
+						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+						id.setSemError();
+					}
+				}
+			}
+		}
 		auto lookup=id.constLookup||id.implicitDup?Lookup.constant:Lookup.consuming;
 		DeadDecl[] failures;
-		id.meaning=null;
-		id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
+		if(!avoidCapture){
+			id.meaning=null;
+			id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
+		}else if(sc) sc.recordAccess(id,id.meaning);
 		if(id.isSemError()) return id;
 		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
@@ -4978,17 +4994,6 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			}
 			undefinedIdentifierError(id,failures,context.sc);
 			return id;
-		}else{
-			static if(language==silq){
-				if(context.constResult!=ConstResult.indexed && !id.meaning.isSemError()) {
-					auto crepls=sc.componentReplacements(id.meaning);
-					if(crepls.length){
-						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
-						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
-						id.setSemError();
-					}
-				}
-			}
 		}
 	}else{
 		setConstResult(id,context);
