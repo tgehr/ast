@@ -1572,8 +1572,7 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,Expression con
 	static if(language==silq){
 		if(control.type&&!control.type.isClassical()){
 			if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_);
-			if(control.isQfree()) ce.blscope_.addControlDependency(controlDependency);
-			else ce.blscope_.addControlDependency(Dependency(true));
+			ce.blscope_.addControlDependency(controlDependency);
 		}
 	}
 	return compoundExpSemantic(ce,sc,restriction_);
@@ -2776,22 +2775,20 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 						addDependencies(tpl1.e,tpl2.e);
 					}
 				}
-				if(!ok&&be.e2.isQfree()){
+				if(!ok){
 					auto dep=be.e2.getDependency(sc);
 					addDependencyMulti(tpl1.e,dep);
 				}
 			}else if(auto ce=cast(CallExp)be.e1){
 				// TODO: add dependencies
 			}else if(auto ce=cast(CatExp)be.e1){
-				if(be.e1.isQfree()){
-					Expression[] ids;
-					if(auto id=cast(Identifier)unwrap(ce.e1))
-						ids~=id;
-					if(auto id=cast(Identifier)unwrap(ce.e2))
-						ids~=id;
-					auto dep=be.e2.getDependency(sc);
-					addDependencyMulti(ids,dep);
-				}
+				Expression[] ids;
+				if(auto id=cast(Identifier)unwrap(ce.e1))
+					ids~=id;
+				if(auto id=cast(Identifier)unwrap(ce.e2))
+					ids~=id;
+				auto dep=be.e2.getDependency(sc);
+				addDependencyMulti(ids,dep);
 			}else badUnpackLhs=true;
 		}
 		if(sc.allowsLinear)
@@ -3529,7 +3526,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	Declaration[Id] defined;
 	void updateVars(Expression lhs,Expression rhs,Stage stage){
 		Dependency rhsdep(){
-			if(stage!=Stage.collectDeps||!rhs.isQfree()) return Dependency(true);
+			if(stage!=Stage.collectDeps) return Dependency(true);
 			return rhs.getDependency(sc);
 		}
 		void updateVars2(Expression lhs,Expression olhs,bool indexed,Expression rhsty,Dependency rhsdep,Stage stage){
@@ -3545,18 +3542,16 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 					final switch(stage){
 						static if(language==silq){
 							case Stage.collectDeps:
-								if(rhs.isQfree()){
-									auto dep=rhsdep.dup;
-									if(indexed){
-										dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-										if(decl in dependencies) dep.joinWith(dependencies[decl]);
-									}
-									if(decl in dep.dependencies){
-										dep.remove(decl);
-										dep.joinWith(sc.getDependency(decl));
-									}
-									dependencies[decl]=dep;
+								auto dep=rhsdep.dup;
+								if(indexed){
+									dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+									if(decl in dependencies) dep.joinWith(dependencies[decl]);
 								}
+								if(decl in dep.dependencies){
+									dep.remove(decl);
+									dep.joinWith(sc.getDependency(decl));
+								}
+								dependencies[decl]=dep;
 								break;
 						}
 						case Stage.consumeLhs:
@@ -3587,7 +3582,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								}
 								auto var=addVar(origId,ntype,lhs.loc,sc);
 								static if(language==silq){
-									if(rhs.isQfree()) sc.addDependency(var,dependencies[decl]);
+									sc.addDependency(var,dependencies[decl]);
 								}
 								defined[decl.getId]=var;
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
@@ -3816,17 +3811,12 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		}
 		static if(language==silq){
 			bool ok=false;
-			if(be.e2.isQfree()){
-				auto dependency=sc.getDependency(id.meaning);
-				auto rhsDep=be.e2.getDependency(sc);
-				rhsDep.remove(id.meaning);
-				dependency.joinWith(rhsDep);
-				consume();
-				define(dependency);
-			}else{
-				consume();
-				define(Dependency(true));
-			}
+			auto dependency=sc.getDependency(id.meaning);
+			auto rhsDep=be.e2.getDependency(sc);
+			rhsDep.remove(id.meaning);
+			dependency.joinWith(rhsDep);
+			consume();
+			define(dependency);
 		}else{
 			consume();
 			define();
