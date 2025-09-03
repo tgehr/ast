@@ -2686,6 +2686,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 		if(be.e2.type){
 			auto dcontext=defineLhsContext(econtext,be.e2.type,be.e2);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
+			propErr(be.e1,be);
 		}
 	}
 	if(attemptLowering){
