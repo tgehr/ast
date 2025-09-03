@@ -98,8 +98,22 @@ bool isPreludeSource(Source src){
 	return src is preludeSrc;
 }
 
-int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
+int importModule(Source src,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
+	int nerr=err.nerrors;
+	exprs=parseSource(src,err);
+	if(nerr!=err.nerrors) return 1;
+	sc=new TopScope(err);
+	sc.import_(getPreludeScope(err, loc));
 	import ast.semantic_: semantic;
+	exprs=semantic(exprs,sc);
+	if(nerr!=err.nerrors){
+		if(loc.line) sc.error("errors in imported file",loc);
+		return 1;
+	}
+	return 0;
+}
+
+int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
 	if(path in modules){
 		// only the main module doesn't have an import location
 		assert(loc.line);
@@ -118,6 +132,7 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 	sc=new TopScope(err);
 	sc.import_(getPreludeScope(err, loc));
 	int nerr=err.nerrors;
+	import ast.semantic_: semantic;
 	exprs=semantic(exprs,sc);
 	if(nerr!=err.nerrors){
 		if(loc.line) sc.error("errors in imported file",loc);
