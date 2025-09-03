@@ -1815,8 +1815,8 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					sc.error("reversed function must be `mfree`",f.loc);
 					ok=false;
 				}
-				if(ft.captureAnnotation!=CaptureAnnotation.const_){
-					sc.error("reversed function must be `const`",f.loc);
+				if(!(ft.captureAnnotation==CaptureAnnotation.const_||ft.isClassical())){
+					sc.error("reversed function must be classical or cannot have `moved` captures",f.loc);
 					ok=false;
 				}
 				if(ft.cod.hasAnyFreeVar(ft.names)){
@@ -4042,8 +4042,8 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		f.setSemForceError();
 		errors=true;
 	}
-	if(check && ft.captureAnnotation!=CaptureAnnotation.const_){
-		sc.error("reversed function must be `const`",f.loc);
+	if(check && !(ft.captureAnnotation==CaptureAnnotation.const_||ft.isClassical())){
+		sc.error("reversed function must be classical or cannot have `moved` captures",f.loc);
 		f.setSemForceError();
 		errors=true;
 	}

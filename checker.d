@@ -954,7 +954,7 @@ class Checker {
 
 		if(callTy.captureAnnotation == ast_ty.CaptureAnnotation.moved) {
 			expectMoved(targetExpr, "quantum call target");
-			assert(!isReversed, format("ERROR: Reversed moved call on %s: << %s >>", targetExpr.loc, targetExpr));
+			assert(!isReversed||ast_ty.isClassical(callTy), format("ERROR: Reversed moved call on %s: << %s >>", targetExpr.loc, targetExpr));
 		} else {
 			expectConst(targetExpr, "call target");
 		}
