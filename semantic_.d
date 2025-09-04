@@ -3672,7 +3672,7 @@ AAssignExp isInvertibleOpAssignExp(Expression e){
 Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	assert(isOpAssignExp(be));
 }do{
-	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -4566,6 +4566,10 @@ enum InType:bool{
 	no,
 	yes,
 }
+enum InConst:bool{
+	no,
+	yes,
+}
 
 Expression unwrap(Expression e){
 	if(auto tae=cast(TypeAnnotationExp)e)
@@ -4584,15 +4588,17 @@ struct ExpSemContext{
 	Scope sc;
 	ConstResult constResult;
 	InType inType;
+	InConst inConst;
 	static ExpSemContext forType(Scope sc) {
-		return ExpSemContext(sc, ConstResult.yes, InType.yes);
+		return ExpSemContext(sc, ConstResult.yes, InType.yes, InConst.yes);
 	}
 }
-auto expSemContext(Scope sc,ConstResult constResult,InType inType){
-	return ExpSemContext(sc,constResult,inType);
+auto expSemContext(Scope sc,ConstResult constResult,InType inType,InConst inConst=InConst.no){
+	if(constResult&&!inConst) inConst=InConst.yes;
+	return ExpSemContext(sc,constResult,inType,inConst);
 }
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
-	with(context) return expSemContext(sc,newConstResult,inType);
+	with(context) return expSemContext(sc,newConstResult,inType,inConst);
 }
 auto nestConst(ref ExpSemContext context){
 	return context.nest(ConstResult.yes);
@@ -6204,7 +6210,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			sc.error(format("instances of type `%s` not realizable (did you mean to use `!%s`?)",expr.type,expr.type),expr.loc);
 			expr.setSemForceError();
 		}
-		if(!context.constResult&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
+		if(!context.inConst&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
 			if(!sc.resetConst(constSave,expr,false,context.inType))
 				expr.setSemForceError();
 		}
