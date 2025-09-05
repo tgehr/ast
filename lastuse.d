@@ -171,6 +171,15 @@ final class LastUse{
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
+	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes){
+		return iota(nestedScopes.length).map!((i){
+			auto nsc=nestedScopes[i];
+			auto cdecl=decl;
+			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nsc)
+				cdecl=decl.mergedFrom[i];
+			return nsc.lastUses.canCancelImplicitDup(cdecl);
+		}).any;
+	}
 
 	void remove(){
 		assert(!prev||prev.next is this);
@@ -528,14 +537,79 @@ final class LastUse{
 		}
 		consume(isForget);
 	}
+	bool canCancelImplicitDup(){
+		if(forwardTo) return forwardTo.canCancelImplicitDup();
+		if(splitFrom) return false;
+		final switch(kind)with(Kind){
+			case definition,lazySplitSink,lazySplit:
+				return false;
+			case lazyMerge:
+				return canCancelImplicitDupMerge(decl,nestedScopes);
+			case synthesizedForget:
+				return false;
+			case implicitDup,constPinned:
+				return use&&use.implicitDup;
+			case constUse:
+				if(constConsume&&constConsume.canCancelImplicitDup())
+					return true;
+				return false;
+			case consumption:
+				return false;
+			case capture:
+				return false; // TODO
+		}
+		return true;
+	}
 	bool cancelImplicitDup(){
 		if(forwardTo) return forwardTo.cancelImplicitDup();
-		if(!use) return false;
-		if(!use.implicitDup) return false;
-		use.implicitDup=false;
-		auto ok=scope_.checkImplicitDupCancel(use);
-		consume(false);
-		return ok;
+		if(splitFrom) return false;
+		final switch(kind)with(Kind){
+			case definition,lazySplitSink,lazySplit:
+				return assert(0);
+			case lazyMerge:
+				consume(false);
+				bool ok=true;
+				foreach(i,nsc;nestedScopes){
+					auto cdecl=decl;
+					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
+						cdecl=decl.mergedFrom[i];
+					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
+						cdecl=decl.splitInto[i];
+					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
+					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
+						nsc.lastUses.cancelImplicitDup(cdecl);
+					}else if(nsc.lastUses.canForget(cdecl,false,false)){
+						nsc.lastUses.forget(cdecl,false);
+						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
+						if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
+							nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
+					}else{
+						ok=false;
+						nsc.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
+						// TODO: needs a note indicating the end of scope
+					}
+				}
+				return ok;
+			case synthesizedForget:
+				assert(0);
+			case implicitDup,constPinned:
+				if(!(use&&use.implicitDup)) return false;
+				use.implicitDup=false;
+				auto ok=scope_.checkImplicitDupCancel(use);
+				consume(false);
+				return ok;
+			case constUse:
+				if(constConsume&&constConsume.canCancelImplicitDup()){
+					constConsume.cancelImplicitDup();
+					markConsumed(false);
+					return true;
+				}
+				return false;
+			case consumption:
+				assert(0);
+			case capture:
+				assert(0); // TODO
+		}
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto){
@@ -606,6 +680,7 @@ struct LastUses{
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;;
 			if(lastUse.kind==LastUse.Kind.constUse){
+				//imported!"util.io".writeln("ATTACHING CONSTCONSUME: ",prevLastUse);
 				lastUse.constConsume=prevLastUse;
 				keep=true;
 			}
@@ -781,6 +856,7 @@ struct LastUses{
 			//assert(use.scope_ is sc);
 		}
 	}do{
+		//imported!"util.io".writeln("CONSUMPTION: ",decl," ",use);
 		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
 	}
 	void capture(Declaration decl,Identifier use,Scope sc,Declaration parent){
@@ -834,6 +910,11 @@ struct LastUses{
 			assert(!!split.scope_);
 			split.scope_.lastUses.pin(split,true);
 		}
+	}
+	bool canCancelImplicitDup(Declaration decl){
+		if(auto lastUse=lastUses.get(decl,null))
+			return lastUse.canCancelImplicitDup();
+		return false;
 	}
 	bool cancelImplicitDup(Declaration decl){
 		if(auto lastUse=lastUses.get(decl,null))

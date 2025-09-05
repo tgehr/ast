@@ -424,7 +424,8 @@ abstract class Scope{
 				ok=false;
 				id.setSemForceError();
 				id.meaning.setSemForceError();
-			}else lastUses.cancelImplicitDup(id.meaning); // TOOD: what if this fails?
+			}
+			lastUses.cancelImplicitDup(id.meaning); // TOOD: what if this fails?
 			return ok;
 		}
 		final void pushTrackedTemporaryDependencies(Declaration decl){
@@ -820,8 +821,13 @@ abstract class Scope{
 			if(canRecompute(meaning))
 				return true;
 			if(!meaning.isSemError()){
-				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
-				note(format("%s was made `const` here", meaning.kind), read.loc);
+				if(read !is id){
+					error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
+					note(format("%s was made `const` here", meaning.kind), read.loc);
+				}else{
+					import ast.semantic_:nonLiftedError;
+					nonLiftedError(id,this); // TODO: would be better to locate this around the enclosing `const` expression
+				}
 				meaning.setSemForceError();
 			}
 			id.setSemForceError();
@@ -1053,12 +1059,14 @@ abstract class Scope{
 		final void pushDependencies(Declaration decl,bool keep){
 			if(getDependency(decl).isTop){
 				foreach(ndecl,ref v;dependencies.dependencies){
+					//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
 					if(decl in v.dependencies){
 						if(auto lu=lastUses.get(ndecl,true)){
 							while(lu.forwardTo) lu=lu.forwardTo;
-							if(lu.use&&lu.use.implicitDup){
-								if(cancelImplicitDup(lu.use)){
-									assert(lu.kind==LastUse.Kind.consumption);
+							//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
+							if(lu.canCancelImplicitDup()){
+								if(lu.cancelImplicitDup()){
+									assert(lu.kind==LastUse.Kind.consumption,text(lu));
 								}else{
 									// TODO
 								}

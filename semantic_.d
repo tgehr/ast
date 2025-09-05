@@ -2655,7 +2655,6 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 }
 
 Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
-	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -2676,7 +2675,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 			}
 		}
 	}
-	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	bool success=true;
 	DefineExp de=null;
 	enum flags=LowerDefineFlags.createFresh, unchecked=false, noImplicitDup=false;
@@ -2685,7 +2684,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 		assert(!de);
 		de=cast(DefineExp)makeDeclaration(be,success,sc,attemptLowering);
 		if(be.e2.type){
-			auto dcontext=defineLhsContext(econtext,be.e2.type,be.e2);
+			auto dcontext=defineLhsContext(context,be.e2.type,be.e2);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
 		}
@@ -4904,6 +4903,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		fe.var=expressionSemantic(fe.var,context.nestConsumed);
 		propErr(fe.var,fe);
 		void classicalForget(Expression var){
+			if(var.implicitDup) return;
 			if(auto tpl=cast(TupleExp)var){
 				tpl.e.each!classicalForget;
 				return;
@@ -4948,7 +4948,7 @@ Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisti
 	int nerr=sc.handler.nerrors; // TODO: this is a bit hacky
 	id.meaning=sc.lookup(id,false,true,lookup,failures);
 	if(nerr!=sc.handler.nerrors&&!id.isSemError()&&(!id.meaning||!id.meaning.isSemError)){ // TODO: still needed?
-		sc.note("looked up here",id.loc);
+		sc.note("error caused by lookup",id.loc);
 		id.setSemError();
 	}
 	return id.meaning;
