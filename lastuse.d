@@ -109,6 +109,7 @@ final class LastUse{
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
+	Identifier constBlock=null;
 	Expression parent=null;
 	static if(language==silq)
 		auto dep=Dependency(true);
@@ -218,12 +219,13 @@ final class LastUse{
 		if(splitFrom) splitFrom.pinSplits();
 	}
 
-	private void markConsumed(bool isForget){
-		//imported!"util.io".writeln("MARKING CONSUMED: ",this);
+	private void markConsumed(Identifier theUse,bool isForget){
+		if(!use) use=theUse;
+		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
 		if(isConsumption()) return;
 		if(splitSource&&splitSource.splitFrom)
-			splitSource.splitFrom.markConsumed(false);
-		if(splitFrom) splitFrom.markConsumed(false);
+			splitSource.splitFrom.markConsumed(theUse,false);
+		if(splitFrom) splitFrom.markConsumed(theUse,false);
 		if(isForget){
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
@@ -259,6 +261,10 @@ final class LastUse{
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				cdep.replace(lu.decl,lu.dep);
+				if(!lu.decl.isSemError()&&lu.isConsumption()){
+					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
+					lu.checkConsumable();
+				}
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
 						if(lu.use && lu.use.scope_){
@@ -282,10 +288,30 @@ final class LastUse{
 		}
 	}
 
-	void consume(bool isForget){
+	bool checkConsumable(){
+		if(constBlock&&dep.isTop){
+			if(!use){
+				scope_.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
+				imported!"util.io".writeln("???? ",this);
+				// TODO: needs a note indicating the end of scope
+			}else if(constBlock !is use){
+				scope_.error(format("cannot consume `const` %s `%s`",decl.kind,use), use.loc);
+				scope_.note(format("%s was made `const` here", decl.kind), constBlock.loc);
+			}else{
+				import ast.semantic_:nonLiftedError;
+				nonLiftedError(use,scope_); // TODO: would be better to locate this around the enclosing `const` expression
+			}
+			decl.setSemForceError();
+			if(use) use.setSemForceError();
+			return false;
+		}
+		return true;
+	}
+	bool consume(bool isForget){
 		assert(!forwardTo);
-		if(kind==Kind.synthesizedForget) return;
-		if(kind==Kind.consumption) return;
+		if(kind==Kind.synthesizedForget) return false;
+		if(kind==Kind.consumption) return false;
+		bool ok=checkConsumable();
 		if(kind==Kind.lazySplit){
 			auto lu=getSplitFrom();
 			assert(!!lu);
@@ -323,7 +349,7 @@ final class LastUse{
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
 					if(auto lu=nested.lastUses.get(result,true))
-						lu.markConsumed(isForget);
+						lu.markConsumed(use,isForget);
 				}
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
@@ -333,7 +359,8 @@ final class LastUse{
 			}
 		}
 		removeCopies(scope_);
-		markConsumed(isForget);
+		markConsumed(use,isForget);
+		return ok;
 	}
 
 	static enum Forgettability{
@@ -480,7 +507,7 @@ final class LastUse{
 							scope_.symtabRemove(decl);
 							scope_.pushDependencies(decl,false);
 						}
-						markConsumed(false);
+						markConsumed(use,false);
 						return;
 					}
 				}
@@ -501,6 +528,10 @@ final class LastUse{
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
 					assert(nsc.lastUses.canForget(cdecl,false,false));
 					auto declBefore=decl;
+					if(!use){
+						if(auto lu=nsc.lastUses.get(cdecl,true))
+							use=lu.use;
+					}
 					nsc.lastUses.forget(cdecl,false);
 					//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
@@ -520,7 +551,7 @@ final class LastUse{
 				assert(!dep.isTop);
 				if(constConsume&&constConsume.canForget(true)){
 					constConsume.forget(true);
-					markConsumed(false);
+					markConsumed(use,false);
 					return;
 				}
 				assert(canAddForget(parent));
@@ -567,8 +598,8 @@ final class LastUse{
 			case definition,lazySplitSink,lazySplit:
 				return assert(0);
 			case lazyMerge:
-				consume(false);
 				bool ok=true;
+				ok&=consume(false);
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=decl;
 					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
@@ -576,6 +607,10 @@ final class LastUse{
 					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
 						cdecl=decl.splitInto[i];
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
+					if(!use){
+						if(auto lu=nsc.lastUses.get(cdecl,true))
+							use=lu.use;
+					}
 					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
 						nsc.lastUses.cancelImplicitDup(cdecl);
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
@@ -596,12 +631,13 @@ final class LastUse{
 				if(!(use&&use.implicitDup)) return false;
 				use.implicitDup=false;
 				auto ok=scope_.checkImplicitDupCancel(use);
-				consume(false);
+				//imported!"util.io".writeln("CONSUMING: ",this," ",use.loc," ",constBlock," ",dep);
+				ok&=consume(false);
 				return ok;
 			case constUse:
 				if(constConsume&&constConsume.canCancelImplicitDup()){
 					constConsume.cancelImplicitDup();
-					markConsumed(false);
+					markConsumed(use,false);
 					return true;
 				}
 				return false;
@@ -671,14 +707,19 @@ struct LastUses{
 		}
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
+		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		static if(language==silq){
 			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
 			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop);
 		}
-		//imported!"util.io".writeln("ADDING LU: ",lastUse);
+		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
+			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
+			if(lastUse.use!is read) // TODO: ok?
+				lastUse.constBlock=read;
+		}
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
-			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;;
+			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;
 			if(lastUse.kind==LastUse.Kind.constUse){
 				//imported!"util.io".writeln("ATTACHING CONSTCONSUME: ",prevLastUse);
 				lastUse.constConsume=prevLastUse;
@@ -723,7 +764,7 @@ struct LastUses{
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
-				lastUse.splitSource.splitFrom.markConsumed(false);
+				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false);
 			lastUse.updateDependenciesOnConsumption();
 		}
 	}
