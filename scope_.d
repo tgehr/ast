@@ -1494,15 +1494,15 @@ abstract class Scope{
 				}
 				if(mayChange&&loopScope)
 					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
-				bool canForget=dependencies.canForget(decl);
+				bool canForget=type.isClassical()||dependencies.canForget(decl);
 				if(!mayChange){
-					// TODO: just use const captures?
-					auto lu=loopScope.lastUses.get(decl,true);
+					continue; // use const captures
+					/+auto lu=loopScope.lastUses.get(decl,true);
 					if(!lu||lu.kind==LastUse.kind.lazySplit)
 						continue;
-					if(!canForget) continue;
+					//if(!canForget) continue; // TODO: why does this not work?+/
 				}
-				bool isConstParamDecl=type.isClassical()||!mayChange||canForget;
+				bool isConstParamDecl=!mayChange||canForget;
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
 			}
