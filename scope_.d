@@ -320,18 +320,22 @@ abstract class Scope{
 				lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 				if(!id.constLookup&&!id.implicitDup)
 					lastUses.consumption(meaning,id,this); // TODO: ok?
+				updateDeclProps(meaning).accesses~=id;
 			}
-			updateDeclProps(meaning).accesses~=id;
 		}
 		final void recordCapturer(Declaration capturer,Declaration meaning){
-			updateDeclProps(meaning).capturers~=capturer;
+			if(!meaning.isToplevelDeclaration){
+				updateDeclProps(meaning).capturers~=capturer;
+			}
 		}
 		private final Identifier isConstHere(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r.constBlock;
 			return null;
 		}
 		final void blockConst(Declaration decl,Identifier constBlock){
-			updateDeclProps(decl).constBlock=constBlock;
+			if(!decl.isToplevelDeclaration){
+				updateDeclProps(decl).constBlock=constBlock;
+			}
 		}
 		static struct TrackedTemporary{
 			Expression expr;
@@ -725,11 +729,9 @@ abstract class Scope{
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		if(remove){
 			symtabRemove(odecl);
+			if(odecl !is ndecl)
+				replaceDecl(odecl,ndecl);
 			static if(language==silq){
-				static if(language==silq){
-					if(odecl !is ndecl)
-						replaceDecl(odecl,ndecl);
-				}
 				if(dependencyTracked(ndecl))
 					pushDependencies(ndecl,true);
 			}
@@ -738,8 +740,7 @@ abstract class Scope{
 			assert(odecl.name.id == ndecl.name.id);
 			symtabRemove(odecl);
 			symtabInsert(ndecl);
-			static if(language==silq)
-				replaceDecl(odecl,ndecl);
+			replaceDecl(odecl,ndecl);
 		}
 		return ndecl;
 	}
@@ -1501,12 +1502,15 @@ abstract class Scope{
 				}
 				if(mayChange&&loopScope)
 					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
+				bool canForget=dependencies.canForget(decl);
 				if(!mayChange){
+					// TODO: just use const captures?
 					auto lu=loopScope.lastUses.get(decl,true);
 					if(!lu||lu.kind==LastUse.kind.lazySplit)
 						continue;
+					if(!canForget) continue;
 				}
-				bool isConstParamDecl=type.isClassical()||!mayChange||dependencies.canForget(decl);
+				bool isConstParamDecl=type.isClassical()||!mayChange||canForget;
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
 			}
@@ -1750,8 +1754,8 @@ class NestedScope: Scope{
 					import ast.semantic_:propErr;
 					propErr(ndecl,result);
 					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
-					static if(language==silq){
-						if(remove){ // TODO: can we get rid of this?
+					if(remove){ // TODO: can we get rid of this?
+						static if(language==silq){
 							if(parent.getFunction() is getFunction()){
 								if(dependencyTracked(odecl))
 									removeDependency(odecl);
@@ -1760,9 +1764,9 @@ class NestedScope: Scope{
 								addDependency(odecl,pdep.dup);
 								//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
 							}
-							assert(odecl !is result);
-							replaceDecl(odecl,result);
 						}
+						assert(odecl !is result);
+						replaceDecl(odecl,result);
 					}
 				}
 			}
@@ -1790,9 +1794,9 @@ class NestedScope: Scope{
 								sc.addDependency(odecl,pdep.dup);
 								//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
 							}
-							if(odecl !is cdecl)
-								sc.replaceDecl(odecl,cdecl);
 						}
+						if(odecl !is cdecl)
+							sc.replaceDecl(odecl,cdecl);
 					}
 				}
 			}else processCurrent();
@@ -1998,16 +2002,25 @@ class CapturingScope(T): NestedScope{
 				}
 			}
 		}
+		auto meaningBefore=meaning,pmeaning=meaning;
 		if(!id.lazyCapture){
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
 			if(!id.isSemError){
 				if(consumed) meaning=parent.split(meaning,id);
 				decl.addCapture(meaning,id);
+				pmeaning=meaning;
 			}
 			if(consumed){
 				symtabInsert(meaning);
 				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this);
+				void replace(Scope csc){ // TODO: this is a bit hacky
+					foreach(sc;csc.activeNestedScopes){
+						sc.replaceDecl(meaningBefore,meaning);
+						replace(sc);
+					}
+				}
+				replace(this);
 			}
 			if(!id.isSemError()){
 				static if(is(T==FunctionDef)){
@@ -2019,9 +2032,6 @@ class CapturingScope(T): NestedScope{
 				}
 			}
 		}else origin.lastUses.definition(meaning,null);
-		auto pmeaning=meaning;
-		while(pmeaning.splitFrom&&pmeaning.splitFrom.scope_.isNestedIn(parent))
-			pmeaning=pmeaning.splitFrom;
 		parent.lastUses.capture(pmeaning,id,parent,decl);
 		parent.recordAccess(id,pmeaning);
 		if(!id.lazyCapture) parent.recordCapturer(decl,pmeaning);
