@@ -1501,6 +1501,11 @@ abstract class Scope{
 				}
 				if(mayChange&&loopScope)
 					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
+				if(!mayChange){
+					auto lu=loopScope.lastUses.get(decl,true);
+					if(!lu||lu.kind==LastUse.kind.lazySplit)
+						continue;
+				}
 				bool isConstParamDecl=type.isClassical()||!mayChange||dependencies.canForget(decl);
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
