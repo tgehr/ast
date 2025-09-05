@@ -1028,17 +1028,9 @@ abstract class Scope{
 			}
 			foreach(decl,dep;deps.map!(x=>x)){
 				assert(decl&&!cast(DeadDecl)decl);
-				bool ok=true;
-				foreach(odecl;dep.dependencies){
-					if(odecl.isSemError()) continue;
-					//assert(dependencyTracked(odecl),text(dependencies," ",decl," ",dep," ",odecl)); // TODO?
-					if(!dependencyTracked(odecl)&&getDefaultDependency(odecl).isTop) ok=false;
-				}
-				if(!ok) continue;
 				dependencies.dependencies[decl]=dep;
 			}
 		}
-
 		final bool dependencyTracked(Declaration decl){
 			return !!(decl in dependencies.dependencies);
 		}
@@ -1325,28 +1317,28 @@ abstract class Scope{
 				producedOuter~=sym;
 			}
 		}
-		static if(language==silq){
-			foreach(sc;scopes){
-				foreach(sym;sc.rnsymtab.dup){
-					if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
-					if(cast(DeadDecl)sym){
-						addDeadMerge(sym).mergedFrom~=sym;
-						assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
-						continue;
+		foreach(sc;scopes){
+			foreach(sym;sc.rnsymtab.dup){
+				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
+				if(cast(DeadDecl)sym){
+					addDeadMerge(sym).mergedFrom~=sym;
+					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
+					continue;
+				}
+				if(sym.getId !in rnsymtab){
+					sym=sc.split(sym,null);
+					if(!sc.canForgetAppend(sym)){
+						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						errors=true;
 					}
-					if(sym.getId !in rnsymtab){
-						sym=sc.split(sym,null);
-						if(!sc.canForgetAppend(sym)){
-							error(format("variable `%s` is not consumed", sym.getName), sym.loc);
-							errors=true;
-						}
-						static if(language==silq){
-							if(sc.dependencyTracked(sym))
-								sc.pushDependencies(sym,false);
-						}
+					static if(language==silq){
+						if(sc.dependencyTracked(sym))
+							sc.pushDependencies(sym,false);
 					}
 				}
 			}
+		}
+		static if(language==silq){
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
 			foreach(k,v;dependencies.dependencies.dup){
