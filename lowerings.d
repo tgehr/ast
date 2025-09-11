@@ -350,6 +350,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	void visId(Identifier id){
 		auto cur=id.meaning;
 		assert(!!cur);
+		if(!cur.scope_.getFunction()) return; // no need to capture global declarations
 		if(cur.scope_.isNestedIn(context.sc)){
 			while(cur.splitFrom&&cur.splitFrom.scope_!is context.sc)
 				cur=cur.splitFrom;
