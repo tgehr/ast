@@ -356,6 +356,7 @@ class DatDecl: Declaration{
 			auto param=new Parameter(dparam.isConst, name, dparam.dtype);
 			param.loc=dparam.loc;
 			param.vtype=dparam.vtype;
+			assert(dparam.isSemCompleted());
 			param.sstate=dparam.sstate;
 			return param;
 		}).array;
@@ -384,18 +385,25 @@ class DatDecl: Declaration{
 		call.loc=id.loc.to(arg.loc);
 		import ast.semantic_: ConstResult, InType, expSemContext, callSemantic; // TODO: get rid of this?
 		auto ncall=callSemantic(call,expSemContext(null,ConstResult.no,InType.no));
+		ncall.setSemCompleted();
 		auto ret=new ReturnExp(ncall);
 		ret.type=unit;
 		ret.setSemCompleted();
 		auto bdy=new CompoundExp([ret]);
 		bdy.type=unit;
+		bdy.setSemCompleted();
 		fd=new FunctionDef(null, fparams, isTuple, null, bdy);
+		fd.loc=this.loc;
 		fd.isSquare=true;
 		fd.annotation=pure_;
+		fd.scope_=this.scope_;
 		fd.ftype=cast(ProductTy)id.type;
 		assert(fd.ftype);
 		assert(!captures.length,"nested dat decl not supported");
 		fd.fscope_=new FunctionScope(this.dscope_.parent,fd);
+		foreach(fparam; fparams) {
+			fparam.scope_ = fd.fscope_;
+		}
 		fd.context=this.context;
 		fd.ret=fd.ftype.cod;
 		assert(isType(fd.ret));
