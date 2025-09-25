@@ -532,12 +532,14 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			auto z=constantExp(0);
 			z.loc=olhs.loc;
 			Expression s1=new SliceExp(tmp1,z,l1);
+			s1.implicitDup=true;
 			s1.loc=tmp1.loc;
 			auto tmp2=tmp.copy();
 			tmp2.loc=orhs.loc;
 			auto l=tmpLen();
 			l.loc=olhs.loc;
 			Expression s2=new SliceExp(tmp2,l1.copy(),l);
+			s2.implicitDup=true;
 			s2.loc=tmp2.loc;
 			auto tmpl=cast(Identifier)ce.e1?ce.e1:new Identifier(freshName);
 			if(tmpl!is ce.e1){

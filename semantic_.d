@@ -5227,7 +5227,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		return expressionSemantic(id,context);
 	}
 	static if(language==silq)
-	if(!idx.byRef&&!context.constResult){
+	if(!idx.byRef&&!context.constResult&&!idx.implicitDup){
 		auto dep=getDependency(idx.e,sc);
 		if(auto id=getIdFromIndex(idx))
 			if(id.meaning)
@@ -5356,7 +5356,8 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
 		sl.setSemError();
 	}
-	if(!sl.byRef&&!context.constResult){
+	static if(language==silq)
+	if(!sl.byRef&&!context.constResult&&!sl.implicitDup){
 		auto dep=getDependency(sl.e,sc);
 		if(auto id=getIdFromDefLhs(sl))
 			if(id.meaning)
