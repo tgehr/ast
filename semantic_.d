@@ -2863,6 +2863,7 @@ Identifier getIdFromIndex(IndexExp e){
 
 Identifier getIdFromDefLhs(Expression e){
 	if(auto idx=cast(IndexExp)unwrap(e)) return getIdFromDefLhs(idx.e);
+	if(auto sl=cast(SliceExp)unwrap(e)) return getIdFromDefLhs(sl.e);
 	return cast(Identifier)unwrap(e);
 }
 
@@ -5226,8 +5227,18 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		return expressionSemantic(id,context);
 	}
 	static if(language==silq)
-	if(!idx.byRef&&!context.constResult)
-		idx.implicitDup=true;
+	if(!idx.byRef&&!context.constResult){
+		auto dep=getDependency(idx.e,sc);
+		if(auto id=getIdFromIndex(idx))
+			if(id.meaning)
+				sc.pushUp(dep,id.meaning);
+		if(dep.isTop){
+			sc.error("cannot consume component of quantum aggregate",idx.loc);
+			sc.note(format("did you mean to write `dup(%s)`?",idx.loc.rep),idx.loc);
+			idx.setSemError();
+		}else idx.implicitDup=true;
+	}
+	idx.setSemCompleted();
 	return idx;
 }
 
@@ -5344,6 +5355,17 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	}else{
 		sc.error(format("type %s is not sliceable",sl.e.type),sl.loc);
 		sl.setSemError();
+	}
+	if(!sl.byRef&&!context.constResult){
+		auto dep=getDependency(sl.e,sc);
+		if(auto id=getIdFromDefLhs(sl))
+			if(id.meaning)
+				sc.pushUp(dep,id.meaning);
+		if(dep.isTop){
+			sc.error("cannot consume components of quantum aggregate",sl.loc);
+			sc.note(format("did you mean to write `dup(%s)`?",sl.loc.rep),sl.loc);
+			sl.setSemError();
+		}else sl.implicitDup=true;
 	}
 	return sl;
 }
