@@ -608,9 +608,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(!tpl) return res=new CompoundExp([arhs,def]);
 		return def;
 	}
-	if(auto conv=cast(TypeAnnotationExp)olhs) {
-		return lowerDefine!flags(conv.e, orhs, loc, sc, unchecked,noImplicitDup);
-	}
 	static if(language==silq)
 	if(string prim=isPrimitiveCall(olhs)) {
 		auto oce=cast(CallExp)olhs;
