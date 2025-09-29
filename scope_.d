@@ -149,7 +149,7 @@ abstract class Scope{
 	}do{
 		error(format("redefinition of \"%s\"",decl.name), decl.name.loc);
 		note("previous definition was here",prev.name.loc);
-		decl.setSemError();;
+		decl.setSemError();
 	}
 
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
