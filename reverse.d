@@ -775,6 +775,25 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		rhs.implicitDup=false; // TODO: ok?
 		return res=new ForgetExp(rhs,null);
 	}
+	if(auto ite=cast(IteExp)olhs){
+		if(ite.then.s.length==1&&ite.othw&&ite.othw.s.length==1){
+			auto tmp=new Identifier(freshName());
+			tmp.loc=orhs.loc;
+			auto d1=lowerDefine!flags(tmp,orhs,orhs.loc,sc,unchecked,noImplicitDup);
+			auto thenlhs=ite.then.s[0];
+			auto othwlhs=ite.othw.s[0];
+			auto dthen=lowerDefine!(flags|LowerDefineFlags.createFresh)(thenlhs,tmp,thenlhs.loc,sc,unchecked,noImplicitDup);
+			auto dothw=lowerDefine!(flags|LowerDefineFlags.createFresh)(othwlhs,tmp,othwlhs.loc,sc,unchecked,noImplicitDup);
+			auto cond=createFresh?ite.cond.copy():ite.cond;
+			auto blthen=cast(CompoundExp)dthen;
+			if(!blthen) blthen=new CompoundExp([dthen]);
+			auto blothw=cast(CompoundExp)dothw;
+			if(!blothw) blothw=new CompoundExp([dothw]);
+			auto nite=new IteExp(cond,blthen,blothw);
+			nite.loc=ite.loc;
+			return res=new CompoundExp([d1,nite]);
+		}
+	}
 	sc.error("not supported as definition left-hand side",olhs.loc);
 	return error();
 }

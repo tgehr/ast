@@ -1774,8 +1774,100 @@ Expression defineLhsSemanticImpl(CommaExp ce,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(ce,context); // TODO: get rid of this case?
 }
 
-Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){
-	return defineLhsSemanticImplCurrentlyUnsupported(ite,context);
+
+CompoundExp branchBlockSemanticLhs(CompoundExp branch, DefineLhsContext context, bool quantumControl){
+	auto sc = context.sc;
+	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
+
+	assert(branch.s.length == 1);
+	branch.s[0] = branchSemanticLhs(branch.s[0], DefineLhsContext(ExpSemContext(branch.blscope_, context.expSem.constResult, context.expSem.inType), context.type, context.initializer), quantumControl);
+	static if(language==silq) branch.blscope_.clearConsumed();
+
+	static if(!isPresemantic){
+		branch.type=branch.s[0].type;
+		propErr(branch.s[0], branch);
+		branch.setSemCompleted();
+	}
+	return branch;
+}
+
+Expression branchSemanticLhs(Expression branch,DefineLhsContext context,bool quantumControl){ // TODO: actually introduce a bottom type?
+	auto sc=context.sc;
+	if(quantumControl){
+		if(context.type&&context.type.hasClassicalComponent()){
+			if(auto qtype=context.type.getQuantum()){
+				if(isType(qtype)){
+					auto nbranch=new TypeAnnotationExp(branch,qtype,TypeAnnotationType.annotation);
+					nbranch.loc=branch.loc;
+					branch=nbranch;
+				}
+			}
+		}
+	}
+	return defineLhsSemantic!isPresemantic(branch,context);
+}
+
+Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: merge with forward semantic to avoid code duplication?
+	static if(isPresemantic) return ite;
+	if(ite.isSemError()) return ite;
+	auto sc=context.sc, inType=context.inType;
+	ite.cond=conditionSemantic!true(ite, ite.cond, sc, inType);
+	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
+		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
+		ite.setSemError();
+		return ite;
+	}
+	static if(language==silq){
+		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
+		auto restriction_=quantumControl?Annotation.mfree:Annotation.none;
+	}else{
+		enum quantumControl=false;
+		enum restriction_=Annotation.none;
+	}
+	// initialize both scopes first, to allow captures to be inserted
+	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_);
+	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_);
+	ite.then=branchBlockSemanticLhs(ite.then, context, quantumControl);
+	if(!ite.othw){
+		sc.error("missing else for if expression",ite.loc);
+		ite.setSemError();
+		return ite;
+	}
+	ite.othw=branchBlockSemanticLhs(ite.othw, context, quantumControl);
+	propErr(ite.then,ite);
+	propErr(ite.othw,ite);
+	static if(!isPresemantic){
+		propErr(ite.cond,ite);
+		if(!ite.isSemError()){
+			auto t1=ite.then.type;
+			auto t2=ite.othw.type;
+			ite.type=joinTypes(t1,t2);
+			if(t1 && t2 && !ite.type){
+				sc.error(format("incompatible types %s and %s for branches of if expression",t1,t2),ite.loc);
+				ite.setSemError();
+			}
+			if(quantumControl&&ite.type&&ite.type.hasClassicalComponent()){
+				sc.error(format("type `%s` of if expression with quantum control has classical components",ite.type),ite.loc);
+				ite.setSemError();
+			}
+		}
+		auto thenRepl=ite.then.blscope_.moveLocalComponentReplacements();
+		auto othwRepl=ite.othw.blscope_.moveLocalComponentReplacements();
+		if(!thenRepl.empty()||!othwRepl.empty()){
+			sc.error("replacing components within conditional expression not yet supported", ite.loc);
+			ite.setSemError();
+		}
+		if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
+			sc.note("consumed in one branch of if expression", ite.loc);
+			ite.setSemError();
+		}
+		if(inType){
+			if(ite.then) ite.then.blscope_=null;
+			if(ite.othw) ite.othw.blscope_=null;
+		}
+		ite.setSemCompleted();
+	}
+	return ite;
 }
 
 Expression defineLhsSemanticImpl(AssertExp ae,DefineLhsContext context){
@@ -2042,11 +2134,10 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		idx.setSemError();
 		return idx;
 	}
-	// TODO: determine type?
 	auto name=context.nameIndex(idx);
 	auto id=new Identifier(name); // TODO: subclass Identifier and give it the original IndexExp?
 	id.loc=idx.loc;
-	return id;
+	return defineLhsSemantic!isPresemantic(id,context);
 }
 }else{ // language!=silq
 Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){

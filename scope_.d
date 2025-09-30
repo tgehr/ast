@@ -567,6 +567,7 @@ abstract class Scope{
 		}
 		static struct ComponentReplacementContext{
 			private DeclProp.ComponentReplacement[][Declaration] componentReplacements;
+			bool empty(){ return !componentReplacements.length; }
 		}
 		final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
 			DeclProp.ComponentReplacement[][Declaration] r;
