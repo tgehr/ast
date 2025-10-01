@@ -4178,7 +4178,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto reverse=cast(Identifier)ce.e;
 	assert(reverse&&isReverse(reverse));
-	ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+	ce.arg=expressionSemantic(ce.arg,context.nestConst);
 	enum simplify=true;
 	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,ce.checkReverse,simplify);
 	if(ce.arg.isSemError())
