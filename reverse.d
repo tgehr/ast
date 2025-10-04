@@ -60,26 +60,33 @@ Expression knownLength(Expression e,bool ignoreType){ // TODO: version that retu
 		}
 	}
 	if(auto tae=cast(TypeAnnotationExp)e){
-		if(auto vec=cast(VectorTy)tae.t)
-			return vec.num;
-		if(auto tt=tae.t.isTupleTy())
-			return res=constantExp(tt.length);
-		if(auto pow=cast(PowExp)tae.t)
-			return pow.e2;
-		if(auto ty=cast(TypeofExp)tae.t){
-			if(auto sl=cast(SliceExp)ty.e){
-				res=new NSubExp(sl.r,sl.l);
-				propErr(sl.r,res);
-				propErr(sl.l,res);
-				if(sl.r.type&&sl.l.type){
-					res.type=nSubType(sl.r,sl.l);
-					if(!res.type) res.setSemError();
+		Expression knownLengthType(Expression t){
+			if(auto une=cast(UNotExp)t)
+				return knownLengthType(une.e);
+			if(auto vec=cast(VectorTy)t)
+				return vec.num;
+			if(auto tt=t.isTupleTy())
+				return res=constantExp(tt.length);
+			if(auto pow=cast(PowExp)t)
+				return pow.e2;
+			if(auto ty=cast(TypeofExp)t){
+				if(auto sl=cast(SliceExp)ty.e){
+					res=new NSubExp(sl.r,sl.l);
+					propErr(sl.r,res);
+					propErr(sl.l,res);
+					if(sl.r.type&&sl.l.type){
+						res.type=nSubType(sl.r,sl.l);
+						if(!res.type) res.setSemError();
+					}
+					if(res.type&&sl.r.isSemCompleted()&&sl.l.isSemCompleted())
+						res.setSemCompleted();
+					return res;
 				}
-				if(res.type&&sl.r.isSemCompleted()&&sl.l.isSemCompleted())
-					res.setSemCompleted();
-				return res;
 			}
+			return null;
 		}
+		if(auto l=knownLengthType(tae.t))
+			return l;
 		return knownLength(tae.e,ignoreType);
 	}
 	if(!ignoreType&&e.type){
