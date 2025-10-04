@@ -4540,25 +4540,15 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.type=ft.tryApply(ce.arg,ce.isSquare);
 				return !!ce.type;
 			}else{
-				if(!ce.isSemError()){
-					if(ft.isTuple){
-						if(auto tpl=cast(TupleExp)ce.arg){
-							assert(ft.nargs==tpl.length);
-							foreach(i,arg;tpl.e) checkArg(arg,ft.argTy(i));
-						}
-					}
-					if(ft.isConstForReverse.all){
-						checkArg(ce.arg,ft.dom);
-					}else assert(ft.isTuple||!ft.isConstForReverse.any);
+				if(!ce.type&&ce.arg.isSemCompleted()&&ft.isConstForReverse.all)
+					ce.type=ft.tryApply(ce.arg,ce.isSquare);
+				if(!ce.type){
+					if(ft.cod.hasAnyFreeVar(ft.names)){
+						sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
+						ce.setSemError();
+					}else ce.type=ft.cod;
 				}
-				if(ft.cod.hasAnyFreeVar(ft.names)){
-					sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
-					ce.setSemError();
-					return true;
-				}else{
-					ce.type=ft.cod;
-					return true;
-				}
+				return true;
 			}
 		}
 		static if(language==silq && isRhs){ // TODO: probably this can work on lhs
