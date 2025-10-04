@@ -131,7 +131,7 @@ abstract class Scope{
 	}
 	final bool canInsert(Id id){
 		auto decl=symtabLookup(id,false,null);
-		return !decl;
+		return !decl||cast(DeadDecl)decl;
 	}
 
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
@@ -139,7 +139,7 @@ abstract class Scope{
 			lastUses.forget(oldDecl,true);
 			return true;
 		}
-		if(!newDecl.isSemError()) redefinitionError(newDecl, oldDecl);
+		if(!oldDecl.isSemError()&&!newDecl.isSemError()) redefinitionError(newDecl, oldDecl);
 		newDecl.setSemError();
 		return false;
 	}
