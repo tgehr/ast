@@ -3910,7 +3910,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			if(!id){
 				sc.error(format("cannot update-assign to quantum expression %s",be.e1),be.e1.loc);
 				be.setSemError();
-			}else if((!isInvertibleOpAssignExp(be)||be.e2.hasFreeIdentifier(id.id))&&id.meaning&&!sc.canForget(id.meaning)){
+			}else if(!cast(CatAssignExp)be&&(!isInvertibleOpAssignExp(be)||be.e2.hasFreeIdentifier(id.id))&&id.meaning&&!sc.canForget(id.meaning)){
 				sc.error("quantum update must be invertible",be.loc);
 				be.setSemError();
 			}
