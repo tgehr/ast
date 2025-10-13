@@ -4457,7 +4457,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				assert(!isRhs || tpl.isSemFinal());
 			}else{
 				static if(isRhs){
-					auto isConst=(ft.isConst.length?ft.isConst[0]:true);
+					auto isConst=(ft.isConst.length?ft.isConst[0]:ft.isSquare);
 					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 				}else{
 					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:true);
