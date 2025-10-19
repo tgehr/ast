@@ -5255,17 +5255,23 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	}
 	idx.e=expressionSemantic(idx.e,context.nestIndexed);
 	propErr(idx.e,idx);
-	if(auto ft=cast(FunTy)idx.e.type){
-		auto ce=new CallExp(idx.e,idx.a,true,false);
-		ce.loc=idx.loc;
-		return callSemantic(ce,context);
+	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
+	if(!ne){
+		if(auto ft=cast(FunTy)idx.e.type){
+			auto ce=new CallExp(idx.e,idx.a,true,false);
+			ce.loc=idx.loc;
+			return callSemantic(ce,context);
+		}
 	}
-	if(idx.e.sstate != SemState.error && idx.isArraySyntax && (isType(idx.e)||isQNumeric(idx.e))){
-		if(auto tpl=cast(TupleExp)idx.a){
-			if(tpl.length==0) {
-				auto r = new ArrayTy(idx.e);
-				r.loc = idx.loc;
-				return expressionSemantic(r, context);
+	if(idx.e.sstate != SemState.error && idx.isArraySyntax){
+		ne=ne?ne:idx.e;
+		if((isType(ne)||isQNumeric(ne))){
+			if(auto tpl=cast(TupleExp)idx.a){
+				if(tpl.length==0) {
+					auto r = new ArrayTy(ne);
+					r.loc = idx.loc;
+					return expressionSemantic(r, context);
+				}
 			}
 		}
 	}
@@ -5802,14 +5808,19 @@ Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){
 	return handleUnary!minusType("minus",ume,ume.e,context);
 }
 
+Expression asPreludeType(Expression e,Scope sc){ // TODO: overloading?
+	static if(language==silq){
+		if(auto id=cast(Identifier)e)
+			if(isPreludeSymbol(id) == "Z")
+				return getPreludeSymbol("ℤ", id.loc, sc);
+	}
+	return null;
+}
+
 Expression expressionSemanticImpl(UNotExp une,ExpSemContext context){
 	auto sc=context.sc;
 	une.e=expressionSemantic(une.e,context.nestConst);
-	static if(language==silq){
-		if(auto id=cast(Identifier)une.e)
-			if(isPreludeSymbol(id) == "Z")
-				une.e = getPreludeSymbol("ℤ", id.loc, sc);
-	}
+	if(auto ne=asPreludeType(une.e,sc)) une.e=ne;
 	static if(language==silq) if(isType(une.e)||isQNumeric(une.e)){
 		auto r = new ClassicalTy(une.e);
 		r.loc = une.loc;
@@ -5872,12 +5883,15 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	propErr(e1,e);
 	if(e.isSemError())
 		return e;
-	if((isType(e1)||isQNumeric(e1))&&name=="power"&&!isEmpty(e1)){
-		auto r = new VectorTy(e1, e2);
-		r.loc = e.loc;
-		return expressionSemantic(r, context);
+	if(name=="power"){
+		auto ne1=e1;
+		if(auto ne=asPreludeType(ne1,sc)) ne1=ne;
+		if((isType(ne1)||isQNumeric(ne1))&&!isEmpty(ne1)){
+			auto r = new VectorTy(ne1, e2);
+			r.loc = e.loc;
+			return expressionSemantic(r, context);
+		}
 	}
-
 	e2 = expressionSemantic(e2, context.nestConst);
 	propErr(e2, e);
 	if(!e1.type || !e2.type) {
