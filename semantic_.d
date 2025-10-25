@@ -362,7 +362,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 		}else LbadDefLhs:if(!ignoreInvalidLhs){
 			if(!be.isSemError()){
 				sc.error("invalid definition left-hand side",be.e1.loc);
-				be.e1.setSemError();
+				be.e1.setSemForceError();
 				be.setSemError();
 			}
 			success=false;
