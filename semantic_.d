@@ -6158,6 +6158,8 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr, ExpSemContext context
 Expression expressionSemanticImpl(TupleTy ex, ExpSemContext context){
 	foreach(ref ty; ex.types) {
 		ty = expressionSemantic(ty, context.nestType());
+		if(auto nty = typeSemantic(ty, context.sc))
+			ty = nty;
 		propErr(ty, ex);
 	}
 	if(!ex.isSemError()) {
