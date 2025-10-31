@@ -2847,6 +2847,12 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 			// TODO: clean up other temporaries
 		}
 	}else{
+		while(auto tae=cast(TypeAnnotationExp)be.e1){
+			auto ntae=new TypeAnnotationExp(be.e2,tae.t,tae.annotationType);
+			ntae.loc=be.e2.loc;
+			be.e1=tae.e;
+			be.e2=ntae;
+		}
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 		propErr(be.e2,be);
 		updateLhs();
@@ -6158,7 +6164,7 @@ Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr, ExpSemContext context
 Expression expressionSemanticImpl(TupleTy ex, ExpSemContext context){
 	foreach(ref ty; ex.types) {
 		ty = expressionSemantic(ty, context.nestType());
-		if(auto nty = typeSemantic(ty, context.sc))
+		if(auto nty = typeSemantic(ty, context.sc, true))
 			ty = nty;
 		propErr(ty, ex);
 	}
