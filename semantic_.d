@@ -298,12 +298,12 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			else vd=varDeclSemantic(vd,sc);
 			return vd;
 		}
-		if(auto id=cast(Identifier)be.e1){
+		if(auto id=cast(Identifier)unwrap(be.e1)){
 			if(id.implicitDup) return be;
 			auto vd=makeVar(id);
 			propErr(vd,be);
 			return be;
-		}else if(auto tpl=cast(TupleExp)be.e1){
+		}else if(auto tpl=cast(TupleExp)unwrap(be.e1)){
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
 				if(auto id=cast(Identifier)exp){
@@ -313,7 +313,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			}
 			foreach(vd;vds) if(vd) propErr(vd,be);
 			return be;
-		}else if(auto ce=cast(CallExp)be.e1){
+		}else if(auto ce=cast(CallExp)unwrap(be.e1)){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				goto LbadDefLhs;
@@ -346,9 +346,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 				propErr(vd,be);
 				return be;
 			}else goto LbadDefLhs;
-		}else if(cast(IndexExp)be.e1||cast(SliceExp)be.e1){
+		}else if(cast(IndexExp)unwrap(be.e1)||cast(SliceExp)unwrap(be.e1)){
 			return be;
-		}else if(auto ce=cast(CatExp)be.e1){
+		}else if(auto ce=cast(CatExp)unwrap(be.e1)){
 			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
 				goto LbadDefLhs;
 			if(auto id=cast(Identifier)unwrap(ce.e1)){
