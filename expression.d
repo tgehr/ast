@@ -838,6 +838,7 @@ class Identifier: Expression{
 		this.constLookup=false;
 	}
 	Declaration meaning;
+	bool consumedDuringBorrow=false;
 	bool lazyCapture=false;
 	Scope scope_;
 	static if(language==silq){

@@ -333,7 +333,10 @@ final class LastUse{
 			if(csc is decl.scope_) break;
 		}
 		Declaration result=scope_.getSplit(decl);
+		auto isConst=constBlock?scope_.isConst(result):null;
+		if(constBlock) scope_.updateDeclProps(decl).constBlock=constBlock;
 		result=scope_.consume(result,use);
+		if(constBlock) scope_.updateDeclProps(decl).constBlock=isConst;
 		assert(!!result);
 		scope_.unsplit(result);
 		assert(scope_.getSplit(decl) is result);

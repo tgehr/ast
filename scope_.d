@@ -184,7 +184,7 @@ abstract class Scope{
 
 	static if(language==silq){
 		static struct DeclProp{
-			private Identifier constBlock;
+			Identifier constBlock;
 			static if(language==silq){
 				static struct ComponentReplacement{
 					IndexExp write;
@@ -334,7 +334,10 @@ abstract class Scope{
 		}
 		final void blockConst(Declaration decl,Identifier constBlock){
 			if(!decl.isToplevelDeclaration){
-				updateDeclProps(decl).constBlock=constBlock;
+				if(auto props=updateDeclProps(decl)){
+					if(!(constBlock.implicitDup&&props.constBlock))
+						props.constBlock=constBlock;
+				}
 			}
 		}
 		static struct TrackedTemporary{
@@ -369,6 +372,7 @@ abstract class Scope{
 			assert(read.scope_);
 		}do{
 			if(read.meaning.isSemError()) return;
+			read.consumedDuringBorrow=true;
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
