@@ -184,7 +184,7 @@ abstract class Scope{
 
 	static if(language==silq){
 		static struct DeclProp{
-			Identifier constBlock;
+			Identifier[] constBlock;
 			static if(language==silq){
 				static struct ComponentReplacement{
 					IndexExp write;
@@ -216,7 +216,7 @@ abstract class Scope{
 				//assert(!constBlock);
 				assert(!componentReplacements.length);
 			}do{
-				constBlock=null; // TODO: ok?
+				constBlock=[]; // TODO: ok?
 				return this;
 			}
 			void merge(DeclProp nested)in{
@@ -329,15 +329,15 @@ abstract class Scope{
 			}
 		}
 		private final Identifier isConstHere(Declaration decl){
-			if(auto r=declProps.tryGet(decl)) return r.constBlock;
+			if(auto r=declProps.tryGet(decl))
+				if(r.constBlock.length)
+					return r.constBlock[$-1];
 			return null;
 		}
 		final void blockConst(Declaration decl,Identifier constBlock){
 			if(!decl.isToplevelDeclaration){
-				if(auto props=updateDeclProps(decl)){
-					if(!(constBlock.implicitDup&&props.constBlock))
-						props.constBlock=constBlock;
-				}
+				if(auto props=updateDeclProps(decl))
+					props.constBlock~=constBlock;
 			}
 		}
 		static struct TrackedTemporary{
@@ -372,7 +372,6 @@ abstract class Scope{
 			assert(read.scope_);
 		}do{
 			if(read.meaning.isSemError()) return;
-			read.consumedDuringBorrow=true;
 			import ast.semantic_:getDependency;
 			auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
 			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
@@ -488,20 +487,22 @@ abstract class Scope{
 			return success;
 		}
 		final Identifier isConst(Declaration decl){
-			foreach(ref prop;nestedDeclProp(decl))
-				if(auto r=prop.constBlock)
-					return r;
+			foreach(ref prop;nestedDeclProp(decl)){
+				auto r=prop.constBlock;
+				if(r.length) return r[$-1];
+			}
 			return null;
 		}
 		static struct ConstBlockContext{
-			private Identifier[Declaration] constBlock;
+			private Identifier[][Declaration] constBlock;
 			private size_t numTrackedTemporaries;
 		}
 		final ConstBlockContext saveConst(){
-			Identifier[Declaration] constBlock;
-			foreach(decl,ref prop;declProps.props)
-				if(prop.constBlock)
-					constBlock[decl]=prop.constBlock;
+			Identifier[][Declaration] constBlock;
+			foreach(decl,ref prop;declProps.props){
+				auto r=prop.constBlock;
+				if(r.length) constBlock[decl]=r;
+			}
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
 		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType){
@@ -513,12 +514,12 @@ abstract class Scope{
 		final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
 			foreach(decl,ref prop;declProps.props){
 				auto nconstBlock=context.constBlock.get(decl,null);
-				if(prop.constBlock !is nconstBlock) recordResetConst(decl,prop.constBlock,parent,isStatement,inType);
+				if(prop.constBlock != nconstBlock) recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
 				prop.constBlock=nconstBlock;
 			}
 			foreach(decl,constBlock;context.constBlock){
 				auto prop=declProps.tryGet(decl);
-				assert(prop&&prop.constBlock is constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
+				assert(prop&&prop.constBlock==constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
@@ -526,9 +527,9 @@ abstract class Scope{
 		}
 		final bool resetConst(ref Expression parent,bool isStatement,bool inType){
 			foreach(decl,ref prop;declProps.props){
-				if(prop.constBlock){
-					recordResetConst(decl,prop.constBlock,parent,isStatement,inType);
-					prop.constBlock=null;
+				if(prop.constBlock.length){
+					recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+					prop.constBlock=[];
 				}
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
@@ -612,8 +613,13 @@ abstract class Scope{
 	}
 	final Declaration consume(Declaration decl,Identifier use){
 		if(use&&!decl.isSemError&&!use.isSemError){
-			if(auto read=isConst(decl))
+			if(auto read=isConst(decl)){
+				foreach(prop;nestedDeclProp(decl)){
+					foreach(block;prop.constBlock)
+						block.consumedDuringBorrow=true;
+				}
 				recordConstBlockedConsumption(read,use);
+			}
 		}
 		if(rnsymtab.get(decl.getId,null) !is decl) return null;
 		if(cast(DeadDecl)decl) return null;
@@ -1478,7 +1484,8 @@ abstract class Scope{
 			assert(restoreable);
 		}do{
 			if(auto dprop=declProps.tryGet(decl))
-				return dprop.constBlock;
+				if(dprop.constBlock.length)
+					return dprop.constBlock[$-1];
 			return null;
 		}
 		private bool isNonConstDecl(Declaration decl){ // TODO: get rid of code duplication?

@@ -109,7 +109,7 @@ final class LastUse{
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
-	Identifier constBlock=null;
+	Identifier[] constBlock;
 	Expression parent=null;
 	static if(language==silq)
 		auto dep=Dependency(true);
@@ -289,14 +289,21 @@ final class LastUse{
 	}
 
 	bool checkConsumable(){
-		if(constBlock&&dep.isTop){
+		//imported!"util.io".writeln(constBlock.map!(id=>id.loc)," ",use?text(use.loc):"<?>");
+		auto nconstBlock=constBlock.length?constBlock[$-1]:null;
+		if(!nconstBlock){
+			if(auto nsc=cast(NestedScope)scope_){
+				nconstBlock=nsc.parent.isConst(decl); // TODO: should not be needed
+				//imported!"util.io".writeln("???? ",decl," ",use?text(use.loc):"<?>",nconstBlock is decl," ",scope_ is decl.scope_," ",nsc.parent is decl.scope_," ",this);
+			}
+		}
+		if(nconstBlock&&dep.isTop){
 			if(!use){
 				scope_.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
-				imported!"util.io".writeln("???? ",this);
 				// TODO: needs a note indicating the end of scope
-			}else if(constBlock !is use){
+			}else if(nconstBlock !is use){
 				scope_.error(format("cannot consume `const` %s `%s`",decl.kind,use), use.loc);
-				scope_.note(format("%s was made `const` here", decl.kind), constBlock.loc);
+				scope_.note(format("%s was made `const` here", decl.kind), nconstBlock.loc);
 			}else{
 				import ast.semantic_:nonLiftedError;
 				nonLiftedError(use,scope_); // TODO: would be better to locate this around the enclosing `const` expression
@@ -333,10 +340,15 @@ final class LastUse{
 			if(csc is decl.scope_) break;
 		}
 		Declaration result=scope_.getSplit(decl);
-		auto isConst=constBlock?scope_.isConst(result):null;
-		if(constBlock) scope_.updateDeclProps(decl).constBlock=constBlock;
+		Identifier[] oldConstBlock;
+		if(constBlock.length){
+			if(auto prop=scope_.updateDeclProps(decl)){
+				oldConstBlock=prop.constBlock;
+				prop.constBlock=constBlock;
+			}
+		}
 		result=scope_.consume(result,use);
-		if(constBlock) scope_.updateDeclProps(decl).constBlock=isConst;
+		if(constBlock.length) scope_.updateDeclProps(decl).constBlock=oldConstBlock;
 		assert(!!result);
 		scope_.unsplit(result);
 		assert(scope_.getSplit(decl) is result);
@@ -595,6 +607,7 @@ final class LastUse{
 		return true;
 	}
 	bool cancelImplicitDup(){
+		//imported!"util.io".writeln("CANCELING: ",use.loc," ",dep);
 		if(forwardTo) return forwardTo.cancelImplicitDup();
 		if(splitFrom) return false;
 		final switch(kind)with(Kind){
@@ -717,8 +730,13 @@ struct LastUses{
 		}
 		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
 			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
-			if(lastUse.use!is read) // TODO: ok?
-				lastUse.constBlock=read;
+			if(auto prop=lastUse.scope_.declProps.tryGet(lastUse.decl)){
+				//imported!"util.io".writeln(read," ",prop.constBlock," ",lastUse.dep);
+				assert(!lastUse.constBlock,text(lastUse," ",lastUse.constBlock));
+				lastUse.constBlock=prop.constBlock;
+				if(lastUse.constBlock.length&&lastUse.constBlock.back is lastUse.use)
+					lastUse.constBlock.popBack(); // TODO: ok?
+			}
 		}
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
