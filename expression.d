@@ -990,31 +990,18 @@ class IndexExp: Expression{ //e[a]
 	Expression e;
 	Expression a;
 	bool isArraySyntax=false; // e[] vs e[()]
+	static if(language==silq) bool isClassical_=false;
+	else enum isClassical_=true;
 	this(Expression exp, Expression arg){e=exp; a=arg;}
 	override IndexExp copyImpl(CopyArgs args){
 		auto r=new IndexExp(e.copy(args),a.copy(args));
 		r.isArraySyntax=isArraySyntax;
+		r.isClassical_=isClassical_;
 		return r;
 	}
 	override string toString(){
-		return _brk(e.toString()~a.tupleToString(true));
-	}
-	override Expression evalImpl(){
-		auto ne=e.eval();
-		auto na=a.eval();
-		Expression[] exprs;
-		if(auto tpl=cast(TupleExp)ne) exprs=tpl.e;
-		if(auto vec=cast(VectorExp)ne) exprs=vec.e;
-		if(exprs.length){
-			if(auto v=na.asIntegerConstant()){
-				auto idx=v.get();
-				if(0<=idx&&idx<exprs.length) return exprs[cast(size_t)idx].eval();
-			}
-		}
-		if(ne is e && na is a) return this;
-		auto r=new IndexExp(ne,na);
-		r.isArraySyntax=isArraySyntax;
-		return r;
+		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~a.tupleToString(true));
+		else return _brk(e.toString()~a.tupleToString(true));
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
@@ -1038,15 +1025,78 @@ class IndexExp: Expression{ //e[a]
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
 		auto idx=cast(IndexExp)rhs;
 		if(!idx) return false;
+		// TODO: improve
 		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
 	}
 	override bool opEquals(Object rhs){
 		if(rhs is this) return true;
 		auto idx=cast(IndexExp)rhs;
-		return idx&&idx.e==e&&idx.a==a;
+		return idx&&idx.e==e&&idx.a==a&&idx.isClassical_==isClassical_;
+	}
+	override bool isSubtypeImpl(Expression rhs){
+		if(this == rhs) return true;
+		// TODO: improve
+		return false;
+	}
+	override Expression combineTypesImpl(Expression rhs, bool meet){
+		if(this == rhs) return this;
+		// TODO: improve
+		return null;
+	}
+	override Expression getClassical(){
+		assert(isSemEvaluated());
+		static if(language==silq){
+			assert(isType(this), format("index not a type: %s", this));
+			if(auto r=super.getClassical()) return r;
+			auto r=new IndexExp(e,a);
+			r.isClassical_=isClassical_;
+			r.type=getClassicalTy(type);
+			r.setSemEvaluated();
+			return r;
+		}else return this;
+	}
+	override Expression getQuantum(){
+		assert(isSemEvaluated());
+		static if(language==silq){
+			assert(isType(this), format("index not a type: %s", this));
+			// TODO
+			return null;
+		}else return null;
+	}
+	override bool mayBeClassical(){
+		return super.mayBeClassical()||isType(this); // may evaluate to unit type
+	}
+	override bool mayBeQuantum(){
+		return super.mayBeQuantum()||isType(this); // may evaluate to unit type
 	}
 
 	override Annotation getAnnotation(){ return min(e.getAnnotation(), a.getAnnotation()); }
+
+	override Expression evalImpl(){
+		auto ne=e.eval();
+		auto na=a.eval();
+		Expression[] exprs;
+		if(auto tpl=cast(TupleExp)ne) exprs=tpl.e;
+		if(auto vec=cast(VectorExp)ne) exprs=vec.e;
+		if(exprs.length){
+			if(auto v=na.asIntegerConstant()){
+				auto idx=v.get();
+				if(0<=idx&&idx<exprs.length){
+					auto r=exprs[cast(size_t)idx].eval();
+					static if(language==silq){
+						if(isClassical_)
+							r=r.getClassical();
+					}
+					return r;
+				}
+			}
+		}
+		if(ne is e && na is a) return this;
+		auto r=new IndexExp(ne,na);
+		r.isArraySyntax=isArraySyntax;
+		r.isClassical_=isClassical_;
+		return r;
+	}
 }
 
 class SliceExp: Expression{
