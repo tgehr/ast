@@ -336,6 +336,46 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 	return typeof(return).init;
 }
 
+class UnmultiplexConversion: Conversion{
+	Conversion[] conversions;
+	Expression index;
+	this(IndexExp from,Expression to,Conversion[] conversions){
+		super(from,to);
+		this.conversions=conversions;
+		Expression[] types;
+		import ast.semantic_:unwrap;
+		if(auto vec=cast(VectorExp)unwrap(from.e)) types=vec.e;
+		if(auto tup=cast(TupleExp)unwrap(from.e)) types=tup.e;
+		assert(!!types&&types.all!isType);
+		assert(types.length==conversions.length);
+		assert(iota(types.length).all!(i=>isNoOpConversion(types[i],conversions[i].from)));
+		assert(iota(types.length).all!(i=>isNoOpConversion(conversions[i].to,to)));
+		import ast.semantic_:isBasicIndexType;
+		assert(isBasicIndexType(from.a.type));
+		this.index=from.a;
+	}
+}
+
+Ret!witness unmultiplex(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	auto idx=cast(IndexExp)from;
+	import ast.semantic_:isBasicIndexType;
+	if(!idx||!isBasicIndexType(idx.a.type)||!isClassical(idx.a.type)) return typeof(return).init;
+	Expression[] types;
+	import ast.semantic_:unwrap;
+	if(auto vec=cast(VectorExp)unwrap(idx.e)) types=vec.e;
+	if(auto tup=cast(TupleExp)unwrap(idx.e)) types=tup.e;
+	if(!types||!types.all!isType) return typeof(return).init;
+	auto conversions=iota(types.length).map!(i=>typeExplicitConversion!witness(types[i],to,annotationType));
+	static if(witness){
+		auto elements=conversions.array;
+		if(elements.all!(x=>!!x)){
+			return new UnmultiplexConversion(idx,to,elements);
+		}
+	}else if(conversions.all) return true;
+	return typeof(return).init;
+}
+
+
 class FunctionConversion: Conversion{
 	Id[] names;
 	Conversion dom,cod;
@@ -590,6 +630,7 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 		if(auto r=vectorToFixed!witness(from,to,annotationType)) return r;
 	}
 	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
+	if(auto r=unmultiplex!witness(from,to,annotationType)) return r;
 	if(annotationType>=annotationType.coercion){
 		if(isEmpty(to)){
 			static if(witness) return new ImplosionCoercion(from,to);
