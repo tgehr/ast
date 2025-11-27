@@ -3395,45 +3395,58 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 	assert(!!rhsty);
 }do{
 	if(cast(Identifier)lhs) return rhsty;
-	auto idx=cast(IndexExp)lhs;
-	assert(!!idx,text(lhs));
-	Expression getNrhsty(){
-		if(auto tt=idx.e.type.isTupleTy){
-			if(auto lit=idx.a.asIntegerConstant(true)){
-				auto c=lit.get();
-				if(c<0||c>=tt.length) return idx.e.type;
-				return tupleTy(iota(tt.length).map!(i=>i==c?rhsty:tt[i]).array);
-			}
-			Expression[] ntypes;
-			foreach(i;0..tt.length){
-				auto ntype=joinTypes(tt[i],rhsty);
-				if(!ntype) return null;
-				ntypes~=ntype;
-			}
-			return tupleTy(ntypes);
-		}
-		if(auto vt=cast(VectorTy)idx.e.type){
-			auto nnext=joinTypes(vt.next,rhsty);
-			if(!nnext) return null;
-			return vectorTy(nnext,vt.num);
-		}
-		if(auto at=cast(ArrayTy)idx.e.type){
-			auto nnext=joinTypes(at.next,rhsty);
-			if(!nnext) return null;
-			return arrayTy(nnext);
-		}
-		if(isFixedIntTy(idx.e.type)){
-			if(isNumericTy(rhsty) != NumericType.Bool) return null;
-			auto rtype=idx.e.type;
-			if(!rhsty.isClassical||!idx.a.type.isClassical) rtype=rtype.getQuantum();
-			return rtype;
-		}
-		return null;
+	Identifier base;
+	Expression[] indices;
+	void collect(Expression e){
+		if(auto id=cast(Identifier)e){ base=id; return; }
+		auto idx=cast(IndexExp)e;
+		assert(!!idx,text(lhs));
+		collect(idx.e);
+		indices~=idx.a;
 	}
-	auto nrhsty=getNrhsty();
-	if(nrhsty&&!idx.a.type.isClassical) nrhsty=nrhsty.getQuantum();
-	if(!nrhsty) return null;
-	return updatedType(idx.e,nrhsty);
+	collect(lhs);
+	Expression rec(Expression baseTy,Expression[] indices){
+		if(!indices.length) return rhsty;
+		Expression impl(){
+			if(auto tt=baseTy.isTupleTy){
+				if(auto lit=indices[0].asIntegerConstant(true)){
+					auto c=lit.get();
+					if(c<0||c>=tt.length) return baseTy;
+					return tupleTy(iota(tt.length).map!(i=>i==c?rec(tt[i],indices[1..$]):tt[i]).array);
+				}
+				if(cast(TupleTy)baseTy){
+					Expression[] ntypes;
+					foreach(i;0..tt.length){
+						auto ntype=joinTypes(tt[i],rec(tt[i],indices[1..$]));
+						if(!ntype) return null;
+						ntypes~=ntype;
+					}
+					return tupleTy(ntypes);
+				}
+			}
+			if(auto vt=cast(VectorTy)baseTy){
+				auto nnext=joinTypes(vt.next,rec(vt.next,indices[1..$]));
+				if(!nnext) return null;
+				return vectorTy(nnext,vt.num);
+			}
+			if(auto at=cast(ArrayTy)baseTy){
+				auto nnext=joinTypes(at.next,rec(at.next,indices[1..$]));
+				if(!nnext) return null;
+				return arrayTy(nnext);
+			}
+			if(isFixedIntTy(baseTy)){
+				if(isNumericTy(rhsty) != NumericType.Bool) return null;
+				auto rtype=baseTy;
+				if(!rhsty.isClassical||!indices[0].type.isClassical) rtype=rtype.getQuantum();
+				return rtype;
+			}
+			return null;
+		}
+		auto nty=impl();
+		if(nty&&!indices[0].type.isClassical) nty=nty.getQuantum();
+		return nty;
+	}
+	return rec(base.type,indices);
 }
 
 Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
