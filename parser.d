@@ -1171,7 +1171,7 @@ struct Parser{
 		auto left=parseExpression();
 		Expression step=null;
 		expect(Tok!"..");
-		auto right=parseExpression();
+		auto right=parseExpression(0,false);
 		if(ttype==Tok!".."){
 			nextToken();
 			step=right;
