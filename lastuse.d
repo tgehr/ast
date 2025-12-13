@@ -741,8 +741,8 @@ struct LastUses{
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;
-			if(lastUse.kind==LastUse.Kind.constUse){
-				//imported!"util.io".writeln("ATTACHING CONSTCONSUME: ",prevLastUse);
+			if(lastUse.kind==LastUse.Kind.constUse&&prevLastUse.kind==LastUse.kind.lazyMerge){
+				//imported!"util.io".writeln("ATTACHING CONSTCONSUME: ",lastUse);
 				lastUse.constConsume=prevLastUse;
 				keep=true;
 			}
