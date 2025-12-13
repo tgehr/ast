@@ -1070,7 +1070,7 @@ abstract class Scope{
 							//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
 							if(lu.canCancelImplicitDup()){
 								if(lu.cancelImplicitDup()){
-									assert(lu.kind==LastUse.Kind.consumption,text(lu));
+									assert(lu.isConsumption(),text(lu));
 								}else{
 									// TODO
 								}

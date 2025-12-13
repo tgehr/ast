@@ -115,6 +115,7 @@ final class LastUse{
 		auto dep=Dependency(true);
 	LastUse forwardTo=null;
 	LastUse constConsume=null;
+	LastUse prevImplicitDup=null;
 	LastUse splitFrom=null;
 	LastUse splitSource=null;
 	NestedScope[] nestedScopes;
@@ -598,6 +599,8 @@ final class LastUse{
 			case constUse:
 				if(constConsume&&constConsume.canCancelImplicitDup())
 					return true;
+				if(prevImplicitDup)
+					return canForget(false);
 				return false;
 			case consumption:
 				return false;
@@ -654,6 +657,10 @@ final class LastUse{
 				if(constConsume&&constConsume.canCancelImplicitDup()){
 					constConsume.cancelImplicitDup();
 					markConsumed(use,false);
+					return true;
+				}
+				if(prevImplicitDup&&canForget(false)){
+					forget(false);
 					return true;
 				}
 				return false;
@@ -746,9 +753,14 @@ struct LastUses{
 				lastUse.constConsume=prevLastUse;
 				keep=true;
 			}
+			if(prevLastUse.prevImplicitDup){
+				lastUse.prevImplicitDup=prevLastUse.prevImplicitDup;
+			}
 			if(prevLastUse.kind==LastUse.Kind.constPinned){
-				if(prevLastUse.use&&prevLastUse.use.implicitDup)
+				if(prevLastUse.use&&prevLastUse.use.implicitDup){
+					lastUse.prevImplicitDup=prevLastUse;
 					keep=true;
+				}
 			}
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
