@@ -1062,22 +1062,28 @@ abstract class Scope{
 		}
 		final void pushDependencies(Declaration decl,bool keep){
 			if(getDependency(decl).isTop){
-				foreach(ndecl,ref v;dependencies.dependencies){
-					//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
-					if(decl in v.dependencies){
-						if(auto lu=lastUses.get(ndecl,true)){
-							while(lu.forwardTo) lu=lu.forwardTo;
-							//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
-							if(lu.canCancelImplicitDup()){
-								if(lu.cancelImplicitDup()){
-									assert(lu.isConsumption(),text(lu));
-								}else{
-									// TODO
+				bool done=false;
+				do{ // TODO: improve
+					done=true;
+					foreach(ndecl;dependencies.dependencies.keys.array){
+						auto v=getDependency(ndecl);
+						//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
+						if(decl in v.dependencies){
+							if(auto lu=lastUses.get(ndecl,true)){
+								while(lu.forwardTo) lu=lu.forwardTo;
+								//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
+								if(lu.canCancelImplicitDup()){
+									if(lu.cancelImplicitDup()){
+										assert(lu.isConsumption(),text(lu));
+										done=false;
+									}else{
+										// TODO
+									}
 								}
 							}
 						}
 					}
-				}
+				}while(!done);
 			}
 			dependencies.pushUp(decl,keep);
 			if(keep) toRemove~=decl;
