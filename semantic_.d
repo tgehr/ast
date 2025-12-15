@@ -7091,6 +7091,7 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 		auto nlit=New!LiteralExp(tok);
 		nlit.loc=ce.loc;
 		nlit.type=stringTy(true);
+		nlit.constLookup=true;
 		nlit.setSemCompleted();
 		return nlit;
 	}
@@ -7101,14 +7102,23 @@ Expression handleQuery(CallExp ce,ExpSemContext context){
 				ce.setSemError();
 				break;
 			}else{
-				args[1]=expressionSemantic(args[1],context.nestConst);
+				auto id=cast(Identifier)args[1];
+				assert(!!id);
+				if(!id.meaning){
+					DeadDecl[] failures;
+					id.meaning=lookupMeaning(id,Lookup.probing,context.sc,false,&failures);
+					if(id.meaning){
+						propErr(id.meaning,id);
+						id.type=id.typeFromMeaning;
+						if(id.type) id.setSemCompleted();
+						else id.setSemError();
+					}else undefinedIdentifierError(id,failures,sc);
+				}
 				auto dep="{}";
-				if(auto id=cast(Identifier)args[1]){
-					if(id.isSemCompleted()){
-						auto dependency=sc.getDependency(id);
-						if(dependency.isTop) dep="⊤";
-						else dep=dependency.dependencies.to!string;
-					}
+				if(id.isSemCompleted){
+					auto dependency=sc.getDependency(id);
+					if(dependency.isTop) dep="⊤";
+					else dep=dependency.dependencies.to!string;
 				}
 				return makeStrLit(dep);
 			}
