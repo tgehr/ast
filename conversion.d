@@ -651,8 +651,6 @@ bool annotateLiteral(Expression expr, Expression type){
 			return true;
 		if(isSubtype(expr.type,ℤt(false))&&isInt(type))
 			return true;
-		if(isSubtype(expr.type,ℝ(false))&&isSubtype(ℚt(true),type))
-			return true;
 		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 			return true;
 		return false;

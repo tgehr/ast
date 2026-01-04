@@ -4875,7 +4875,7 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 	}
 	if(auto v = le.asRationalConstant()) {
 		if(!le.type)
-			le.type = ℝ(true); // actually rational, but whatever
+			le.type = ℚt(true);
 		return le;
 	}
 	if(auto v = le.asImaginaryRationalConstant()) {
