@@ -428,11 +428,11 @@ class LiteralExp: Expression{
 		return _brk(lit.toString());
 	}
 	override bool isConstant(){
-		assert(type);
+		assert(!!type);
 		return type.isConstant();
 	}
 	override bool isTotal(){
-		assert(type);
+		assert(!!type);
 		return type.isTotal();
 	}
 
@@ -498,48 +498,36 @@ class LiteralExp: Expression{
 }
 
 bool isZero(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() == 0;
 	return false;
 }
 bool isOne(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() == 1;
 	return false;
 }
 bool isNonzero(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() != 0;
 	return false;
 }
 bool isPositive(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type)||isEmpty(e.type));
 	if(auto v = e.asIntegerConstant(eval))
 		return v.get() > 0;
 	return false;
 }
 bool isFalse(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type) == NumericType.Bool||isEmpty(e.type));
 	return isZero(e, eval);
 }
 bool isTrue(Expression e, bool eval=false){
-	assert(e.isSemFinal());
 	if(!e.type) return false;
-	assert(isNumericTy(e.type) == NumericType.Bool||isEmpty(e.type));
-	return isOne(e, eval);
+	return isNonzero(e, eval);
 }
 
 struct Id {
