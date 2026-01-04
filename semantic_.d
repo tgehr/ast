@@ -4878,6 +4878,11 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 			le.type = ℝ(true); // actually rational, but whatever
 		return le;
 	}
+	if(auto v = le.asImaginaryRationalConstant()) {
+		if(!le.type)
+			le.type = ℂ(true); // TODO: more precise type?
+		return le;
+	}
 	if(auto v = le.asStringConstant()) {
 		if(!le.type)
 			le.type = stringTy(true);

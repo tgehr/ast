@@ -921,8 +921,10 @@ private:
 		bool isFloat=false;
 		if(*p=='.'&&*(p+1)!='.'){ isFloat=true; p++; while('0'<=*p && *p<='9') p++; }
 		if(*p=='e'){ isFloat=true;p++; if(*p=='+'||*p=='-') p++; while('0'<=*p && *p<='9') p++; }
+		bool isImag=false;
+		if(*p=='i'){ isImag=true; p++; }
 		Token r;
-		r.type=isFloat?Tok!".0":Tok!"0";
+		r.type=isImag?Tok!".0i":isFloat?Tok!".0":Tok!"0";
 		r.str=s[0..p-s];
 		return r;
 	}

@@ -124,6 +124,9 @@ abstract class Expression: Node{
 	Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
 		return none!(Q!(ℤ, ℤ, int, int));
 	}
+	Maybe!(Q!(ℤ, ℤ, int, int)) asImaginaryRationalConstant() {
+		return none!(Q!(ℤ, ℤ, int, int));
+	}
 	Maybe!string asStringConstant() {
 		return none!string;
 	}
@@ -438,28 +441,35 @@ class LiteralExp: Expression{
 		return just(ℤ(lit.str));
 	}
 	// returns (x, y, b, n) where the value is x/y * b**n; y > 0, b > 0
-	override Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
-		if(lit.type == Tok!"0") return just(q(ℤ(lit.str), ℤ(1), 1, 0));
-		if(lit.type != Tok!".0") return none!(Q!(ℤ, ℤ, int, int));
-
+	private static Maybe!(Q!(ℤ, ℤ, int, int)) parseRationalConstant(string str){
 		int base = 10;
 		int exp = 0;
-		string numPart = lit.str;
-		auto e = lit.str.find("e");
+		string numPart = str;
+		auto e = str.find("e");
 		if(e.length > 0) {
-			numPart = lit.str[0..(e.ptr - lit.str.ptr)];
+			numPart = str[0..(e.ptr - str.ptr)];
 			exp = e[1..$].to!int(); // TODO overflow
 		}
 
 		string intPart = numPart, fracPart = "";
 		auto dot = numPart.find(".");
 		if(dot.length > 0) {
-			intPart = lit.str[0..(dot.ptr - numPart.ptr)];
+			intPart = str[0..(dot.ptr - numPart.ptr)];
 			fracPart = dot[1..$];
 		}
 		exp -= fracPart.length;
 
 		return just(q(ℤ(intPart ~ fracPart), ℤ(1), base, exp));
+	}
+	override Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
+		if(lit.type == Tok!"0") return just(q(ℤ(lit.str), ℤ(1), 1, 0));
+		if(lit.type != Tok!".0") return none!(Q!(ℤ, ℤ, int, int));
+		return parseRationalConstant(lit.str);
+	}
+	override Maybe!(Q!(ℤ, ℤ, int, int)) asImaginaryRationalConstant() {
+		if(lit.type != Tok!".0i") return none!(Q!(ℤ, ℤ, int, int));
+		if(!lit.str.endsWith("i"))  return none!(Q!(ℤ, ℤ, int, int));
+		return parseRationalConstant(lit.str[0..$-1]);
 	}
 	override Maybe!string asStringConstant() {
 		if(lit.type != Tok!"``") return none!string;
