@@ -1336,7 +1336,11 @@ abstract class Scope{
 		}
 		foreach(sc;scopes){
 			foreach(sym;sc.rnsymtab.dup){
-				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // TODO: why needed?
+				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))){
+					// TODO: why needed?
+					sym.scope_=this;
+					continue;
+				}
 				if(cast(DeadDecl)sym){
 					addDeadMerge(sym).mergedFrom~=sym;
 					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
