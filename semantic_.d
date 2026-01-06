@@ -5702,7 +5702,10 @@ Expression powerType(Expression t1, Expression t2){
 	if(num1 == NumericType.Bool && num2 && num2 <= NumericType.ℕt) return Bool(classical);
 	if(num1 == NumericType.ℕt && num2 && num2 <= NumericType.ℕt) return ℕt(classical);
 	if(num1 == NumericType.ℤt && num2 && num2 <= NumericType.ℕt) return ℤt(classical);
-	if(num1 == NumericType.ℂ || num2 == NumericType.ℂ) return ℂ(classical);
+	if(num1 == NumericType.ℂ){
+		if(num2 > NumericType.ℤt) return null;
+		return ℂ(classical);
+	}
 	if(num1 && num2 && num1 <= NumericType.ℚt && num2 <= NumericType.ℤt) return ℚt(classical);
 	return ℝ(classical); // TODO: good?
 }
@@ -5925,7 +5928,9 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	}
 	e.type = determineType(e1.type, e2.type);
 	if(!e.type){
-		sc.error(format("incompatible types %s and %s for %s",e1.type,e2.type,name),e.loc);
+		sc.error(format("incompatible types `%s` and `%s` for %s",e1.type,e2.type,name),e.loc);
+		if(name=="power"&&isNumericTy(e1.type)==NumericType.ℂ&&isNumericTy(e2.type)>NumericType.ℤt)
+			sc.note(format("use `cpow(%s, %s)` or specialized functions for non-integer complex power",e1,e2),e.loc);
 		e.setSemError();
 	}
 	return e;

@@ -45,8 +45,7 @@ enum NumericType{
 }
 
 NumericType isNumericTy(Expression t){
-	assert(t);
-	assert(t.isSemEvaluated());
+	if(!t) return NumericType.none;
 	auto ty = cast(NumericTy)t;
 	if(!ty) return NumericType.none;
 	return ty.nty;
