@@ -5760,7 +5760,7 @@ Expression bitAndType(Expression t1, Expression t2){
 	return r;
 }
 
-Expression cmpType(Expression t1,Expression t2){
+Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
 	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
 	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
@@ -5770,7 +5770,7 @@ Expression cmpType(Expression t1,Expression t2){
 		auto a1=cast(ArrayTy)t1,a2=cast(ArrayTy)t2;
 		auto v1=cast(VectorTy)t1,v2=cast(VectorTy)t2;
 		Expression n1=a1?a1.next:v1?v1.next:null,n2=a2?a2.next:v2?v2.next:null;
-		if(n1&&n2) return cmpType(n1,n2);
+		if(n1&&n2) return cmpType!eqOnly(n1,n2);
 		auto tpl1=t1.isTupleTy();
 		auto tpl2=t2.isTupleTy();
 		if(tpl1&&tpl2){
@@ -5780,7 +5780,7 @@ Expression cmpType(Expression t1,Expression t2){
 			// TODO: this may be confusing?
 			// if(tpl1.length!=tpl2.length) return null;
 			foreach(i;0..min(tpl1.length,tpl2.length)){
-				auto ct=cmpType(tpl1[i],tpl2[i]);
+				auto ct=cmpType!eqOnly(tpl1[i],tpl2[i]);
 				if(!ct) return null;
 				r=logicType(r,ct);
 				if(!r) return null;
@@ -5790,7 +5790,7 @@ Expression cmpType(Expression t1,Expression t2){
 		if(tpl1&&n2){
 			Expression r=Bool(true);
 			foreach(i;0..tpl1.length){
-				auto ct=cmpType(tpl1[i],n2);
+				auto ct=cmpType!eqOnly(tpl1[i],n2);
 				if(!ct) return null;
 				r=logicType(r,ct);
 				if(!r) return null;
@@ -5800,7 +5800,7 @@ Expression cmpType(Expression t1,Expression t2){
 		if(n1&&tpl2){
 			Expression r=Bool(true);
 			foreach(i;0..tpl2.length){
-				auto ct=cmpType(n1,tpl2[i]);
+				auto ct=cmpType!eqOnly(n1,tpl2[i]);
 				if(!ct) return null;
 				r=logicType(r,ct);
 				if(!r) return null;
@@ -5809,7 +5809,8 @@ Expression cmpType(Expression t1,Expression t2){
 		}
 		auto num1 = isNumericTy(t1);
 		auto num2 = isNumericTy(t2);
-		if(!num1 || num1 >= NumericType.ℂ || !num2 || num2 >= NumericType.ℂ) return null;
+		if(!num1||!num2) return null;
+		if(!eqOnly&&num1 >= NumericType.ℂ || !eqOnly&&num2 >= NumericType.ℂ) return null;
 	}
 	return Bool(t1.isClassical()&&t2.isClassical());
 }
@@ -6020,10 +6021,10 @@ Expression expressionSemanticImpl(GeExp ge,ExpSemContext context){
 	return handleBinary!cmpType("`≥`",ge,ge.e1,ge.e2,context);
 }
 Expression expressionSemanticImpl(EqExp eq,ExpSemContext context){
-	return handleBinary!cmpType("`=`",eq,eq.e1,eq.e2,context);
+	return handleBinary!(cmpType!true)("`=`",eq,eq.e1,eq.e2,context);
 }
 Expression expressionSemanticImpl(NeqExp ne,ExpSemContext context){
-	return handleBinary!cmpType("`≠`",ne,ne.e1,ne.e2,context);
+	return handleBinary!(cmpType!true)("`≠`",ne,ne.e1,ne.e2,context);
 }
 
 Expression concatType(Expression t1,Expression t2){
