@@ -709,6 +709,8 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 				len.loc=expr.loc;
 				auto eq=new EqExp(len,vec2.num);
 				eq.loc=expr.loc;
+				eq.type=Bool(true);
+				eq.setSemCompleted();
 				bool proven=eq.eval()==LiteralExp.makeBoolean(1);
 				if(proven) checkLength=false;
 				ok|=proven;
