@@ -3298,7 +3298,9 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
     return result;
 }
 
-void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc){
+void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
+	assert(!!decl&&blocker&&sc);
+}do{
 	decl.typeConstBlocker=blocker;
 	sc.pinLastUse(decl);
 	assert(!isAssignable(decl,sc));
@@ -6533,6 +6535,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.setSemError();
 	static if(language==silq) fsc.clearConsumed();
 	if(fd.ftype) foreach(id;fd.ftype.freeIdentifiers){
+		assert(!!id.meaning,text(id," ",fd.ftype," ",fd));
 		typeConstBlockDecl(id.meaning,fd,sc);
 	}
 	if(bdy){
