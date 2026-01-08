@@ -789,14 +789,14 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 				id.type=fd.ftype;
 				id.sstate=SemState.completed;
 				auto ids=fd.params.map!(delegate Expression(p){
-						auto id=new Identifier(p.name.id);
-						id.constLookup=p.isConst;
-						id.meaning=p;
-						id.type=p.vtype;
-						id.sstate=SemState.completed;
-						id.loc=p.loc;
-						return id;
-					}).array;
+					auto id=new Identifier(p.name.id);
+					id.constLookup=p.isConst;
+					id.meaning=p;
+					id.type=p.vtype;
+					id.sstate=SemState.completed;
+					id.loc=p.loc;
+					return id;
+				}).array;
 				Expression arg;
 				if(fd.isTuple){
 					arg=new TupleExp(ids);
