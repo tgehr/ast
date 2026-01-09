@@ -335,6 +335,7 @@ struct Parser{
 		string name;
 		if(ttype==Tok!"i") name=tok.name;
 		else if(ttype==Tok!"_"){ import ast.semantic_:freshName; name=freshName().str; } // TODO: remove dependency
+		else if(ttype==Tok!"λ") name="λ";
 		else{expectErr!"identifier"(); auto e=New!Identifier(string.init); e.loc=tok.loc; return e;}
 		displayExpectErr=true;
 		auto e=New!Identifier(name);
@@ -438,6 +439,34 @@ struct Parser{
 		return res;
 	}
 
+	bool isLambdaSyntax(){
+		auto state=saveState();
+		bool allowDot=false;
+		if(util.among(ttype,Tok!"lambda",Tok!"λ")){
+			allowDot=true;
+			nextToken();
+		}
+		if(!util.among(ttype,Tok!"(",Tok!"[")){
+			restoreState(state);
+			return false;
+		}
+		do{
+			nextToken();
+			skipToUnmatched();
+			nextToken();
+		}while(util.among(ttype,Tok!"(",Tok!"["));
+		auto peektt=ttype;
+		restoreState(state);
+		if(!allowDot&&peektt==Tok!".") return false;
+		switch(peektt){
+			case Tok!"{",Tok!"⇒",Tok!"↦",Tok!"=>",Tok!".":
+			static if(language==silq) case Tok!"wild",Tok!"lifted",Tok!"qfree",Tok!"mfree":{}
+			static if(language==psi) case Tok!"pure":{}
+				return true;
+			default: return false;
+		}
+	}
+
 	// Operator precedence expression parser
 	// null denotation
 	Expression nud(bool allowLambda){
@@ -481,30 +510,20 @@ struct Parser{
 				res.type=Bool(true);
 				return res;
 			}
-			static if(language==silq){
-				case Tok!"lambda",Tok!"λ": // TODO: add support in PSI as well?
+			static if(language==silq){ // TODO: add support in PSI as well?
+				case Tok!"lambda":
 					return parseLambdaExp();
+				case Tok!"λ":
+					if(isLambdaSyntax())
+						return parseLambdaExp();
+					nextToken();
+					return res=New!Identifier("λ");
 			}
 			case Tok!"let":
 				return parseLetExp();
 			case Tok!"(",Tok!"[":
-				if(allowLambda){
-					auto state=saveState();
-					while(util.among(ttype,Tok!"(",Tok!"[")){
-						nextToken();
-						skipToUnmatched();
-						nextToken();
-					}
-					switch(ttype){
-						case Tok!"{",Tok!"⇒",Tok!"↦",Tok!"=>":
-						static if(language==silq) case Tok!"wild",Tok!"lifted",Tok!"qfree",Tok!"mfree":{}
-						static if(language==psi) case Tok!"pure":{}
-							restoreState(state);
-							return parseLambdaExp();
-						default: break;
-					}
-					restoreState(state);
-				}
+				if(allowLambda&&isLambdaSyntax())
+					return parseLambdaExp();
 				if(ttype==Tok!"("){
 					return res=parseParenthesized();
 				}else{
