@@ -1000,7 +1000,7 @@ class Checker {
 			assert(isConstForReverse.length == 1);
 			isConstForReverse = isConstForReverse[0].repeat(n).array;
 		} else if(!isTuple && callTy.isTuple) {
-			isConstForReverse = [isConstForReverse.all!(c => c)];
+			isConstForReverse = [isConstForReverse.length?isConstForReverse.all!(c => c):callTy.isSquare];
 			// assert(isConstForReverse[0] || !isReversed, "TODO: reverse with all-const arguments");
 		}
 		assert(isConstForReverse.length == n);

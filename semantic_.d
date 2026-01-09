@@ -4421,6 +4421,14 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 			}
 		}
+		static if(!isRhs){
+			void badReverseImplicitDup(Expression arg){
+				if(unwrap(arg).implicitDup) return;
+				if(!ce.checkReverse) return;
+				sc.error(format("use `dup(%s)` for `moved` classical argument of reversed function call",arg),arg.loc);
+				arg.setSemForceError();
+			}
+		}
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				void wrongNumberOfArgs(){
@@ -4430,7 +4438,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					tpl.setSemError();
 					error=true;
 				}
-				bool defaultIsConst=true;
+				bool defaultIsConst=ft.isSquare;
 				if(ft.nargs!=tpl.length){
 					if(ft.isConst.any!(c=>c!=ft.isConst[0])){
 						wrongNumberOfArgs();
@@ -4440,13 +4448,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				if(!tpl.isSemError()){
 					foreach(i,ref exp;tpl.e){
+						auto realIsConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
 						static if(isRhs){
-							auto isConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
+							auto isConst=realIsConst;
 							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 						}else{
 							auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
 							auto aty=ft.nargs==tpl.e.length?ft.argTy(i):null;
 							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
+							if(!realIsConst&&isConst&&cast(Identifier)unwrap(exp))
+								badReverseImplicitDup(exp);
 						}
 						exp=argSemantic(exp,ncontext);
 						static if(isRhs) checkArg(i,exp);
@@ -4477,13 +4488,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				assert(!isRhs || tpl.isSemFinal());
 			}else{
+				auto realIsConst=(ft.isConst.length?ft.isConst[0]:ft.isSquare);
 				static if(isRhs){
-					auto isConst=(ft.isConst.length?ft.isConst[0]:ft.isSquare);
+					auto isConst=realIsConst;
 					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 				}else{
-					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:true);
+					auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:ft.isSquare);
 					auto aty=ft.dom;
 					auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
+					if(!realIsConst&&isConst&&cast(Identifier)unwrap(ce.arg))
+						badReverseImplicitDup(ce.arg);
 				}
 				ce.arg=argSemantic(ce.arg,ncontext);
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
@@ -4495,13 +4509,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 		}else{
 			assert(ft.isConst.length==1);
+			auto realIsConst=ft.isConst[0];;
 			static if(isRhs){
-				auto isConst=ft.isConst[0];
+				auto isConst=realIsConst;
 				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
 			}else{
 				auto isConst=ft.isConstForReverse[0];
 				auto aty=ft.dom;
 				auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no,aty,null);
+				if(!realIsConst&&isConst&&cast(Identifier)unwrap(ce.arg))
+					badReverseImplicitDup(ce.arg);
 			}
 			ce.arg=argSemantic(ce.arg,ncontext);
 			assert(ft.names.length==1);
