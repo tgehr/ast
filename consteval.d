@@ -51,7 +51,7 @@ private Expression make(TokenType subop)(Location loc, Expression sub1, Expressi
 	} else static if(subop == Tok!"·") {
 		subty = arithmeticType!true(sub1.type, sub2.type);
 	} else static if(subop == Tok!"=" || subop == Tok!"≠") {
-		subty = cmpType(sub1.type, sub2.type);
+		subty = cmpType!true(sub1.type, sub2.type);
 	} else {
 		static assert(0);
 	}
