@@ -65,11 +65,19 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 		final switch(behavior)with(OperatorBehavior){
 			case default_:
 				if(num0 && num1 && !(num0 == NumericType.Bool && num1 == NumericType.Bool)){
+					if(num0!=num1){
+						if(num0==NumericType.ℂ) return "CR";
+						if(num1==NumericType.ℂ) return "RC";
+					}
 					return getSuffix(num0>num1?t0:t1);
 				}
 				break;
 			case comparison, mul, div:
 				if(num0 && num1 && t0 != Bool(false) && t1 != Bool(false)){
+					if(num0!=num1){
+						if(num0==NumericType.ℂ) return "CR";
+						if(num1==NumericType.ℂ) return "RC";
+					}
 					return getSuffix(num0>num1?t0:t1);
 				}
 				break;
