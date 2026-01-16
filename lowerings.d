@@ -532,3 +532,76 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 		}else return toAssign();
 	}
 }
+
+// note: this does not generate a valid Silq AST, assumes specific backend semantics
+Expression getSwapLowering(DefineExp de, Scope sc){
+	if(!de.isSwap) return null;
+	auto tpll=cast(TupleExp)de.e1;
+	if(!tpll||tpll.e.length!=2) return null;
+	auto tplr=cast(TupleExp)de.e2;
+	if(!tplr||tplr.e.length!=2) return null;
+
+	auto tmp0=new Identifier(freshName());
+	tmp0.scope_=sc;
+	auto tmp1=new Identifier(freshName());
+	tmp1.scope_=sc;
+	auto vd0=new VarDecl(tmp0.copy());
+	vd0.scope_=sc;
+	tmp0.meaning=vd0;
+	auto vd1=new VarDecl(tmp1.copy());
+	vd1.scope_=sc;
+	tmp1.meaning=vd1;
+	auto de0=new DefineExp(tmp0,tplr.e[0]);
+	tmp0.type=tplr.e[0].type;
+	vd0.vtype=tmp0.type;
+	vd0.setSemCompleted();
+	auto de1=new DefineExp(tmp1,tplr.e[1]);
+	tmp1.type=tplr.e[1].type;
+	vd1.vtype=tmp1.type;
+	vd1.setSemCompleted();
+
+	auto tmp0s=tmp0.copy();
+	tmp0s.scope_=sc;
+	auto vd0s=new VarDecl(tmp0s.copy());
+	vd0s.scope_=sc;
+	vd0s.vtype=tmp1.type;
+	vd0s.setSemCompleted();
+	tmp0s.meaning=vd0s;
+	tmp0s.type=tmp1.type;
+
+	auto tmp1s=tmp1.copy();
+	tmp1s.scope_=sc;
+	auto vd1s=new VarDecl(tmp1s.copy());
+	vd1s.scope_=sc;
+	vd1s.vtype=tmp0.type;
+	vd1s.setSemCompleted();
+	tmp1s.meaning=vd1s;
+	tmp1s.type=tmp0.type;
+
+	auto sl=new TupleExp([tmp1s,tmp0s]);
+	sl.type=tupleTy([tmp1s.type,tmp0s.type]);
+	auto sr=new TupleExp([tmp0,tmp1]);
+	sr.type=tupleTy([tmp0.type,tmp1.type]);
+	tmp0.constLookup=false;
+	tmp1.constLookup=false;
+	sr.constLookup=false;
+	auto sde=new DefineExp(sl,sr);
+
+	auto tmp2=tmp1s.copy();
+	tmp2.scope_=sc;
+	tmp2.meaning=tmp1s.meaning;
+	tmp2.type=tmp1s.type;
+	auto de2=new DefineExp(tpll.e[0],tmp2);
+	auto tmp3=tmp0s.copy();
+	tmp3.scope_=sc;
+	tmp3.meaning=tmp0s.meaning;
+	tmp3.type=tmp0s.type;
+	auto de3=new DefineExp(tpll.e[1],tmp3);
+	auto fwd=new CompoundExp([de0,de1]);
+	auto bdy=new CompoundExp([sde]);
+	auto bwd=new CompoundExp([de3,de2]); // (reordering handles case where aliased)
+	auto we=new WithExp(fwd,bdy);
+	we.itrans=bwd;
+	//return statementSemantic(we,sc); // TODO?
+	return we;
+}

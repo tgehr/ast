@@ -513,6 +513,7 @@ class Checker {
 		}
 		visExpr(rhs);
 		if(e.isSwap) {
+			assert(!!ast_low.getSwapLowering(e, nscope));
 			foreach(r; e.replacements) {
 				assert(r.previous && r.new_);
 				getVar(r.previous, false, "consumed variable for swap", e);
