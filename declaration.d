@@ -36,6 +36,14 @@ abstract class Declaration: Expression{
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
 
+	Declaration canonicalSource_=null;
+	Declaration canonicalSource(){ // TODO: compute eagerly instead?
+		if(canonicalSource_) return canonicalSource_;
+		if(splitFrom) return canonicalSource_=splitFrom.canonicalSource;
+		if(mergedFrom.length==1) return canonicalSource_=mergedFrom[0].canonicalSource;
+		return canonicalSource_=this;
+	}
+
 	bool isToplevelDeclaration(){
 		return scope_&&cast(TopScope)scope_;
 	}

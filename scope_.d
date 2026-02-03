@@ -1282,13 +1282,14 @@ abstract class Scope{
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
 						if(!st) st=ot;
+						bool trivialSplit=sym.canonicalSource is osym.canonicalSource;
 						if(ot&&st){
-							if(quantumControl){ // automatically promote to quantum if possible
+							if(quantumControl&&!trivialSplit){ // automatically promote to quantum if possible
 								if(auto qt=ot.getQuantum)
 									ot=qt;
 							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
-							if(!nt||quantumControl&&nt.hasClassicalComponent()){
+							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								static if(language==silq){
 									splitSym(), sc.split(osym,null);
 									if(sym.isSemCompleted()&&osym.isSemCompleted()){
