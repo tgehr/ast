@@ -10,7 +10,7 @@ import ast.lexer, ast.error, ast.expression, ast.type, ast.declaration, util;
 // (re-purposed D parser, a little bit messy for now.)
 
 
-enum unaryOps = ["&", "*", "-", "++", "--", "+", "!", "~"];
+enum unaryOps = ["&", "*", "+", "-", "++", "--", "+", "!", "~"];
 enum postfixOps=[/*".",*/"++", "--","(","["];
 //alias canFind!("a==b",TokenType[],TokenType) _canFind;
 enum binaryOps=mixin({string r="[";
@@ -592,6 +592,9 @@ struct Parser{
 			case Tok!"∏",Tok!"cprod":
 				nextToken();
 				return res=New!VariadicTy(parseExpression(nbp,false), false);
+			case Tok!"+":
+				nextToken();
+				return res=New!(UnaryExp!(Tok!"+"))(parseExpression(nbp,false));
 			case Tok!"-":
 				nextToken();
 				return res=New!(UnaryExp!(Tok!"-"))(parseExpression(nbp,false));

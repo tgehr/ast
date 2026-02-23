@@ -55,9 +55,11 @@ enum OperatorBehavior{
 	pow,
 	cat,
 	andb,
+	genericPrelude,
 }
 
 string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: replace with some sort of language-level overloading support
+	if(behavior==OB.genericPrelude) return "";
 	if(types.length==1) return getSuffix(types[0].eval());
 	if(types.length==2){
 		auto t0=types[0].eval(),t1=types[1].eval();
@@ -101,6 +103,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				return "t";
 			case andb:
 				break;
+			case genericPrelude:
+				assert(0);
 		}
 		auto s0=getSuffix(t0);
 		auto s1=getSuffix(t1);
@@ -116,6 +120,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				break;
 			case cat:
 				break;
+			case genericPrelude:
+				assert(0);
 		}
 		return s0==s1?s0:s0~s1;
 	}
@@ -413,8 +419,13 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 	Expression fun=null;
 	string fullName="";
 	if(!fun){
-		fullName=name~"_"~getSuffix(behavior,name,args.map!(x=>x.type));
-		fun=getOperatorSymbol(fullName,loc,sc);
+		auto suffix=getSuffix(behavior,name,args.map!(x=>x.type));
+		fullName=name~(suffix!=""?"_"~suffix:"");
+		if(behavior==OB.genericPrelude){
+			fun=getPreludeSymbol(fullName,loc,sc);
+		}else{
+			fun=getOperatorSymbol(fullName,loc,sc);
+		}
 		enforce(!!fun,text("function prototype for lowering not found: ",fullName));
 	}
 	bool isSquare=false,isClassical=false;
@@ -439,6 +450,7 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 }
 
 private alias OB=OperatorBehavior;
+Expression getLowering(UPlusExp upe,ExpSemContext context){ return makeFunctionCall(OB.genericPrelude,"dup",upe,[upe.e],upe.loc,context); }
 Expression getLowering(UMinusExp ume,ExpSemContext context){ return makeFunctionCall(OB.default_,"__uminus",ume,[ume.e],ume.loc,context); }
 Expression getLowering(UNotExp une,ExpSemContext context){ return makeFunctionCall(OB.default_,"__not",une,[une.e],une.loc,context); }
 Expression getLowering(UBitNotExp ubne,ExpSemContext context){ return makeFunctionCall(OB.default_,"__bitnot",ubne,[ubne.e],ubne.loc,context); }

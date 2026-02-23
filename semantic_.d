@@ -1744,7 +1744,7 @@ bool isLifted(Expression e,Scope sc){
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 	if(e.implicitDup) return true;
-	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
+	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UPlusExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
 		return true;
 	if(cast(LiteralExp)e) return true;
 	if(cast(SliceExp)e) return true;
@@ -2299,6 +2299,9 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 	// TODO: need to do anything else?
 }
 
+Expression defineLhsSemanticImpl(UPlusExp upe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(upe,context);
+}
 Expression defineLhsSemanticImpl(UMinusExp ume,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(ume,context);
 }
@@ -5728,6 +5731,12 @@ Expression powerType(Expression t1, Expression t2){
 	if(num1 && num2 && num1 <= NumericType.ℚt && num2 <= NumericType.ℤt) return ℚt(classical);
 	return ℝ(classical); // TODO: good?
 }
+Expression plusType(Expression t){
+	if(isFixedIntTy(t)) return t;
+	if(isEmpty(t)) return t;
+	if(isNumericTy(t)) return t;
+	return null;
+}
 Expression minusType(Expression t){
 	if(isFixedIntTy(t)) return t;
 	if(isEmpty(t)) return t;
@@ -5849,6 +5858,10 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 	}
 	e.setSemCompleted();
 	return e;
+}
+
+Expression expressionSemanticImpl(UPlusExp ume,ExpSemContext context){
+	return handleUnary!plusType("plus",ume,ume.e,context);
 }
 
 Expression expressionSemanticImpl(UMinusExp ume,ExpSemContext context){

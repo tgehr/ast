@@ -2367,6 +2367,7 @@ alias CatExp=BinaryExp!(Tok!"~");
 alias BitOrExp=BinaryExp!(Tok!"∨");
 alias BitXorExp=BinaryExp!(Tok!"⊕");
 alias BitAndExp=BinaryExp!(Tok!"∧");
+alias UPlusExp=UnaryExp!(Tok!"+");
 alias UMinusExp=UnaryExp!(Tok!"-");
 alias UNotExp=UnaryExp!(Tok!"¬");
 alias UBitNotExp=UnaryExp!(Tok!"~");
@@ -2462,6 +2463,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 
 	if(auto tae=cast(TypeAnnotationExp)e) return f(tae,forward!args);
 
+	if(auto upe=cast(UPlusExp)e) return f(upe,forward!args);
 	if(auto ume=cast(UMinusExp)e) return f(ume,forward!args);
 	if(auto une=cast(UNotExp)e) return f(une,forward!args);
 	if(auto ubne=cast(UBitNotExp)e) return f(ubne,forward!args);
