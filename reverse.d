@@ -1223,7 +1223,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto be=cast(ABinaryExp)e;
 		assert(!!be);
 		assert(!!be.e2.type);
-		if(be.e2.type.isClassical()){
+		if(be.e1.type.isClassical()){
 			sc.error("reversal of assignments not supported yet",be.loc);
 			return error();
 		}
