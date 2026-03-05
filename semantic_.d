@@ -2967,7 +2967,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 		if(cast(TopScope)sc){
 			if(!be.e2.isConstant() && !cast(PlaceholderExp)be.e2 && !(isType(be.e2)||isQNumeric(be.e2))){
 				sc.error("global constant initializer must be a constant",e2orig.loc);
-				be.setSemError();
+				be.setSemForceError();
 			}
 		}
 	}

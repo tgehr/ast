@@ -1367,9 +1367,11 @@ class CallExp: Expression{
 				return e.isConstant();
 			}
 		}
-		import ast.type:isFixedIntTy;
-		if(auto ft=isFixedIntTy(this))
-			return ft.bits.isConstant();
+		if(isSemEvaluated){
+			import ast.type:isFixedIntTy;
+			if(auto ft=isFixedIntTy(this))
+				return ft.bits.isConstant();
+		}
 		return super.isConstant();
 	}
 
