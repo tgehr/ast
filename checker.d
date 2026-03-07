@@ -51,6 +51,7 @@ struct AssignOp {
 	}
 }
 
+static immutable string unopPlus = "+";
 static immutable string unopMinus = "-";
 static immutable string unopNot = "\u00ac";
 static immutable string unopBitNot = "~";
@@ -106,6 +107,7 @@ static immutable string[] cmpops = [
 ];
 
 static immutable string[] unops = [
+	unopPlus,
 	unopMinus,
 	unopNot,
 	unopBitNot,
