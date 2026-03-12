@@ -1095,8 +1095,9 @@ abstract class Scope{
 			if(decl.isSemError()) return true;
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(decl);
-			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
+			if(decl.isToplevelDeclaration()) return true;
+			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
 			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
 			return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
 		}

@@ -114,6 +114,7 @@ class VarDecl: Declaration{
 	// semantic information
 	Expression vtype;
 	Expression initializer;
+	DefineExp definition;
 }
 
 class Parameter: VarDecl{

@@ -186,7 +186,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 
 Expression presemantic(Declaration expr,Scope sc){
 	bool success=true; // dummy
-	if(!expr.scope_) makeDeclaration(expr,success,sc,false);
+	if(!expr.scope_) makeDeclaration(expr,success,sc,false,false);
 	if(auto dat=cast(DatDecl)expr){
 		if(dat.dtype) return expr;
 		auto dsc=new DataScope(sc,dat);
@@ -196,7 +196,7 @@ Expression presemantic(Declaration expr,Scope sc){
 		if(dat.hasParams) declareParameters(dat,true,dat.params,dsc);
 		if(!dat.body_.ascope_) dat.body_.ascope_=new AggregateScope(dat.dscope_);
 		if(cast(NestedScope)sc) dat.context = addVar(Id.s!"`outer",contextTy(true),dat.loc,null);
-		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_,false);
+		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_,false,false);
 		foreach(ref exp;dat.body_.s) if(auto decl=cast(Declaration)exp) exp=presemantic(decl,dat.body_.ascope_);
 	}
 	if(auto fd=cast(FunctionDef)expr){
@@ -258,7 +258,7 @@ VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success
 	return vd;
 }
 
-Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignoreInvalidLhs){
+Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignoreInvalidLhs,bool isForwardDeclaration){
 	if(auto imp=cast(ImportExp)expr){
 		imp.scope_ = sc;
 		auto ctsc=cast(TopScope)sc;
@@ -284,9 +284,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 		return decl;
 	}
 	if(auto ce=cast(CommaExp)expr){
-		ce.e1=makeDeclaration(ce.e1,success,sc,ignoreInvalidLhs);
+		ce.e1=makeDeclaration(ce.e1,success,sc,ignoreInvalidLhs,isForwardDeclaration);
 		propErr(ce.e1,ce);
-		ce.e2=makeDeclaration(ce.e2,success,sc,ignoreInvalidLhs);
+		ce.e2=makeDeclaration(ce.e2,success,sc,ignoreInvalidLhs,isForwardDeclaration);
 		propErr(ce.e2,ce);
 		return ce;
 	}
@@ -294,8 +294,11 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 		VarDecl makeVar(Identifier id){
 			auto vd=declareVariable(id,sc,!be.isSemError(),success);
 			vd.dtype=id.type;
-			if(!vd.dtype) vd.setSemError();
-			else vd=varDeclSemantic(vd,sc);
+			if(!isForwardDeclaration){
+				if(!vd.dtype) vd.setSemError();
+				else vd=varDeclSemantic(vd,sc);
+			}
+			vd.definition=be;
 			return vd;
 		}
 		if(auto id=cast(Identifier)unwrap(be.e1)){
@@ -404,11 +407,7 @@ void checkNotLinear(Expression e,Scope sc){
 
 Expression[] semantic(Expression[] exprs,Scope sc){
 	bool success=true;
-	foreach(ref expr;exprs) if(!cast(DefineExp)expr&&!cast(CommaExp)expr) expr=makeDeclaration(expr,success,sc,false); // TODO: get rid of special casing?
-	/+foreach(ref expr;exprs){
-	 if(auto decl=cast(Declaration)expr) expr=presemantic(decl,sc);
-		if(cast(DefineExp)expr) expr=makeDeclaration(expr,success,sc);
-	}+/
+	foreach(ref expr;exprs) expr=makeDeclaration(expr,success,sc,false,true);
 	foreach(ref expr;exprs){
 		if(auto decl=cast(Declaration)expr) expr=presemantic(decl,sc);
 		expr=toplevelSemantic(expr,sc);
@@ -666,7 +665,7 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&asc.close()) cd.setSemError(); // TODO: fix
 	cd.ascope_=asc;
 	bool success=true; // dummy
-	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc,false);
+	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc,false,false);
 	foreach(ref e;cd.s) if(auto decl=cast(Declaration)e) e=presemantic(decl,asc);
 	foreach(ref e;cd.s){
 		e=nestedDeclSemantic(e,asc);
@@ -1614,7 +1613,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, Annotation restriction
 
 VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 	bool success=true;
-	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc,false);
+	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc,false,false);
 	vd.type=unit;
 	if(!success) vd.setSemError();
 	if(!vd.vtype){
@@ -2017,7 +2016,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 				}else id.setSemError();
 				id.type=id.typeFromMeaning;
 				if(context.initializer){
-					assert(!vd.initializer);
+					assert(!vd.initializer||vd.initializer is context.initializer);
 					vd.initializer=context.initializer;
 				}
 			}
@@ -2815,7 +2814,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
 		}
-		makeDeclaration(be,success,sc,attemptLowering||be.isSemError());
+		makeDeclaration(be,success,sc,attemptLowering||be.isSemError(),false);
 	}
 	if(attemptLowering){
 		auto preState=sc.getStateSnapshot(true);
@@ -5197,6 +5196,11 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			fd.ret=bottom;
 			setFtype(fd,true);
 			id.type=id.typeFromMeaning;
+		}else if(auto vd=cast(VarDecl)id.meaning){
+			if(vd.definition){
+				toplevelSemantic(vd.definition,vd.scope_);
+				id.type=id.typeFromMeaning;
+			}
 		}
 		if(!id.type){
 			sc.error("invalid forward reference",id.loc);
