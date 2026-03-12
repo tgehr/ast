@@ -676,13 +676,12 @@ class Identifier: Expression{
 		return this;
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+		if(id !in subst) return isSubtype(rhs,this);
 		if(this==rhs){
-			if(id !in subst) return true;
 			if(subst[id]&&subst[id]!=this) return false;
 			subst[id]=this;
 			return true;
 		}
-		if(id !in subst) return false;
 		if(subst[id]==this) return false;
 		static if(language==silq){
 			if(isType(this)&&isType(rhs))
