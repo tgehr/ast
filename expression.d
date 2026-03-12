@@ -676,7 +676,7 @@ class Identifier: Expression{
 		return this;
 	}
 	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
-		if(id !in subst) return isSubtype(rhs,this);
+		if(id !in subst) return meet?isSubtype(this,rhs):isSubtype(rhs,this);
 		if(this==rhs){
 			if(subst[id]&&subst[id]!=this) return false;
 			subst[id]=this;
