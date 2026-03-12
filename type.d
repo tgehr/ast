@@ -1084,10 +1084,16 @@ class ProductTy: Type{
 		if(isSquare!=r.isSquare||annotation>r.annotation||!captureAnnotationSubtype(r.captureAnnotation,captureAnnotation)||
 		   isClassical_&&!r.isClassical_||nargs!=r.nargs)
 			return false;
-		if(names.any!(name=>r.hasFreeVar(name)))
-			return false;
-		if(r.names.any!(name=>hasFreeVar(name)))
-			return false;
+		foreach(name;names){
+			if(r.hasFreeVar(name))
+				return relabelAway(name).unify(r,subst,meet);
+		}
+		foreach(name;r.names){
+			if(hasFreeVar(name))
+				return unify(r.relabelAway(name),subst,meet);
+		}
+		// assert(!names.any!(name=>r.hasFreeVar(name)));
+		// assert(!r.names.any!(name=>hasFreeVar(name)));
 		r=r.relabelAll(iota(names.length).map!(i=>names[i]?names[i]:r.names[i]).array);
 		Expression[Id] nsubst;
 		foreach(k,v;subst) if(!names.canFind(k)) nsubst[k]=v;
