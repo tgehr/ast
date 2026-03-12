@@ -5287,8 +5287,9 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			}
 		}
 		return r;
-	}
-	else return noMember();
+	}else if(isEmpty(fe.e.type)){
+		return fe.e;
+	}else return noMember();
 }
 
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
