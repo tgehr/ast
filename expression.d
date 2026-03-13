@@ -687,16 +687,28 @@ class Identifier: Expression{
 			if(isType(this)&&isType(rhs))
 				if(rhs.isClassical<classical) return false;
 		}
+		void addSubst(Expression r){
+			if(isType(r)){
+				if(classical||type==qtypeTy){
+					if(auto q=r.getQuantum())
+						r=q;
+				}else if(type==ctypeTy){
+					if(auto c=r.getClassical())
+						r=c;
+				}
+			}
+			subst[id]=r;
+		}
 		if(subst[id]){
-			if(!subst[id].unify(rhs,subst,meet))
-				return false;
+			if(!subst[id].unify(rhs,subst,meet)) return false;
 			if((isType(subst[id])||isQNumeric(subst[id]))&&(isType(rhs)||isQNumeric(rhs)))
-				if(auto cmb=combineTypes(subst[id],rhs,meet)) // TODO: good?
-					subst[id]=cmb;
+				if(auto cmb=combineTypes(subst[id],rhs,meet)){ // TODO: good?
+					addSubst(cmb);
+				}
 			return true;
 		}
 		if(rhs.hasFreeVar(id)) return false; // TODO: fixpoint types
-		subst[id]=rhs;
+		addSubst(rhs);
 		return true;
 	}
 	override bool opEquals(Object o){
