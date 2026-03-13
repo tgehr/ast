@@ -454,7 +454,7 @@ class LiteralExp: Expression{
 	}
 	override LiteralExp copyImpl(CopyArgs args){
 		auto r=new LiteralExp(lit);
-		r.type=type;
+		if(args.preserveSemantic) r.type=type;
 		return r;
 	}
 	override string toString(){
