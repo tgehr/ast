@@ -403,7 +403,7 @@ class ClassicalTy: Expression{
 	override Expression substituteImpl(Expression[Id] subst){
 		return new ClassicalTy(inner.substitute(subst));
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		assert(false);
 	}
 	override Annotation getAnnotation(){
@@ -457,7 +457,7 @@ class TupleTy: Type,ITupleTy{
 		foreach(ref t;ntypes) t=t.substitute(subst);
 		return tupleTy(ntypes);
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		auto tt=rhs.isTupleTy();
 		if(!tt||types.length!=tt.length) return false;
 		return all!(i=>types[i].unify(tt[i],subst,meet))(iota(types.length));
@@ -573,7 +573,7 @@ class ArrayTy: Type{
 	override ArrayTy substituteImpl(Expression[Id] subst){
 		return arrayTy(next.substitute(subst));
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VectorTy)rhs)
 			return next.unifyImpl(vt.next,subst,meet);
 		if(auto tt=cast(TupleTy)rhs)
@@ -689,7 +689,7 @@ class VectorTy: Type, ITupleTy{
 	override VectorTy substituteImpl(Expression[Id] subst){
 		return vectorTy(next.substitute(subst),num.substitute(subst));
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
 			return tt.types.all!(ty=>next.unifyImpl(ty,subst,meet)) && num.unifyImpl(LiteralExp.makeInteger(tt.length),subst,meet);
 		if(auto vt=cast(VectorTy)rhs){
@@ -1074,7 +1074,7 @@ class ProductTy: Type{
 		auto ncod=cod.substitute(nsubst);
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		auto r=cast(ProductTy)rhs; // TODO: get rid of duplication (same code in opEquals)
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
@@ -1095,7 +1095,7 @@ class ProductTy: Type{
 		// assert(!names.any!(name=>r.hasFreeVar(name)));
 		// assert(!r.names.any!(name=>hasFreeVar(name)));
 		r=r.relabelAll(iota(names.length).map!(i=>names[i]?names[i]:r.names[i]).array);
-		Expression[Id] nsubst;
+		UnificationResult[Id] nsubst;
 		foreach(k,v;subst) if(!names.canFind(k)) nsubst[k]=v;
 		auto res=dom.unify(r.dom,nsubst,!meet)&&cod.unify(r.cod,nsubst,meet);
 		foreach(k,v;nsubst) subst[k]=v;
@@ -1112,8 +1112,8 @@ class ProductTy: Type{
 			atys=iota(tpl.length).map!(i=>tpl[i]).array;
 			if(atys.length!=cod.nargs) return null;
 		}else atys=[arg.type];
-		Expression[Id] subst;
-		foreach(i,n;names) subst[n]=null;
+		UnificationResult[Id] subst;
+		foreach(i,n;names) subst[n]=UnificationResult.init;
 		foreach(i,aty;atys){
 			if(i>=cod.nargs) continue;
 			if(!cod.argTy(i).unify(aty,subst,false))
@@ -1121,8 +1121,19 @@ class ProductTy: Type{
 		}
 		auto gargs=new Expression[](names.length);
 		foreach(i,n;names){
-			if(!subst[n]) return null;
-			gargs[i]=subst[n];
+			Expression value=null;
+			if(auto low=subst[n].bound(false)){
+				if(argTy(i)==qtypeTy)
+					low=low.getQuantum();
+				if(low&&!value) value=low;
+			}
+			if(auto high=subst[n].bound(true)){
+				if(argTy(i)==ctypeTy)
+					high=high.getClassical();
+				if(high&&!value) value=high;
+			}
+			if(!value) return null;
+			gargs[i]=value;
 		}
 		if(!isTuple) assert(gargs.length==1);
 		if(isTuple){
@@ -1435,7 +1446,7 @@ class VariadicTy: Type{
 	override Expression substituteImpl(Expression[Id] subst){
 		return variadicTy(next.substitute(subst),isClassical_);
 	}
-	override bool unifyImpl(Expression rhs,ref Expression[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VariadicTy)rhs)
 			return next.unifyImpl(vt.next,subst,meet);
 		// if(auto vt=cast(VectorTy)rhs) return next.unifyImpl(vector(vt.next.num,vt.next.type),subst,meet); // TODO
