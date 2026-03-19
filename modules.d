@@ -28,7 +28,7 @@ string readCode(string path){ return readCode(File(path)); }
 
 string readBuiltin(string[] paths)(int index){
 	import std.file: thisExePath;
-	import std.path: dirName;
+	import util.path: dirName;
 	string binPath = dirName(thisExePath());
 	string path = paths[index];
 	foreach(tryPath; [
@@ -53,7 +53,7 @@ Scope getPreludeScope(ErrorHandler err, Location loc){
 	import ast.expression;
 	import ast.type;
 	if(preludeScope) return preludeScope;
-	preludeScope = new TopScope(err);
+	preludeScope = new TopScope(".prelude",err);
 	foreach(name, value; [
 		"𝔹": Bool(false),
 		"⊥": bottom(),
@@ -98,11 +98,47 @@ bool isPreludeSource(Source src){
 	return src is preludeSrc;
 }
 
+
+string getActualPath(string path){
+	import util.path;
+	import util.io:file;
+	auto ext = path.extension;
+	if(ext=="") path = path.setExtension(astopt.defaultExtension);
+	if(file.exists(path)) return path;
+	foreach_reverse(p;astopt.importPath){
+		auto candidate=buildPath(p,path);
+		if(file.exists(candidate))
+			return candidate;
+	}
+	return path;
+}
+
+string getShortPath(string filePath){
+	import std.path: relativePath;
+	string result=filePath;
+	foreach_reverse(p;astopt.importPath){
+		auto candidate=relativePath(filePath,p);
+		if(candidate.length<result.length)
+			result=filePath;
+	}
+	return result;
+}
+
+string moduleName(string filePath){
+	import std.string:replace;
+	import util.path;
+	auto moduleName=getShortPath(filePath).setExtension("");
+	moduleName=moduleName.replace("../","..");
+	moduleName=moduleName.replace("./",".");
+	moduleName=moduleName.replace("/",".");
+	return moduleName.replace("/",".");
+}
+
 int importModule(Source src,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
 	int nerr=err.nerrors;
 	exprs=parseSource(src,err);
 	if(nerr!=err.nerrors) return 1;
-	sc=new TopScope(err);
+	sc=new TopScope(moduleName(src.name),err);
 	sc.import_(getPreludeScope(err, loc));
 	import ast.semantic_: semantic;
 	exprs=semantic(exprs,sc);
@@ -114,6 +150,7 @@ int importModule(Source src,ErrorHandler err,out Expression[] exprs,out TopScope
 }
 
 int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScope sc,Location loc){
+	path = getActualPath(path);
 	if(path in modules){
 		// only the main module doesn't have an import location
 		assert(loc.line);
@@ -129,7 +166,7 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 	scope(success) modules[path]=q(exprs,sc);
 	if(auto r=parseFile(getActualPath(path),err,exprs,loc))
 		return r;
-	sc=new TopScope(err);
+	sc=new TopScope(moduleName(path),err);
 	sc.import_(getPreludeScope(err, loc));
 	int nerr=err.nerrors;
 	import ast.semantic_: semantic;
@@ -171,7 +208,7 @@ static if(language==silq)
 Scope getOperatorScope(ErrorHandler err, Location loc){
 	import ast.semantic_: semantic;
 	if(operatorScope) return operatorScope;
-	operatorScope = new TopScope(err);
+	operatorScope = new TopScope(".operators",err);
 	operatorScope.import_(getPreludeScope(err, loc));
 	auto src = new Source(".operators", readBuiltin!([operatorsPath])(0));
 	int nerr = err.nerrors;

@@ -273,6 +273,7 @@ class FunctionDef: Declaration{
 	}
 
 	FunctionDef reversed=null;
+	bool isMain=false;
 }
 
 
@@ -421,20 +422,6 @@ class DatDecl: Declaration{
 		fd.setSemCompleted();
 		return fd;
 	}
-}
-
-string getActualPath(string path){
-	import util.path;
-	import util.io:file;
-	auto ext = path.extension;
-	if(ext=="") path = path.setExtension(astopt.defaultExtension);
-	if(file.exists(path)) return path;
-	foreach_reverse(p;astopt.importPath){
-		auto candidate=buildPath(p,path);
-		if(file.exists(candidate))
-			return candidate;
-	}
-	return path;
 }
 
 class ImportExp: Declaration{

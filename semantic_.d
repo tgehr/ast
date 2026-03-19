@@ -268,10 +268,9 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			return imp;
 		}
 		foreach(p;imp.e){
-			auto path = getActualPath(ImportExp.getPath(p));
 			Expression[] exprs;
 			TopScope tsc;
-			if(importModule(path,sc.handler,exprs,tsc,imp.loc)){
+			if(importModule(ImportExp.getPath(p),sc.handler,exprs,tsc,imp.loc)){
 				imp.setSemError();
 			}
 			if(tsc) ctsc.import_(tsc);

@@ -1706,7 +1706,10 @@ abstract class Scope{
 class TopScope: Scope{
 	private ErrorHandler handler_;
 	override @property ErrorHandler handler(){ return handler_; }
-	this(ErrorHandler handler){ this.handler_=handler; }
+	this(string moduleName,ErrorHandler handler){
+		this.moduleName=moduleName;
+		this.handler_=handler;
+	}
 	override bool allowsLinear(){
 		return false;
 	}
@@ -1735,6 +1738,8 @@ class TopScope: Scope{
 	}
 	override FunctionDef getFunction(){ return null; }
 	override DatDecl getDatDecl(){ return null; }
+
+	string moduleName;
 private:
 	Scope[] imports; // TODO: local imports, import declarations
 }
