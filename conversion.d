@@ -731,3 +731,35 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 	}
 	return typeof(return).init;
 }
+
+
+private noreturn unknownConvError(T...)(Conversion conv,auto ref T args){
+	assert(0,text("unknown conversion: ",conv?typeid(conv):null," ",conv));
+}
+auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion conv,auto ref T args){
+	import core.lifetime:forward;
+	// TODO: implement without cast cascade
+	if(auto econv=cast(ExplosionConversion)conv) return f(econv,forward!args);
+	if(auto icoer=cast(ImplosionCoercion)conv) return f(icoer,forward!args);
+	if(auto nconv=cast(NoOpConversion)conv) return f(nconv,forward!args);
+	if(auto tconv=cast(TransitiveConversion)conv) return f(tconv,forward!args);
+	if(auto tconv=cast(TypeConversion)conv) return f(tconv,forward!args);
+	if(auto qprom=cast(QuantumPromotion)conv) return f(qprom,forward!args);
+	if(auto nconv=cast(NumericConversion)conv) return f(nconv,forward!args);
+	if(auto ncoer=cast(NumericCoercion)conv) return f(ncoer,forward!args);
+	if(auto tconv=cast(TupleConversion)conv) return f(tconv,forward!args);
+	if(auto vconv=cast(VectorConversion)conv) return f(vconv,forward!args);
+	if(auto vconv=cast(VectorToArrayConversion)conv) return f(vconv,forward!args);
+	if(auto aconv=cast(ArrayToVectorConversion)conv) return f(aconv,forward!args);
+	if(auto aconv=cast(ArrayConversion)conv) return f(aconv,forward!args);
+	if(auto uconv=cast(UnmultiplexConversion)conv) return f(uconv,forward!args);
+	if(auto fconv=cast(FunctionConversion)conv) return f(fconv,forward!args);
+	if(auto anpun=cast(AnnotationPun)conv) return f(anpun,forward!args);
+	if(auto zconv=cast(ℤtoFixedConversion)conv) return f(zconv,forward!args);
+	if(auto uconv=cast(UintToℕConversion)conv) return f(uconv,forward!args);
+	if(auto iconv=cast(IntToℤConversion)conv) return f(iconv,forward!args);
+	if(auto fconv=cast(FixedToVectorConversion)conv) return f(fconv,forward!args);
+	if(auto vconv=cast(VectorToFixedConversion)conv) return f(vconv,forward!args);
+	// if(auto pconv=cast(ParameterizedSubtypeConversion)conv) return f(pconv,forward!args);
+	return default_(conv,forward!args);
+}
