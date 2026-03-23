@@ -55,11 +55,12 @@ enum OperatorBehavior{
 	pow,
 	cat,
 	andb,
+	generic,
 	genericPrelude,
 }
 
 string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: replace with some sort of language-level overloading support
-	if(behavior==OB.genericPrelude) return "";
+	if(behavior==OB.generic||behavior==OB.genericPrelude) return "";
 	if(types.length==1) return getSuffix(types[0].eval());
 	if(types.length==2){
 		auto t0=types[0].eval(),t1=types[1].eval();
@@ -103,7 +104,7 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				return "t";
 			case andb:
 				break;
-			case genericPrelude:
+			case generic,genericPrelude:
 				assert(0);
 		}
 		auto s0=getSuffix(t0);
@@ -120,7 +121,7 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 				break;
 			case cat:
 				break;
-			case genericPrelude:
+			case generic,genericPrelude:
 				assert(0);
 		}
 		return s0==s1?s0:s0~s1;
@@ -477,6 +478,16 @@ Expression getLowering(NeqExp neq,ExpSemContext context){ return makeComparisonC
 Expression getLowering(BitOrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__orb",oe,[oe.e1,oe.e2],oe.loc,context); }
 Expression getLowering(BitXorExp xe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__xorb",xe,[xe.e1,xe.e2],xe.loc,context); }
 Expression getLowering(BitAndExp ae,ExpSemContext context){ return makeFunctionCall(OB.andb,"__andb",ae,[ae.e1,ae.e2],ae.loc,context); }
+
+Expression getLowering(IndexExp idx,ExpSemContext context){
+	auto fty=isFixedIntTy(idx.a.type);
+	if(!fty||fty.isClassical) return null;
+	if(auto at=cast(ArrayTy)idx.e.type){
+		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_as":"__qindex_au",idx,[idx.e,idx.a],idx.loc,context);
+	}else{
+		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_vs":"__qindex_vu",idx,[idx.e,idx.a],idx.loc,context);
+	}
+}
 
 
 private CompoundExp toCompound(Expression e){

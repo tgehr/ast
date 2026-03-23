@@ -457,6 +457,7 @@ enum BuiltIn{
 	π,pi=π,
 	show,
 	query,
+	qabort,
 }
 
 static if(language==psi)
@@ -483,6 +484,8 @@ BuiltIn isBuiltIn(Identifier id){
 				return BuiltIn.show;
 			case "__query":
 				return BuiltIn.query;
+			case "__qabort":
+				return BuiltIn.qabort;
 		}else static if(language==psi){
 			case "Marginal":
 				return BuiltIn.Marginal;
@@ -580,6 +583,9 @@ Expression builtIn(Identifier id,Scope sc){
 			case "__query","__show":
 				t=unit;
 				break; // those are actually magic polymorphic functions
+			case "__qabort": // __qabort(a:qtype): a
+				t=unit;
+				break;
 		}
 		static if(language==psi){
 			case "Expectation": t=funTy(ℝ(false),ℝ(false),false,false,true); break; // TODO: should be lifted
@@ -1955,7 +1961,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 		}
 	}
 	static if(!isPresemantic) if(!ok){
-		result.setSemError();
+		result.setSemForceError();
 		foreach(e;result.subexpressions()){
 			if(auto id=cast(Identifier)e){
 				if(!id.constLookup&&!id.implicitDup){
@@ -4254,6 +4260,34 @@ Expression prepareForSubstitutionIntoType(Expression parent,FunTy ft,Expression 
 	return exp;
 }
 
+Expression qabortSemantic(bool isPresemantic,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
+	auto sc=context.sc;
+	static if(is(T==ExpSemContext)){
+		ce.arg=expressionSemantic(ce.arg,context);
+	}else{
+		ce.arg=expressionSemantic(ce.arg,context.expSem);
+	}
+	propErr(ce.arg,ce);
+	if(ce.arg.isSemCompleted){
+		auto ty=typeSemantic(ce.arg,context.sc);
+		if(ty){
+			if(!isQuantum(ty)){
+				sc.error("argument to `__qabort` must be a `qtype`",ce.arg.loc);
+				sc.note(format("type of argument is `%s`",ty.type),ce.arg.loc);
+				ce.setSemError();
+			}
+		}else ce.setSemError();
+		ce.type=ty;
+	}
+	ce.constLookup=!!context.constResult;
+	ce.setSemCompleted();
+	auto id=new Identifier("a");
+	id.type=qtypeTy;
+	id.setSemEvaluated();
+	ce.e.type=productTy([true],[Id.intern("a")],qtypeTy,id,false,false,CaptureAnnotation.const_,Annotation.qfree,false);
+	return ce;
+}
+
 Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
 	enum isRhs=is(T==ExpSemContext);
 	static if(!isRhs){
@@ -4673,6 +4707,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						break;
 					case "__query":
 						return handleQuery(ce,context);
+					case "__qabort":
+						return qabortSemantic!isPresemantic(ce,context);
 				}else static if(language==psi){
 					case "Marginal":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
@@ -4707,6 +4743,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			ce.e=nfun;
 			return callSemantic(ce,context);
 		}
+	}else if(isBuiltInCall(ce)==BuiltIn.qabort){
+		static if(!isRhs){
+			return qabortSemantic!isPresemantic(ce,context);
+		}else assert(0);
 	}else{
 		sc.error(format("cannot call expression of type %s",fun.type),ce.loc);
 		ce.setSemError();
@@ -5602,11 +5642,14 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	if(tae.isSemError())
 		return tae;
 	if(!tae.type) assert(tae.isSemError());
-	if(auto ce=cast(CallExp)tae.e){
-		if(auto id=cast(Identifier)ce.e){
-			if(id.name=="sampleFrom"||id.name=="readCSV"&&tae.type==arrayTy(arrayTy(ℝ(true))))
-				ce.type=tae.type;
+	switch(isBuiltInCall(cast(CallExp)tae.e)){
+		static if(language==psi){
+			case BuiltIn.sampleFrom,BuiltIn.readCSV:
+				if(tae.type==arrayTy(arrayTy(ℝ(true))))
+					tae.e.type=tae.type;
+				break;
 		}
+		default: break;
 	}
 	if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
 		final switch(tae.annotationType){

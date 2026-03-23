@@ -692,6 +692,8 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.IndexExp e) {
+		if(auto low = ast_low.getLowering(e, ast_sem.ExpSemContext(nscope, e.constLookup ? ast_sem.ConstResult.yes : ast_sem.ConstResult.no, ast_sem.InType.no)))
+			return visExpr(low);
 		bool isLifted = e.constLookup;
 		expectConst(e.a, "index");
 		assert(e.e.constLookup, "TODO: non-lifted indexing");
@@ -952,6 +954,9 @@ class Checker {
 				case ast_sem.BuiltIn.show:
 					expectConst(argExpr, "__show argument");
 					visExpr(argExpr);
+					return;
+				case ast_sem.BuiltIn.qabort:
+					assert(ast_ty.isQuantum(callExpr.type));
 					return;
 				default:
 					assert(0, format("TODO: call to built-in %s: << %s >>", targetExpr.loc, targetExpr));
