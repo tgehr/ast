@@ -482,10 +482,17 @@ Expression getLowering(BitAndExp ae,ExpSemContext context){ return makeFunctionC
 Expression getLowering(IndexExp idx,ExpSemContext context){
 	auto fty=isFixedIntTy(idx.a.type);
 	if(!fty||fty.isClassical) return null;
-	if(auto at=cast(ArrayTy)idx.e.type){
-		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_as":"__qindex_au",idx,[idx.e,idx.a],idx.loc,context);
+	auto e=idx.e;
+	if(auto efty=isFixedIntTy(e.type)){
+		auto ne=new TypeAnnotationExp(e,vectorTy(Bool(false),efty.bits),TypeAnnotationType.conversion);
+		ne.type=ne.t;
+		ne.setSemCompleted();
+		e=ne;
+	}
+	if(auto at=cast(ArrayTy)e.type){
+		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_as":"__qindex_au",idx,[e,idx.a],idx.loc,context);
 	}else{
-		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_vs":"__qindex_vu",idx,[idx.e,idx.a],idx.loc,context);
+		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_vs":"__qindex_vu",idx,[e,idx.a],idx.loc,context);
 	}
 }
 
