@@ -763,7 +763,10 @@ class VectorTy: Type, ITupleTy{
 	}
 	override Expression getQuantum(){
 		auto nnext=next.getQuantum();
-		if(!nnext) return null;
+		if(!nnext){
+			if(isZero(num)) return unit;
+			return null;
+		}
 		return vectorTy(nnext,num);
 	}
 	override bool mayBeClassical(){ return next.mayBeClassical(); }
@@ -1588,19 +1591,20 @@ static if(language==silq){
 		ctype,
 		qtype,
 		mtype,
+		badty,
 	}
 	private immutable TypeType[5][5] typeJoin = [
-		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
-		[TypeType.utype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+		[TypeType.etype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
+		[TypeType.ctype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
 		[TypeType.ctype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
-		[TypeType.qtype, TypeType.qtype, TypeType.mtype, TypeType.qtype, TypeType.mtype],
+		[TypeType.mtype, TypeType.qtype, TypeType.mtype, TypeType.qtype, TypeType.mtype],
 		[TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype],
 	];
 	private immutable TypeType[5][5] typeMeet = [
-		[TypeType.etype, TypeType.etype, TypeType.etype, TypeType.etype, TypeType.etype],
-		[TypeType.etype, TypeType.utype, TypeType.utype, TypeType.utype, TypeType.utype],
+		[TypeType.etype, TypeType.badty, TypeType.etype, TypeType.badty, TypeType.etype],
+		[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.utype, TypeType.utype],
 		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.utype, TypeType.ctype],
-		[TypeType.etype, TypeType.utype, TypeType.utype, TypeType.qtype, TypeType.qtype],
+		[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.qtype, TypeType.qtype],
 		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
 	];
 }
@@ -1622,6 +1626,7 @@ class TypeTy: Type{
 				case TypeType.ctype: return "ctype";
 				case TypeType.qtype: return "qtype";
 				case TypeType.mtype: return "*";
+				case TypeType.badty: return "null";
 			}
 		}
 		override bool isSubtypeImpl(Expression r){
@@ -1670,6 +1675,7 @@ class TypeTy: Type{
 static if(language==silq){
 	private TypeTy[5] theTypeTys;
 	private TypeTy typeTyImpl(TypeType tyty) {
+		if(tyty==TypeType.badty) return null;
 		return theTypeTys[tyty] ? theTypeTys[tyty] : (theTypeTys[tyty] = new TypeTy(tyty));
 	}
 	TypeTy etypeTy(){ return typeTyImpl(TypeType.etype); }
