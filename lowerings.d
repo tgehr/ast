@@ -480,8 +480,6 @@ Expression getLowering(BitXorExp xe,ExpSemContext context){ return makeFunctionC
 Expression getLowering(BitAndExp ae,ExpSemContext context){ return makeFunctionCall(OB.andb,"__andb",ae,[ae.e1,ae.e2],ae.loc,context); }
 
 Expression getLowering(IndexExp idx,ExpSemContext context){
-	auto fty=isFixedIntTy(idx.a.type);
-	if(!fty||fty.isClassical) return null;
 	auto e=idx.e;
 	if(auto efty=isFixedIntTy(e.type)){
 		auto ne=new TypeAnnotationExp(e,vectorTy(Bool(false),efty.bits),TypeAnnotationType.conversion);
@@ -489,6 +487,10 @@ Expression getLowering(IndexExp idx,ExpSemContext context){
 		ne.setSemCompleted();
 		e=ne;
 	}
+	if(idx.a.type==Bool(false))
+		return makeFunctionCall(OB.generic,cast(ArrayTy)e.type?"__qindex_ab":"__qindex_vb",idx,[e,idx.a],idx.loc,context);
+	auto fty=isFixedIntTy(idx.a.type);
+	if(!fty||fty.isClassical) return null;
 	if(auto at=cast(ArrayTy)e.type){
 		return makeFunctionCall(OB.generic,fty.isSigned?"__qindex_as":"__qindex_au",idx,[e,idx.a],idx.loc,context);
 	}else{
