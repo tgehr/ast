@@ -690,6 +690,8 @@ abstract class Scope{
 	Declaration[] consumedOuter;
 	Declaration[] splitVars;
 	final void splitVar(Declaration splitFrom,Declaration splitInto){
+		if(splitFrom.isSemError())
+			splitInto.setSemForceError();
 		assert(splitFrom.scope_ !is splitInto.scope_);
 		splitFrom.splitInto~=splitInto;
 		splitInto.splitFrom=splitFrom;
@@ -708,6 +710,8 @@ abstract class Scope{
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
 		assert(splitFrom !is splitInto);
 	}do{
+		if(splitFrom.isSemError())
+			splitInto.setSemForceError();
 		foreach(scopes;mergedNestedScopes){
 			foreach(sc;scopes)
 				sc.replaceDecl(splitFrom,splitInto);
@@ -1141,6 +1145,8 @@ abstract class Scope{
 	Declaration[] mergedVars;
 	Declaration[] producedOuter;
 	final void mergeVar(Declaration mergedFrom,Declaration mergedInto){
+		if(mergedFrom.isSemError())
+			mergedInto.setSemForceError();
 		mergedInto.mergedFrom~=mergedFrom;
 		mergedFrom.mergedInto=mergedInto;
 		mergedVars~=mergedFrom;
