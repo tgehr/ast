@@ -2818,6 +2818,27 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 		with_.setSemCompleted();
 		current=with_;
 	}
+	if(current.isSemCompleted()){
+		auto ce=new CompoundExp([current]);
+		ce.loc=current.loc;
+		ce.type=current.type;
+		ce.setSemCompleted();
+		void recordArrayDefinitions(WithExp we){
+			if(!we||!we.isIndices) return;
+			recordArrayDefinitions(cast(WithExp)we.bdy);
+			foreach(s;we.itrans.s){
+				auto de=cast(DefineExp)s;
+				assert(!!de);
+				auto idx=cast(IndexExp)de.e1;
+				assert(!!idx);
+				auto cid=getIdFromIndex(idx);
+				assert(cid&&cid.meaning);
+				sc.lastUses.definition(cid.meaning,ce);
+			}
+		}
+		recordArrayDefinitions(cast(WithExp)current);
+		current=ce;
+	}
 	return current;
 }
 
