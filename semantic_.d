@@ -2691,7 +2691,17 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	}
 	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.type,be.e2));
 	propErr(be.e1,be);
-	return be;
+	be.type=unit;
+	be.setSemCompleted();
+	if(!be.isSemCompleted) return be;
+	auto ce=new CompoundExp([be]);
+	ce.loc=be.loc;
+	ce.type=be.type;
+	ce.setSemCompleted();
+	auto cid=getIdFromIndex(idx1[0]);
+	assert(cid&&cid.meaning);
+	sc.lastUses.definition(cid.meaning,ce);
+	return ce;
 }
 
 bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
