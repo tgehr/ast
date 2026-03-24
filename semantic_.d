@@ -4390,6 +4390,9 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						auto dep=context.sc.getDependency(meaning);
 						auto nft=ft.setCaptureAnnotation(CaptureAnnotation.spent);
 						auto var=addVar(meaning.getId,nft,meaning.loc,context.sc);
+						var.scope_=context.sc;
+						if(meaning.isSemError())
+							var.setSemForceError();
 						context.sc.addDependency(var,dep);
 						context.sc.lastUses.definition(var,ce);
 						auto nid=new Identifier(var.getId);
