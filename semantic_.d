@@ -5267,7 +5267,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				}
 			}
 		}
-		auto lookup=id.constLookup||id.implicitDup?Lookup.constant:Lookup.consuming;
+		auto lookup=id.constLookup?Lookup.constant:id.implicitDup?Lookup.probingWithCapture:Lookup.consuming;
 		DeadDecl[] failures;
 		if(!avoidCapture){
 			id.meaning=null;
