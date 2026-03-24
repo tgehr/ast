@@ -1148,6 +1148,8 @@ class IndexExp: Expression{ //e[a]
 		r.isClassical_=isClassical_;
 		return r;
 	}
+
+	AAssignExp.Replacement[] replacements;
 }
 
 class SliceExp: Expression{

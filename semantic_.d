@@ -2733,6 +2733,39 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 		prologues~=prologue;
 		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 		prologue.loc=loc;
+		foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
+			auto de=cast(DefineExp)read;
+			assert(!!de);
+			auto idx=cast(IndexExp)de.e2;
+			if(!idx){
+				if(auto le=cast(LetExp)de.e2){
+					if(auto lef=le.isForward(true))
+						idx=cast(IndexExp)lef;
+				}
+			}
+			assert(idx&&idx.byRef,text(de));
+			if(!idx.a.type.isClassical()){
+				auto cid=getIdFromIndex(idx);
+				assert(!!cid);
+				if(cid.type&&!cid.type.isQuantum){
+					if(auto meaning=cid.meaning){
+						meaning=sc.consume(meaning,cid);
+						auto type=cid.type.getQuantum();
+						assert(!!type);
+						auto var=addVar(meaning.name.id,type,idx.loc,sc);
+						idx.replacements~=AAssignExp.Replacement(meaning,var);
+						assert(cid.meaning is meaning);
+						cid.meaning=var;
+						cid.type=cid.typeFromMeaning;
+						assert(!!cid.type);
+						sc.replaceDecl(meaning,var);
+						auto wcid=getIdFromIndex(crepls[i].write);
+						assert(wcid&&wcid.meaning is var);
+						wcid.type=wcid.typeFromMeaning;
+					}
+				}
+			}
+		}
 		Expression[] writes;
 		foreach_reverse(i,ref crepl;crepls){
 			if(!crepl.write) continue;
