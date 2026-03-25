@@ -2746,9 +2746,21 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	ce.loc=be.loc;
 	ce.type=be.type;
 	ce.setSemCompleted();
+	Expression parent=ce;
+	sc.resetConst(parent,true,false);
+	assert(parent is ce);
 	auto cid=getIdFromIndex(idx1[0]);
 	assert(cid&&cid.meaning);
 	sc.lastUses.definition(cid.meaning,ce);
+	foreach(idx;idx1){
+		foreach(id;idx.a.freeIdentifiers){
+			if(!id.meaning) continue;
+			if(id.constLookup){
+				sc.lastUses.constUse(id,parent,true,false);
+				assert(parent is ce);
+			}
+		}
+	}
 	return ce;
 }
 
@@ -2919,6 +2931,9 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 		ce.loc=current.loc;
 		ce.type=current.type;
 		ce.setSemCompleted();
+		Expression parent=ce;
+		sc.resetConst(parent,true,false);
+		assert(parent is ce);
 		void recordArrayDefinitions(WithExp we){
 			if(!we||!we.isIndices) return;
 			recordArrayDefinitions(cast(WithExp)we.bdy);
@@ -2930,6 +2945,13 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 				auto cid=getIdFromIndex(idx);
 				assert(cid&&cid.meaning);
 				sc.lastUses.definition(cid.meaning,ce);
+				foreach(id;idx.a.freeIdentifiers){
+					if(!id.meaning) continue;
+					if(id.constLookup){
+						sc.lastUses.constUse(id,parent,true,false);
+						assert(parent is ce);
+					}
+				}
 			}
 		}
 		recordArrayDefinitions(cast(WithExp)current);
