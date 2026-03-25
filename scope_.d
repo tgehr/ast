@@ -277,6 +277,15 @@ abstract class Scope{
 					props.remove(splitFrom);
 				}
 			}
+			void moveComponentReplacements(Declaration prev,Declaration new_){
+				if(auto prevProp=tryGet(prev)){
+					if(new_ !in props) set(new_,DeclProp.default_());
+					auto newProp=tryGet(new_);
+					assert(newProp&&!newProp.componentReplacements.length);
+					newProp.componentReplacements=prevProp.componentReplacements;
+					prevProp.componentReplacements=[];
+				}
+			}
 		}
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }

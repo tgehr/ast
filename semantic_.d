@@ -1,3 +1,4 @@
+
 // Written in the D programming language
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.semantic_;
@@ -2681,6 +2682,53 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	propErr(id,be.e2);
 	be.e2=expressionSemantic(be.e2,econtext);
 	propErr(be.e2,be);
+	if(!be.isSemError()&&idx2[].any!((idx){
+		bool anyQuantum=false;
+		for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
+			anyQuantum|=!idx2.a.type.isClassical();
+		return anyQuantum;
+	})){
+		void updateTypes(IndexExp cidx,Expression e,bool isFirst){ // promote aggregate to quantum for quantum swaps
+			if(auto cid=cast(Identifier)e){
+				if(isFirst){
+					assert(cidx is idx2[0]);
+					if(cid.meaning && cid.type){
+						if(auto type=cid.type.getQuantum()){
+							cid.meaning=sc.consume(cid.meaning,cid);
+							auto dep=getDependency(cid,sc);
+							auto var=addVar(cid.meaning.name.id,type,cidx.loc,sc);
+							sc.addDependency(var,dep);
+							var.scope_=sc;
+							sc.lastUses.definition(var,be);
+							idx2[0].replacements~=AAssignExp.Replacement(cid.meaning,var);
+							auto prev=cid.meaning;
+							cid.meaning=var;
+							cid.type=cid.typeFromMeaning;
+							cid.setSemForceError();
+						}
+					}
+				}else{
+					foreach(repl;idx2[0].replacements){
+						if(cid.meaning is repl.previous) {
+							cid.meaning=repl.new_;
+							cid.type=cid.typeFromMeaning;
+						}
+						if(!cid.type) cid.setSemForceError();
+					}
+				}
+				return;
+			}
+			if(auto idx=cast(IndexExp)e){
+				updateTypes(cidx,idx.e,isFirst);
+				if(idx.e.type&&idx.a.type){
+					idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
+					if(!idx.type) idx.setSemForceError();
+				}
+				return;
+			}
+		}
+		foreach(i,idx;enumerate(idx2[])) updateTypes(idx,idx,i==0);
+	}
 	if(!be.isSemError()){
 		ArrayConsumer consumer;
 		consumer.recordReplacementsInto(&be.replacements);
@@ -2743,36 +2791,74 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 		prologues~=prologue;
 		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 		prologue.loc=loc;
-		foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
-			auto de=cast(DefineExp)read;
-			assert(!!de);
-			auto idx=cast(IndexExp)de.e2;
-			if(!idx){
-				if(auto le=cast(LetExp)de.e2){
-					if(auto lef=le.isForward(true))
-						idx=cast(IndexExp)lef;
+		if(prologue.isSemCompleted()){
+			Declaration[Declaration] replacements;
+			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
+				auto de=cast(DefineExp)read;
+				assert(!!de);
+				auto idx=cast(IndexExp)de.e2;
+				if(!idx){
+					if(auto le=cast(LetExp)de.e2){
+						if(auto lef=le.isForward(true))
+							idx=cast(IndexExp)lef;
+					}
+				}
+				assert(idx&&idx.byRef,text(de));
+				bool anyQuantum=false;
+				for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
+					anyQuantum|=!idx2.a.type.isClassical();
+				if(anyQuantum){
+					auto cid=getIdFromIndex(idx);
+					assert(!!cid);
+					if(cid.meaning !in replacements&&cid.type&&!cid.type.isQuantum){
+						if(auto meaning=cid.meaning){
+							meaning=sc.consume(meaning,cid);
+							auto dep=getDependency(cid,sc);
+							auto type=cid.type.getQuantum();
+							assert(!!type);
+							auto var=addVar(meaning.name.id,type,idx.loc,sc);
+							sc.addDependency(var,dep);
+							idx.replacements~=AAssignExp.Replacement(meaning,var);
+							assert(cid.meaning is meaning);
+							replacements[meaning]=var;
+							sc.declProps.moveComponentReplacements(meaning,var);
+							sc.lastUses.definition(var,de);
+						}
+					}
 				}
 			}
-			assert(idx&&idx.byRef,text(de));
-			if(!idx.a.type.isClassical()){
-				auto cid=getIdFromIndex(idx);
-				assert(!!cid);
-				if(cid.type&&!cid.type.isQuantum){
-					if(auto meaning=cid.meaning){
-						meaning=sc.consume(meaning,cid);
-						auto type=cid.type.getQuantum();
-						assert(!!type);
-						auto var=addVar(meaning.name.id,type,idx.loc,sc);
-						idx.replacements~=AAssignExp.Replacement(meaning,var);
-						assert(cid.meaning is meaning);
-						cid.meaning=var;
-						cid.type=cid.typeFromMeaning;
-						assert(!!cid.type);
-						sc.replaceDecl(meaning,var);
-						auto wcid=getIdFromIndex(crepls[i].write);
-						assert(wcid&&wcid.meaning is var);
-						wcid.type=wcid.typeFromMeaning;
+			void replaceMeaning(Expression e){
+				if(auto id=cast(Identifier)e){
+					auto prev=id.meaning;
+					auto new_=replacements.get(prev,prev);
+					id.meaning=new_;
+					id.type=id.typeFromMeaning;
+					if(!id.type) id.setSemForceError();
+					return;
+				}
+				if(auto idx=cast(IndexExp)e){
+					replaceMeaning(idx.e);
+					if(idx.e.type&&idx.a.type){
+						idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
+						if(!idx.type) idx.setSemForceError();
 					}
+					return;
+				}
+				if(auto le=cast(LetExp)e){
+					if(auto lef=le.isForward(true))
+						replaceMeaning(lef);
+					return;
+				}
+			}
+			if(replacements.length){
+				foreach(read;reads){
+					auto de=cast(DefineExp)read;
+					assert(!!de);
+					replaceMeaning(de.e2);
+				}
+				foreach(crepl;crepls){
+					replaceMeaning(crepl.write);
+					replaceMeaning(crepl.read);
 				}
 			}
 		}
