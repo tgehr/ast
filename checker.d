@@ -692,8 +692,6 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.IndexExp e) {
-		if(auto low = ast_low.getLowering(e, ast_sem.ExpSemContext(nscope, e.constLookup ? ast_sem.ConstResult.yes : ast_sem.ConstResult.no, ast_sem.InType.no)))
-			return visExpr(low);
 		bool isLifted = e.constLookup;
 		expectConst(e.a, "index");
 		assert(e.e.constLookup, "TODO: non-lifted indexing");
