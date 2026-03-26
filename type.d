@@ -8,8 +8,8 @@ enum CaptureAnnotation{
 	none,
 	const_,
 	moved,
-	once, // (unsupported)
-	spent, // (unsupported)
+	once,
+	spent,
 }
 
 static if(language==silq){
