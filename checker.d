@@ -576,6 +576,7 @@ class Checker {
 	void implLhs(ast_exp.CallExp e) {
 		assert(!e.isSquare);
 		assert(!e.isClassical_);
+		assert(!e.newFunctionVar);
 		visCall(e, true);
 	}
 
@@ -970,10 +971,16 @@ class Checker {
 		} else {
 			expectConst(targetExpr, "call target");
 		}
+		if(callTy.captureAnnotation == ast_ty.CaptureAnnotation.once) {
+			assert(!!callExpr.newFunctionVar == !!cast(ast_exp.Identifier)targetExpr);
+		}
+
 
 		visExpr(targetExpr);
 		if(callExpr.newFunctionVar) {
 			assert(callTy.captureAnnotation == ast_ty.CaptureAnnotation.once, format("ERROR: call target not a `once` function on %s: << %s >>", targetExpr.loc, targetExpr));
+			auto newTy = ast_sem.typeForDecl(callExpr.newFunctionVar), expectedTy = callTy.setCaptureAnnotation(ast_ty.CaptureAnnotation.spent);
+			assert(newTy == expectedTy, format("ERROR: unexpected type change between `once` to `spent` function: << %s >> << %s >>", newTy, expectedTy));
 			defineVar(callExpr.newFunctionVar, "`spent` function definition", callExpr);
 		}
 
