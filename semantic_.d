@@ -1234,6 +1234,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
 	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
+	fd.attributes[Id.s!"silq-loop"] = LiteralExp.makeString(lowerf(T.stringof[0..$-"Exp".length]));
 	fd.annotation=pure_;
 	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
