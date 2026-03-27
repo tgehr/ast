@@ -1,4 +1,3 @@
-
 // Written in the D programming language
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.semantic_;
@@ -2703,17 +2702,19 @@ Expression swapSemantic(DefineExp be,Scope sc){
 							idx2[0].replacements~=AAssignExp.Replacement(cid.meaning,var);
 							auto prev=cid.meaning;
 							cid.meaning=var;
+							propErr(var,cid);
 							cid.type=cid.typeFromMeaning;
-							cid.setSemForceError();
+							assert(cid.type||cid.isSemError());
 						}
 					}
 				}else{
 					foreach(repl;idx2[0].replacements){
 						if(cid.meaning is repl.previous) {
 							cid.meaning=repl.new_;
+							propErr(cid.meaning,cid);
 							cid.type=cid.typeFromMeaning;
 						}
-						if(!cid.type) cid.setSemForceError();
+						assert(cid.type||cid.isSemError());
 					}
 				}
 				return;
@@ -2844,21 +2845,26 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref CompoundExp[] prol
 					auto prev=id.meaning;
 					auto new_=replacements.get(prev,prev);
 					id.meaning=new_;
+					propErr(new_,id.meaning);
 					id.type=id.typeFromMeaning;
-					if(!id.type) id.setSemForceError();
+					assert(id.type||id.isSemError());
 					return;
 				}
 				if(auto idx=cast(IndexExp)e){
 					replaceMeaning(idx.e);
-					if(idx.e.type&&idx.a.type){
+					propErr(idx.e,e);
+					if(idx.e.type&&idx.a.type)
 						idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
-						if(!idx.type) idx.setSemForceError();
-					}
+					assert(idx.type||idx.isSemError());
 					return;
 				}
 				if(auto le=cast(LetExp)e){
-					if(auto lef=le.isForward(true))
+					if(auto lef=le.isForward(true)){
 						replaceMeaning(lef);
+						propErr(lef,le);
+						le.type=lef.type;
+						assert(le.type||le.isSemError());
+					}
 					return;
 				}
 			}

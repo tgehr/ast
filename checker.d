@@ -146,7 +146,7 @@ class Checker {
 	}
 
 	void visExpr(ast_exp.Expression e) {
-		assert(e.isSemCompleted());
+		assert(e.isSemCompleted(), format("expression not fully analyzed: << %s >> in state %s", e, e.sstate));
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
 		visType(e.type);
 		ast_exp.dispatchExp!((auto ref e){
