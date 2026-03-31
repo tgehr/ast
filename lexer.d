@@ -275,7 +275,7 @@ struct Location{
 
 		string l = source.getLineOf(rep);
 		r.startLine = line;
-		r.startColumn = displayWidth(l[0..rep.ptr - l.ptr], tabsize);
+		r.startColumn = rep.ptr-l.ptr<l.length ? displayWidth(l[0..rep.ptr-l.ptr], tabsize) : displayWidth(l, tabsize);
 
 		r.endByte = r.startByte + cast(int)rep.length;
 		auto n = cast(int)rep.count('\n');
