@@ -24,19 +24,32 @@ string readCode(File f){
 	app.put("\0\0\0\0"); // insert 4 padding zero bytes
 	return cast(string)app.data;
 }
-string readCode(string path){ return readCode(File(path)); }
+string readCode(string path){
+	version(WebAssembly){
+		if(path=="/dev/stdin") return readCode(File(path));
+		stderr.writeln("error: reading from file `",path,"` not supported in WebAssembly, use `--stdin` flag");
+		import std.exception:enforce;
+		enforce(0);
+		assert(0);
+	}else{
+		return readCode(File(path));
+	}
+}
 
 string readBuiltin(string[] paths)(int index){
-	import std.file: thisExePath;
-	import util.path: dirName;
-	string binPath = dirName(thisExePath());
 	string path = paths[index];
-	foreach(tryPath; [
-		binPath ~ "/library/" ~ path,
-		binPath ~ "/../share/silq/library/" ~ path,
-	]) {
-		try return readCode(tryPath);
-		catch(Exception) {}
+	version(WebAssembly) string binPath="/home/silq";
+	else{
+		import std.file: thisExePath;
+		import util.path: dirName;
+		string binPath = dirName(thisExePath());
+		foreach(tryPath; [
+			binPath ~ "/library/" ~ path,
+			binPath ~ "/../share/silq/library/" ~ path,
+		]) {
+			try return readCode(tryPath);
+			catch(Exception) {}
+		}
 	}
 	switch(index){
 		static foreach(i,p;paths){
@@ -103,7 +116,8 @@ string getActualPath(string path){
 	import util.path;
 	import util.io:file;
 	auto ext = path.extension;
-	if(ext=="") path = path.setExtension(astopt.defaultExtension);
+	import std.string:startsWith;
+	if(!path.startsWith("/dev/") && ext=="") path = path.setExtension(astopt.defaultExtension);
 	if(file.exists(path)) return path;
 	foreach_reverse(p;astopt.importPath){
 		auto candidate=buildPath(p,path);
