@@ -624,7 +624,7 @@ struct Id {
 		return raw == other.raw;
 	}
 
-	ulong toHash() const pure @safe nothrow {
+	size_t toHash() const pure @safe nothrow {
 		return hashOf(raw);
 	}
 
