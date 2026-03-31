@@ -258,6 +258,7 @@ class FunctionDef: Declaration{
 		auto p = attr in attributes;
 		if(!p||!*p) return default_;
 		auto val = *p;
+		if(!val) return default_;
 		auto num = val.asIntegerConstant();
 		if(!num) return default_; // TODO
 		return num.get() != 0;
@@ -267,6 +268,7 @@ class FunctionDef: Declaration{
 		auto p = attr in attributes;
 		if(!p) return default_;
 		auto e = cast(LiteralExp)*p;
+		if(!e) return default_;
 		auto str = e.asStringConstant();
 		if(!str) return default_; // TODO
 		return str.get();
