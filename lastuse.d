@@ -122,8 +122,9 @@ final class LastUse{
 	LastUse prev=null,next=null;
 
 	bool isConsumption(){
+		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;
 		if(forwardTo) return forwardTo.isConsumption();
-		return !!kind.among(Kind.consumption,Kind.synthesizedForget);
+		return false;
 	}
 
 	LastUse getSplitFrom()in{
