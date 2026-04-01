@@ -882,7 +882,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	assert(loop.isSemCompleted());
 }do{
 	enum returnOnlyMoved=false; // (experimental)
-	auto loopParams_=state.nextStateSnapshot.loopParams(loop.bdy.blscope_);
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];

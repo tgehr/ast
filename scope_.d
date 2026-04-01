@@ -516,7 +516,19 @@ abstract class Scope{
 		}
 		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType){
 			if(constBlock is parent&&!(!constBlock.type||constBlock.type.isClassical())) return; // TODO: would be nice if we would not need this, can happen e.g. in consumeArray
-			if(auto lu=lastUses.get(decl,true)) if(lu.isConsumption()||lu.kind==LastUse.Kind.implicitDup) return;
+			if(auto lu=lastUses.get(decl,true)){
+				if(lu.isConsumption()){
+					if(constBlock.meaning){
+						if(dependencyTracked(constBlock.meaning)&&!getDependency(constBlock.meaning).isTop){ // TODO: make this condition unnecessary?
+							if(lu.kind==LastUse.Kind.consumption){
+								lastUses.synthesizedForget(constBlock.meaning,null,this,parent);
+							}
+						}
+					}
+					return;
+				}
+				if(lu.kind==LastUse.Kind.implicitDup) return;
+			}
 			if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
 				lastUses.constUse(constBlock,parent,isStatement,inType);
 		}
@@ -1521,7 +1533,9 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(Scope loopScope){ // (name,decl,type,mayChange)
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope)in{
+			assert(!!loopScope);
+		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
 			foreach(id,decl;rnsymtab){
 				import ast.semantic_: typeForDecl;
@@ -1531,17 +1545,16 @@ abstract class Scope{
 				if(!mayChange){
 					if(type.isClassical) continue;
 				}
-				if(mayChange&&loopScope)
-					mayChange=decl.mergedFrom.any!(d=>d.scope_ is loopScope);
+				if(mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is loopScope);
+				if(!mayChange) continue; // use const captures
 				bool canForget=type.isClassical()||dependencies.canForget(decl);
-				if(!mayChange){
-					continue; // use const captures
-					/+auto lu=loopScope.lastUses.get(decl,true);
-					if(!lu||lu.kind==LastUse.kind.lazySplit)
-						continue;
-					//if(!canForget) continue; // TODO: why does this not work?+/
+				bool isConstParamDecl=false;
+				if(canForget){
+					//auto nestedDecl=decl.splitInto.filter!(d=>d.scope_ is loopScope).front;
+					//auto lastUse=loopScope.lastUses.lastUses.get(nestedDecl,loopScope.lastUses.retired.get(nestedDecl,[null])[$-1]);
+					//isConstParamDecl=lastUse?lastUse.kind==LastUse.Kind.synthesizedForget:true;
+					isConstParamDecl=true;
 				}
-				bool isConstParamDecl=!mayChange||canForget;
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
 			}
@@ -1614,6 +1627,24 @@ abstract class Scope{
 			}
 			state.prevCapturedDecls=fd.capturedDecls;
 		}
+		void splitSymtab(ref Declaration[Id] symtab,bool replace){
+			Q!(Declaration,Declaration)[] splits;
+			foreach(id,ref decl;symtab){
+				auto splt=getSplit(decl);
+				if(splt !is decl){
+					static if(language==silq){
+						if(replace){
+							if(decl in state.dependencies.dependencies)
+								state.dependencies.replace(decl,splt);
+							state.declProps.replaceDecl(decl,splt);
+						}
+					}
+					decl=splt;
+				}
+			}
+		}
+		splitSymtab(state.rnsymtab,true);
+		splitSymtab(state.symtab,false);
 	}
 
 	Declaration updateDecl(Declaration decl){
@@ -1771,7 +1802,7 @@ class NestedScope: Scope{
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
-		auto pdep=Dependency(true);
+		auto pdep=getDefaultDependency(ndecl);
 		Declaration result=ndecl;
 		void processCurrent(){
 			result=ndecl;
