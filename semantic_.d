@@ -858,8 +858,13 @@ struct FixedPointIterState{
 	}
 	void endIteration(Scope sc){
 		sc.clearConsumed();
-		sc.updateStateSnapshot(origStateSnapshot);
-		sc.updateStateSnapshot(prevStateSnapshot);
+		if(origStateSnapshot !is prevStateSnapshot){ // TODO: simply avoid aliasing?
+			sc.updateStateSnapshot(origStateSnapshot);
+			sc.updateStateSnapshot(prevStateSnapshot);
+		}else{
+			sc.updateStateSnapshot(origStateSnapshot);
+			prevStateSnapshot=origStateSnapshot;
+		}
 		nextStateSnapshot=sc.getStateSnapshot(true);
 	}
 	bool converged(){ return nextStateSnapshot==prevStateSnapshot; }
@@ -1418,7 +1423,6 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,bool resetConst=true){
 	int numTries=-1;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
-		auto prevStateSnapshot=sc.getStateSnapshot();
 		bdy=we.bdy.copy(cargs);
 		auto wesc=bdy.blscope_=state.makeScopes(sc);
 		ncond=we.cond.copy(cargs);
@@ -3781,6 +3785,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
+			}else{
+				assert(!!id.meaning&&!id.constLookup);
+				sc.lastUses.synthesizedForget(id.meaning,id,sc,ae);
 			}
 		}else if(auto tpl=cast(TupleExp)lhs){
 			if(indexed){
@@ -4045,6 +4052,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				id.scope_=sc;
 				propErr(id.meaning, id);
 				id.setSemCompleted();
+				id.constLookup=false;
 			}
 			semanticDone=true;
 		}
@@ -4076,10 +4084,14 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	checkIndexReplacement(be,sc);
 	void checkULhs(Expression lhs){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,id.loc,sc,!!isInvertibleOpAssignExp(be))){
+			bool isReversible=!!isInvertibleOpAssignExp(be);
+			if(!checkAssignable(id.meaning,id.loc,sc,isReversible)){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				be.setSemError();
+			}else if(!isReversible){
+				assert(!!id.meaning&&!id.constLookup);
+				sc.lastUses.synthesizedForget(id.meaning,id,sc,be);
 			}
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e);
