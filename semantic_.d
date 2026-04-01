@@ -834,7 +834,7 @@ Expression statementSemanticImpl(FunctionDef fd,Scope sc,bool resetConst=true){
 		ce.setSemCompleted();
 		r=ce;
 	}
-	sc.lastUses.definition(fd,r);
+	if(fd.scope_) sc.lastUses.definition(fd,r);
 	return r;
 }
 Expression statementSemanticImpl(DatDecl dd,Scope sc,bool resetConst=true){
@@ -6732,7 +6732,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					sc.note("possibly caused by missing return type annotation",fd.loc);
 				return false;
 			}else{
-				if(cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
+				if(cfd.scope_&&cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
 				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
 					fd.functionDefsToUpdate~=cfd;
