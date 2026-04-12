@@ -86,7 +86,7 @@ Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1,
 			if(v12 && v2) {
 				return make!sub1(loc, se1.e1, make(v12.get() - v2.get()));
 			}
-			if(se1.e2 == ne2) return se1.e1;
+			if(ne2.isDeterministic() && se1.e2 == ne2) return se1.e1;
 		}
 	}
 	if(v2) {
@@ -115,7 +115,7 @@ Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1,
 
 Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"-" || op == Tok!"sub") {
 	if(v1 && v2) return make(v1.get() - v2.get());
-	if(ne1 == ne2) return make(0);
+	if(ne1.isDeterministic() && ne1 == ne2) return make(0);
 	if(v2 && v2.get() == 0) return ne1;
 	if(v1 && v1.get() == 0) return make!(Tok!"-")(loc, ne2);
 	// if(auto se2 = cast(UnaryExp!(Tok!"-")) ne2) {
@@ -152,8 +152,10 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 	static foreach(sub1;[Tok!"-",Tok!"sub"]){
 		if(auto se1 = cast(BinaryExp!sub1)ne1){
 			if(auto ae = cast(BinaryExp!(Tok!"+"))se1.e1){
-				if(ae.e1 == ne2) return make!sub1(loc, ae.e2, se1.e2);
-				if(ae.e2 == ne2) return make!sub1(loc, ae.e1, se1.e2);
+				if(ne2.isDeterministic()){
+					if(ae.e1 == ne2) return make!sub1(loc, ae.e2, se1.e2);
+					if(ae.e2 == ne2) return make!sub1(loc, ae.e1, se1.e2);
+				}
 			}
 		}
 	}
@@ -201,13 +203,13 @@ Expression evalNumericBinop(TokenType op: Tok!"^")(Location loc, Expression ne1,
 Expression evalNumericSum(TokenType op)(Location loc, Expression ne1, Expression ne2) if(op == Tok!"+" || op == Tok!"-" || op == Tok!"sub") {
 	if(auto me1=cast(BinaryExp!(Tok!"·"))ne1){
 		if(auto le1=cast(LiteralExp)me1.e1){
-			if(me1.e2==ne2){
+			if(ne2.isDeterministic() && me1.e2==ne2){
 				auto a = make!op(loc, le1, make(1));
 				return make!(Tok!"·")(loc, a, me1.e2);
 			}
 			if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
 				if(auto le2=cast(LiteralExp)me2.e1){
-					if(me1.e2==me2.e2){
+					if(me1.e2.isDeterministic() && me1.e2==me2.e2){
 						auto a = make!op(loc, le1, le2);
 						return make!(Tok!"·")(loc, a, me1.e2);
 					}
@@ -217,7 +219,7 @@ Expression evalNumericSum(TokenType op)(Location loc, Expression ne1, Expression
 	}
 	if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
 		if(auto le2=cast(LiteralExp)me2.e1){
-			if(me2.e2==ne1){
+			if(ne1.isDeterministic() && me2.e2==ne1){
 				auto a = make!op(loc, make(1), le2);
 				return make!(Tok!"·")(loc, a, ne1);
 			}
