@@ -76,7 +76,7 @@ Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1,
 		if(auto se1 = cast(BinaryExp!sub1)ne1){
 			static foreach(sub2;[Tok!"-",Tok!"sub"]){
 				if(auto se2 = cast(BinaryExp!sub2)ne2){
-					auto nb0 = make!(Tok!"+")(loc, se1.e1, se2.e2);
+					auto nb0 = make!(Tok!"+")(loc, se1.e1, se2.e1);
 					auto nb1 = make!sub1(loc, nb0, se1.e2);
 					auto nb2 = make!sub2(loc, nb1, se2.e2);
 					return nb2;
@@ -149,6 +149,14 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 			}
 		}
 	}
+	static foreach(sub1;[Tok!"-",Tok!"sub"]){
+		if(auto se1 = cast(BinaryExp!sub1)ne1){
+			if(auto ae = cast(BinaryExp!(Tok!"+"))se1.e1){
+				if(ae.e1 == ne2) return make!sub1(loc, ae.e2, se1.e2);
+				if(ae.e2 == ne2) return make!sub1(loc, ae.e1, se1.e2);
+			}
+		}
+	}
 	static foreach(sub2;[Tok!"-",Tok!"sub"]){
 		if(auto se2 = cast(BinaryExp!sub2)ne2){
 			return make!(Tok!"-")(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
@@ -165,6 +173,17 @@ Expression evalNumericBinop(TokenType op: Tok!"·")(Location loc, Expression ne1
 	if(v2 && v2.get() == 1) return ne1;
 	if(cast(LiteralExp)ne2 && !cast(LiteralExp)ne1) {
 		return make!op(loc, ne2, ne1);
+	}
+	if(v1){
+		static foreach(sop;[Tok!"+",Tok!"-",Tok!"sub"]){
+			if(auto se2 = cast(BinaryExp!sop)ne2){
+				if(auto v = se2.e2.asIntegerConstant()){
+					return make!sop(loc,
+					                make!(Tok!"·")(loc, ne1, se2.e1),
+					                make(v1.get() * v.get()));
+				}
+			}
+		}
 	}
 	return null;
 }
