@@ -1641,7 +1641,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 			}
 		}
-		if(ne1 is e1 && ne2 is e1) return this;
+		if(ne1 is e1 && ne2 is e2) return this;
 		static if(op == Tok!"→") {
 			return new BinaryExp!op(ne1, ne2, captureAnnotation, annotation, isLifted);
 		} else {
