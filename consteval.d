@@ -116,15 +116,25 @@ Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1,
 Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"-" || op == Tok!"sub") {
 	if(v1 && v2) return make(v1.get() - v2.get());
 	if(ne1.isDeterministic() && ne1 == ne2) return make(0);
-	if(v2 && v2.get() == 0) return ne1;
+	if(v2){
+		if(v2.get() == 0) return ne1;
+		if(v2.get() < 0){
+			return make!(Tok!"+")(loc, ne1, make(-v2.get()));
+		}
+	}
 	if(v1 && v1.get() == 0) return make!(Tok!"-")(loc, ne2);
-	// if(auto se2 = cast(UnaryExp!(Tok!"-")) ne2) {
-	// 	return make!(Tok!"+")(loc, ne1, se2.e);
-	// }
+	static if(op == Tok!"-")
+	if(auto se2 = cast(UnaryExp!(Tok!"-")) ne2) {
+		return make!(Tok!"+")(loc, ne1, se2.e);
+	}
 	if(ne2.isDeterministic()) {
 		if(auto ae1 = cast(BinaryExp!(Tok!"+"))ne1){
 			if(ae1.e1 == ne2) return ae1.e2;
 			if(ae1.e2 == ne2) return ae1.e1;
+			auto v12 = ae1.e2.asIntegerConstant();
+			if(v12 && v2){
+				return make!op(loc, ae1.e1, make(v2.get() - v12.get()));
+			}
 			if(auto ae2 = cast(BinaryExp!(Tok!"+"))ne2){
 				if(ae1.e1 == ae2.e1)
 					return make!op(loc, ae1.e2, ae2.e2);
