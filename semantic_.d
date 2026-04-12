@@ -6705,7 +6705,7 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			expr.setSemCompleted();
 		}else expr.constLookup=context.constResult!=ConstResult.no;
 		if(expr.type&&unrealizable(expr.type)){
-			sc.error(format("instances of type `%s` not realizable (did you mean to use `!%s`?)",expr.type,expr.type),expr.loc);
+			sc.error(format("instances of type `%s` not realizable (did you mean to use `%s`?)",expr.type,expr.type.getClassical()),expr.loc);
 			expr.setSemForceError();
 		}
 		if(!context.inConst&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
