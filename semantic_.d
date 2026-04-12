@@ -3627,11 +3627,12 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 				return arrayTy(nnext);
 			}
 			if(isFixedIntTy(baseTy)){
-				if(isNumericTy(rhsty) != NumericType.Bool) return null;
+				if(!isSubtype(rhsty,Bool(false))) return null;
 				auto rtype=baseTy;
 				if(!rhsty.isClassical||!indices[0].type.isClassical) rtype=rtype.getQuantum();
 				return rtype;
 			}
+			if(isEmpty(baseTy)) return bottom;
 			return null;
 		}
 		auto nty=impl();
@@ -3680,41 +3681,56 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 		if(sc) sc.error(format("index should be integer, not %s",indexTy),indexLoc);
 		return null;
 	}
-	bool checkBounds(Expression index,ℤ len){
-		if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
-			auto c=lit.get();
+	auto constIndex=index.asIntegerConstant(index.isSemCompleted);
+	if(constIndex){
+		auto c=constIndex.get();
+		if(c<0){
+			if(sc) sc.error(format("index for type `%s` is smaller than `0`",aty),index.loc);
+			return null;
+		}
+	}
+	bool mayBeInBounds(ℤ len){
+		if(constIndex){
+			auto c=constIndex.get();
 			if(c<0||c>=len){
-				if(sc) sc.error(format("index for type `%s` is out of bounds [0..%s)",aty,len),index.loc);
 				return false;
 			}
 		}
 		/+if(auto tpl=cast(TupleExp)index)
-			return tpl.e.all!(e=>checkBounds(e,len));+/
+			return tpl.e.all!(e=>mayBeInBounds(e,len));+/
 		return true;
 	}
 	if(auto at=cast(ArrayTy)aty){
 		return check(at.next, index, index.type, index.loc);
 	}else if(auto vt=cast(VectorTy)aty){
-		if(auto mlen=vt.num.asIntegerConstant()){
-			auto len=mlen.get();
-			if(!checkBounds(index,len))
-				return null;
+		if(constIndex){
+			if(auto mlen=vt.num.asIntegerConstant()){
+				auto len=mlen.get();
+				if(!mayBeInBounds(len))
+					return bottom;
+			}
 		}
 		return check(vt.next, index, index.type, index.loc);
 	}else if(auto idxInt=isFixedIntTy(aty)){
 		if(auto mlen=idxInt.bits.asIntegerConstant()){
 			auto len=mlen.get();
-			if(!checkBounds(index,len))
+			if(!mayBeInBounds(len)){
+				if(sc) sc.error(format("index for type `%s` is out of bounds `[0..%s)`",aty,len),index.loc);
 				return null;
+			}
 		}
 		return check(Bool(idxInt.isClassical), index, index.type, index.loc);
 	}else if(auto tt=cast(TupleTy)aty){
 		Expression checkTpl(Expression index){
+			Expression next=bottom;
+			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 			if(auto lit=index.asIntegerConstant(index.isSemCompleted)){
 				auto c=lit.get();
 				if(c<0||c>=tt.types.length){
-					if(sc) sc.error(format("index for type `%s` is out of bounds [0..%s)",tt,tt.types.length),index.loc);
-					return null;
+					if(!next){
+						if(sc) sc.error(format("index for type `%s` is out of bounds `[0..%s)`",tt,tt.types.length),index.loc);
+						return null;
+					}else return bottom;
 				}else{
 					return tt.types[cast(size_t)c.toLong()];
 				}
@@ -3724,8 +3740,6 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 				if(types.all!(e=>e!is null)) return tupleTy(types);
 				return null;
 			}+/
-			Expression next=bottom;
-			foreach(i;0..tt.types.length) next=next?joinTypes(next,tt.types[i]):null;
 			if(next) return check(next,index,index.type,index.loc);
 			if(isEmpty(index.type)) return bottom;
 			if(sc) sc.error(format("index for type %s should be integer constant",tt),index.loc);
@@ -5612,7 +5626,11 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq)
 		if(replaceIndex)
 			propErr(crepls[replaceIndexLoc].write,idx);
-	if(isEmpty(idx.e.type)) return idx.e;
+	if(isEmpty(idx.e.type)){
+		idx.type=bottom;
+		idx.setSemCompleted();
+		return idx;
+	}
 	idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
 	if(!idx.type) idx.setSemError();
 	static if(language==silq)
