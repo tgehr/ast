@@ -3768,7 +3768,19 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
+	Expression tde=null;
 	if(sc.allowsLinear){
+		if(cast(IndexExp)ae.e1&&!cast(Identifier)ae.e2){
+			auto tmp=new Identifier(freshName);
+			tmp.loc=ae.e2.loc;
+			tde=new DefineExp(tmp,ae.e2);
+			tmp=tmp.copy();
+			tmp.byRef=true;
+			tde=statementSemantic(tde,sc);
+			propErr(tde,ae);
+			propErr(tde,tmp);
+			ae.e2=tmp;
+		}
 		auto oe1=ae.e1.copy();
 		prepareIndexReplacements(oe1,sc,prologues,epilogues,ae.loc);
 	}
@@ -3799,8 +3811,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
-			}else{
-				assert(!!id.meaning&&!id.constLookup);
+			}else if(!!id.meaning){
+				assert(!id.constLookup);
 				sc.lastUses.synthesizedForget(id.meaning,id,sc,ae);
 			}
 		}else if(auto tpl=cast(TupleExp)lhs){
@@ -4000,7 +4012,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 	ae.setSemCompleted();
 	Expression r=ae;
 	if(ae.isSemCompleted()){
-		auto ce=new CompoundExp([ae]);
+		auto ce=new CompoundExp([r]);
 		ce.loc=ae.loc;
 		ce.type=ae.type;
 		ce.setSemCompleted();
@@ -4010,7 +4022,15 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 		if(var&&var.scope_)
 			sc.lastUses.definition(var,r);
 	}
-	return lowerIndexReplacement(prologues,epilogues,r,sc);
+	r=lowerIndexReplacement(prologues,epilogues,r,sc);
+	if(r.isSemCompleted&&tde){
+		auto ce=new CompoundExp([tde,r]);
+		ce.loc=r.loc;
+		ce.type=r.type;
+		ce.setSemCompleted();
+		r=ce;
+	}
+	return r;
 }
 
 AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssignExp)e; }
@@ -5626,11 +5646,6 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq)
 		if(replaceIndex)
 			propErr(crepls[replaceIndexLoc].write,idx);
-	if(isEmpty(idx.e.type)){
-		idx.type=bottom;
-		idx.setSemCompleted();
-		return idx;
-	}
 	idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
 	if(!idx.type) idx.setSemError();
 	static if(language==silq)
@@ -5651,6 +5666,11 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		id.loc=idx.loc;
 		if(!context.constResult) id.byRef=true;
 		return expressionSemantic(id,context);
+	}
+	if(isEmpty(idx.e.type)){
+		idx.type=bottom;
+		idx.setSemCompleted();
+		return idx;
 	}
 	static if(language==silq)
 	if(!idx.byRef&&!context.constResult&&!idx.implicitDup){
