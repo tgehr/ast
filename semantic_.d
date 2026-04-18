@@ -2289,6 +2289,9 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	}
 	return vec;
 }
+Expression defineLhsSemanticImpl(VectorForExp vfe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(vfe,context); // TODO: [X(x) for x in xs] := ys;
+}
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
 	if(isLiftedBuiltIn(tae)) return defineLhsSemanticImplLifted(tae,context);
@@ -5859,6 +5862,66 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 		vec.type=vectorTy(bottom, 0);
 	}
 	return vec;
+}
+
+Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
+	auto sc=context.sc;
+	assert(vfe.fe);
+	if(!(!vfe.fe.leftExclusive&&vfe.fe.rightExclusive)){
+		sc.error(text("[("[vfe.fe.leftExclusive],".."~"])"[vfe.fe.rightExclusive],"-style ranges not yet supported in vector comprehension"),vfe.fe.left.loc.to(vfe.fe.right.loc));
+		vfe.setSemError();
+		return vfe;
+	}
+	bool isSimple(Expression e){ // TODO: lift restriction
+		if(cast(LiteralExp)e) return true;
+		if(cast(Identifier)e) return true;
+		if(auto tae=cast(TypeAnnotationExp)e) return isSimple(tae.e)&&isSimple(tae.t);
+		if(auto idx=cast(IndexExp)e) return isSimple(idx.e)&&isSimple(idx.a);
+		if(auto ue=cast(AUnaryExp)e) return isSimple(ue.e);
+		if(auto be=cast(ABinaryExp)e) return isSimple(be.e1)&&isSimple(be.e2);
+		return false;
+	}
+	if(!isSimple(vfe.fe.left)||!isSimple(vfe.fe.right)){
+		sc.error("range not yet supported in vector comprehension because it is not simple enough",vfe.fe.left.loc.to(vfe.fe.right.loc));
+		vfe.setSemError();
+		return vfe;
+	}
+	auto rname=new Identifier(freshName());
+	rname.loc=vfe.fe.bdy.s[0].loc;
+	auto empty=new VectorExp([]);
+	empty.loc=rname.loc;
+	auto de=new DefineExp(rname,empty);
+	de.loc=rname.loc;
+	auto fe=vfe.fe.copy();
+	auto ce=fe.bdy.s[0];
+	auto vce=new VectorExp([ce]);
+	vce.loc=ce.loc;
+	auto cae=new CatAssignExp(rname.copy(),vce);
+	cae.loc=vce.loc;
+	fe.bdy.s[0]=cae;
+	auto left=vfe.fe.left.copy();
+	auto right=vfe.fe.right.copy();
+	auto ty=new WildcardExp();
+	ty.loc=rname.loc;
+	auto len=new NSubExp(right,left);
+	len.loc=rname.loc;
+	auto rty=new PowExp(ty,len);
+	rty.loc=rname.loc;
+	auto tae=new TypeAnnotationExp(rname.copy(),rty,TypeAnnotationType.coercion);
+	tae.loc=rname.loc;
+	auto re=new ReturnExp(tae);
+	re.loc=rname.loc;
+	Expression[] stmts=[de,fe,re];
+	auto fbdy=new CompoundExp(stmts);
+	auto fd=new FunctionDef(null,[],true,null,fbdy);
+	fd.loc=vfe.loc;
+	auto le=new LambdaExp(fd);
+	le.loc=vfe.loc;
+	auto etpl=new TupleExp([]);
+	etpl.loc=vfe.loc;
+	auto lce=new CallExp(le,etpl,false,false);
+	lce.loc=vfe.loc;
+	return expressionSemantic(lce,context);
 }
 
 Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){

@@ -1903,11 +1903,18 @@ class ForExp: Expression{
 		}
 		return r;
 	}
-	override string toString(){ return _brk("for "~var.toString()~" in "~
-	                                        (leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~
-	                                        (rightExclusive?")":"]")~bdy.toString()); }
+	final string toStringNoBody(){
+		return "for "~var.toString()~" in "~
+			(leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~
+			(rightExclusive?")":"]");
+	}
+	override string toString(){ return _brk(toStringNoBody()~bdy.toString()); }
 	override @property string kind(){ return "for loop"; }
 	override bool isCompound(){ return true; }
+
+	override bool isTotal(){
+		return left.isTotal()&&(!step||step.isTotal)&&right.isTotal()&&bdy.isTotal();
+	}
 
 	// semantic information
 	BlockScope fescope_;
@@ -2042,6 +2049,7 @@ class TupleExp: Expression{
 		return new TupleExp(e.map!(e=>e.copy(args)).array);
 	}
 	override string toString(){ return _brk("("~e.map!(to!string).join(",")~(e.length==1?",":"")~")"); }
+	override @property string kind(){ return "tuple expression"; }
 	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
 	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 	final @property size_t length(){ return e.length; }
@@ -2204,6 +2212,7 @@ class VectorExp: Expression{
 		return new VectorExp(e.map!(e=>e.copy(args)).array);
 	}
 	override string toString(){ return _brk("["~e.map!(to!string).join(",")~"]");}
+	override @property string kind(){ return "vector expression"; }
 	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
 	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 
@@ -2244,6 +2253,45 @@ class VectorExp: Expression{
 	override void setConstLookup(bool constLookup){
 		foreach(x;e) x.setConstLookup(constLookup);
 		super.setConstLookup(constLookup);
+	}
+}
+
+class VectorForExp: Expression{
+	ForExp fe;
+	this(ForExp fe)in{
+		assert(fe.bdy&&fe.bdy.s.length==1);
+	}do{
+		this.fe=fe;
+	}
+	override VectorForExp copyImpl(CopyArgs args){
+		return new VectorForExp(fe.copy(args));
+	}
+	override string toString(){ return _brk("["~fe.bdy.s[0].toString()~" "~fe.toStringNoBody()~"]"); }
+	override @property string kind(){ return "vector comprehension"; }
+	override bool isConstant(){ return false; } // TODO?
+	override bool isTotal(){ return fe.isTotal(); }
+
+	override bool opEquals(Object o){
+		auto vfe=cast(VectorForExp)o;
+		if(!vfe) return false;
+		return fe==vfe.fe;
+	}
+
+	mixin VariableFree; // TODO!
+	override int componentsImpl(scope int delegate(Expression) dg){
+		if(auto r=dg(fe.bdy.s[0])) return r;
+		if(auto r=dg(fe.left)) return r;
+		if(fe.step) if(auto r=dg(fe.step)) return r;
+		if(auto r=dg(fe.right)) return r;
+		return 0;
+	}
+	override Expression evalImpl(){ return this; } // TODO: partially evaluate lambdas?
+	override Annotation getAnnotation(){
+		auto r=pure_;
+		r=min(r,fe.left.getAnnotation());
+		if(fe.step) r=min(r,fe.step.getAnnotation());
+		r=min(r,fe.right.getAnnotation());
+		return r;
 	}
 }
 
@@ -2567,6 +2615,7 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
+		if(auto vfe=cast(VectorForExp)e) return f(vfe,forward!args); // TODO: turn into expression that may appear in analyzed AST
 	}
 
 	return default_(e,forward!args);

@@ -529,7 +529,17 @@ struct Parser{
 				}else{
 					assert(ttype==Tok!"[");
 					nextToken();
-					res=New!VectorExp(parseArgumentList(Tok!"]")[0]);
+					if(ttype!=Tok!"]"){
+						auto ae=parseExpression(rbp!(Tok!","));
+						if(ttype==Tok!"for"){
+							auto fe=parseForNoBody();
+							fe.bdy=new CompoundExp([ae]);
+							fe.bdy.loc=ae.loc;
+							res=New!VectorForExp(fe);
+						}else{
+							res=New!VectorExp(parseArgumentList(Tok!"]",ae)[0]);
+						}
+					}else res=New!VectorExp((Expression[]).init);
 					expect(Tok!"]");
 					return res;
 				}
@@ -1181,9 +1191,10 @@ struct Parser{
 		auto bdy=parseCompoundExp();
 		return res=New!WhileExp(num,bdy);
 	}
-	ForExp parseFor(){
+
+	ForExp parseForNoBody(){
 		mixin(SetLoc!ForExp);
-		expect(Tok!"for");
+				expect(Tok!"for");
 		auto var=parseIdentifier();
 		expect(Tok!"in");
 		bool leftExclusive=false,rightExclusive=false;
@@ -1204,8 +1215,15 @@ struct Parser{
 			else expect(Tok!"]");
 		}else rightExclusive=true;
 		if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
+		return res=New!ForExp(var,leftExclusive,left,step,rightExclusive,right,null);
+	}
+
+	ForExp parseFor(){
+		mixin(SetLoc!ForExp);
+		res=parseForNoBody();
 		auto bdy=parseCompoundExp();
-		return res=New!ForExp(var,leftExclusive,left,step,rightExclusive,right,bdy);
+		res.bdy=bdy;
+		return res;
 	}
 	AssertExp parseAssert(){
 		mixin(SetLoc!AssertExp);
