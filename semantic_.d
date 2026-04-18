@@ -5886,6 +5886,11 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 		vfe.setSemError();
 		return vfe;
 	}
+	if(vfe.fe.step){
+		sc.error("range with step not yet supported in vector comprehension",vfe.fe.step.loc);
+		vfe.setSemError();
+		return vfe;
+	}
 	auto rname=new Identifier(freshName());
 	rname.loc=vfe.fe.bdy.s[0].loc;
 	auto empty=new VectorExp([]);
