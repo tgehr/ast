@@ -197,7 +197,7 @@ abstract class Expression: Node{
 	}
 
 	final bool unify(Expression rhs,ref UnificationResult[Id] subst, bool meet){
-		return unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet);
+		return unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet) || isSubtype(rhs,this);
 	}
 	abstract bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet);
 

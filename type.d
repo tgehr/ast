@@ -575,11 +575,11 @@ class ArrayTy: Type{
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VectorTy)rhs)
-			return next.unifyImpl(vt.next,subst,meet);
+			return next.unify(vt.next,subst,meet);
 		if(auto tt=cast(TupleTy)rhs)
-			return tt.types.all!(ty=>next.unifyImpl(ty,subst,meet));
+			return tt.types.all!(ty=>next.unify(ty,subst,meet));
 		if(auto at=cast(ArrayTy)rhs)
-			return next.unifyImpl(at.next,subst,meet);
+			return next.unify(at.next,subst,meet);
 		return false;
 	}
 	override ArrayTy evalImpl(){
@@ -691,12 +691,12 @@ class VectorTy: Type, ITupleTy{
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
-			return tt.types.all!(ty=>next.unifyImpl(ty,subst,meet)) && num.unifyImpl(LiteralExp.makeInteger(tt.length),subst,meet);
+			return tt.types.all!(ty=>next.unify(ty,subst,meet)) && num.unify(LiteralExp.makeInteger(tt.length),subst,meet);
 		if(auto vt=cast(VectorTy)rhs){
-			auto r=next.unifyImpl(vt.next,subst,meet);
+			auto r=next.unify(vt.next,subst,meet);
 			if(auto nlit=num.asIntegerConstant())
 				if(nlit.get()==0&&num==vt.num) return true;
-			return r && num.unifyImpl(vt.num,subst,meet);
+			return r && num.unify(vt.num,subst,meet);
 		}
 		return false;
 	}
@@ -1454,15 +1454,15 @@ class VariadicTy: Type{
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VariadicTy)rhs)
-			return next.unifyImpl(vt.next,subst,meet);
-		// if(auto vt=cast(VectorTy)rhs) return next.unifyImpl(vector(vt.next.num,vt.next.type),subst,meet); // TODO
+			return next.unify(vt.next,subst,meet);
+		// if(auto vt=cast(VectorTy)rhs) return next.unify(vector(vt.next.num,vt.next.type),subst,meet); // TODO
 		// if(auto at=cast(ArrayTy)rhs) // TODO
 		if(auto tt=rhs.isTupleTy()){
 			auto types=iota(tt.length).map!(i=>tt[i]).array;
 			auto tpl=new TupleExp(types);
 			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 			tpl.setSemCompleted();
-			return next.unifyImpl(tpl,subst,meet);
+			return next.unify(tpl,subst,meet);
 		}
 		return false;
 	}
