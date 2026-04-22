@@ -3069,7 +3069,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 				Q!(Declaration,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
-						if(id.meaning){
+						if(id.meaning&&id.type&&id.meaning.scope_ is sc){
 							auto dep=rhs[i].getDependency(sc);
 							dep.joinWith(getIndexDependency(lhs[i]));
 							dependencies~=q(id.meaning,dep);
@@ -3082,7 +3082,7 @@ Expression defineSemantic(DefineExp be,Scope sc,bool resetConst=true){
 				Q!(Declaration,Dependency)[] dependencies;
 				foreach(i;0..lhs.length){
 					if(auto id=getIdFromDefLhs(lhs[i])){
-						if(id.meaning&&id.type){
+						if(id.meaning&&id.type&&id.meaning.scope_ is sc){
 							if(!id.type.isClassical()){
 								auto dep=dependency.dup;
 								dep.joinWith(getIndexDependency(lhs[i]));
@@ -3954,7 +3954,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc){
 								}
 								auto var=addVar(origId,ntype,lhs.loc,sc);
 								static if(language==silq){
-									sc.addDependency(var,dependencies[decl]);
+									if(var.scope_ is sc)
+										sc.addDependency(var,dependencies[decl]);
 								}
 								defined[decl.getId]=var;
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
@@ -4186,7 +4187,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			assert(!var);
 			var=addVar(origId,ce.type,be.loc,sc);
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
-			sc.addDependency(var,dependency);
+			if(var.scope_ is sc)
+				sc.addDependency(var,dependency);
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
 			if(to&&isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
 				sc.error(format("operator assign from type `%s` to type `%s` is disallowed",from,to),be.loc);
