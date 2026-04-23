@@ -1881,40 +1881,137 @@ class RepeatExp: Expression{
 	}
 }
 
-class ForExp: Expression{
-	Identifier var;
+struct ForRange{
 	bool leftExclusive;
 	Expression left;
 	Expression step;
 	bool rightExclusive;
 	Expression right;
+	Location loc(){ // TODO: store full extent?
+		return left.loc.to(right.loc);
+	}
+	bool opCast(T:bool)(){ return left&&right; }
+
+	string toString()in{
+		assert(!!this);
+	}do{
+		return(leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~(rightExclusive?")":"]");
+	}
+
+	ForRange copy(Expression.CopyArgs args)in{
+		assert(!!this);
+	}do{
+		return ForRange(leftExclusive,left.copy(args),step?step.copy(args):null,rightExclusive,right.copy(args));
+	}
+
+	ForRange copyReversed(){
+		auto nleftExclusive=rightExclusive;
+		auto nleft=right.copy();
+		auto nrightExclusive=leftExclusive;
+		auto nright=left.copy();
+		auto ostep=step?step.copy():null;
+		if(!ostep){
+			import ast.reverse:constantExp; // TODO: move?
+			ostep=constantExp(1);
+			ostep.loc=left.loc.to(right.loc);
+		}
+		auto nstep=new UMinusExp(ostep);
+		nstep.loc=ostep.loc;
+		return ForRange(nleftExclusive,nleft,nstep,nrightExclusive,nright);
+	}
+
+	bool isTotal()in{
+		assert(!!this);
+	}do{
+		return left.isTotal()&&(!step||step.isTotal)&&right.isTotal();
+	}
+	int componentsImpl(scope int delegate(Expression) dg){
+		if(auto r=dg(left)) return r;
+		if(step) if(auto r=dg(step)) return r;
+		if(auto r=dg(right)) return r;
+		return 0;
+	}
+
+	ForRange eval()in{
+		assert(!!this);
+	}do{
+		auto left=this.left.eval();
+		auto step=this.step?this.step.eval():this.step;
+		auto right=this.right.eval();
+		return ForRange(leftExclusive,left,step,rightExclusive,right);
+	}
+	Annotation getAnnotation(){
+		auto r=left.getAnnotation();
+		if(step) r=min(r,step.getAnnotation());
+		r=min(r,right.getAnnotation());
+		return r;
+	}
+
+	// semantici information
+	Expression elementType(){ return joinTypes(left.type, right.type); }
+}
+
+struct ForAggregate{
+	ForRange range;
+	this(ForRange range){
+		this.range=range;
+	}
+	ForRange isRange(){ return range; }
+	bool opCast(T:bool)(){ return !!range; }
+
+	Location loc()=>fwd!"loc"();
+
+	private auto fwd(string method,T...)(auto ref T args)in{
+		assert(!!this);
+	}do{
+		import core.lifetime:forward;
+		return __traits(getMember,range,method)(forward!args);
+	}
+	private auto fwdWrap(string method,T...)(auto ref T args)in{
+		assert(!!this);
+	}do{
+		import core.lifetime:forward;
+		return ForAggregate(__traits(getMember,range,method)(forward!args));
+	}
+
+	string toString()=>fwd!"toString"();
+
+	ForAggregate copy(Expression.CopyArgs args)=>fwdWrap!"copy"(args);
+	ForAggregate copyReversed()=>fwdWrap!"copyReversed"();
+
+	bool isTotal()=>fwd!"isTotal";
+	int componentsImpl(scope int delegate(Expression) dg)=>fwd!"componentsImpl"(dg);
+	ForAggregate eval()=>fwdWrap!"eval"();
+	Annotation getAnnotation()=>fwd!"getAnnotation"();
+
+	// semantic information
+	Expression elementType()=>fwd!"elementType"();
+}
+
+class ForExp: Expression{
+	Identifier var;
+	ForAggregate aggr;
 	CompoundExp bdy;
-	this(Identifier var,bool leftExclusive,Expression left,Expression step,bool rightExclusive,Expression right,CompoundExp bdy){
+	this(Identifier var,ForAggregate aggr,CompoundExp bdy){
 		this.var=var;
-		this.leftExclusive=leftExclusive; this.left=left;
-		this.step=step;
-		this.rightExclusive=rightExclusive; this.right=right;
+		this.aggr=aggr;
 		this.bdy=bdy;
 	}
 	override ForExp copyImpl(CopyArgs args){
-		auto r=new ForExp(var.copy(args),leftExclusive,left.copy(args),step?step.copy(args):null,rightExclusive,right.copy(args),bdy.copy(args));
+		auto r=new ForExp(var.copy(args),aggr.copy(args),bdy.copy(args));
 		if(args.preserveSemantic){
 			enforce(!fescope_&&!loopVar,"TODO");
 		}
 		return r;
 	}
 	final string toStringNoBody(){
-		return "for "~var.toString()~" in "~
-			(leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~
-			(rightExclusive?")":"]");
+		return "for "~var.toString()~" in "~aggr.toString();
 	}
 	override string toString(){ return _brk(toStringNoBody()~bdy.toString()); }
 	override @property string kind(){ return "for loop"; }
 	override bool isCompound(){ return true; }
 
-	override bool isTotal(){
-		return left.isTotal()&&(!step||step.isTotal)&&right.isTotal()&&bdy.isTotal();
-	}
+	override bool isTotal(){ return aggr.isTotal()&&bdy.isTotal(); }
 
 	// semantic information
 	BlockScope fescope_;
@@ -2280,18 +2377,25 @@ class VectorForExp: Expression{
 	mixin VariableFree; // TODO!
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(fe.bdy.s[0])) return r;
-		if(auto r=dg(fe.left)) return r;
-		if(fe.step) if(auto r=dg(fe.step)) return r;
-		if(auto r=dg(fe.right)) return r;
-		return 0;
+		return fe.aggr.componentsImpl(dg);
 	}
-	override Expression evalImpl(){ return this; } // TODO: partially evaluate lambdas?
+	override Expression evalImpl(){
+		auto naggr=fe.aggr.eval();
+		auto ns=fe.bdy.s[0].eval();
+		if(naggr is fe.aggr&&ns is fe.bdy.s[0])
+			return this;
+		auto nbdy=new CompoundExp([ns]);
+		nbdy.loc=fe.bdy.loc;
+		nbdy.type=fe.bdy.type;
+		nbdy.setSemEvaluated();
+		auto nfe=new ForExp(fe.var,naggr,nbdy);
+		nfe.loc=nfe.loc;
+		nfe.type=fe.type;
+		nfe.setSemEvaluated();
+		return new VectorForExp(nfe);
+	}
 	override Annotation getAnnotation(){
-		auto r=pure_;
-		r=min(r,fe.left.getAnnotation());
-		if(fe.step) r=min(r,fe.step.getAnnotation());
-		r=min(r,fe.right.getAnnotation());
-		return r;
+		return min(fe.bdy.s[0].getAnnotation(),fe.aggr.getAnnotation());
 	}
 }
 

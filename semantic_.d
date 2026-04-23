@@ -888,16 +888,24 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
 	}else static if(is(T==ForExp)){
 		auto loopVarId=loop.var.id;
-		assert(loop.left.type && loop.right.type);
-		auto loopVarType=joinTypes(loop.left.type, loop.right.type);
-		auto loopParamType=loopVarType;
-		if(loopParamType is Bool(true)) loopParamType=ℕt(true);
-		if(loop.step){
-			if(auto at=arithmeticType!false(loopParamType,loop.step.type))
-				loopParamType=at;
+		Expression loopVarType;
+		Q!(Id,Declaration,Expression,bool)[] loopParams;
+		if(auto range=loop.aggr.isRange){
+			loopVarType=loop.aggr.elementType();
+			assert(!!loopVarType);
+			auto loopParamType=loopVarType;
+			if(loopParamType is Bool(true)) loopParamType=ℕt(true);
+			if(range.step){
+				if(auto at=arithmeticType!false(loopParamType,range.step.type))
+					loopParamType=at;
+			}
+			Declaration loopVarDecl=loop.loopVar;
+			loopParams=[q(loopVarId,loopVarDecl,loopParamType,true)];
+		}else{
+			sc.error("aggregate type not yet supported by loop lowering pass",loop.aggr.loc);
+			loop.setSemForceError();
+			return loop;
 		}
-		Declaration loopVarDecl=loop.loopVar;
-		auto loopParams=[q(loopVarId,loopVarDecl,loopParamType,true)];
 	}else static if(is(T==RepeatExp)){
 		auto loopVarId=freshName();
 		Expression loopVarType=ℕt(true);
@@ -968,127 +976,136 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 		auto ncond=loop.cond.copy(cargsDefault);
 	}else static if(is(T==ForExp)){
 		//writeln("?? ",constParams);
-		auto leftName=new Identifier(freshName());
-		leftName.loc=loop.left.loc;
-		auto leftInit=loop.left.copy(cargsDefault);
-		leftInit.loc=loop.left.loc;
-		auto leftDef=new DefineExp(leftName,leftInit);
-		leftDef.loc=loop.left.loc;
-		auto rightName=new Identifier(freshName());
-		rightName.loc=loop.right.loc;
-		auto rightInit=loop.right.copy(cargsDefault);
-		rightInit.loc=loop.right.loc;
-		auto rightDef=new DefineExp(rightName,rightInit);
-		rightDef.loc=loop.right.loc;
+		Expression ncond;
+		Identifier leftName;
+		Expression leftDef;
 		Identifier stepName=null;
 		Expression stepDef=null;
+		Identifier rightName;
+		Expression rightDef;
 		Identifier modMatchName=null;
 		Expression modMatchDef=null;
 		Expression adjDef=null;
 		Expression adjIte=null;
 		Expression adjUpd=null;
-		if(loop.step){
-			stepName=new Identifier(freshName());
-			auto stepInit=loop.step.copy(cargsDefault);
-			stepInit.loc=loop.step.loc;
-			stepDef=new DefineExp(stepName,stepInit);
-			stepDef.loc=loop.step.loc;
-			if(loop.leftExclusive==loop.rightExclusive){
-				auto two=LiteralExp.makeInteger(2);
-				two.loc=loop.step.loc;
-				auto add=new AddExp(leftName.copy(cargsDefault),rightName.copy(cargsDefault));
-				add.loc=loop.step.loc;
-				modMatchName=new Identifier(freshName());
-				modMatchName.loc=loop.step.loc;
-				auto modMatchInit=new IDivExp(add,two);
-				modMatchInit.loc=loop.step.loc;
-				modMatchDef=new DefineExp(modMatchName,modMatchInit);
-				modMatchDef.loc=loop.step.loc;
-			}else{
-				bool isOne=false;
-				if(auto v=loop.step.eval().asIntegerConstant())
-					isOne=util.among(v.get(),-1,1);
-				if(!isOne) modMatchName=loop.leftExclusive?rightName:leftName;
-				else modMatchName=leftName;
-			}
-			Expression adjName=null;
-			if(modMatchName !is leftName){
-				auto sub=new SubExp(modMatchName.copy(cargsDefault),leftName.copy(cargsDefault));
-				sub.brackets++;
-				sub.loc=loop.step.loc;
-				adjName=new Identifier(freshName());
-				adjName.loc=loop.step.loc;
-				auto adjInit=new ModExp(sub,stepName.copy(cargsDefault));
-				adjDef=new DefineExp(adjName,adjInit);
-				adjDef.loc=loop.step.loc;
-			}
-			if(loop.leftExclusive){
-				if(adjName){
-					auto zero=LiteralExp.makeInteger(0);
-					zero.loc=loop.step.loc;
-					auto adjCond=new EqExp(adjName.copy(cargsDefault),zero);
-					adjCond.loc=loop.step.loc;
-					auto setAdj=new AssignExp(adjName.copy(cargsDefault),stepName.copy(cargsDefault));
-					setAdj.loc=loop.step.loc;
-					auto setAdjBdy=new CompoundExp([setAdj]);
-					setAdjBdy.loc=loop.step.loc;
-					adjIte=new IteExp(adjCond,setAdjBdy,null);
-					adjIte.loc=loop.step.loc;
+		if(auto range=loop.aggr.isRange){
+			leftName=new Identifier(freshName());
+			leftName.loc=range.left.loc;
+			auto leftInit=range.left.copy(cargsDefault);
+			leftInit.loc=range.left.loc;
+			leftDef=new DefineExp(leftName,leftInit);
+			leftDef.loc=range.left.loc;
+			rightName=new Identifier(freshName());
+			rightName.loc=range.right.loc;
+			auto rightInit=range.right.copy(cargsDefault);
+			rightInit.loc=range.right.loc;
+			rightDef=new DefineExp(rightName,rightInit);
+			rightDef.loc=range.right.loc;
+			if(range.step){
+				stepName=new Identifier(freshName());
+				auto stepInit=range.step.copy(cargsDefault);
+				stepInit.loc=range.step.loc;
+				stepDef=new DefineExp(stepName,stepInit);
+				stepDef.loc=range.step.loc;
+				if(range.leftExclusive==range.rightExclusive){
+					auto two=LiteralExp.makeInteger(2);
+					two.loc=range.step.loc;
+					auto add=new AddExp(leftName.copy(cargsDefault),rightName.copy(cargsDefault));
+					add.loc=range.step.loc;
+					modMatchName=new Identifier(freshName());
+					modMatchName.loc=range.step.loc;
+					auto modMatchInit=new IDivExp(add,two);
+					modMatchInit.loc=range.step.loc;
+					modMatchDef=new DefineExp(modMatchName,modMatchInit);
+					modMatchDef.loc=range.step.loc;
 				}else{
-					adjUpd=new AddAssignExp(leftName.copy(cargsDefault),stepName.copy(cargsDefault));
-					adjUpd.loc=loop.step.loc;
+					bool isOne=false;
+					if(auto v=range.step.eval().asIntegerConstant())
+						isOne=util.among(v.get(),-1,1);
+					if(!isOne) modMatchName=range.leftExclusive?rightName:leftName;
+					else modMatchName=leftName;
 				}
-			}
-			if(adjName){
-				adjUpd=new AddAssignExp(leftName.copy(cargsDefault),adjName.copy(cargsDefault));
-				adjUpd.loc=loop.step.loc;
-			}
-		}else if(loop.leftExclusive){
-			auto one=LiteralExp.makeInteger(1);
-			one.loc=loop.left.loc;
-			adjUpd=new AddAssignExp(leftName.copy(cargsDefault),one);
-			adjUpd.loc=loop.left.loc;
-		}
-		auto loopVarName=constTmpNames[0].copy(cargsDefault);
-		loopVarName.loc=loop.var.loc;
-		Expression makeForCond(){
-			auto makePositive(){
-				auto ncond=loop.rightExclusive?
-					new LtExp(loopVarName,rightName.copy(cargsDefault))
-				:   new LeExp(loopVarName,rightName.copy(cargsDefault));
-				ncond.loc=loop.loc;
-				return ncond;
-			}
-			auto makeNegative(){
-				auto ncond=loop.rightExclusive?
-					new GtExp(loopVarName,rightName.copy(cargsDefault))
-				:   new GeExp(loopVarName,rightName.copy(cargsDefault));
-				ncond.loc=loop.loc;
-				return ncond;
-			}
-			if(!loop.step||isSubtype(loop.step.type,ℕt(true))){
-				return makePositive();
-			}
-			if(auto v=loop.step.eval().asIntegerConstant()){
-				if(v.get()<0){
-					return makeNegative();
+				Expression adjName=null;
+				if(modMatchName !is leftName){
+					auto sub=new SubExp(modMatchName.copy(cargsDefault),leftName.copy(cargsDefault));
+					sub.brackets++;
+					sub.loc=range.step.loc;
+					adjName=new Identifier(freshName());
+					adjName.loc=range.step.loc;
+					auto adjInit=new ModExp(sub,stepName.copy(cargsDefault));
+					adjDef=new DefineExp(adjName,adjInit);
+					adjDef.loc=range.step.loc;
 				}
+				if(range.leftExclusive){
+					if(adjName){
+						auto zero=LiteralExp.makeInteger(0);
+						zero.loc=range.step.loc;
+						auto adjCond=new EqExp(adjName.copy(cargsDefault),zero);
+						adjCond.loc=range.step.loc;
+						auto setAdj=new AssignExp(adjName.copy(cargsDefault),stepName.copy(cargsDefault));
+						setAdj.loc=range.step.loc;
+						auto setAdjBdy=new CompoundExp([setAdj]);
+						setAdjBdy.loc=range.step.loc;
+						adjIte=new IteExp(adjCond,setAdjBdy,null);
+						adjIte.loc=range.step.loc;
+					}else{
+						adjUpd=new AddAssignExp(leftName.copy(cargsDefault),stepName.copy(cargsDefault));
+						adjUpd.loc=range.step.loc;
+					}
+				}
+				if(adjName){
+					adjUpd=new AddAssignExp(leftName.copy(cargsDefault),adjName.copy(cargsDefault));
+					adjUpd.loc=range.step.loc;
+				}
+			}else if(range.leftExclusive){
+				auto one=LiteralExp.makeInteger(1);
+				one.loc=range.left.loc;
+				adjUpd=new AddAssignExp(leftName.copy(cargsDefault),one);
+				adjUpd.loc=range.left.loc;
 			}
-			auto zero=LiteralExp.makeInteger(0);
-			zero.loc=loop.loc;
-			assert(!!stepName);
-			auto stepPos=new GeExp(stepName.copy(cargsDefault),zero);
-			stepPos.loc=loop.loc;
-			auto posBdy=new CompoundExp([makePositive()]);
-			posBdy.loc=loop.loc;
-			auto negBdy=new CompoundExp([makeNegative()]);
-			negBdy.loc=loop.loc;
-			auto ite=new IteExp(stepPos,posBdy,negBdy);
-			ite.loc=loop.loc;
-			ite.brackets++;
-			return ite;
+			auto loopVarName=constTmpNames[0].copy(cargsDefault);
+			loopVarName.loc=loop.var.loc;
+			Expression makeForCond(){
+				auto makePositive(){
+					auto ncond=range.rightExclusive?
+						new LtExp(loopVarName,rightName.copy(cargsDefault))
+						:   new LeExp(loopVarName,rightName.copy(cargsDefault));
+					ncond.loc=range.loc;
+					return ncond;
+				}
+				auto makeNegative(){
+					auto ncond=range.rightExclusive?
+						new GtExp(loopVarName,rightName.copy(cargsDefault))
+						:   new GeExp(loopVarName,rightName.copy(cargsDefault));
+					ncond.loc=range.loc;
+					return ncond;
+				}
+				if(!range.step||isSubtype(range.step.type,ℕt(true))){
+					return makePositive();
+				}
+				if(auto v=range.step.eval().asIntegerConstant()){
+					if(v.get()<0){
+						return makeNegative();
+					}
+				}
+				auto zero=LiteralExp.makeInteger(0);
+				zero.loc=range.loc;
+				assert(!!stepName);
+				auto stepPos=new GeExp(stepName.copy(cargsDefault),zero);
+				stepPos.loc=range.loc;
+				auto posBdy=new CompoundExp([makePositive()]);
+				posBdy.loc=range.loc;
+				auto negBdy=new CompoundExp([makeNegative()]);
+				negBdy.loc=range.loc;
+				auto ite=new IteExp(stepPos,posBdy,negBdy);
+				ite.loc=range.loc;
+				ite.brackets++;
+				return ite;
+			}
+			ncond=makeForCond();
+		}else{
+			assert(0,"unknown aggregate type");
 		}
-		auto ncond=makeForCond();
 	}else static if(is(T==RepeatExp)){
 		auto numName=new Identifier(freshName());
 		numName.loc=loop.num.loc;
@@ -1322,31 +1339,43 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc)in{
 	return result;
 }
 
-// TODO: supertypes for define and assign?
-Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
-	auto context=expSemContext(sc,ConstResult.yes,InType.no);
-	assert(!fe.bdy.blscope_);
-	fe.left=expressionSemantic(fe.left,context.nestConst);
-	propErr(fe.left,fe);
-	static if(language==silq) sc.clearConsumed();
-	if(fe.left.isSemCompleted() && !isSubtype(fe.left.type, ℝ(true))){
-		sc.error(format("lower bound for loop variable should be a classical number, not %s",fe.left.type),fe.left.loc);
-		fe.setSemError();
-	}
-	if(fe.step){
-		fe.step=expressionSemantic(fe.step,context.nestConst);
-		if(fe.step.isSemCompleted() && !isSubtype(fe.step.type, ℤt(true))){
-			sc.error(format("step should be a classical integer, not %s",fe.step.type),fe.step.loc);
+ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp fe){
+	auto sc=context.sc;
+	if(auto range=aggr.isRange){
+		range.left=expressionSemantic(range.left,context.nestConst);
+		propErr(range.left,fe);
+		static if(language==silq) sc.clearConsumed();
+		if(range.left.isSemCompleted() && !isSubtype(range.left.type, ℝ(true))){
+			sc.error(format("lower bound for loop variable should be a classical number, not %s",range.left.type),range.left.loc);
 			fe.setSemError();
 		}
-	}
-	fe.right=expressionSemantic(fe.right,context.nestConst);
-	propErr(fe.right,fe);
-	static if(language==silq) sc.clearConsumed();
-	if(fe.right.isSemCompleted() && !isSubtype(fe.right.type, ℝ(true))){
-		sc.error(format("upper bound for loop variable should be a classical number, not %s",fe.right.type),fe.right.loc);
+		if(range.step){
+			range.step=expressionSemantic(range.step,context.nestConst);
+			if(range.step.isSemCompleted() && !isSubtype(range.step.type, ℤt(true))){
+				sc.error(format("step should be a classical integer, not %s",range.step.type),range.step.loc);
+				fe.setSemError();
+			}
+		}
+		range.right=expressionSemantic(range.right,context.nestConst);
+		propErr(range.right,fe);
+		static if(language==silq) sc.clearConsumed();
+		if(range.right.isSemCompleted() && !isSubtype(range.right.type, ℝ(true))){
+			sc.error(format("upper bound for loop variable should be a classical number, not %s",range.right.type),range.right.loc);
+			fe.setSemError();
+		}
+		return ForAggregate(range);
+	}else{
+		sc.error("for aggregate not supported yet",fe.aggr.loc);
 		fe.setSemError();
+		return fe.aggr;
 	}
+}
+
+// TODO: supertypes for define and assign?
+Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
+	auto context=expSemContext(sc,ConstResult.no,InType.no);
+	assert(!fe.bdy.blscope_);
+	fe.aggr=forAggregateSemantic(fe.aggr,context,fe);
 	bool converged=false;
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc);
@@ -1360,7 +1389,8 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 		id.loc=fe.var.loc;
 		auto vd=new VarDecl(id);
 		vd.loc=fe.var.loc;
-		vd.vtype=fe.left.type && fe.right.type ? joinTypes(fe.left.type, fe.right.type) : ℤt(true);
+		vd.vtype=fe.aggr.elementType();
+		if(!vd.vtype) vd.vtype=ℤt(true);
 		assert(fe.isSemError()||vd.vtype.isClassical());
 		if(fe.isSemError()){
 			if(!vd.vtype) vd.vtype=ℤt(true);
@@ -5877,27 +5907,38 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	auto sc=context.sc;
 	assert(vfe.fe);
-	if(!(!vfe.fe.leftExclusive&&vfe.fe.rightExclusive)){
-		sc.error(text("[("[vfe.fe.leftExclusive],".."~"])"[vfe.fe.rightExclusive],"-style ranges not yet supported in vector comprehension"),vfe.fe.left.loc.to(vfe.fe.right.loc));
-		vfe.setSemError();
-		return vfe;
-	}
-	bool isSimple(Expression e){ // TODO: lift restriction
-		if(cast(LiteralExp)e) return true;
-		if(cast(Identifier)e) return true;
-		if(auto tae=cast(TypeAnnotationExp)e) return isSimple(tae.e)&&isSimple(tae.t);
-		if(auto idx=cast(IndexExp)e) return isSimple(idx.e)&&isSimple(idx.a);
-		if(auto ue=cast(AUnaryExp)e) return isSimple(ue.e);
-		if(auto be=cast(ABinaryExp)e) return isSimple(be.e1)&&isSimple(be.e2);
-		return false;
-	}
-	if(!isSimple(vfe.fe.left)||!isSimple(vfe.fe.right)){
-		sc.error("range not yet supported in vector comprehension because it is not simple enough",vfe.fe.left.loc.to(vfe.fe.right.loc));
-		vfe.setSemError();
-		return vfe;
-	}
-	if(vfe.fe.step){
-		sc.error("range with step not yet supported in vector comprehension",vfe.fe.step.loc);
+	Expression len=null;
+	if(auto range=vfe.fe.aggr.isRange){
+		if(!(!range.leftExclusive&&range.rightExclusive)){
+			sc.error(text("[("[range.leftExclusive],".."~"])"[range.rightExclusive],"-style ranges not yet supported in vector comprehension"),range.left.loc.to(range.right.loc));
+			vfe.setSemError();
+			return vfe;
+		}
+		bool isSimple(Expression e){ // TODO: lift restriction
+			if(cast(LiteralExp)e) return true;
+			if(cast(Identifier)e) return true;
+			if(auto tae=cast(TypeAnnotationExp)e) return isSimple(tae.e)&&isSimple(tae.t);
+			if(auto idx=cast(IndexExp)e) return isSimple(idx.e)&&isSimple(idx.a);
+			if(auto ue=cast(AUnaryExp)e) return isSimple(ue.e);
+			if(auto be=cast(ABinaryExp)e) return isSimple(be.e1)&&isSimple(be.e2);
+			return false;
+		}
+		if(!isSimple(range.left)||!isSimple(range.right)){
+			sc.error("range not yet supported in vector comprehension because it is not simple enough",range.left.loc.to(range.right.loc));
+			vfe.setSemError();
+			return vfe;
+		}
+		if(range.step){
+			sc.error("range with step not yet supported in vector comprehension",range.step.loc);
+			vfe.setSemError();
+			return vfe;
+		}
+		auto left=range.left.copy();
+		auto right=range.right.copy();
+		len=new NSubExp(right,left);
+		len.loc=range.loc;
+	}else{
+		sc.error("aggregate not yet supported in vector comprehension",vfe.fe.aggr.loc);
 		vfe.setSemError();
 		return vfe;
 	}
@@ -5914,12 +5955,8 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	auto cae=new CatAssignExp(rname.copy(),vce);
 	cae.loc=vce.loc;
 	fe.bdy.s[0]=cae;
-	auto left=vfe.fe.left.copy();
-	auto right=vfe.fe.right.copy();
 	auto ty=new WildcardExp();
-	ty.loc=rname.loc;
-	auto len=new NSubExp(right,left);
-	len.loc=rname.loc;
+	ty.loc=len.loc;
 	auto rty=new PowExp(ty,len);
 	rty.loc=rname.loc;
 	auto tae=new TypeAnnotationExp(rname.copy(),rty,TypeAnnotationType.coercion);

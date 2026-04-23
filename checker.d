@@ -430,13 +430,17 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.ForExp e) {
-		expectConst(e.left, "for-left");
-		visExpr(e.left);
-		expectConst(e.right, "for-right");
-		visExpr(e.right);
-		if(e.step) {
-			expectConst(e.step, "for-step");
-			visExpr(e.step);
+		if(auto range=e.aggr.range) {
+			expectConst(range.left, "for-left");
+			visExpr(range.left);
+			if(range.step) {
+				expectConst(range.step, "for-step");
+				visExpr(range.step);
+			}
+			expectConst(range.right, "for-right");
+			visExpr(range.right);
+		} else {
+			assert(0, "invalid for loop aggregate");
 		}
 		auto retBdy = visLoop(e.bdy, e.loopVar);
 		return retBdy | StmtResult.MayPass;

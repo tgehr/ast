@@ -323,7 +323,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 				iterate(s,np0,np1);
 				auto forBdy=new CompoundExp(s);
 				forBdy.loc=loc;
-				auto for_=new ForExp(i0.copy(cargs),false,makeConst(0),null,true,len,forBdy);
+				auto for_=new ForExp(i0.copy(cargs),ForAggregate(ForRange(false,makeConst(0),null,true,len)),forBdy);
 				for_.loc=loc;
 				stm(body_,for_);
 			}else{

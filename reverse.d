@@ -1267,20 +1267,14 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return error();
 	}
 	if(auto fe=cast(ForExp)e){
+		auto aggrRev=fe.aggr.copyReversed();
+		if(!aggrRev){
+			sc.error("reversal of aggregate not supported yet",fe.aggr.loc);
+			return error();
+		}
 		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
-		auto leftExclusive=fe.rightExclusive;
-		auto left=fe.right.copy();
-		auto rightExclusive=fe.leftExclusive;
-		auto right=fe.left.copy();
-		auto ostep=fe.step?fe.step.copy():null;
-		if(!ostep){
-			ostep=constantExp(1);
-			ostep.loc=left.loc.to(right.loc);
-		}
-		auto step=new UMinusExp(ostep);
-		step.loc=ostep.loc;
-		auto res=new ForExp(fe.var.copy(),leftExclusive,left,step,rightExclusive,right,bdy);
+		auto res=new ForExp(fe.var.copy(),aggrRev,bdy);
 		res.loc=fe.loc;
 		return res;
 	}

@@ -1215,7 +1215,7 @@ struct Parser{
 			else expect(Tok!"]");
 		}else rightExclusive=true;
 		if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
-		return res=New!ForExp(var,leftExclusive,left,step,rightExclusive,right,null);
+		return res=New!ForExp(var,ForAggregate(ForRange(leftExclusive,left,step,rightExclusive,right)),null);
 	}
 
 	ForExp parseFor(){
