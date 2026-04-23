@@ -4695,6 +4695,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				if(!ce.checkReverse) return;
 				sc.error(format("use `dup(%s)` for `moved` classical argument of reversed function call",arg),arg.loc);
 				arg.setSemForceError();
+				error=true;
 			}
 		}
 		if(ft.isTuple){
@@ -4793,6 +4794,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			static if(isRhs) checkArg(0,ce.arg);
 		}
 		propErr(ce.arg,ce);
+		if(error){
+			if(auto fid=cast(Identifier)fun){
+				if(auto fd=cast(FunctionDef)fid.meaning){
+					sc.note(format("`%s` declared here",fd.name),fd.loc);
+				}
+			}
+		}
 		return error;
 	}
 	Expression checkFunCall(FunTy ft){
