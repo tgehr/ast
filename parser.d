@@ -1228,7 +1228,7 @@ struct Parser{
 		}else{
 			if(hasLeft){
 				restoreState(save);
-				exp=parseExpression();
+				exp=parseCondition();
 			}
 			aggr=ForAggregate(ForContainer(exp));
 		}
