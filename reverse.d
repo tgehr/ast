@@ -702,8 +702,13 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return lowerDefine!flags(newlhs,newrhs,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto we=cast(WildcardExp)olhs){
-		rhs.implicitDup=false; // TODO: ok?
-		return res=new ForgetExp(rhs,null);
+		auto tmp=new Identifier(freshName);
+		tmp.loc=orhs.loc;
+		auto de=new DefineExp(tmp,rhs);
+		de.loc=rhs.loc;
+		auto fe=new ForgetExp(tmp.copy(),null);
+		fe.loc=loc;
+		return res=new CompoundExp([de,fe]);
 	}
 	if(auto ite=cast(IteExp)olhs){
 		if(ite.then.s.length==1&&ite.othw&&ite.othw.s.length==1){
