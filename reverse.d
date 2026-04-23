@@ -1274,7 +1274,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		}
 		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
-		auto res=new ForExp(fe.var.copy(),aggrRev,bdy);
+		auto res=new ForExp(fe.var.copy(),fe.pattern?fe.pattern.copy():null,aggrRev,bdy);
 		res.loc=fe.loc;
 		return res;
 	}

@@ -2070,22 +2070,24 @@ struct ForAggregate{
 
 class ForExp: Expression{
 	Identifier var;
+	Expression pattern;
 	ForAggregate aggr;
 	CompoundExp bdy;
-	this(Identifier var,ForAggregate aggr,CompoundExp bdy){
+	this(Identifier var,Expression pattern,ForAggregate aggr,CompoundExp bdy){
 		this.var=var;
+		this.pattern=pattern;
 		this.aggr=aggr;
 		this.bdy=bdy;
 	}
 	override ForExp copyImpl(CopyArgs args){
-		auto r=new ForExp(var.copy(args),aggr.copy(args),bdy.copy(args));
+		auto r=new ForExp(var?var.copy(args):null,pattern?pattern.copy(args):null,aggr.copy(args),bdy.copy(args));
 		if(args.preserveSemantic){
 			enforce(!fescope_&&!loopVar,"TODO");
 		}
 		return r;
 	}
 	final string toStringNoBody(){
-		return "for "~var.toString()~" in "~aggr.toString();
+		return "for "~(pattern?pattern.toString():var?var.toString():"_")~" in "~aggr.toString();
 	}
 	override string toString(){ return _brk(toStringNoBody()~bdy.toString()); }
 	override @property string kind(){ return "for loop"; }
@@ -2468,7 +2470,7 @@ class VectorForExp: Expression{
 		nbdy.loc=fe.bdy.loc;
 		nbdy.type=fe.bdy.type;
 		nbdy.setSemEvaluated();
-		auto nfe=new ForExp(fe.var,naggr,nbdy);
+		auto nfe=new ForExp(fe.var,fe.pattern,naggr,nbdy);
 		nfe.loc=nfe.loc;
 		nfe.type=fe.type;
 		nfe.setSemEvaluated();

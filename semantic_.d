@@ -1380,6 +1380,17 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc);
 	int numTries=-1;
+	if(!fe.var){
+		fe.var=new Identifier(freshName());
+		fe.var.loc=fe.pattern?fe.pattern.loc:fe.loc;
+	}
+	if(fe.pattern){
+		auto varId=fe.var.copy(); // TODO: force a move
+		Expression pde=new DefineExp(fe.pattern,varId);
+		pde.loc=fe.pattern.loc;
+		fe.bdy.s=[pde]~fe.bdy.s;
+		fe.pattern=null;
+	}
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		Expression.CopyArgs cargs={preserveSemantic: true};
@@ -5906,7 +5917,7 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 
 Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	auto sc=context.sc;
-	assert(vfe.fe);
+	assert(!!vfe.fe);
 	Expression len=null;
 	if(auto range=vfe.fe.aggr.isRange){
 		if(!(!range.leftExclusive&&range.rightExclusive)){

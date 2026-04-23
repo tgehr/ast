@@ -1194,11 +1194,17 @@ struct Parser{
 
 	ForExp parseForNoBody(){
 		mixin(SetLoc!ForExp);
-				expect(Tok!"for");
-		auto var=parseIdentifier();
+		expect(Tok!"for");
+		auto pattern=parseExpression();
+		Identifier var=null;
+		if(auto id=cast(Identifier)pattern){
+			var=id;
+			pattern=null;
+		}
 		expect(Tok!"in");
 		bool leftExclusive=false,rightExclusive=false;
 		bool hasLeft=false;
+		auto save=saveState();
 		if(tok.type==Tok!"("){ hasLeft=true; leftExclusive=true; nextToken(); }
 		else if(tok.type==Tok!"["){ hasLeft=true; nextToken(); }
 		ForAggregate aggr;
@@ -1220,9 +1226,13 @@ struct Parser{
 			if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
 			aggr=ForAggregate(ForRange(leftExclusive,left,step,rightExclusive,right));
 		}else{
+			if(hasLeft){
+				restoreState(save);
+				exp=parseExpression();
+			}
 			aggr=ForAggregate(ForContainer(exp));
 		}
-		return res=New!ForExp(var,aggr,null);
+		return res=New!ForExp(var,pattern,aggr,null);
 	}
 
 	ForExp parseFor(){

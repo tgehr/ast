@@ -430,6 +430,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.ForExp e) {
+		assert(!e.pattern, "for loop pattern still in AST");
 		if(auto range=e.aggr.range) {
 			expectConst(range.left, "for-left");
 			visExpr(range.left);
