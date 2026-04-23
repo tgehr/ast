@@ -6351,7 +6351,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	if(name=="power"){
 		auto ne1=e1;
 		if(auto ne=asPreludeType(ne1,sc)) ne1=ne;
-		if((isType(ne1)||isQNumeric(ne1))&&!isEmpty(ne1)){
+		if((isType(ne1)||isQNumeric(ne1))&&!isEmpty(ne1.type)){
 			auto r = new VectorTy(ne1, e2);
 			r.loc = e.loc;
 			return expressionSemantic(r, context);
