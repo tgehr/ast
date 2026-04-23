@@ -1887,7 +1887,9 @@ struct ForRange{
 	Expression step;
 	bool rightExclusive;
 	Expression right;
-	Location loc(){ // TODO: store full extent?
+	Location loc()in{ // TODO: store full extent?
+		assert(!!this);
+	}do{
 		return left.loc.to(right.loc);
 	}
 	bool opCast(T:bool)(){ return left&&right; }
@@ -1895,7 +1897,7 @@ struct ForRange{
 	string toString()in{
 		assert(!!this);
 	}do{
-		return(leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~(rightExclusive?")":"]");
+		return (leftExclusive?"(":"[")~left.toString()~".."~(step?step.toString()~"..":"")~right.toString()~(rightExclusive?")":"]");
 	}
 
 	ForRange copy(Expression.CopyArgs args)in{
@@ -1925,7 +1927,10 @@ struct ForRange{
 	}do{
 		return left.isTotal()&&(!step||step.isTotal)&&right.isTotal();
 	}
-	int componentsImpl(scope int delegate(Expression) dg){
+
+	int componentsImpl(scope int delegate(Expression) dg)in{
+		assert(!!this);
+	}do{
 		if(auto r=dg(left)) return r;
 		if(step) if(auto r=dg(step)) return r;
 		if(auto r=dg(right)) return r;
@@ -1947,17 +1952,83 @@ struct ForRange{
 		return r;
 	}
 
-	// semantici information
+	// semantic information
 	Expression elementType(){ return joinTypes(left.type, right.type); }
+}
+
+struct ForContainer{
+	Expression e;
+	Location loc()in{
+		assert(!!this);
+	}do{
+		return e.loc;
+	}
+	bool opCast(T:bool)(){ return !!e; }
+
+	string toString()in{
+		assert(!!this);
+	}do{
+		return e.toString();
+	}
+
+	ForContainer copy(Expression.CopyArgs args)in{
+		assert(!!this);
+	}do{
+		return ForContainer(e.copy(args));
+	}
+
+	ForContainer copyReversed()in{
+		assert(!!this);
+	}do{
+		// TODO
+		return ForContainer.init;
+	}
+
+	bool isTotal()in{
+		assert(!!this);
+	}do{
+		return e.isTotal();
+	}
+
+	int componentsImpl(scope int delegate(Expression) dg)in{
+		assert(!!this);
+	}do{
+		return dg(e);
+	}
+
+	ForContainer eval()in{
+		assert(!!this);
+	}do{
+		return ForContainer(e.eval());
+	}
+	Annotation getAnnotation(){
+		return e.getAnnotation();
+	}
+
+	// semantic information
+	Expression elementType(){
+		if(auto vec=cast(VectorTy)e.type)
+			return vec.next;
+		if(auto arr=cast(ArrayTy)e.type)
+			return arr.next;
+		if(auto tpl=cast(TupleTy)e.type){
+			Expression ety=bottom;
+			foreach(ty;tpl.types)
+				ety=joinTypes(ety,ty);
+			return ety;
+		}
+		return null;
+	}
 }
 
 struct ForAggregate{
 	ForRange range;
-	this(ForRange range){
-		this.range=range;
-	}
+	ForContainer container;
+	this(ForRange range){ this.range=range; }
+	this(ForContainer container){ this.container=container; }
 	ForRange isRange(){ return range; }
-	bool opCast(T:bool)(){ return !!range; }
+	ForContainer isContainer(){ return container; }
+	bool opCast(T:bool)(){ return range||container; }
 
 	Location loc()=>fwd!"loc"();
 
@@ -1965,13 +2036,22 @@ struct ForAggregate{
 		assert(!!this);
 	}do{
 		import core.lifetime:forward;
-		return __traits(getMember,range,method)(forward!args);
+		if(range){
+			return __traits(getMember,range,method)(forward!args);
+		}else{
+			assert(!!container);
+			return __traits(getMember,container,method)(forward!args);
+		}
 	}
 	private auto fwdWrap(string method,T...)(auto ref T args)in{
 		assert(!!this);
 	}do{
 		import core.lifetime:forward;
-		return ForAggregate(__traits(getMember,range,method)(forward!args));
+		if(range){
+			return ForAggregate(__traits(getMember,range,method)(forward!args));
+		}else{
+			return ForAggregate(__traits(getMember,container,method)(forward!args));
+		}
 	}
 
 	string toString()=>fwd!"toString"();

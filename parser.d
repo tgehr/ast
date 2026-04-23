@@ -1201,21 +1201,28 @@ struct Parser{
 		bool hasLeft=false;
 		if(tok.type==Tok!"("){ hasLeft=true; leftExclusive=true; nextToken(); }
 		else if(tok.type==Tok!"["){ hasLeft=true; nextToken(); }
-		auto left=parseExpression();
-		Expression step=null;
-		expect(Tok!"..");
-		auto right=parseExpression(0,false);
+		ForAggregate aggr;
+		auto exp=parseExpression();
 		if(ttype==Tok!".."){
-			nextToken();
-			step=right;
-			right=parseExpression();
+			auto left=exp;
+			Expression step=null;
+			expect(Tok!"..");
+			auto right=parseExpression(0,false);
+			if(ttype==Tok!".."){
+				nextToken();
+				step=right;
+				right=parseExpression();
+			}
+			if(hasLeft){
+				if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
+				else expect(Tok!"]");
+			}else rightExclusive=true;
+			if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
+			aggr=ForAggregate(ForRange(leftExclusive,left,step,rightExclusive,right));
+		}else{
+			aggr=ForAggregate(ForContainer(exp));
 		}
-		if(hasLeft){
-			if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
-			else expect(Tok!"]");
-		}else rightExclusive=true;
-		if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
-		return res=New!ForExp(var,ForAggregate(ForRange(leftExclusive,left,step,rightExclusive,right)),null);
+		return res=New!ForExp(var,aggr,null);
 	}
 
 	ForExp parseFor(){
