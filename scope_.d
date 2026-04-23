@@ -1212,6 +1212,7 @@ abstract class Scope{
 		// scope(exit) writeln("MERGING\n",this,"\n",scopes.map!(sc=>text("nested: ",sc,"\nconsumed: ",sc.consumedOuter,"\nsplit: ",sc.splitVars,"\nmergedVars: ",sc.mergedVars,"\nproducedOuter: ",producedOuter)).join("\n"),"\nEND MERGE\n");
 		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.rnsymtab));
 		// imported!"util.io".writeln("MERGING: ",scopes.map!(sc=>sc.dependencies));
+		clearConsumed(); // TODO: why needed?
 		foreach(sc;scopes) sc.clearConsumed();
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
 		foreach(sc;scopes){
