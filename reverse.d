@@ -1192,6 +1192,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup);
 		assert(!!bdy);
 		auto res=new WithExp(trans,bdy);
+		res.isIndices=we.isIndices;
+		if(we.itrans) res.itrans=we.itrans.copy();
 		res.loc=we.loc;
 		return res;
 	}
