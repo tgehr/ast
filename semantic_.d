@@ -1364,6 +1364,10 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 			fe.setSemError();
 		}
 		return ForAggregate(range);
+	}else if(auto cnt=aggr.isContainer()){
+		cnt.e=expressionSemantic(cnt.e,context.nestConsumed);
+		propErr(cnt.e,fe);
+		return ForAggregate(cnt);
 	}else{
 		sc.error("for aggregate not supported yet",fe.aggr.loc);
 		fe.setSemError();
@@ -1384,12 +1388,61 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 		fe.var=new Identifier(freshName());
 		fe.var.loc=fe.pattern?fe.pattern.loc:fe.loc;
 	}
+	auto sourceVar=fe.var;
+	Expression[] init;
+	Expression[] prologue;
+	Expression[] uninit;
+	if(auto cnt=fe.aggr.isContainer()){
+		auto cntId=new Identifier(freshName());
+		cntId.loc=cnt.loc;
+		auto cde=new DefineExp(cntId,cnt.e);
+		cde.loc=cnt.loc;
+		init~=cde;
+		auto lenId=new Identifier(freshName());
+		lenId.loc=cnt.loc;
+		auto lengthId=new Identifier(Id.s!"length");
+		lengthId.loc=cnt.loc;
+		auto fld=new FieldExp(cntId.copy(),lengthId);
+		fe.loc=cnt.loc;
+		auto lde=new DefineExp(lenId,fld);
+		lde.loc=cnt.loc;
+		init~=lde;
+		auto tpl=new TupleExp([sourceVar]);
+		tpl.loc=sourceVar.loc;
+		auto upl=new CatExp(tpl,cntId.copy());
+		upl.loc=sourceVar.loc;
+		auto upd=new DefineExp(upl,cntId.copy());
+		upd.loc=sourceVar.loc;
+		prologue~=upd;
+		fe.var=new Identifier(freshName());
+		fe.var.loc=sourceVar.loc;
+		auto uil=new TupleExp([]);
+		uil.loc=cnt.loc;
+		auto uid=new DefineExp(uil,cntId.copy()); // TODO: force move
+		uid.loc=cnt.loc;
+		uninit~=uid;
+		auto left=LiteralExp.makeInteger(0);
+		left.loc=cnt.loc;
+		auto right=lenId.copy();
+		fe.aggr=ForAggregate(ForRange(false,left,null,true,right));
+	}
 	if(fe.pattern){
-		auto varId=fe.var.copy(); // TODO: force a move
-		Expression pde=new DefineExp(fe.pattern,varId);
+		auto varId=sourceVar.copy(); // TODO: force a move
+		auto pde=new DefineExp(fe.pattern,varId);
 		pde.loc=fe.pattern.loc;
-		fe.bdy.s=[pde]~fe.bdy.s;
+		prologue~=pde;
 		fe.pattern=null;
+		sourceVar=null;
+	}
+	if(prologue.length){
+		fe.bdy.s=prologue~fe.bdy.s;
+		prologue=[];
+	}
+	if(init.length||uninit.length){
+		auto s=init~fe~uninit;
+		auto ce=new CompoundExp(s);
+		ce.loc=fe.loc;
+		return statementSemanticImpl(ce,sc,resetConst);
 	}
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
