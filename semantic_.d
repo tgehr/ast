@@ -6001,6 +6001,8 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 		auto right=range.right.copy();
 		len=new NSubExp(right,left);
 		len.loc=range.loc;
+	}else if(auto cnt=vfe.fe.aggr.isContainer()){
+		// TODO
 	}else{
 		sc.error("aggregate not yet supported in vector comprehension",vfe.fe.aggr.loc);
 		vfe.setSemError();
@@ -6019,13 +6021,17 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	auto cae=new CatAssignExp(rname.copy(),vce);
 	cae.loc=vce.loc;
 	fe.bdy.s[0]=cae;
-	auto ty=new WildcardExp();
-	ty.loc=len.loc;
-	auto rty=new PowExp(ty,len);
-	rty.loc=rname.loc;
-	auto tae=new TypeAnnotationExp(rname.copy(),rty,TypeAnnotationType.coercion);
-	tae.loc=rname.loc;
-	auto re=new ReturnExp(tae);
+	Expression ret=rname.copy();
+	if(len){
+		auto ty=new WildcardExp();
+		ty.loc=vfe.fe.aggr.loc;
+		auto rty=new PowExp(ty,len);
+		rty.loc=rname.loc;
+		auto tae=new TypeAnnotationExp(ret,rty,TypeAnnotationType.coercion);
+		tae.loc=rname.loc;
+		ret=tae;
+	}
+	auto re=new ReturnExp(ret);
 	re.loc=rname.loc;
 	Expression[] stmts=[de,fe,re];
 	auto fbdy=new CompoundExp(stmts);
