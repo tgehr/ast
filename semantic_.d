@@ -6036,6 +6036,8 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	Expression[] stmts=[de,fe,re];
 	auto fbdy=new CompoundExp(stmts);
 	auto fd=new FunctionDef(null,[],true,null,fbdy);
+	fd.annotation=pure_;
+	fd.inferAnnotation=true;
 	fd.loc=vfe.loc;
 	auto le=new LambdaExp(fd);
 	le.loc=vfe.loc;
