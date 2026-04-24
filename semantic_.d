@@ -2384,7 +2384,9 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	return vec;
 }
 Expression defineLhsSemanticImpl(VectorForExp vfe,DefineLhsContext context){
-	return defineLhsSemanticImplLifted(vfe,context); // TODO: [X(x) for x in xs] := ys;
+	auto lce=lowerVectorForExp(vfe,context.sc);
+	if(lce.isSemError()) return lce;
+	return defineLhsSemantic(lce,context);
 }
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
@@ -5968,8 +5970,7 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 	return vec;
 }
 
-Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
-	auto sc=context.sc;
+Expression lowerVectorForExp(VectorForExp vfe,Scope sc){
 	assert(!!vfe.fe);
 	Expression len=null;
 	if(auto range=vfe.fe.aggr.isRange){
@@ -6002,7 +6003,22 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 		len=new NSubExp(right,left);
 		len.loc=range.loc;
 	}else if(auto cnt=vfe.fe.aggr.isContainer()){
-		// TODO
+		Expression cntTypeExp=new TypeofExp(cnt.e.copy()); // TODO: solve without analyzing twice
+		cntTypeExp.loc=cnt.loc;
+		cntTypeExp=expressionSemantic(cntTypeExp,expSemContext(sc,ConstResult.yes,InType.yes));
+		propErr(cntTypeExp,vfe);
+		if(vfe.isSemError()) return vfe;
+		auto cntType=typeSemantic(cntTypeExp,sc);
+		if(!cntType){
+			vfe.setSemError();
+			return vfe;
+		}
+		propErr(cntType,vfe);
+		if(auto vt=cast(VectorTy)cntType){
+			len=vt.num.copy(); // TODO: ok?
+		}else if(auto tt=cast(TupleTy)cntType){
+			len=LiteralExp.makeInteger(tt.length);
+		}
 	}else{
 		sc.error("aggregate not yet supported in vector comprehension",vfe.fe.aggr.loc);
 		vfe.setSemError();
@@ -6045,6 +6061,12 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	etpl.loc=vfe.loc;
 	auto lce=new CallExp(le,etpl,false,false);
 	lce.loc=vfe.loc;
+	return lce;
+}
+
+Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
+	auto lce=lowerVectorForExp(vfe,context.sc);
+	if(lce.isSemError()) return lce;
 	return expressionSemantic(lce,context);
 }
 
