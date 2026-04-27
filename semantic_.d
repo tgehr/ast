@@ -1403,7 +1403,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,bool resetConst=true){
 		auto lengthId=new Identifier(Id.s!"length");
 		lengthId.loc=cnt.loc;
 		auto fld=new FieldExp(cntId.copy(),lengthId);
-		fe.loc=cnt.loc;
+		fld.loc=cnt.loc;
 		auto lde=new DefineExp(lenId,fld);
 		lde.loc=cnt.loc;
 		init~=lde;
@@ -6016,8 +6016,10 @@ Expression lowerVectorForExp(VectorForExp vfe,Scope sc){
 		propErr(cntType,vfe);
 		if(auto vt=cast(VectorTy)cntType){
 			len=vt.num.copy(); // TODO: ok?
+			len.loc=cnt.loc;
 		}else if(auto tt=cast(TupleTy)cntType){
 			len=LiteralExp.makeInteger(tt.length);
+			len.loc=cnt.loc;
 		}
 	}else{
 		sc.error("aggregate not yet supported in vector comprehension",vfe.fe.aggr.loc);
