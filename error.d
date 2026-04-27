@@ -96,6 +96,10 @@ class JSONErrorHandler: ErrorHandler{
 
 	override void report(ErrorType ty, lazy string error, Location loc){
 		super.report(ty, error, loc);
+		if(loc.line == 0||!loc.rep.length){ // just here for robustness
+			stderr.writef("(location missing): %s%s\n", ty.prefix(), error);
+			return;
+		}
 		auto li = loc.info(getTabsize());
 		auto sourceJS = JS(li.source.name);
 		auto startJS = JS(["byte": li.startByte, "line": li.startLine, "column": li.startColumn]);
