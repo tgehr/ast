@@ -6624,13 +6624,14 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 Expression resolveWildcards(Expression wildcards,Expression analyzed){
 	// TODO: improve
 	if(auto pow=cast(PowExp)wildcards){
+		Expression ne1=pow.e1, ne2=pow.e2;
 		if(cast(WildcardExp)pow.e1){
 			Expression elemTy=null;
-			if(auto aty=cast(ArrayTy)analyzed)
+			if(auto aty=cast(ArrayTy)analyzed){
 				elemTy=aty.next;
-			if(auto vty=cast(VectorTy)analyzed)
+			}else if(auto vty=cast(VectorTy)analyzed){
 				elemTy=vty.next;
-			if(auto tpl=analyzed.isTupleTy){
+			}else if(auto tpl=analyzed.isTupleTy){
 				import util.maybe:mfold;
 				if(pow.e2.asIntegerConstant().mfold!(z=>z==tpl.length,()=>false)){
 					return analyzed; // TODO: revisit
@@ -6640,9 +6641,25 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 					elemTy=joinTypes(elemTy, tpl[i]);
 					if(!elemTy) break;
 				}
+			}else if(auto intTy=isFixedIntTy(analyzed)){
+				elemTy=Bool(intTy.isClassical);
 			}
-			if(!elemTy) return null;
-			auto npow=new PowExp(elemTy,pow.e2);
+			if(elemTy) ne1=elemTy;
+		}
+		if(cast(WildcardExp)pow.e2){
+			Expression len=null;
+			if(auto vty=cast(VectorTy)analyzed){
+				len=vty.num;
+			}else if(auto tpl=analyzed.isTupleTy){
+				len=LiteralExp.makeInteger(tpl.length);
+				len.loc=pow.e2.loc;
+			}else if(auto intTy=isFixedIntTy(analyzed)){
+				len=intTy.bits;
+			}
+			if(len) ne2=len;
+		}
+		if(ne1!is pow.e1 || ne2!is pow.e2){
+			auto npow=new PowExp(ne1,ne2);
 			npow.loc=pow.loc;
 			return npow;
 		}
@@ -6666,6 +6683,22 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 			nidx.isArraySyntax=true;
 			nidx.loc=idx.loc;
 			return nidx;
+		}
+		if(cast(WildcardExp)idx.a){
+			if(auto vt=cast(VectorTy)analyzed){
+				auto nidx=new IndexExp(idx.e,vt.num);
+				nidx.loc=idx.loc;
+				return nidx;
+			}
+		}
+	}
+	if(auto ne=cast(UNotExp)wildcards){
+		Expression next=analyzed;
+		if(auto q=next.getQuantum()) next=q;
+		if(auto nee=resolveWildcards(ne.e,next)){
+			auto nne=new UNotExp(nee);
+			nne.loc=ne.loc;
+			return nne;
 		}
 	}
 	return null;
