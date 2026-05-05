@@ -5810,11 +5810,13 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	// TODO: quantum slicing (at least when length is known)
 	if(!isSubtype(sl.l.type,ℤt(true))){
 		sc.error(format("lower bound should be classical integer, not %s",sl.l.type),sl.l.loc);
-		sl.l.setSemError();
+		sl.l.setSemForceError();
+		sl.setSemError();
 	}
 	if(!isSubtype(sl.r.type,ℤt(true))){
 		sc.error(format("upper bound should be classical integer, not %s",sl.r.type),sl.r.loc);
-		sl.r.setSemError();
+		sl.r.setSemForceError();
+		sl.setSemError();
 	}
 	if(sl.isSemError())
 		return sl;
