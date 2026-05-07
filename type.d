@@ -665,9 +665,9 @@ class VectorTy: Type, ITupleTy{
 		return new VectorTy(next.copy(args), num.copy(args));
 	}
 	@property size_t length(){
-		auto lit=cast(LiteralExp)num;
-		assert(!!lit);
-		return lit.asIntegerConstant().get().to!size_t(); // TODO: avoid crash if length is too big
+		auto iconst=num.asIntegerConstant();
+		assert(!!iconst);
+		return iconst.get().to!size_t(); // TODO: avoid crash if length is too big
 	}
 	Expression opIndex(size_t i){ return next; }
 	Expression opSlice(size_t l,size_t r){
