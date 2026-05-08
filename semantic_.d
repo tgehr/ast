@@ -6625,40 +6625,45 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 
 Expression resolveWildcards(Expression wildcards,Expression analyzed){
 	// TODO: improve
+	if(cast(WildcardExp)wildcards) return analyzed;
 	if(auto pow=cast(PowExp)wildcards){
 		Expression ne1=pow.e1, ne2=pow.e2;
-		if(cast(WildcardExp)pow.e1){
-			Expression elemTy=null;
-			if(auto aty=cast(ArrayTy)analyzed){
-				elemTy=aty.next;
-			}else if(auto vty=cast(VectorTy)analyzed){
-				elemTy=vty.next;
-			}else if(auto tpl=analyzed.isTupleTy){
-				import util.maybe:mfold;
+		Expression elemTy=null;
+		if(auto aty=cast(ArrayTy)analyzed){
+			elemTy=aty.next;
+		}else if(auto vty=cast(VectorTy)analyzed){
+			elemTy=vty.next;
+		}else if(auto tpl=analyzed.isTupleTy){
+			import util.maybe:mfold;
+			if(cast(WildcardExp)ne1){
 				if(pow.e2.asIntegerConstant().mfold!(z=>z==tpl.length,()=>false)){
 					return analyzed; // TODO: revisit
 				}
-				elemTy=bottom;
-				foreach(i;0..tpl.length){
-					elemTy=joinTypes(elemTy, tpl[i]);
-					if(!elemTy) break;
-				}
-			}else if(auto intTy=isFixedIntTy(analyzed)){
-				elemTy=Bool(intTy.isClassical);
 			}
-			if(elemTy) ne1=elemTy;
+			elemTy=bottom;
+			foreach(i;0..tpl.length){
+				elemTy=joinTypes(elemTy, tpl[i]);
+				if(!elemTy) break;
+			}
+		}else if(auto intTy=isFixedIntTy(analyzed)){
+			elemTy=Bool(intTy.isClassical);
 		}
-		if(cast(WildcardExp)pow.e2){
-			Expression len=null;
-			if(auto vty=cast(VectorTy)analyzed){
-				len=vty.num;
-			}else if(auto tpl=analyzed.isTupleTy){
-				len=LiteralExp.makeInteger(tpl.length);
-				len.loc=pow.e2.loc;
-			}else if(auto intTy=isFixedIntTy(analyzed)){
-				len=intTy.bits;
-			}
-			if(len) ne2=len;
+		if(elemTy){
+			if(auto r=resolveWildcards(ne1,elemTy))
+				ne1=r;
+		}
+		Expression len=null;
+		if(auto vty=cast(VectorTy)analyzed){
+			len=vty.num;
+		}else if(auto tpl=analyzed.isTupleTy){
+			len=LiteralExp.makeInteger(tpl.length);
+			len.loc=pow.e2.loc;
+		}else if(auto intTy=isFixedIntTy(analyzed)){
+			len=intTy.bits;
+		}
+		if(len){
+			if(auto r=resolveWildcards(ne2,len))
+				ne2=r;
 		}
 		if(ne1!is pow.e1 || ne2!is pow.e2){
 			auto npow=new PowExp(ne1,ne2);
@@ -6667,7 +6672,8 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 		}
 	}
 	if(auto idx=cast(IndexExp)wildcards){
-		if(idx.isArraySyntax&&cast(WildcardExp)idx.e){
+		auto ne=idx.e,na=idx.a;
+		if(idx.isArraySyntax){
 			Expression elemTy=null;
 			if(auto aty=cast(ArrayTy)analyzed)
 				elemTy=aty.next;
@@ -6680,18 +6686,20 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 					if(!elemTy) break;
 				}
 			}
-			if(!elemTy) return null;
-			auto nidx=new IndexExp(elemTy,idx.a);
+			if(elemTy){
+				if(auto r=resolveWildcards(ne,elemTy))
+				   ne=r;
+			}
+		}
+		if(auto vt=cast(VectorTy)analyzed){
+			if(auto r=resolveWildcards(na,vt.num))
+				na=r;
+		}
+		if(ne!is idx.e || na!is idx.a){
+			auto nidx=new IndexExp(ne,na);
 			nidx.isArraySyntax=true;
 			nidx.loc=idx.loc;
 			return nidx;
-		}
-		if(cast(WildcardExp)idx.a){
-			if(auto vt=cast(VectorTy)analyzed){
-				auto nidx=new IndexExp(idx.e,vt.num);
-				nidx.loc=idx.loc;
-				return nidx;
-			}
 		}
 	}
 	if(auto ne=cast(UNotExp)wildcards){
@@ -6701,6 +6709,47 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 			auto nne=new UNotExp(nee);
 			nne.loc=ne.loc;
 			return nne;
+		}
+	}
+	if(auto pe=cast(BinaryExp!(Tok!"×"))wildcards){
+		auto types=cartesianTypes(pe);
+		Expression[] resolved;
+		if(auto tt=cast(TupleTy)analyzed){
+			foreach(i;0..types.length){
+				auto next=i<tt.length?resolveWildcards(types[i],tt[i]):null;
+				if(!next) next=types[i];
+				resolved~=next;
+			}
+		}
+		if(auto vt=cast(VectorTy)analyzed){
+			foreach(i;0..types.length){
+				auto next=resolveWildcards(types[i],vt.next);
+				if(!next) next=types[i];
+				resolved~=next;
+			}
+		}
+		if(auto at=cast(ArrayTy)analyzed){
+			foreach(i;0..types.length){
+				auto next=resolveWildcards(types[i],at.next);
+				if(!next) next=types[i];
+				resolved~=next;
+			}			
+		}
+		if(resolved.length==types.length && iota(types.length).any!(i=>types[i] !is resolved[i])){
+			Expression rec(Expression e,ref size_t index){
+				if(auto pe=cast(BinaryExp!(Tok!"×"))e){
+					auto e1=rec(pe.e1,index);
+					auto e2=rec(pe.e2,index);
+					auto npe=new BinaryExp!(Tok!"×")(e1,e2);
+					npe.loc=pe.loc;
+					return npe;
+				}
+				return resolved[index++];
+			}
+			size_t index=0;
+			auto r=rec(pe,index);
+			assert(index==types.length);
+			return r;
 		}
 	}
 	return null;
@@ -6728,16 +6777,17 @@ Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 	return ty.e.type;
 }
 
+Expression[] cartesianTypes(BinaryExp!(Tok!"×") pr){
+	auto merge1 = !pr.e1.brackets ? cast(BinaryExp!(Tok!"×"))pr.e1 : null;
+	auto t1 = merge1 ? cartesianTypes(merge1) : [pr.e1];
+	auto merge2 = !pr.e2.brackets ? cast(BinaryExp!(Tok!"×"))pr.e2 : null;
+	auto t2 = merge2 ? cartesianTypes(merge2) : [pr.e2];
+	return t1 ~ t2;
+}
+
 Expression expressionSemanticImpl(BinaryExp!(Tok!"×") pr, ExpSemContext context){
 	auto sc=context.sc;
-	Expression[] rec(BinaryExp!(Tok!"×") pr){
-		auto merge1 = !pr.e1.brackets ? cast(BinaryExp!(Tok!"×"))pr.e1 : null;
-		auto t1 = merge1 ? rec(merge1) : [pr.e1];
-		auto merge2 = !pr.e2.brackets ? cast(BinaryExp!(Tok!"×"))pr.e2 : null;
-		auto t2 = merge2 ? rec(merge2) : [pr.e2];
-		return t1 ~ t2;
-	}
-	auto r = new TupleTy(rec(pr));
+	auto r = new TupleTy(cartesianTypes(pr));
 	r.loc = pr.loc;
 	return expressionSemantic(r, context);
 }
