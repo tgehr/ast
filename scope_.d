@@ -794,7 +794,7 @@ abstract class Scope{
 		}
 	}
 
-	protected final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
+	final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
 		return symtabLookup(ident.id,rnsym,failures);
 	}
 	protected final Declaration symtabLookup(Id id,bool rnsym,DeadDecl[]* failures){

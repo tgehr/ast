@@ -1776,14 +1776,15 @@ Dependency getDependency(Expression e,Scope sc){
 	return getDependencyImpl(e,sc);
 }
 
-Dependency getFunctionDependency(FunctionDef fd,Scope sc){
+Dependency getFunctionDependency(FunctionDef fd,Scope sc,bool constOnly=false){
 	auto dep=Dependency();
 	foreach(decl;fd.capturedDecls){
 		if(decl.isSemError()||fd.captures[decl][0].isSemError()) continue;
 		auto type=typeForDecl(decl);
 		if(type&&type.isClassical()) continue;
-		if(fd.isConsumedCapture(decl)) dep.joinWith(sc.getDependency(decl));
-		else dep.dependencies.insert(decl);
+		if(fd.isConsumedCapture(decl)){
+			if(!constOnly) dep.joinWith(sc.getDependency(decl));
+		}else dep.dependencies.insert(decl);
 	}
 	return dep;
 }
@@ -4666,32 +4667,53 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	if(ce.e.type){
 		if(auto ft=cast(FunTy)ce.e.type){
 			if(ft.captureAnnotation==CaptureAnnotation.once){
-				bool ok=false;
-				if(auto id=cast(Identifier)ce.e){
-					if(auto meaning=id.meaning){
-						auto dep=context.sc.getDependency(meaning);
-						auto nft=ft.setCaptureAnnotation(CaptureAnnotation.spent);
-						auto var=addVar(meaning.getId,nft,meaning.loc,context.sc);
-						var.scope_=context.sc;
-						if(meaning.isSemError())
-							var.setSemForceError();
-						context.sc.addDependency(var,dep);
-						context.sc.lastUses.definition(var,ce);
-						auto nid=new Identifier(var.getId);
-						nid.loc=id.loc;
-						nid.scope_=context.sc;
-						nid.meaning=var;
-						nid.constLookup=true;
-						nid.type=nft;
-						nid.sstate=SemState.completed;
-						context.sc.blockConst(var,nid);
-						ce.newFunctionVar=var;
-						ok=true;
+				Dependency getDependency(Declaration meaning,bool isLambda){
+					if(auto fd=cast(FunctionDef)meaning){
+						auto cdep=getFunctionDependency(fd,context.sc,true);
+						if(isLambda) return cdep;
+						bool ok=true;
+						foreach(decl;cdep.dependencies)
+							ok&=context.sc.symtabLookup(decl.rename,true,null) is decl; // TODO: propagate
+						if(ok) return cdep;
 					}
+					return context.sc.getDependency(meaning);
 				}
-				if(!ok&&getDependency(ce.e,context.sc).isTop){
-					context.sc.error("unable to forget `const` captures of `once` function",ce.e.loc);
-					ce.e.setSemForceError();
+				bool ok=false;
+				void handleDeclaration(Declaration meaning){
+					if(!meaning) return;
+					auto dep=getDependency(meaning,false);
+					auto nft=ft.setCaptureAnnotation(CaptureAnnotation.spent);
+					auto var=addVar(meaning.getId,nft,meaning.loc,context.sc);
+					var.scope_=context.sc;
+					if(meaning.isSemError())
+						var.setSemForceError();
+					context.sc.addDependency(var,dep);
+					context.sc.lastUses.definition(var,ce);
+					auto nid=new Identifier(var.getId);
+					nid.loc=ce.e.loc;
+					nid.scope_=context.sc;
+					nid.meaning=var;
+					nid.constLookup=true;
+					nid.type=nft;
+					nid.sstate=SemState.completed;
+					context.sc.blockConst(var,nid);
+					ce.newFunctionVar=var;
+					ok=true;
+				}
+				if(auto id=cast(Identifier)unwrap(ce.e)){
+					handleDeclaration(id.meaning);
+				}
+				if(!ok){
+					Dependency dep;
+					if(auto le=cast(LambdaExp)unwrap(ce.e)){
+						dep=getDependency(le.fd,true);
+					}else{
+						dep=.getDependency(ce.e,context.sc);
+					}
+					if(dep.isTop){
+						context.sc.error("unable to forget `const` captures of `once` function",ce.e.loc);
+						ce.e.setSemForceError();
+					}
 				}
 			}else if(ft.captureAnnotation==CaptureAnnotation.spent){
 				context.sc.error("cannot call `once` function again",ce.e.loc);
@@ -6753,7 +6775,7 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 				auto next=resolveWildcards(types[i],at.next);
 				if(!next) next=types[i];
 				resolved~=next;
-			}			
+			}
 		}
 		if(resolved.length==types.length && iota(types.length).any!(i=>types[i] !is resolved[i])){
 			Expression rec(Expression e,ref size_t index){
