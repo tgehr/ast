@@ -4148,10 +4148,30 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
+	Expression oe1=be.e1;
+	static if(language==silq)
 	if(sc.allowsLinear){
-		auto oe1=be.e1.copy();
-		prepareIndexReplacements(oe1,sc,prologues,epilogues,be.loc);
+		oe1=be.e1.copy();
+		prepareIndexReplacements(be.e1,sc,prologues,epilogues,be.loc);
 	}
+	static if(language==silq)
+	if(!cast(CatExp)be.e1&&isInvertibleOpAssignExp(be)&&!cast(Identifier)be.e1){
+		auto tmp=new Identifier(freshName());
+		tmp.loc=be.e1.loc;
+		auto de=new DefineExp(tmp,be.e1);
+		de.loc=be.e1.loc;
+		be.e1=tmp.copy();
+		auto trans=new CompoundExp([de]);
+		trans.loc=de.loc;
+		auto bdy=new CompoundExp([be]);
+		bdy.loc=be.loc;
+		auto we=new WithExp(trans,bdy);
+		we.loc=be.loc;
+		auto r=statementSemantic(we,sc);
+		if(!r.isSemError()) finishIndexReplacement(r,sc);
+		return lowerIndexReplacement(prologues,epilogues,r,sc);
+	}
+	be.e1=oe1;
 	static if(language==silq){
 		// TODO: assignments to fields
 		auto semanticDone=false;
