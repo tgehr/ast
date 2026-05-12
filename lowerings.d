@@ -504,6 +504,10 @@ Expression getLowering(OrElseExp oe,ExpSemContext context){
 	return expressionSemantic(new IteExp(oe.e1,toCompound(true_),toCompound(ne2)),context);
 }
 
+Expression getLowering(OrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__or",oe,[oe.e1,oe.e2],oe.loc,context); }
+Expression getLowering(XorExp xe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__xor",xe,[xe.e1,xe.e2],xe.loc,context); }
+Expression getLowering(AndExp ae,ExpSemContext context){ return makeFunctionCall(OB.andb,"__and",ae,[ae.e1,ae.e2],ae.loc,context); }
+
 
 Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:AAssignExp)){
 	static if(op==Tok!"←"){
@@ -520,7 +524,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			ae.sstate=SemState.completed;
 			return ae;
 		}
-		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"~←"].canFind(op)){
+		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"⊻←",Tok!"~←"].canFind(op)){
 			if(e.e1.type.isClassical()&&op!=Tok!"~←") return toAssign();
 			auto id1=cast(Identifier)e.e1;
 			if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
@@ -528,6 +532,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			else static if(op==Tok!"-←") enum name="__sub_assign", ob=OB.default_;
 			else static if(op==Tok!"sub←") enum name="__nsub_assign", ob=OB.nsub;
 			else static if(op==Tok!"⊕←") enum name="__xorb_assign", ob=OB.mul;
+			else static if(op==Tok!"⊻←") enum name="__xor_assign", ob=OB.mul;
 			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
 			else static assert(0);
 			auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));

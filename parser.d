@@ -18,6 +18,8 @@ enum binaryOps=mixin({string r="[";
 		return r~"]";
 	}());
 
+enum binaryOpIds=[["div","div"],["sub","sub"],["orb","|"],["xorb","⊕"],["andb","&"],["or","∨"],["xor","⊻"],["and","∧"]];
+
 bool isRelationalOp(TokenType op){
 	switch(op){
 		// relational operators
@@ -45,14 +47,14 @@ int getLbp(TokenType type) pure{ // operator precedence
 	case Tok!",":  return 10; // comma operator
 	// assignment operators
 	case Tok!"←":
-	case Tok!"/=",Tok!"div=",Tok!"&=",Tok!"∧=",Tok!"⊕=",Tok!"|=",Tok!"∨=",Tok!"-=",Tok!"sub=":
-	case Tok!"/←",Tok!"div←",Tok!"&←",Tok!"∧←",Tok!"⊕←",Tok!"|←",Tok!"∨←",Tok!"-←",Tok!"sub←":
+	case Tok!"/=",Tok!"div=",Tok!"&=",Tok!"⊕=",Tok!"|=",Tok!"-=",Tok!"sub=":
+	case Tok!"/←",Tok!"div←",Tok!"&←",Tok!"⊕←",Tok!"|←",Tok!"-←",Tok!"sub←":
 	case Tok!"+=",Tok!"<<=",Tok!">>=", Tok!">>>=":
 	case Tok!"+←",Tok!"<<←",Tok!">>←", Tok!">>>←":
 	case Tok!"*=",Tok!"%=",Tok!"^=":
 	case Tok!"*←",Tok!"·←",Tok!"·=",Tok!"%←",Tok!"^←":
-	case Tok!"&&=", Tok!"||=", Tok!"~=":
-	case Tok!"&&←", Tok!"||←", Tok!"~←":
+	case Tok!"∧=", Tok!"&&=", Tok!"⊻=", Tok!"∨=", Tok!"||=", Tok!"~=":
+	case Tok!"∧←", Tok!"&&←", Tok!"⊻←", Tok!"∨←", Tok!"||←", Tok!"~←":
 	case Tok!":=":
 		return 20;
 	case Tok!"as",Tok!"coerce",Tok!"pun": // statically safe type conversion, unsafe type conversion, type punning
@@ -61,12 +63,13 @@ int getLbp(TokenType type) pure{ // operator precedence
 		return 31;
 	// logical operators
 	case Tok!"?":  return 40; // conditional operator
-	case Tok!"||": return 50; // logical OR
-	case Tok!"&&": return 60; // logical AND
+	case Tok!"∨",Tok!"||": return 50; // logical OR
+	case Tok!"⊻": return 55;
+	case Tok!"∧",Tok!"&&": return 60; // logical AND
 	// bitwise operators
-	case Tok!"|",Tok!"∨": return 70;
+	case Tok!"|": return 70;
 	case Tok!"⊕": return 80;
-	case Tok!"&",Tok!"∧": return 90;
+	case Tok!"&": return 90;
 	// relational operators
 	case Tok!"==",Tok!"=",Tok!"!=",Tok!"≠",Tok!">",Tok!"<":
 	case Tok!">=",Tok!"≥",Tok!"<=",Tok!"≤",Tok!"!>",Tok!"!<":
@@ -711,7 +714,7 @@ struct Parser{
 				return res;
 			}mixin({string r;
 				foreach(x;binaryOps)
-					if(!util.among(x,"=>",".","!","classical","const","moved","once","spent","?",":","as","coerce","pun","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&","&=","&←","∧=","|","|=","|←","∨=")){
+					if(!util.among(x,"=>",".","!","classical","const","moved","once","spent","?",":","as","coerce","pun","*","=","==","<=","!<=",">=","!>=","!=","*=","/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","*=","·=","%=","^=","&&=","||=","~=","&=","∧=","⊻=","|=","∨=")){
 						r~=mixin(X!q{case Tok!"@(x)":
 							nextToken();
 							static if("@(x)"=="->"||"@(x)"=="→"){
@@ -746,7 +749,7 @@ struct Parser{
 					}
 				return r;
 			}());
-			static foreach(x;["/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","%=","^=","&&=","||=","~="])
+			static foreach(x;["/=","div=","&=","⊕=","|=","-=","sub=","+=","<<=",">>=",">>>=","%=","^=","&&=","||=","∧=","∨=","⊻=","~="])
 				case Tok!x: goto case Tok!(x[0..$-1]~"←");
 			case Tok!"=":
 				if(statement) goto case Tok!"←";
@@ -803,45 +806,21 @@ struct Parser{
 					default: assert(0);
 				}
 				return res;
-			case Tok!"&": goto case Tok!"∧";
-			case Tok!"&←",Tok!"∧=": goto case Tok!"∧←";
-			case Tok!"|": goto case Tok!"∨";
-			case Tok!"|←",Tok!"∨=": goto case Tok!"∨←";
 			case Tok!"i":
-				switch(tok.str){ // TODO: clean this up using code generation
-					case "div":
-						auto id=tok;
-						nextToken();
-						if((ttype==Tok!"←"||ttype==Tok!"=") && id.loc.rep.ptr+id.loc.rep.length==tok.loc.rep.ptr){
+				switch(tok.str){
+					static foreach(t;binaryOpIds){
+						case t[0]:
+							auto id=tok;
 							nextToken();
-							auto right=parseExpression(rbp!(Tok!"div="),false);
-							return res=New!(BinaryExp!(Tok!"div←"))(left,right);
-						}else{
-							auto right=parseExpression(rbp!(Tok!"div"),false);
-							return res=New!(BinaryExp!(Tok!"div"))(left,right);
-						}
-					case "sub":
-						auto id=tok;
-						nextToken();
-						if((ttype==Tok!"←"||ttype==Tok!"=") && id.loc.rep.ptr+id.loc.rep.length==tok.loc.rep.ptr){
-							nextToken();
-							auto right=parseExpression(rbp!(Tok!"sub="),false);
-							return res=New!(BinaryExp!(Tok!"sub←"))(left,right);
-						}else{
-							auto right=parseExpression(rbp!(Tok!"sub"),false);
-							return res=New!(BinaryExp!(Tok!"sub"))(left,right);
-						}
-					case "xorb":
-						auto id=tok;
-						nextToken();
-						if((ttype==Tok!"←"||ttype==Tok!"=") && id.loc.rep.ptr+id.loc.rep.length==tok.loc.rep.ptr){
-							nextToken();
-							auto right=parseExpression(rbp!(Tok!"⊕="),false);
-							return res=New!(BinaryExp!(Tok!"⊕←"))(left,right);
-						}else{
-							auto right=parseExpression(rbp!(Tok!"⊕"),false);
-							return res=New!(BinaryExp!(Tok!"⊕"))(left,right);
-						}
+							if((ttype==Tok!"←"||ttype==Tok!"=") && id.loc.rep.ptr+id.loc.rep.length==tok.loc.rep.ptr){
+								nextToken();
+								auto right=parseExpression(rbp!(Tok!(t[1]~"=")),false);
+								return res=New!(BinaryExp!(Tok!(t[1]~"←")))(left,right);
+							}else{
+								auto right=parseExpression(rbp!(Tok!(t[1])),false);
+								return res=New!(BinaryExp!(Tok!(t[1])))(left,right);
+							}
+					}
 					case "x":
 						nextToken();
 						auto right=parseExpression(rbp!(Tok!"×"),false);
@@ -885,14 +864,14 @@ struct Parser{
 	Expression parseExpression2(Expression left, int rbp = 0, bool statement=false){ // left is already known
 		int clbp(){
 			if(ttype==Tok!"i"){
-				if(tok.str=="div")
-					return arrLbp[util.among(peek().type,Tok!"←",Tok!"=")?Tok!"div←":Tok!"div"];
-				if(tok.str=="sub")
-					return arrLbp[util.among(peek().type,Tok!"←",Tok!"=")?Tok!"sub←":Tok!"sub"];
-				if(tok.str=="xorb")
-					return arrLbp[util.among(peek().type,Tok!"←",Tok!"=")?Tok!"⊕←":Tok!"⊕"];
-				if(tok.str=="x")
-					return arrLbp[Tok!"×"];
+				switch(tok.str){
+					static foreach(t;binaryOpIds){
+						case t[0]:
+							return arrLbp[util.among(peek().type,Tok!"←",Tok!"=")?Tok!(t[1]~"←"):Tok!(t[1])];
+					}
+					case "x": return arrLbp[Tok!"×"];
+					default: break;
+				}
 			}
 			if(statement && ttype==Tok!"=")
 				return arrLbp[Tok!"←"];

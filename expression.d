@@ -2634,6 +2634,9 @@ alias AssignExp=BinaryExp!(Tok!"←");
 alias DefineExp=BinaryExp!(Tok!":=");
 alias OrElseAssignExp=BinaryExp!(Tok!"||←");
 alias AndThenAssignExp=BinaryExp!(Tok!"&&←");
+alias OrAssignExp=BinaryExp!(Tok!"∨←");
+alias XorAssignExp=BinaryExp!(Tok!"⊻←");
+alias AndAssignExp=BinaryExp!(Tok!"∧←");
 alias AddAssignExp=BinaryExp!(Tok!"+←");
 alias SubAssignExp=BinaryExp!(Tok!"-←");
 alias NSubAssignExp=BinaryExp!(Tok!"sub←");
@@ -2643,9 +2646,9 @@ alias IDivAssignExp=BinaryExp!(Tok!"div←");
 alias ModAssignExp=BinaryExp!(Tok!"%←");
 alias PowAssignExp=BinaryExp!(Tok!"^←");
 alias CatAssignExp=BinaryExp!(Tok!"~←");
-alias BitOrAssignExp=BinaryExp!(Tok!"∨←");
+alias BitOrAssignExp=BinaryExp!(Tok!"|←");
 alias BitXorAssignExp=BinaryExp!(Tok!"⊕←");
-alias BitAndAssignExp=BinaryExp!(Tok!"∧←");
+alias BitAndAssignExp=BinaryExp!(Tok!"&←");
 alias AddExp=BinaryExp!(Tok!"+");
 alias SubExp=BinaryExp!(Tok!"-");
 alias NSubExp=BinaryExp!(Tok!"sub");
@@ -2655,9 +2658,9 @@ alias IDivExp=BinaryExp!(Tok!"div");
 alias ModExp=BinaryExp!(Tok!"%");
 alias PowExp=BinaryExp!(Tok!"^");
 alias CatExp=BinaryExp!(Tok!"~");
-alias BitOrExp=BinaryExp!(Tok!"∨");
+alias BitOrExp=BinaryExp!(Tok!"|");
 alias BitXorExp=BinaryExp!(Tok!"⊕");
-alias BitAndExp=BinaryExp!(Tok!"∧");
+alias BitAndExp=BinaryExp!(Tok!"&");
 alias UPlusExp=UnaryExp!(Tok!"+");
 alias UMinusExp=UnaryExp!(Tok!"-");
 alias UNotExp=UnaryExp!(Tok!"¬");
@@ -2670,6 +2673,9 @@ alias EqExp=BinaryExp!(Tok!"=");
 alias NeqExp=BinaryExp!(Tok!"≠");
 alias OrElseExp=BinaryExp!(Tok!"||");
 alias AndThenExp=BinaryExp!(Tok!"&&");
+alias OrExp=BinaryExp!(Tok!"∨");
+alias XorExp=BinaryExp!(Tok!"⊻");
+alias AndExp=BinaryExp!(Tok!"∧");
 alias Exp=Expression;
 
 
@@ -2767,12 +2773,17 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	if(auto ide=cast(IDivExp)e) return f(ide,forward!args);
 	if(auto me=cast(ModExp)e) return f(me,forward!args);
 	if(auto pe=cast(PowExp)e) return f(pe,forward!args);
+
 	if(auto boe=cast(BitOrExp)e) return f(boe,forward!args);
 	if(auto bxe=cast(BitXorExp)e) return f(bxe,forward!args);
 	if(auto bae=cast(BitAndExp)e) return f(bae,forward!args);
 
 	if(auto ae=cast(AndThenExp)e) return f(ae,forward!args);
 	if(auto oe=cast(OrElseExp)e) return f(oe,forward!args);
+
+	if(auto oe=cast(OrExp)e) return f(oe,forward!args);
+	if(auto xe=cast(XorExp)e) return f(xe,forward!args);
+	if(auto ae=cast(AndExp)e) return f(ae,forward!args);
 
 	if(auto le=cast(LtExp)e) return f(le,forward!args);
 	if(auto le=cast(LeExp)e) return f(le,forward!args);

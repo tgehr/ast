@@ -68,8 +68,11 @@ static immutable string binopMod = "%";
 static immutable string binopPow = "^";
 static immutable string binopCat = "~";
 static immutable string binopBitXor = "\u2295";
-static immutable string binopBitOr = "\u2228";
-static immutable string binopBitAnd = "\u2227";
+static immutable string binopBitOr = "|";
+static immutable string binopBitAnd = "&";
+static immutable string binopXor = "\u22BB";
+static immutable string binopOr = "\u2228";
+static immutable string binopAnd = "\u2227";
 static immutable string binopCmpEq = "=";
 static immutable string binopCmpNe = "\u2260";
 static immutable string binopCmpLt = "<";
@@ -90,6 +93,9 @@ static immutable string[] binops = [
 	binopBitXor,
 	binopBitOr,
 	binopBitAnd,
+	binopXor,
+	binopOr,
+	binopAnd,
 ];
 
 static immutable string[] boolops = [
@@ -116,7 +122,7 @@ static immutable string[] unops = [
 static immutable AssignOp[] assignOps = [
 	AssignOp(binopAssign, null, false),
 	AssignOp(binopCat ~ binopAssign, binopCat, false),
-] ~ (binops ~ boolops).map!(op => AssignOp(op ~ binopAssign, op, op == binopAdd || op == binopSub || op == binopNSub || op == binopBitXor)).array;
+] ~ (binops ~ boolops).map!(op => AssignOp(op ~ binopAssign, op, op == binopAdd || op == binopSub || op == binopNSub || op == binopBitXor || op == binopXor)).array;
 
 bool isBinop(string op) pure {
 	foreach(r; binops) {

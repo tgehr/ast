@@ -1263,6 +1263,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 			return lowerDefine!flags(nlhs,nrhs,ae.loc,sc,unchecked,noImplicitDup);
 		}
 		if(auto ae=cast(BitXorAssignExp)e) return ae.copy();
+		if(auto ae=cast(XorAssignExp)e) return ae.copy();
 		sc.error("reversal not supported yet",e.loc);
 		return error();
 	}

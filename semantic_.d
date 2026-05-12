@@ -1848,7 +1848,7 @@ bool isLifted(Expression e,Scope sc){
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 	if(e.implicitDup) return true;
-	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UPlusExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndThenExp)e||cast(OrElseExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
+	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UPlusExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndThenExp)e||cast(OrElseExp)e||cast(OrExp)e||cast(XorExp)e||cast(AndExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
 		return true;
 	if(cast(LiteralExp)e) return true;
 	if(cast(SliceExp)e) return true;
@@ -2469,6 +2469,16 @@ Expression defineLhsSemanticImpl(AndThenExp ae,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(OrElseExp oe,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(oe,context);
+}
+
+Expression defineLhsSemanticImpl(OrExp oe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(oe,context);
+}
+Expression defineLhsSemanticImpl(XorExp xe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(xe,context);
+}
+Expression defineLhsSemanticImpl(AndExp ae,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(ae,context);
 }
 
 Expression defineLhsSemanticImpl(LtExp le,DefineLhsContext context){
@@ -4138,7 +4148,7 @@ AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssig
 
 AAssignExp isInvertibleOpAssignExp(Expression e){
 	auto r=isOpAssignExp(e);
-	if(r&&(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e))
+	if(r&&(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e||cast(XorAssignExp)e))
 		return r;
 	return null;
 }
@@ -6577,6 +6587,16 @@ Expression expressionSemanticImpl(AndThenExp ae,ExpSemContext context){
 }
 Expression expressionSemanticImpl(OrElseExp oe,ExpSemContext context){
 	return handleLogic("shortcut disjunction",oe,oe.e1,oe.e2,context);
+}
+
+Expression expressionSemanticImpl(OrExp boe,ExpSemContext context){
+	return handleBinary!logicType("disjunction",boe,boe.e1,boe.e2,context);
+}
+Expression expressionSemanticImpl(XorExp bxe,ExpSemContext context){
+	return handleBinary!logicType("xor",bxe,bxe.e1,bxe.e2,context);
+}
+Expression expressionSemanticImpl(AndExp bae,ExpSemContext context){
+	return handleBinary!logicType("conjunction",bae,bae.e1,bae.e2,context);
 }
 
 Expression expressionSemanticImpl(LtExp le,ExpSemContext context){
