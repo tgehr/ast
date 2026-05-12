@@ -585,7 +585,6 @@ class Checker {
 	}
 
 	void implLhs(ast_exp.CallExp e) {
-		assert(!e.isSquare);
 		assert(!e.isClassical_);
 		assert(!e.newFunctionVar);
 		visCall(e, true);
