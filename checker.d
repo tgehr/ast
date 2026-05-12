@@ -56,8 +56,8 @@ static immutable string unopMinus = "-";
 static immutable string unopNot = "\u00ac";
 static immutable string unopBitNot = "~";
 
-static immutable string binopOr = "||";
-static immutable string binopAnd = "&&";
+static immutable string binopOrElse = "||";
+static immutable string binopAndThen = "&&";
 static immutable string binopAdd = "+";
 static immutable string binopSub = "-";
 static immutable string binopNSub = "sub";
@@ -93,8 +93,8 @@ static immutable string[] binops = [
 ];
 
 static immutable string[] boolops = [
-	binopOr,
-	binopAnd,
+	binopOrElse,
+	binopAndThen,
 ];
 
 static immutable string[] cmpops = [

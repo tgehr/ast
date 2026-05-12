@@ -1848,7 +1848,7 @@ bool isLifted(Expression e,Scope sc){
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 	if(e.implicitDup) return true;
-	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UPlusExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndExp)e||cast(OrExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
+	if(cast(AddExp)e||cast(SubExp)e||cast(NSubExp)e||cast(MulExp)e||cast(DivExp)e||cast(IDivExp)e||cast(ModExp)e||cast(PowExp)e||cast(BitOrExp)e||cast(BitXorExp)e||cast(BitAndExp)e||cast(UPlusExp)e||cast(UMinusExp)e||cast(UNotExp)e||cast(UBitNotExp)e||cast(AndThenExp)e||cast(OrElseExp)e||cast(LtExp)e||cast(LeExp)e||cast(GtExp)e||cast(GeExp)e||cast(EqExp)e||cast(NeqExp)e||cast(AssertExp)e)
 		return true;
 	if(cast(LiteralExp)e) return true;
 	if(cast(SliceExp)e) return true;
@@ -2464,10 +2464,10 @@ Expression defineLhsSemanticImpl(BitAndExp bae,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(bae,context);
 }
 
-Expression defineLhsSemanticImpl(AndExp ae,DefineLhsContext context){
+Expression defineLhsSemanticImpl(AndThenExp ae,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(ae,context);
 }
-Expression defineLhsSemanticImpl(OrExp oe,DefineLhsContext context){
+Expression defineLhsSemanticImpl(OrElseExp oe,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(oe,context);
 }
 
@@ -4177,9 +4177,9 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 		// TODO: assignments to fields
 		auto semanticDone=false;
 		if(auto id=cast(Identifier)be.e1){
-			if(cast(AndAssignExp)be||cast(OrAssignExp)be){
+			if(cast(AndThenAssignExp)be||cast(OrElseAssignExp)be){
 				auto cond=be.e1.copy();
-				if(cast(OrAssignExp)be){
+				if(cast(OrElseAssignExp)be){
 					auto ncond=new UNotExp(cond);
 					ncond.loc=cond.loc;
 					cond=ncond;
@@ -4193,7 +4193,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 				result.loc=be.loc;
 				result=statementSemantic(result,sc); // TODO: better error messages
 				if(result.isSemCompleted&&!logicType(be.e1.type,be.e2.type)){
-					sc.error(format("incompatible types `%s` and `%s` for %s",be.e1.type,be.e2.type,cast(OrAssignExp)be?"disjunction":"conjunction"),be.loc);
+					sc.error(format("incompatible types `%s` and `%s` for %s",be.e1.type,be.e2.type,cast(OrElseAssignExp)be?"disjunction":"conjunction"),be.loc);
 					result.setSemForceError();
 				}
 				return result;
@@ -6572,11 +6572,11 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 	return e;
 }
 
-Expression expressionSemanticImpl(AndExp ae,ExpSemContext context){
-	return handleLogic("conjunction",ae,ae.e1,ae.e2,context);
+Expression expressionSemanticImpl(AndThenExp ae,ExpSemContext context){
+	return handleLogic("shortcut conjunction",ae,ae.e1,ae.e2,context);
 }
-Expression expressionSemanticImpl(OrExp oe,ExpSemContext context){
-	return handleLogic("disjunction",oe,oe.e1,oe.e2,context);
+Expression expressionSemanticImpl(OrElseExp oe,ExpSemContext context){
+	return handleLogic("shortcut disjunction",oe,oe.e1,oe.e2,context);
 }
 
 Expression expressionSemanticImpl(LtExp le,ExpSemContext context){

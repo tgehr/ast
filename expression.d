@@ -2632,8 +2632,8 @@ class ForgetExp: Expression{
 alias CommaExp=BinaryExp!(Tok!",");
 alias AssignExp=BinaryExp!(Tok!"←");
 alias DefineExp=BinaryExp!(Tok!":=");
-alias OrAssignExp=BinaryExp!(Tok!"||←");
-alias AndAssignExp=BinaryExp!(Tok!"&&←");
+alias OrElseAssignExp=BinaryExp!(Tok!"||←");
+alias AndThenAssignExp=BinaryExp!(Tok!"&&←");
 alias AddAssignExp=BinaryExp!(Tok!"+←");
 alias SubAssignExp=BinaryExp!(Tok!"-←");
 alias NSubAssignExp=BinaryExp!(Tok!"sub←");
@@ -2668,8 +2668,8 @@ alias GtExp=BinaryExp!(Tok!">");
 alias GeExp=BinaryExp!(Tok!"≥");
 alias EqExp=BinaryExp!(Tok!"=");
 alias NeqExp=BinaryExp!(Tok!"≠");
-alias OrExp=BinaryExp!(Tok!"||");
-alias AndExp=BinaryExp!(Tok!"&&");
+alias OrElseExp=BinaryExp!(Tok!"||");
+alias AndThenExp=BinaryExp!(Tok!"&&");
 alias Exp=Expression;
 
 
@@ -2771,8 +2771,8 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 	if(auto bxe=cast(BitXorExp)e) return f(bxe,forward!args);
 	if(auto bae=cast(BitAndExp)e) return f(bae,forward!args);
 
-	if(auto ae=cast(AndExp)e) return f(ae,forward!args);
-	if(auto oe=cast(OrExp)e) return f(oe,forward!args);
+	if(auto ae=cast(AndThenExp)e) return f(ae,forward!args);
+	if(auto oe=cast(OrElseExp)e) return f(oe,forward!args);
 
 	if(auto le=cast(LtExp)e) return f(le,forward!args);
 	if(auto le=cast(LeExp)e) return f(le,forward!args);

@@ -485,7 +485,7 @@ private CompoundExp toCompound(Expression e){
 	ce.sstate=e.sstate;
 	return ce;
 }
-Expression getLowering(AndExp ae,ExpSemContext context){
+Expression getLowering(AndThenExp ae,ExpSemContext context){
 	auto false_=LiteralExp.makeBoolean(false);
 	false_.loc=ae.loc;
 	false_.sstate=SemState.initial;
@@ -494,7 +494,7 @@ Expression getLowering(AndExp ae,ExpSemContext context){
 	else ne2=ne2.copy();
 	return expressionSemantic(new IteExp(ae.e1,toCompound(ne2),toCompound(false_)),context);
 }
-Expression getLowering(OrExp oe,ExpSemContext context){
+Expression getLowering(OrElseExp oe,ExpSemContext context){
 	auto true_=LiteralExp.makeBoolean(true);
 	true_.loc=oe.loc;
 	true_.sstate=SemState.initial;
