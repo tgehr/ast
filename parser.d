@@ -784,7 +784,6 @@ struct Parser{
 							auto classical=cast(UnaryExp!(Tok!"¬"))res;
 							assert(!!classical);
 							arrow=cast(BinaryExp!(Tok!"→"))classical.e;
-							imported!"util.io".writeln(classical," ",typeid(classical.e)," ",arrow);
 						}
 					}
 				}
