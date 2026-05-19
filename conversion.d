@@ -676,36 +676,62 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 		else return true;
 	}
 	if(auto r=typeExplicitConversion!witness(expr.type,type,annotationType)) return r;
-	if(auto tpl1=cast(TupleExp)expr){
-		void update(){ expr.type=tupleTy(tpl1.e.map!(e=>e.type).array); }
+	Expression[] es;
+	bool isVec=false;
+	if(auto tpl1=cast(TupleExp)expr) es=tpl1.e;
+	if(auto vec1=cast(VectorExp)expr){
+		es=vec1.e;
+		isVec=true;
+	}
+	if(es.length){
+		Expression ety2=null;
+		void update(){
+			assert(!isVec||ety2);
+			expr.type=isVec?vectorTy(ety2,es.length):tupleTy(es.map!(e=>e.type).array);
+		}
 		if(auto tpl2=type.isTupleTy()){
-			if(tpl1.e.length!=tpl2.length) return typeof(return).init;
-			auto next=iota(tpl1.e.length).map!(i=>explicitConversion!witness(tpl1.e[i],tpl2[i],annotationType));
-			static if(witness){
-				auto elements=next.array;
-				update();
-				if(elements.all!(x=>!!x)){
-					if(elements.all!(x=>!!cast(NoOpConversion)x)) return new NoOpConversion(expr.type);
-					return new TupleConversion(expr.type,type,elements);
+			if(es.length!=tpl2.length) return typeof(return).init;
+			if(isVec){
+				ety2=tpl2.length?tpl2[0]:bottom;
+				foreach(ty;iota(1,tpl2.length).map!(i=>tpl2[i]))
+					ety2=meetTypes(ety2,ty);
+			}
+			if(!isVec||ety2){
+				auto next=iota(es.length).map!(i=>explicitConversion!witness(es[i],isVec?ety2:tpl2[i],annotationType));
+				static if(witness){
+					auto elements=next.array;
+					update();
+					if(elements.all!(x=>!!x)){
+						if(elements.all!(x=>!!cast(NoOpConversion)x)) return new NoOpConversion(expr.type);
+						return new TupleConversion(expr.type,type,elements);
+					}
+				}else if(next.all){
+					update();
+					return true;
 				}
-			}else{ scope(exit) update(); return next.all; }
+			}
 		}
 		if(auto arr2=cast(ArrayTy)type){
-			auto next=iota(tpl1.e.length).map!(i=>explicitConversion!witness(tpl1.e[i],arr2.next,annotationType));
+			ety2=arr2.next;
+			auto next=iota(es.length).map!(i=>explicitConversion!witness(es[i],arr2.next,annotationType));
 			static if(witness){
 				auto elements=next.array;
 				update();
 				if(elements.all!(x=>!!x)){
-					auto nvec2=vectorTy(arr2.next, tpl1.e.length);
+					auto nvec2=vectorTy(arr2.next, es.length);
 					return trans(new TupleConversion(expr.type,nvec2,elements),new VectorToArrayConversion(nvec2,arr2));
 				}
-			}else{ scope(exit) update(); return next.all; }
+			}else if(next.all){
+				update();
+				return true;
+			}
 		}
 		if(auto vec2=cast(VectorTy)type){
+			ety2=vec2.next;
 			bool checkLength=annotationType==TypeAnnotationType.coercion;
 			bool ok=checkLength;
 			if(witness||!ok){
-				auto len=LiteralExp.makeInteger(tpl1.e.length);
+				auto len=LiteralExp.makeInteger(es.length);
 				len.loc=expr.loc;
 				auto eq=new EqExp(len,vec2.num);
 				eq.loc=expr.loc;
@@ -716,16 +742,18 @@ Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression ty
 				ok|=proven;
 			}
 			if(ok){
-				auto next=iota(tpl1.e.length).map!(i=>explicitConversion!witness(tpl1.e[i],vec2.next,annotationType));
+				auto next=iota(es.length).map!(i=>explicitConversion!witness(es[i],vec2.next,annotationType));
 				static if(witness){
 					auto elements=next.array;
 					update();
 					if(elements.all!(x=>!!x)){
-						auto nvec2=vectorTy(vec2.next, tpl1.e.length);
+						auto nvec2=vectorTy(vec2.next, es.length);
 						return trans(new TupleConversion(expr.type,nvec2,elements),new VectorConversion(nvec2,vec2,refl(vec2.next),checkLength));
 					}
-				}else{ scope(exit) update(); return next.all; }
-
+				}else if(next.all){
+					update();
+					return true;
+				}
 			}
 		}
 	}
