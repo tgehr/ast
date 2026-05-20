@@ -1953,7 +1953,12 @@ struct ForRange{
 	}
 
 	// semantic information
-	Expression elementType(){ return joinTypes(left.type, right.type); }
+	Expression elementType(){
+		auto r=joinTypes(left.type, right.type);
+		if(r==ℤt(true)&&isSubtype(left.type,ℕt(true))&&(!step||isSubtype(step.type,ℕt(true))))
+			return ℕt(true);
+		return r;
+	}
 }
 
 struct ForContainer{
