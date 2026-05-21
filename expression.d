@@ -861,6 +861,12 @@ class Identifier: Expression{
 				return true;
 			}
 		}
+		if(auto dd=cast(DatDecl)meaning){
+			if(!dd.isNested){
+				assert(!dd.capturedDecls);
+				return true;
+			}
+		}
 		return super.isConstant();
 	}
 	override bool isTotal(){
