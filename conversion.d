@@ -480,8 +480,7 @@ class ℤtoFixedConversion: Conversion{
 	this(NumericTy from,Expression to)in{
 		assert(from is numericTy(NumericType.ℤt, true));
 		auto toInt=isFixedIntTy(to);
-		assert(toInt);
-		assert(toInt.isClassical);
+		assert(toInt && toInt.isClassical);
 	}do{
 		super(from,to);
 	}
@@ -495,13 +494,17 @@ Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotatio
 			static if(witness) return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),new ℤtoFixedConversion(ℤt(true),to));
 			else return true;
 		}
+		if(isℤmodTy(to)){
+			static if(witness) return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),new ℤtoℤmodConversion(ℤt(true),to));
+			else return true;
+		}
 	}
 	return typeof(return).init;
 }
 
 class UintToℕConversion: Conversion{
 	this(Expression from, NumericTy to)in{
-		assert(isUint(from));
+		assert(isUint(from) && from.isClassical());
 		assert(to is numericTy(NumericType.ℕt, true));
 	}do{
 		super(from,to);
@@ -510,8 +513,26 @@ class UintToℕConversion: Conversion{
 
 class IntToℤConversion: Conversion{
 	this(Expression from, NumericTy to)in{
-		assert(isInt(from));
+		assert(isInt(from) && from.isClassical());
 		assert(to is numericTy(NumericType.ℤt, true));
+	}do{
+		super(from,to);
+	}
+}
+
+class ℤtoℤmodConversion: Conversion{
+	this(NumericTy from,Expression to)in{
+		assert(isℤmodTy(to) && to.isClassical());
+		assert(from is numericTy(NumericType.ℤt, true));
+	}do{
+		super(from,to);
+	}
+}
+
+class ℤmodToℕConversion: Conversion{
+	this(Expression from,NumericTy to)in{
+		assert(isℤmodTy(from) && from.isClassical());
+		assert(to is numericTy(NumericType.ℕt, true));
 	}do{
 		super(from,to);
 	}
@@ -528,6 +549,12 @@ Ret!witness fixedToNumeric(bool witness)(Expression from,Expression to,TypeAnnot
 		}
 		if(fromInt.isSigned && isSubtype(ℤt(true),to)){
 			static if(witness) return trans(new IntToℤConversion(from,ℤt(true)),numericToNumeric!witness(ℤt(true),to,TypeAnnotationType.annotation));
+			else return true;
+		}
+	}
+	if(auto fromℤmod=isℤmodTy(from)){
+		if(isSubtype(ℕt(true),to)){
+			static if(witness) return trans(new ℤmodToℕConversion(from,ℕt(true)),numericToNumeric!witness(ℕt(true),to,TypeAnnotationType.annotation));
 			else return true;
 		}
 	}
@@ -592,6 +619,51 @@ Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnota
 	return typeof(return).init;
 }
 
+class UintToℤmodCoercion: Conversion{
+	bool checkBits;
+	this(Expression from,Expression to,bool checkBits)in{
+		assert(isUint(from)&&isℤmodTy(to));
+		assert(from.isClassical()==to.isClassical());
+	}do{
+		this.checkBits=checkBits;
+		super(from,to);
+	}
+}
+
+class ℤmodToUintCoercion: Conversion{
+	bool checkBits=true;
+	this(Expression from,Expression to,bool checkBits)in{
+		assert(isℤmodTy(from)&&isUint(to));
+		assert(from.isClassical()==to.isClassical());
+	}do{
+		this.checkBits=checkBits;
+		super(from,to);
+	}
+}
+
+Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(annotationType<TypeAnnotationType.coercion) return typeof(return).init;
+	if(auto uintFrom=isFixedIntTy(from)){
+		if(!uintFrom.isSigned){
+			if(auto zmodTo=isℤmodTy(to)){
+				if(uintFrom.isClassical == zmodTo.isClassical){
+					static if(witness) return new UintToℤmodCoercion(from,to,annotationType==TypeAnnotationType.coercion);
+					else return true;
+				}
+			}
+		}
+	}
+	if(auto zmodFrom=isℤmodTy(from)){
+		if(auto uintTo=isFixedIntTy(to)){
+			if(!uintTo.isSigned && zmodFrom.isClassical == uintTo.isClassical){
+				static if(witness) return new ℤmodToUintCoercion(from,to,annotationType==TypeAnnotationType.coercion);
+				else return true;
+			}
+		}
+	}
+	return typeof(return).init;
+}
+
 /+
 class ParameterizedSubtypeConversion: Conversion{
 	struct ParameterConversion{
@@ -621,8 +693,6 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 		if(auto r=functionToFunction!true(from,to,annotationType)) return r;
 	}else if(isSubtype(from,to)) return true;
 	if(auto r=numericToNumeric!witness(from,to,annotationType)) return r;
-	if(annotationType==TypeAnnotationType.punning)
-		return annotationPun!witness(from,to,annotationType);
 	if(annotationType>=annotationType.conversion){
 		if(auto r=ℤtoFixed!witness(from,to,annotationType)) return r;
 		if(auto r=fixedToNumeric!witness(from,to,annotationType)) return r;
@@ -636,7 +706,10 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 			static if(witness) return new ImplosionCoercion(from,to);
 			else return true;
 		}
+		if(auto r=zmodVsUint!witness(from,to,annotationType)) return r;
 	}
+	if(annotationType==TypeAnnotationType.punning)
+		return annotationPun!witness(from,to,annotationType);
 	return typeof(return).init;
 }
 bool isLiteral(Expression expr){
@@ -650,6 +723,8 @@ bool annotateLiteral(Expression expr, Expression type){
 		if(isSubtype(expr.type,ℕt(false))&&isFixedIntTy(type))
 			return true;
 		if(isSubtype(expr.type,ℤt(false))&&isInt(type))
+			return true;
+		if(isSubtype(expr.type,ℤt(false))&&isℤmodTy(type))
 			return true;
 		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 			return true;
@@ -788,6 +863,10 @@ auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion
 	if(auto iconv=cast(IntToℤConversion)conv) return f(iconv,forward!args);
 	if(auto fconv=cast(FixedToVectorConversion)conv) return f(fconv,forward!args);
 	if(auto vconv=cast(VectorToFixedConversion)conv) return f(vconv,forward!args);
+	if(auto zconv=cast(ℤtoℤmodConversion)conv) return f(zconv,forward!args);
+	if(auto zconv=cast(ℤmodToℕConversion)conv) return f(zconv,forward!args);
+	if(auto uconv=cast(UintToℤmodCoercion)conv) return f(uconv,forward!args);
+	if(auto zconv=cast(ℤmodToUintCoercion)conv) return f(zconv,forward!args);
 	// if(auto pconv=cast(ParameterizedSubtypeConversion)conv) return f(pconv,forward!args);
 	return default_(conv,forward!args);
 }

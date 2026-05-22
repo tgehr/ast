@@ -34,6 +34,9 @@ string getSuffix(Expression type){
 	if(auto intTy=isFixedIntTy(type)){
 		return intTy.isSigned ? type.isClassical()?"S":"s" : type.isClassical?"U":"u";
 	}
+	if(auto ℤmodTy=isℤmodTy(type)){
+		return type.isClassical()?"M":"m";
+	}
 	final switch(isNumericTy(type))with(NumericType){
 		case none: enforce(0, text("unsupported lowering type: ",type)); assert(0);
 		case Bool: return type.isClassical()?"B":"b";
@@ -111,8 +114,8 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 		auto s1=getSuffix(t1);
 		final switch(behavior)with(OperatorBehavior){
 			case default_,nsub,mul,andb:
-				if(s0.among("s","S","u","U")&&s1=="N") s1="Z";
-				if(s1.among("s","S","u","U")&&s0=="N") s0="Z";
+				if(s0.among("s","S","u","U","m","M")&&s1=="N") s1="Z";
+				if(s1.among("s","S","u","U","m","M")&&s0=="N") s0="Z";
 				break;
 			case comparison,div,mod:
 				break;

@@ -1384,7 +1384,7 @@ class CallExp: Expression{
 		assert(isSemEvaluated());
 		static if(language==silq){
 			assert(isType(this), format("call not a type: %s", this));
-			if(isFixedIntTy(this)){ // TODO: generalize
+			if(isFixedIntTy(this)||isℤmodTy(this)){ // TODO: generalize
 				auto r=new CallExp(e,arg,isSquare,false);
 				r.type=qtypeTy;
 				r.setSemEvaluated();
@@ -1432,6 +1432,9 @@ class CallExp: Expression{
 			import ast.type:isFixedIntTy;
 			if(auto ft=isFixedIntTy(this))
 				return ft.bits.isConstant();
+			import ast.type:isℤmodTy;
+			if(auto zmt=isℤmodTy(this))
+				return zmt.N.isConstant();
 		}
 		return super.isConstant();
 	}

@@ -26,6 +26,17 @@ Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location
 	return ce;
 }
 
+Expression getℤmodTy(Expression N,bool isClassical,Location loc,Scope isc){
+	assert(N.isSemEvaluated());
+	auto sym=getPreludeSymbol("ℤmod",loc,isc);
+	if(!sym.isSemCompleted()) return null;
+	auto ce=new CallExp(sym,N,true,isClassical);
+	ce.loc=loc;
+	ce.type=isClassical?ctypeTy:qtypeTy;
+	ce.setSemEvaluated();
+	return ce;
+}
+
 Identifier getDup(Location loc,Scope isc){
 	return getPreludeSymbol("dup",loc,isc);
 }
@@ -3312,7 +3323,7 @@ Expression moveExp(Expression e){
 }
 
 bool isBasicIndexType(Expression ty){
-	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isFixedIntTy(ty);
+	return isSubtype(ty,ℤt(true))||isSubtype(ty,Bool(false))||isFixedIntTy(ty)||isℤmodTy(ty);
 }
 
 bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
@@ -4317,7 +4328,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc)in{
 			if(var.scope_ is sc)
 				sc.addDependency(var,dependency);
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
-			if(to&&isFixedIntTy(to)&&!joinTypes(from,to)){ // TODO: generalize?
+			if(to&&(isFixedIntTy(to)||isℤmodTy(to))&&!joinTypes(from,to)){ // TODO: generalize?
 				sc.error(format("operator assign from type `%s` to type `%s` is disallowed",from,to),be.loc);
 				sc.note(format("change the type of `%s` or use a regular assignment",id.meaning),id.meaning.loc);
 				be.setSemError();
@@ -6175,22 +6186,32 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 }
 
 Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
+	if((isNumericTy(t1)||isEmpty(t1))&&(isNumericTy(t2)||isEmpty(t2))){
+		auto r=joinTypes(t1,t2);
+		if((isEmpty(t1)||isEmpty(t2))&&isSubtype(r,ℤt(false))) return bottom; // 1+(_:⊥) may become 1+(0:int[n])
+		static if(!preserveBool){
+			if(r==Bool(true)) return ℕt(true);
+			if(r==Bool(false)) return ℕt(false);
+		}
+		return r;
+	}
 	auto int1 = isFixedIntTy(t1);
 	auto int2 = isFixedIntTy(t2);
-	if(int1 && int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
-	if(int2 && int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
-	if(int1 && !int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
-	if(int2 && !int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
-	if(int1 || int2)
+	if(int1 || int2){
+		if(int1 && int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+		if(int2 && int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
+		if(int1 && !int1.isSigned && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+		if(int2 && !int2.isSigned && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
 		return joinTypes(t1,t2);
-	if(!(isNumericTy(t1)||isEmpty(t1))||!(isNumericTy(t2)||isEmpty(t2))) return null;
-	auto r=joinTypes(t1,t2);
-	if((isEmpty(t1)||isEmpty(t2))&&isSubtype(r,ℤt(false))) return bottom; // 1+(_:⊥) may become 1+(0:int[n])
-	static if(!preserveBool){
-		if(r==Bool(true)) return ℕt(true);
-		if(r==Bool(false)) return ℕt(false);
 	}
-	return r;
+	auto zmod1 = isℤmodTy(t1);
+	auto zmod2 = isℤmodTy(t2);
+	if(zmod1 || zmod2){
+		if(zmod1 && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
+		if(zmod2 && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
+		return joinTypes(t1,t2);
+	}
+	return null;
 }
 Expression subtractionType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
@@ -6276,28 +6297,31 @@ Expression powerType(Expression t1, Expression t2){
 	return ℝ(classical); // TODO: good?
 }
 Expression plusType(Expression t){
-	if(isFixedIntTy(t)) return t;
 	if(isEmpty(t)) return t;
 	if(isNumericTy(t)) return t;
+	if(isFixedIntTy(t)) return t;
+	if(isℤmodTy(t)) return t;
 	return null;
 }
 Expression minusType(Expression t){
-	if(isFixedIntTy(t)) return t;
 	if(isEmpty(t)) return t;
-	auto num = isNumericTy(t);
-	if(!num) return null;
-	return numericTy(max(num, NumericType.ℤt), t.isClassical());
+	if(auto num = isNumericTy(t)){
+		return numericTy(max(num, NumericType.ℤt), t.isClassical());
+	}
+	if(isFixedIntTy(t)) return t;
+	if(isℤmodTy(t)) return t;
+	return null;
 }
 Expression bitNotType(Expression t){
-	if(isFixedIntTy(t)) return t;
 	if(isEmpty(t)) return t;
-	auto num = isNumericTy(t);
-	if(!num) return null;
-	if(num == NumericType.ℕt) num =  NumericType.ℤt;
-	return numericTy(num, t.isClassical());
+	if(auto num = isNumericTy(t)){
+		if(num == NumericType.ℕt) num = NumericType.ℤt;
+		return numericTy(num, t.isClassical());
+	}
+	if(isFixedIntTy(t)) return t;
+	return null;
 }
 Expression notType(Expression t){
-	assert(t);
 	if(isEmpty(t)) return t;
 	auto num = isNumericTy(t);
 	if(num == NumericType.Bool) return t;
@@ -6339,6 +6363,9 @@ Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
 	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
 	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
+		if(!(joinTypes(t1,t2)||isNumericTy(t1)||isNumericTy(t2)))
+			return null;
+	}else if(isℤmodTy(t1) || isℤmodTy(t2)){
 		if(!(joinTypes(t1,t2)||isNumericTy(t1)||isNumericTy(t2)))
 			return null;
 	}else{

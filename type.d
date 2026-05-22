@@ -61,8 +61,7 @@ struct FixedIntTy {
 }
 
 FixedIntTy isFixedIntTy(Expression e){
-	assert(e);
-	assert(e.isSemEvaluated());
+	assert(e&&e.isSemEvaluated());
 	auto ce=cast(CallExp)e;
 	if(!ce || !ce.isSquare) return FixedIntTy();
 	auto bits=ce.arg;
@@ -93,6 +92,27 @@ bool isUint(Expression e){
 	if(auto ty=isFixedIntTy(e)) return !ty.isSigned;
 	else return false;
 }
+
+struct ℤmodTy{
+	Expression N;
+	bool isClassical;
+	bool opCast(T:bool)(){
+		return !!N;
+	}
+}
+
+ℤmodTy isℤmodTy(Expression e){
+	assert(e&&e.isSemEvaluated());
+	auto ce=cast(CallExp)e;
+	if(!ce||!ce.isSquare) return ℤmodTy();
+	auto id=cast(Identifier)ce.e;
+	if(!id||!id.meaning||!isInPrelude(id.meaning)) return ℤmodTy();
+	if(id.name!="ℤmod") return ℤmodTy();
+	auto N=ce.arg;
+	auto isClassical=ce.isClassical_;
+	return ℤmodTy(N,isClassical);
+}
+
 
 string preludeNumericTypeName(Expression e){
 	auto ce=cast(CallExp)e;
