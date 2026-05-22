@@ -6222,6 +6222,7 @@ Expression divisionType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
 	if(!r) return null;
 	if(isFixedIntTy(r)) return null; // TODO: add a special operator for float and rat?
+	if(isℤmodTy(r)) return null;
 	return util.among(r,Bool(true),ℕt(true),ℤt(true))?ℚt(true):
 		util.among(r,Bool(false),ℕt(false),ℤt(false))?ℚt(false):r;
 }
@@ -6260,6 +6261,7 @@ Expression nSubType(Expression t1, Expression t2){
 	}
 	if(isSubtype(r,ℕt(false))) return r;
 	if(isSubtype(r,ℤt(false))) return ℕt(r.isClassical());
+	if(isℤmodTy(r)) return null;
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
@@ -6278,6 +6280,7 @@ Expression moduloType(Expression t1, Expression t2){
 	if(isFixed1&&!isSigned1&&isSigned2) return null;
 	if(isSubtype(t1,ℤt(true))&&isSubtype(t2,ℕt(false)))
 		return t2;
+	if(isℤmodTy(r)) return null;
 	return r;
 }
 Expression powerType(Expression t1, Expression t2){
