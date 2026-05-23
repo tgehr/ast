@@ -1283,6 +1283,10 @@ class CallExp: Expression{
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		auto ce=cast(CallExp)rhs;
 		if(!ce) return false;
+		auto zmod1=isℤmodTy(this),zmod2=isℤmodTy(this); // TODO: generalize
+		if(zmod1&&zmod2&&zmod1.isStar<=zmod2.isStar){
+			return arg.unify(ce.arg,subst,meet);
+		}
 		return e.unify(ce.e,subst,meet)&&arg.unify(ce.arg,subst,meet);
 	}
 	override bool opEquals(Object rhs){
@@ -1293,31 +1297,38 @@ class CallExp: Expression{
 	}
 	override bool isSubtypeImpl(Expression rhs){
 		if(this == rhs) return true;
-		auto rcall = cast(CallExp)rhs;
-		if(rcall && isType(this) && isType(rhs) && e==rcall.e && isSquare==rcall.isSquare){
+		if(auto rcall = cast(CallExp)rhs){
 			if(!isClassical_ && rcall.isClassical_) return false;
-			if(auto id=cast(Identifier)e){
-				if(id.meaning){
-					if(auto dat=cast(DatDecl)id.meaning){
-						auto rid=cast(Identifier)rcall.e;
-						assert(rid && rid.meaning == dat);
-						bool check(Variance variance,Expression t1,Expression t2){
-							final switch(variance){
-								case Variance.invariant_: return t1==t2;
-								case Variance.covariant: return isSubtype(t1,t2);
-								case Variance.contravariant: return isSubtype(t2,t1);
+			if(isType(this) && isType(rhs) && isSquare==rcall.isSquare){
+				if(e==rcall.e){
+					if(auto id=cast(Identifier)e){
+						if(id.meaning){
+							if(auto dat=cast(DatDecl)id.meaning){
+								auto rid=cast(Identifier)rcall.e;
+								assert(rid && rid.meaning == dat);
+								bool check(Variance variance,Expression t1,Expression t2){
+									final switch(variance){
+										case Variance.invariant_: return t1==t2;
+										case Variance.covariant: return isSubtype(t1,t2);
+										case Variance.contravariant: return isSubtype(t2,t1);
+									}
+								}
+								if(!dat.isTuple){
+									assert(dat.params.length==1);
+									return check(dat.params[0].variance,arg,rcall.arg);
+								}
+								assert(dat.isTuple);
+								auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
+								if(tup && rtup && tup.length==dat.params.length && tup.length==rtup.length){ // TODO: assert this?
+									return iota(tup.length).all!(i=>check(dat.params[i].variance,tup[i],rtup[i]));
+								}
 							}
 						}
-						if(!dat.isTuple){
-							assert(dat.params.length==1);
-							return check(dat.params[0].variance,arg,rcall.arg);
-						}
-						assert(dat.isTuple);
-						auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
-						if(tup && rtup && tup.length==dat.params.length && tup.length==rtup.length){ // TODO: assert this?
-							return iota(tup.length).all!(i=>check(dat.params[i].variance,tup[i],rtup[i]));
-						}
 					}
+				}
+				auto zmod1=isℤmodTy(this),zmod2=isℤmodTy(rcall);
+				if(zmod1&&zmod2&&zmod1.N==zmod2.N){
+					return zmod1.isStar>=zmod2.isStar;
 				}
 			}
 		}
@@ -1325,45 +1336,55 @@ class CallExp: Expression{
 	}
 	override Expression combineTypesImpl(Expression rhs, bool meet){
 		if(this == rhs) return this;
-		auto rcall = cast(CallExp)rhs;
-		if(rcall && isType(type) && isType(rhs) && e==rcall.e && isSquare==rcall.isSquare){
-			if(e==rcall.e&&arg==rcall.arg){
-				if(isClassical_ && !rcall.isClassical_){
-					return meet?this:rcall;
-				}else{
-					assert(rcall.isClassical_ && !isClassical_);
-					return !meet?this:rcall;
-				}
-			}
-			if(auto id=cast(Identifier)e){
-				if(id.meaning){
-					if(auto dat=cast(DatDecl)id.meaning){
-						auto rid=cast(Identifier)rcall.e;
-						assert(rid && rid.meaning == dat);
-						Expression combine(Variance variance,Expression t1,Expression t2){
-							final switch(variance){
-								case Variance.invariant_: return t1==t2 ? t1 : null;
-								case Variance.covariant: return combineTypes(t1,t2,meet);
-								case Variance.contravariant: return combineTypes(t1,t2,!meet);
-							}
-						}
-						import ast.semantic_: ExpSemContext, callSemantic; // TODO: get rid of this?
-						if(!dat.isTuple){
-							assert(dat.params.length==1);
-							assert(arg != rcall.arg); // (checked at start of function)
-							auto combined=combine(dat.params[0].variance,arg,rcall.arg);
-							if(!combined) return null;
-							return callSemantic(new CallExp(e,combined,isSquare,isClassical_), ExpSemContext.forType(null));
-						}
-						assert(dat.isTuple);
-						auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
-						if(tup && rtup && tup.length==dat.params.length && tup.length==rtup.length){ // TODO: assert this?
-							auto combined=iota(tup.length).map!(i=>combine(dat.params[i].variance,tup[i],rtup[i])).array;
-							if(combined.any!(x=>x is null)) return null;
-							auto rarg=new TupleExp(combined);
-							return callSemantic(new CallExp(e,rarg,isSquare,isClassical_), ExpSemContext.forType(null));
+		if(auto rcall = cast(CallExp)rhs){
+			if(isType(type) && isType(rhs) && isSquare==rcall.isSquare){
+				if(e==rcall.e){
+					if(arg==rcall.arg){
+						if(isClassical_ && !rcall.isClassical_){
+							return meet?this:rcall;
+						}else{
+							assert(rcall.isClassical_ && !isClassical_);
+							return !meet?this:rcall;
 						}
 					}
+					if(auto id=cast(Identifier)e){
+						if(id.meaning){
+							if(auto dat=cast(DatDecl)id.meaning){
+								auto rid=cast(Identifier)rcall.e;
+								assert(rid && rid.meaning == dat);
+								Expression combine(Variance variance,Expression t1,Expression t2){
+									final switch(variance){
+										case Variance.invariant_: return t1==t2 ? t1 : null;
+										case Variance.covariant: return combineTypes(t1,t2,meet);
+										case Variance.contravariant: return combineTypes(t1,t2,!meet);
+									}
+								}
+								import ast.semantic_: ExpSemContext, callSemantic; // TODO: get rid of this?
+								if(!dat.isTuple){
+									assert(dat.params.length==1);
+									assert(arg != rcall.arg); // (checked at start of function)
+									auto combined=combine(dat.params[0].variance,arg,rcall.arg);
+									if(!combined) return null;
+									return callSemantic(new CallExp(e,combined,isSquare,isClassical_), ExpSemContext.forType(null));
+								}
+								assert(dat.isTuple);
+								auto tup=arg.isTupleTy(), rtup=rcall.arg.isTupleTy();
+								if(tup && rtup && tup.length==dat.params.length && tup.length==rtup.length){ // TODO: assert this?
+									auto combined=iota(tup.length).map!(i=>combine(dat.params[i].variance,tup[i],rtup[i])).array;
+									if(combined.any!(x=>x is null)) return null;
+									auto rarg=new TupleExp(combined);
+									return callSemantic(new CallExp(e,rarg,isSquare,isClassical_), ExpSemContext.forType(null));
+								}
+							}
+						}
+					}
+				}
+				auto zmod1=isℤmodTy(this),zmod2=isℤmodTy(rcall);
+				if(zmod1&&zmod2&&zmod1.isStar!=zmod2.isStar&&zmod1.N==zmod2.N){
+					auto id=cast(Identifier)this.e;
+					assert(!!id);
+					import ast.semantic_:getℤmodTy;
+					return getℤmodTy(zmod1.N,false,zmod1.isClassical&&zmod2.isClassical,loc,id.scope_);
 				}
 			}
 		}

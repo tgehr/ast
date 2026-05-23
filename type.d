@@ -95,7 +95,7 @@ bool isUint(Expression e){
 
 struct ℤmodTy{
 	Expression N;
-	bool isClassical;
+	bool isStar,isClassical;
 	bool opCast(T:bool)(){
 		return !!N;
 	}
@@ -107,10 +107,11 @@ struct ℤmodTy{
 	if(!ce||!ce.isSquare) return ℤmodTy();
 	auto id=cast(Identifier)ce.e;
 	if(!id||!id.meaning||!isInPrelude(id.meaning)) return ℤmodTy();
-	if(id.name!="ℤmod") return ℤmodTy();
+	bool isStar=id.name=="ℤstar";
+	if(!isStar&&id.name!="ℤmod") return ℤmodTy();
 	auto N=ce.arg;
 	auto isClassical=ce.isClassical_;
-	return ℤmodTy(N,isClassical);
+	return ℤmodTy(N,isStar,isClassical);
 }
 
 

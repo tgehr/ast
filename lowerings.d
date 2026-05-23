@@ -32,10 +32,10 @@ string getSuffix(Expression type){
 	if(cast(VectorTy)type) return "v";
 	if(cast(ArrayTy)type) return "a";
 	if(auto intTy=isFixedIntTy(type)){
-		return intTy.isSigned ? type.isClassical()?"S":"s" : type.isClassical?"U":"u";
+		return intTy.isSigned ? intTy.isClassical?"S":"s" : intTy.isClassical?"U":"u";
 	}
 	if(auto ℤmodTy=isℤmodTy(type)){
-		return type.isClassical()?"M":"m";
+		return ℤmodTy.isStar ? ℤmodTy.isClassical?"X":"x" : ℤmodTy.isClassical?"M":"m";
 	}
 	final switch(isNumericTy(type))with(NumericType){
 		case none: enforce(0, text("unsupported lowering type: ",type)); assert(0);
@@ -114,8 +114,14 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 		auto s1=getSuffix(t1);
 		final switch(behavior)with(OperatorBehavior){
 			case default_,nsub,mul,andb:
-				if(s0.among("s","S","u","U","m","M")&&s1=="N") s1="Z";
-				if(s1.among("s","S","u","U","m","M")&&s0=="N") s0="Z";
+				if(s0.among("s","S","u","U","m","M","x","X")&&s1=="N") s1="Z";
+				if(s1.among("s","S","u","U","m","M","x","X")&&s0=="N") s0="Z";
+				if(behavior!=mul||s0.among("x","X")!=s1.among("x","X")){
+					if(s0=="x") s0="m";
+					if(s0=="X") s0="M";
+					if(s1=="x") s1="m";
+					if(s1=="X") s1="M";
+				}
 				break;
 			case comparison,div,mod:
 				break;

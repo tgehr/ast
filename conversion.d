@@ -494,9 +494,27 @@ Ret!witness ℤtoFixed(bool witness)(Expression from,Expression to,TypeAnnotatio
 			static if(witness) return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),new ℤtoFixedConversion(ℤt(true),to));
 			else return true;
 		}
-		if(isℤmodTy(to)){
-			static if(witness) return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),new ℤtoℤmodConversion(ℤt(true),to));
-			else return true;
+		if(auto zmod=isℤmodTy(to)){
+			if(zmod.isStar){
+				if(annotationType>=TypeAnnotationType.coercion){
+					static if(witness){
+						auto ce=cast(CallExp)to;
+						auto id=cast(Identifier)ce.e;
+						assert(!!id);
+						import ast.semantic_:getℤmodTy;
+						auto nstar=getℤmodTy(zmod.N,false,true,to.loc,id.scope_);
+						return trans(typeExplicitConversion!witness(from,nstar,annotationType),
+						             typeExplicitConversion!witness(nstar,to,annotationType));
+					}else return true;
+				}
+			}else{
+				auto tocl=to.getClassical();
+				static if(witness){
+					return trans(numericToNumeric!witness(from,ℤt(true),TypeAnnotationType.annotation),
+					             trans(new ℤtoℤmodConversion(ℤt(true),tocl),
+					                   typeExplicitConversion!witness(tocl,to,TypeAnnotationType.annotation)));
+				}else return true;
+			}
 		}
 	}
 	return typeof(return).init;
@@ -622,7 +640,9 @@ Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnota
 class UintToℤmodCoercion: Conversion{
 	bool checkBits;
 	this(Expression from,Expression to,bool checkBits)in{
-		assert(isUint(from)&&isℤmodTy(to));
+		auto zmod2=isℤmodTy(to);
+		assert(!zmod2.isStar);
+		assert(isUint(from)&&zmod2);
 		assert(from.isClassical()==to.isClassical());
 	}do{
 		this.checkBits=checkBits;
@@ -641,23 +661,116 @@ class ℤmodToUintCoercion: Conversion{
 	}
 }
 
+class ℤstarToℤmodConversion: Conversion{
+	this(Expression from,Expression to)in{
+		auto zmod1=isℤmodTy(from),zmod2=isℤmodTy(to);
+		assert(zmod1&&zmod2);
+		assert(zmod1.isStar&&!zmod2.isStar);
+		assert(zmod1.N==zmod2.N);
+		assert(zmod1.isClassical==zmod2.isClassical);
+	}do{
+		super(from,to);
+	}
+}
+
+class ℤmodToℤstarCoercion: Conversion{
+	bool checkUnit=true;
+	this(Expression from,Expression to,bool checkUnit)in{
+		auto zmod1=isℤmodTy(from),zmod2=isℤmodTy(to);
+		assert(zmod1&&zmod2);
+		assert(!zmod1.isStar&&zmod2.isStar);
+		assert(zmod1.N==zmod2.N);
+		assert(!checkUnit||zmod1.isClassical);
+		assert(zmod1.isClassical==zmod2.isClassical);
+	}do{
+		this.checkUnit=checkUnit;
+		super(from,to);
+	}
+}
+
+
 Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(auto zmodFrom=isℤmodTy(from)){
+		if(auto zmodTo=isℤmodTy(to)){
+			if(zmodFrom.isStar&&!zmodTo.isStar&&zmodFrom.N==zmodTo.N){
+				if(zmodFrom.isClassical||!zmodTo.isClassical){
+					static if(witness){
+						if(zmodFrom.isClassical){
+							auto tocl=to.getClassical();
+							return trans(new ℤstarToℤmodConversion(from,tocl),typeExplicitConversion!witness(tocl,to,annotationType));
+						}else return new ℤstarToℤmodConversion(from,to);
+					}else return true;
+				}
+			}
+		}
+	}
 	if(annotationType<TypeAnnotationType.coercion) return typeof(return).init;
 	if(auto uintFrom=isFixedIntTy(from)){
 		if(!uintFrom.isSigned){
 			if(auto zmodTo=isℤmodTy(to)){
-				if(uintFrom.isClassical == zmodTo.isClassical){
-					static if(witness) return new UintToℤmodCoercion(from,to,annotationType==TypeAnnotationType.coercion);
-					else return true;
+				if(uintFrom.isClassical || !zmodTo.isClassical){
+					if(zmodTo.isStar){
+						if(uintFrom.isClassical/+||annotationType>=TypeAnnotationType.punning+/){
+							auto ce=cast(CallExp)from;
+							auto id=cast(Identifier)ce.e;
+							assert(!!id);
+							import ast.semantic_:getℤmodTy;
+							auto nstar=getℤmodTy(zmodTo.N,false,true,to.loc,id.scope_);
+							static if(witness){
+								return trans(typeExplicitConversion!witness(from,nstar,annotationType),
+								             typeExplicitConversion!witness(nstar,to,annotationType));
+							}else return true;
+						}
+					}else{
+						if(uintFrom.isClassical){
+							auto tocl=to.getClassical();
+							static if(witness){
+								return trans(new UintToℤmodCoercion(from,tocl,annotationType==TypeAnnotationType.coercion),
+								             typeExplicitConversion!witness(tocl,to,annotationType.annotation));
+							}else return true;
+						}else if(!zmodTo.isClassical){
+							static if(witness) return new UintToℤmodCoercion(from,to,false);
+							else return true;
+						}
+					}
 				}
 			}
 		}
 	}
 	if(auto zmodFrom=isℤmodTy(from)){
 		if(auto uintTo=isFixedIntTy(to)){
-			if(!uintTo.isSigned && zmodFrom.isClassical == uintTo.isClassical){
-				static if(witness) return new ℤmodToUintCoercion(from,to,annotationType==TypeAnnotationType.coercion);
-				else return true;
+			if(!uintTo.isSigned && (zmodFrom.isClassical || !uintTo.isClassical)){
+				if(zmodFrom.isStar){
+					auto ce=cast(CallExp)from;
+					auto id=cast(Identifier)ce.e;
+					assert(!!id);
+					import ast.semantic_:getℤmodTy;
+					auto nstar=getℤmodTy(zmodFrom.N,false,true,to.loc,id.scope_);
+					static if(witness){
+						return trans(typeExplicitConversion!witness(from,nstar,TypeAnnotationType.annotation),
+						             typeExplicitConversion!witness(nstar,to,annotationType));
+					}else return true;
+				}else{
+					static if(witness){
+						if(zmodFrom.isClassical){
+							auto tocl=to.getClassical();
+							return trans(new ℤmodToUintCoercion(from,tocl,annotationType==TypeAnnotationType.coercion),
+						             typeExplicitConversion!witness(tocl,to,annotationType.annotation));
+						}else return new ℤmodToUintCoercion(from,to,annotationType==TypeAnnotationType.coercion);
+					}else return true;
+				}
+			}
+		}
+		if(auto zmodTo=isℤmodTy(to)){
+			if(!zmodFrom.isStar&&zmodTo.isStar&&zmodFrom.N==zmodTo.N){
+				if(zmodFrom.isClassical||!zmodTo.isClassical&&annotationType>=TypeAnnotationType.punning){
+					static if(witness){
+						if(zmodFrom.isClassical){
+							auto tocl=to.getClassical(), checkUnit=annotationType==TypeAnnotationType.coercion;
+							return trans(new ℤmodToℤstarCoercion(from,tocl,checkUnit),typeExplicitConversion!witness(tocl,to,annotationType));
+						}else return new ℤmodToℤstarCoercion(from,to,annotationType==TypeAnnotationType.coercion);
+					}else return true;
+				}
 			}
 		}
 	}
@@ -701,12 +814,12 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 	}
 	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
 	if(auto r=unmultiplex!witness(from,to,annotationType)) return r;
+	if(auto r=zmodVsUint!witness(from,to,annotationType)) return r;
 	if(annotationType>=annotationType.coercion){
 		if(isEmpty(to)){
 			static if(witness) return new ImplosionCoercion(from,to);
 			else return true;
 		}
-		if(auto r=zmodVsUint!witness(from,to,annotationType)) return r;
 	}
 	if(annotationType==TypeAnnotationType.punning)
 		return annotationPun!witness(from,to,annotationType);
@@ -724,8 +837,10 @@ bool annotateLiteral(Expression expr, Expression type){
 			return true;
 		if(isSubtype(expr.type,ℤt(false))&&isInt(type))
 			return true;
-		if(isSubtype(expr.type,ℤt(false))&&isℤmodTy(type))
-			return true;
+		if(isSubtype(expr.type,ℤt(false)))
+			if(auto zmod=isℤmodTy(type))
+				if(!zmod.isStar||lit.isOne())
+					return true;
 		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 			return true;
 		return false;
@@ -867,6 +982,8 @@ auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion
 	if(auto zconv=cast(ℤmodToℕConversion)conv) return f(zconv,forward!args);
 	if(auto uconv=cast(UintToℤmodCoercion)conv) return f(uconv,forward!args);
 	if(auto zconv=cast(ℤmodToUintCoercion)conv) return f(zconv,forward!args);
+	if(auto zconv=cast(ℤstarToℤmodConversion)conv) return f(zconv,forward!args);
+	if(auto zconv=cast(ℤmodToℤstarCoercion)conv) return f(zconv,forward!args);
 	// if(auto pconv=cast(ParameterizedSubtypeConversion)conv) return f(pconv,forward!args);
 	return default_(conv,forward!args);
 }

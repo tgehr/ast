@@ -19,20 +19,24 @@ Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location
 	assert(bits.isSemEvaluated());
 	auto sym=getPreludeSymbol(isSigned?"int":"uint",loc,isc);
 	if(!sym.isSemCompleted()) return null;
+	sym.constLookup=true;
 	auto ce=new CallExp(sym,bits,true,isClassical);
 	ce.loc=loc;
 	ce.type=isClassical?ctypeTy:qtypeTy;
+	ce.constLookup=true;
 	ce.setSemEvaluated();
 	return ce;
 }
 
-Expression getℤmodTy(Expression N,bool isClassical,Location loc,Scope isc){
+Expression getℤmodTy(Expression N,bool isStar,bool isClassical,Location loc,Scope isc){
 	assert(N.isSemEvaluated());
-	auto sym=getPreludeSymbol("ℤmod",loc,isc);
+	auto sym=getPreludeSymbol(isStar?"ℤstar":"ℤmod",loc,isc);
 	if(!sym.isSemCompleted()) return null;
+	sym.constLookup=true;
 	auto ce=new CallExp(sym,N,true,isClassical);
 	ce.loc=loc;
 	ce.type=isClassical?ctypeTy:qtypeTy;
+	ce.constLookup=true;
 	ce.setSemEvaluated();
 	return ce;
 }
@@ -6221,7 +6225,7 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	return tae;
 }
 
-Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
+Expression arithmeticType(bool preserveBool,bool preserveZstar=false)(Expression t1, Expression t2){
 	if((isNumericTy(t1)||isEmpty(t1))&&(isNumericTy(t2)||isEmpty(t2))){
 		auto r=joinTypes(t1,t2);
 		if((isEmpty(t1)||isEmpty(t2))&&isSubtype(r,ℤt(false))) return bottom; // 1+(_:⊥) may become 1+(0:int[n])
@@ -6243,9 +6247,26 @@ Expression arithmeticType(bool preserveBool)(Expression t1, Expression t2){
 	auto zmod1 = isℤmodTy(t1);
 	auto zmod2 = isℤmodTy(t2);
 	if(zmod1 || zmod2){
-		if(zmod1 && isSubtype(t2,ℤt(false))) return t2.isClassical()?t1:t1.getQuantum();
-		if(zmod2 && isSubtype(t1,ℤt(false))) return t1.isClassical()?t2:t2.getQuantum();
-		return joinTypes(t1,t2);
+		if(zmod1 && isSubtype(t2,ℤt(false))){
+			auto ce=cast(CallExp)t1, id=cast(Identifier)ce.e;
+			assert(!!id);
+			return getℤmodTy(zmod1.N,false,zmod1.isClassical&&t2.isClassical(),t1.loc,id.scope_); // TODO: do not require scope
+		}
+		if(zmod2 && isSubtype(t1,ℤt(false))){
+			auto ce=cast(CallExp)t2, id=cast(Identifier)ce.e;
+			assert(!!id);
+			return getℤmodTy(zmod2.N,false,t1.isClassical()&&zmod2.isClassical,t2.loc,id.scope_);
+		}
+		if(auto r=joinTypes(t1,t2)){
+			static if(!preserveZstar){
+				if(auto zmod3=isℤmodTy(r)){
+					auto ce=cast(CallExp)r, id=cast(Identifier)ce.e;
+					assert(!!id);
+					return getℤmodTy(zmod3.N,false,r.isClassical,t2.loc,id.scope_);
+				}
+			}
+			return r;
+		}
 	}
 	return null;
 }
@@ -6258,7 +6279,7 @@ Expression divisionType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
 	if(!r) return null;
 	if(isFixedIntTy(r)) return null; // TODO: add a special operator for float and rat?
-	if(isℤmodTy(r)) return null;
+	if(isℤmodTy(r)) return null; // TODO: support division on ℤstar?
 	return util.among(r,Bool(true),ℕt(true),ℤt(true))?ℚt(true):
 		util.among(r,Bool(false),ℕt(false),ℤt(false))?ℚt(false):r;
 }
@@ -6297,7 +6318,6 @@ Expression nSubType(Expression t1, Expression t2){
 	}
 	if(isSubtype(r,ℕt(false))) return r;
 	if(isSubtype(r,ℤt(false))) return ℕt(r.isClassical());
-	if(isℤmodTy(r)) return null;
 	return null;
 }
 Expression moduloType(Expression t1, Expression t2){
@@ -6588,7 +6608,7 @@ Expression expressionSemanticImpl(NSubExp nse,ExpSemContext context){
 	return handleBinary!nSubType("natural subtraction",nse,nse.e1,nse.e2,context);
 }
 Expression expressionSemanticImpl(MulExp me,ExpSemContext context){
-	return handleBinary!(arithmeticType!true)("multiplication",me,me.e1,me.e2,context);
+	return handleBinary!(arithmeticType!(true,true))("multiplication",me,me.e1,me.e2,context);
 }
 Expression expressionSemanticImpl(DivExp de,ExpSemContext context){
 	return handleBinary!divisionType("division",de,de.e1,de.e2,context);
