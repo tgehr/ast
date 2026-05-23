@@ -980,7 +980,7 @@ abstract class Scope{
 							done=true;
 						}
 						d.setSemForceError();
-					}
+					}else symtabRemove(d);
 					static if(is(typeof(loc):Expression)) loc.setSemForceError();
 				}else{
 					Identifier use=null;
@@ -1018,7 +1018,7 @@ abstract class Scope{
 				static if(language==silq){
 					clearConsumed();
 				}
-			}
+			}else symtabRemove(d);
 		}
 		static if(language==silq)
 			if(mergeScope)
@@ -1342,6 +1342,10 @@ abstract class Scope{
 					foreach(sc;scopes){
 						assert(sym.getId in sc.rnsymtab);
 						auto osym=sc.rnsymtab[sym.getId];
+						if(cast(DeadDecl)osym){ // TODO: why needed?
+							removeSym();
+							break;
+						}
 						sc.mergeVar(osym,sym);
 						if(osym.loc.rep.ptr>sym.loc.rep.ptr) sym.loc=osym.loc; // TODO: this is a bit hacky
 						//imported!"util.io".writeln("MAKING MERGE: ",osym," ",sym," ",cast(void*)osym," ",cast(void*)sym);
@@ -1361,7 +1365,7 @@ abstract class Scope{
 					sym.scope_=this;
 					//addDependency(sym,dep);
 				}
-				producedOuter~=sym;
+				if(symExists) producedOuter~=sym;
 			}
 		}
 		foreach(sc;scopes){
