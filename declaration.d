@@ -505,7 +505,7 @@ class DeadMerge: DeadDecl{
 			}
 			auto d=mergedFrom[$-1];
 			sc.note("however, not declared on all paths",d.loc);
-		}if(mergedFrom.length==numBranches){
+		}else if(mergedFrom.length==numBranches){
 			Expression common=bottom;
 			foreach(d;mergedFrom){
 				auto type=typeForDecl(d);
@@ -516,7 +516,7 @@ class DeadMerge: DeadDecl{
 				foreach(d;mergedFrom){
 					auto type=typeForDecl(d);
 					if(!type) continue;
-					if(!type.getQuantum){
+					if(!isType(type.getQuantum)){
 						sc.note(format("declaration under quantum `if` has type `%s` which cannot be promoted to quantum",type),d.loc);
 						if(type.isSubtype(ℤt(true))){
 							sc.note("did you mean to use `int[n]` or `uint[n]`, with explicit bit width `n`?",d.loc);

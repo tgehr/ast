@@ -1375,8 +1375,10 @@ abstract class Scope{
 					sym.scope_=this;
 					continue;
 				}
-				if(cast(DeadDecl)sym){
-					addDeadMerge(sym).mergedFrom~=sym;
+				if(auto dd=cast(DeadDecl)sym){
+					auto dm=addDeadMerge(sym);
+					if(dm.mergedFrom.all!(d=>cast(DeadDecl)d))
+					   dm.mergedFrom~=dd;
 					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
 					continue;
 				}
