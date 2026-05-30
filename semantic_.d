@@ -334,7 +334,8 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			auto f=ce.e,ft=cast(ProductTy)f.type;
 			if(!ft||ft.isSquare!=ce.isSquare)
 				goto LbadDefLhs;
-			bool allConst=iota(ft.nargs).all!(i=>ft.isConstForReverse[i]);
+			bool defaultIsConst=ft.isSquare;
+			bool allConst=ft.nargs==0?defaultIsConst:iota(ft.nargs).all!(i=>ft.isConstForReverse[i]);
 			if(allConst) return be;
 			bool allMoved=iota(ft.nargs).all!(i=>!ft.isConstForReverse[i]);
 			if(auto tpl=cast(TupleExp)ce.arg){
@@ -3266,7 +3267,40 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 					addDependencyMulti(tpl1.e,dep);
 				}
 			}else if(auto ce=cast(CallExp)be.e1){
-				// TODO: add dependencies
+				auto dep=Dependency(true);
+				Expression[] lhs;
+				if(auto ft=cast(FunTy)ce.e.type){
+					bool isQfree=ft.annotation>=Annotation.qfree;
+					if(isQfree) dep=ce.e.getDependency(sc);
+					void addArg(Expression arg,bool isConst){
+						if(!arg.isSemCompleted)
+							return;
+						if(!isConst){
+							lhs~=arg;
+							return;
+						}
+						if(isQfree) dep.joinWith(arg.getDependency(sc));
+					}
+					if(ft.isTuple){
+						bool defaultIsConst=ft.isSquare;
+						if(auto tpl=cast(TupleExp)ce.arg){
+							if(ft.nargs!=tpl.length)
+								defaultIsConst=ft.isConst.all;
+							foreach(i,arg;tpl.e){
+								auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
+								addArg(arg,isConst);
+							}
+						}else{
+							auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:defaultIsConst);
+							addArg(ce.arg,isConst);
+						}
+					}else{
+						assert(ft.isConst.length==1);
+						addArg(ce.arg,ft.isConstForReverse[0]);
+					}
+					if(isQfree) dep.joinWith(be.e2.getDependency(sc));
+					addDependencyMulti(lhs,dep);
+				}
 			}else if(auto ce=cast(CatExp)be.e1){
 				Expression[] ids;
 				if(auto id=cast(Identifier)unwrap(ce.e1))
