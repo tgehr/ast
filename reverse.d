@@ -364,14 +364,17 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			if(noImplicitDup){ // TODO: this is a hack
 				void removeImplicitDup(Expression e){
 					e.implicitDup=false;
-					if(auto tae=cast(TypeAnnotationExp)e)
+					if(auto tae=cast(TypeAnnotationExp)e){
 						removeImplicitDup(tae.e);
-					else if(auto tpl=cast(TupleExp)e)
+					}else if(auto tpl=cast(TupleExp)e){
 						foreach(ne;tpl.e)
 							removeImplicitDup(ne);
-					else if(auto let=cast(LetExp)e)
+					}else if(auto let=cast(LetExp)e){
 						if(auto fwd=let.isForward(false))
 							removeImplicitDup(fwd);
+					}else if(auto ce=cast(CallExp)e){
+						removeImplicitDup(ce.arg);
+					}
 				}
 				removeImplicitDup(nlhs);
 			}

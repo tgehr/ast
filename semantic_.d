@@ -4217,7 +4217,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc);
 	}
 	static if(language==silq)
-	if(!cast(CatExp)be.e1&&isInvertibleOpAssignExp(be)&&!cast(Identifier)be.e1){
+	if(!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
 		auto tmp=new Identifier(freshName());
 		tmp.loc=be.e1.loc;
 		auto de=new DefineExp(tmp,be.e1);
