@@ -839,7 +839,7 @@ bool annotateLiteral(Expression expr, Expression type){
 			return true;
 		if(isSubtype(expr.type,ℤt(false)))
 			if(auto zmod=isℤmodTy(type))
-				if(!zmod.isStar||lit.isOne())
+				if(!zmod.isStar||lit&&lit.isOne()||negLit&&negLit.isOne())
 					return true;
 		if(isSubtype(expr.type,ℝ(false))&&(isRat(type)||isFloat(type)))
 			return true;
