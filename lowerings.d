@@ -533,28 +533,37 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			ae.sstate=SemState.completed;
 			return ae;
 		}
-		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"⊻←",Tok!"~←"].canFind(op)){
+		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"⊻←",Tok!"~←",Tok!"·←"].canFind(op)){
+			Expression toReversible(){
+				auto id1=cast(Identifier)e.e1;
+				if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
+				static if(op==Tok!"+←") enum name="__add_assign", ob=OB.default_;
+				else static if(op==Tok!"-←") enum name="__sub_assign", ob=OB.default_;
+				else static if(op==Tok!"sub←") enum name="__nsub_assign", ob=OB.nsub;
+				else static if(op==Tok!"⊕←") enum name="__xorb_assign", ob=OB.mul;
+				else static if(op==Tok!"⊻←") enum name="__xor_assign", ob=OB.mul;
+				else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
+				else static if(op==Tok!"·←") enum name="__mul_assign", ob=OB.mul;
+				else static assert(0);
+				auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,expSemContext(sc,ConstResult.no,InType.no));
+				auto id2=new Identifier(id1.name);
+				auto de=new DefineExp(id2,fc);
+				assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
+				id2.meaning=e.replacements[0].new_;
+				id2.type=id2.typeFromMeaning;
+				id2.constLookup=false;
+				id2.sstate=SemState.completed;
+				de.type=unit;
+				de.sstate=SemState.completed;
+				return de;
+			}
 			if(e.e1.type.isClassical()&&op!=Tok!"~←") return toAssign();
-			auto id1=cast(Identifier)e.e1;
-			if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
-			static if(op==Tok!"+←") enum name="__add_assign", ob=OB.default_;
-			else static if(op==Tok!"-←") enum name="__sub_assign", ob=OB.default_;
-			else static if(op==Tok!"sub←") enum name="__nsub_assign", ob=OB.nsub;
-			else static if(op==Tok!"⊕←") enum name="__xorb_assign", ob=OB.mul;
-			else static if(op==Tok!"⊻←") enum name="__xor_assign", ob=OB.mul;
-			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
-			else static assert(0);
-			auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,expSemContext(sc,ConstResult.no,InType.no));
-			auto id2=new Identifier(id1.name);
-			auto de=new DefineExp(id2,fc);
-			assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
-			id2.meaning=e.replacements[0].new_;
-			id2.type=id2.typeFromMeaning;
-			id2.constLookup=false;
-			id2.sstate=SemState.completed;
-			de.type=unit;
-			de.sstate=SemState.completed;
-			return de;
+			static if(op==Tok!"·←"){
+				assert(e.e2&&e.e2.type);
+				auto zmod=isℤmodTy(e.e2.type);
+				if(!zmod||!zmod.isStar) return toAssign();
+			}
+			return toReversible();
 		}else return toAssign();
 	}
 }

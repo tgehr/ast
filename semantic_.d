@@ -4233,8 +4233,14 @@ AAssignExp isOpAssignExp(Expression e){ return cast(AssignExp)e?null:cast(AAssig
 
 AAssignExp isInvertibleOpAssignExp(Expression e){
 	auto r=isOpAssignExp(e);
-	if(r&&(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e||cast(XorAssignExp)e))
+	if(!r) return null;
+	if(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e||cast(XorAssignExp)e)
 		return r;
+	if(cast(MulAssignExp)e&&r.e2.type){
+		if(auto zmod=isℤmodTy(r.e2.type))
+			if(zmod.isStar && zmod.isClassical) // TODO: support quantum
+				return r;
+	}
 	return null;
 }
 
