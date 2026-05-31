@@ -181,7 +181,7 @@ class Checker {
 
 	ast_exp.Expression lowerExpr(E)(E from) {
 		auto constResult = from.constLookup?ast_sem.ConstResult.yes:ast_sem.ConstResult.no;
-		auto to = ast_low.getLowering(from, ast_sem.ExpSemContext(nscope, constResult, ast_sem.InType.no));
+		auto to = ast_low.getLowering(from, ast_sem.expSemContext(nscope, constResult, ast_sem.InType.no));
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		// imported!"util.io".writeln("lowered ", from, " → ", to, " ", from.type, " ", to.type);
 		assert(to.isSemCompleted() && to.type && from.type == to.type);

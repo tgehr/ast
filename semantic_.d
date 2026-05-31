@@ -232,7 +232,7 @@ Expression presemantic(Declaration expr,Scope sc){
 						// capture c:
 						auto id=new Identifier("c");
 						id.loc=fd.loc;
-						expressionSemantic(id,expSemContext(fsc,ConstResult.yes,InType.no));
+						expressionSemantic(id,expSemContext(fsc,ConstResult.yes,InType.no,InConst.yes));
 						break;
 					default: break;
 				}
@@ -1953,7 +1953,7 @@ CompoundExp branchBlockSemanticLhs(CompoundExp branch, DefineLhsContext context,
 	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
 
 	assert(branch.s.length == 1);
-	branch.s[0] = branchSemanticLhs(branch.s[0], DefineLhsContext(ExpSemContext(branch.blscope_, context.expSem.constResult, context.expSem.inType), context.type, context.initializer), quantumControl);
+	branch.s[0] = branchSemanticLhs(branch.s[0], DefineLhsContext(expSemContext(branch.blscope_, context.expSem.constResult, context.expSem.inType), context.type, context.initializer), quantumControl);
 	static if(language==silq) branch.blscope_.clearConsumed();
 
 	static if(!isPresemantic){
@@ -5306,7 +5306,7 @@ CompoundExp branchBlockSemantic(CompoundExp branch, ExpSemContext context, bool 
 	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
 
 	assert(branch.s.length == 1);
-	branch.s[0] = branchSemantic(branch.s[0], ExpSemContext(branch.blscope_, context.constResult, context.inType), quantumControl);
+	branch.s[0] = branchSemantic(branch.s[0], expSemContext(branch.blscope_, context.constResult, context.inType), quantumControl);
 	static if(language==silq) branch.blscope_.clearConsumed();
 
 	branch.type=branch.s[0].type;
@@ -6679,7 +6679,7 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 	// initialize scopes, to allow captures to be inserted
 	e.blscope_=new BlockScope(sc,restriction_);
 	e.forgetScope=new BlockScope(sc,restriction_);
-	e2=branchSemantic(e2,ExpSemContext(e.blscope_,ConstResult.yes,inType),quantumControl);
+	e2=branchSemantic(e2,expSemContext(e.blscope_,ConstResult.yes,inType),quantumControl);
 	static if(language==silq) e.blscope_.clearConsumed();
 	propErr(e1,e);
 	propErr(e2,e);
@@ -7847,7 +7847,7 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 }
 
 Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
-	auto context=ExpSemContext(sc,ConstResult.yes,inType);
+	auto context=expSemContext(sc,ConstResult.yes,inType);
 	if(inType){
 		sc.error("cannot use sampleFrom directly within type",ce.loc);
 		ce.setSemError();

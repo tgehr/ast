@@ -544,7 +544,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			else static if(op==Tok!"⊻←") enum name="__xor_assign", ob=OB.mul;
 			else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
 			else static assert(0);
-			auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,ExpSemContext(sc,ConstResult.no,InType.no));
+			auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,expSemContext(sc,ConstResult.no,InType.no));
 			auto id2=new Identifier(id1.name);
 			auto de=new DefineExp(id2,fc);
 			assert(e.replacements.length==1 && e.replacements[0].previous==id1.meaning);
