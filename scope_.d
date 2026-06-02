@@ -290,6 +290,19 @@ abstract class Scope{
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
 		final void mergeDeclProps(ref DeclProps nested){
+			static if(language==silq){
+				foreach(decl,ref prop;nested.props){
+					if(!prop.constBlock.length) continue;
+					if(!decl.scope_||!this.isNestedIn(decl.scope_)) continue;
+					foreach(read;prop.constBlock){
+						Expression.CopyArgs cargs={preserveSemantic: true};
+						auto nread=read.copy(cargs);
+						nread.scope_=this;
+						blockConst(decl,nread);
+					}
+					prop.constBlock=[];
+				}
+			}
 			declProps.merge(nested);
 		}
 		final int nestedDeclProps(scope int delegate(ref DeclProps) dg){
