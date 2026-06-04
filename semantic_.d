@@ -211,6 +211,13 @@ Expression presemantic(Declaration expr,Scope sc){
 		if(dat.hasParams) declareParameters(dat,true,dat.params,dsc);
 		if(!dat.body_.ascope_) dat.body_.ascope_=new AggregateScope(dat.dscope_);
 		if(cast(NestedScope)sc) dat.context = addVar(Id.s!"`outer",contextTy(true),dat.loc,null);
+		static if(language==silq){
+			if(!sc.isInPrelude||!dat.isQuantum){
+				sc.error("unsupported",dat.loc);
+				dat.setSemError();
+				return dat;
+			}
+		}
 		foreach(ref exp;dat.body_.s) exp=makeDeclaration(exp,success,dat.body_.ascope_,false,false);
 		foreach(ref exp;dat.body_.s) if(auto decl=cast(Declaration)exp) exp=presemantic(decl,dat.body_.ascope_);
 	}
@@ -7476,6 +7483,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 }
 
 DatDecl datDeclSemantic(DatDecl dat,Scope sc){
+	static if(language==silq) if(dat.isSemCompleted()) return dat;
 	bool success=true;
 	if(!dat.dscope_) presemantic(dat,sc);
 	auto bdy=compoundDeclSemantic(dat.body_,dat.dscope_);
@@ -7684,10 +7692,10 @@ Expression typeSemantic(Expression expr, Scope sc, bool allowQNumeric=false)in{a
 Expression typeForDecl(Declaration decl){
 	if(auto dat=cast(DatDecl)decl){
 		if(!dat.dtype&&dat.scope_&&dat.sstate!=SemState.started) dat=cast(DatDecl)presemantic(dat,dat.scope_);
+		if(!dat.dtype) return null;
 		assert(cast(AggregateTy)dat.dtype);
 		static if(language==silq){
-			assert(dat.isQuantum);
-			auto ttype=qtypeTy;
+			auto ttype=dat.isQuantum?qtypeTy:typeTy;
 		}else auto ttype=typeTy;
 		if(!dat.hasParams) return ttype;
 		foreach(p;dat.params) if(!p.vtype) return unit; // TODO: ok?

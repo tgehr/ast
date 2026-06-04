@@ -107,6 +107,11 @@ bool isInPrelude(Declaration decl){
 	return decl.scope_.isNestedIn(preludeScope);
 }
 
+bool isInPrelude(Scope sc){
+	if(!preludeScope) return false;
+	return sc.isNestedIn(preludeScope);
+}
+
 bool isPreludeSource(Source src){
 	return src is preludeSrc;
 }
