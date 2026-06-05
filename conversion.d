@@ -638,14 +638,15 @@ Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnota
 }
 
 class UintToℤmodCoercion: Conversion{
-	bool checkBits;
-	this(Expression from,Expression to,bool checkBits)in{
+	bool check;
+	this(Expression from,Expression to,bool check)in{
 		auto zmod2=isℤmodTy(to);
 		assert(!zmod2.isStar);
 		assert(isUint(from)&&zmod2);
 		assert(from.isClassical()==to.isClassical());
+		assert(to.isClassical()||!check);
 	}do{
-		this.checkBits=checkBits;
+		this.check=check;
 		super(from,to);
 	}
 }
@@ -728,7 +729,7 @@ Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotatio
 								return trans(new UintToℤmodCoercion(from,tocl,annotationType==TypeAnnotationType.coercion),
 								             typeExplicitConversion!witness(tocl,to,annotationType.annotation));
 							}else return true;
-						}else if(!zmodTo.isClassical){
+						}else if(!zmodTo.isClassical&&annotationType>=TypeAnnotationType.punning){
 							static if(witness) return new UintToℤmodCoercion(from,to,false);
 							else return true;
 						}
