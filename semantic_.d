@@ -6890,6 +6890,14 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 			if(auto r=resolveWildcards(na,vt.num))
 				na=r;
 		}
+		if(auto zmod=isℤmodTy(analyzed)){
+			if(auto r=resolveWildcards(na,zmod.N))
+				na=r;
+		}
+		if(auto fty=isFixedIntTy(analyzed)){
+			if(auto r=resolveWildcards(na,fty.bits))
+				na=r;
+		}
 		if(ne!is idx.e || na!is idx.a){
 			auto nidx=new IndexExp(ne,na);
 			nidx.isArraySyntax=true;
