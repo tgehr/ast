@@ -716,7 +716,7 @@ Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotatio
 							auto id=cast(Identifier)ce.e;
 							assert(!!id);
 							import ast.semantic_:getℤmodTy;
-							auto nstar=getℤmodTy(zmodTo.N,false,true,to.loc,id.scope_);
+							auto nstar=getℤmodTy(zmodTo.N,false,uintFrom.isClassical,to.loc,id.scope_);
 							static if(witness){
 								return trans(typeExplicitConversion!witness(from,nstar,annotationType),
 								             typeExplicitConversion!witness(nstar,to,annotationType));
@@ -746,7 +746,7 @@ Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotatio
 					auto id=cast(Identifier)ce.e;
 					assert(!!id);
 					import ast.semantic_:getℤmodTy;
-					auto nstar=getℤmodTy(zmodFrom.N,false,true,to.loc,id.scope_);
+					auto nstar=getℤmodTy(zmodFrom.N,false,zmodFrom.isClassical,to.loc,id.scope_);
 					static if(witness){
 						return trans(typeExplicitConversion!witness(from,nstar,TypeAnnotationType.annotation),
 						             typeExplicitConversion!witness(nstar,to,annotationType));
