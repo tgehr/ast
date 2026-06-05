@@ -4130,13 +4130,15 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 								if(!indexed) id.constLookup=false;
 								if(decl.scope_ is sc){
 									sc.unconsume(decl);
+									static if(language==silq){
+										foreach(k,ref v;dependencies)
+											sc.pushUp(v,decl);
+									}
 									consumed[decl]=sc.consume(decl,id);
 								}else{
 									consumed[decl]=decl;
 									assert(ae.isSemError());
 								}
-								static if(language==silq)
-									sc.clearConsumed();
 							}
 							break;
 						case Stage.defineVars:
