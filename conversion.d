@@ -538,6 +538,17 @@ class IntToℤConversion: Conversion{
 	}
 }
 
+class ℤmodCoercion: Conversion{
+	bool checkN;
+	this(Expression from,Expression to,bool checkN)in{
+		assert(from.isClassical==to.isClassical);
+		assert(isℤmodTy(from) && isℤmodTy(to));
+	}do{
+		this.checkN=checkN;
+		super(from,to);
+	}
+}
+
 class ℤtoℤmodConversion: Conversion{
 	this(NumericTy from,Expression to)in{
 		assert(isℤmodTy(to) && to.isClassical());
@@ -773,6 +784,14 @@ Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotatio
 					}else return true;
 				}
 			}
+			if(zmodFrom.isStar==zmodTo.isStar){
+				if(zmodFrom.isClassical||!zmodTo.isClassical){
+					static if(witness){
+						auto tocl=to.getClassical(), checkN=annotationType==TypeAnnotationType.coercion;
+						return trans(new ℤmodCoercion(from,tocl,checkN),typeExplicitConversion!witness(tocl,to,annotationType));
+					}else return true;
+				}
+			}
 		}
 	}
 	return typeof(return).init;
@@ -979,6 +998,7 @@ auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion
 	if(auto iconv=cast(IntToℤConversion)conv) return f(iconv,forward!args);
 	if(auto fconv=cast(FixedToVectorConversion)conv) return f(fconv,forward!args);
 	if(auto vconv=cast(VectorToFixedConversion)conv) return f(vconv,forward!args);
+	if(auto zconv=cast(ℤmodCoercion)conv) return f(zconv,forward!args);
 	if(auto zconv=cast(ℤtoℤmodConversion)conv) return f(zconv,forward!args);
 	if(auto zconv=cast(ℤmodToℕConversion)conv) return f(zconv,forward!args);
 	if(auto uconv=cast(UintToℤmodCoercion)conv) return f(uconv,forward!args);
