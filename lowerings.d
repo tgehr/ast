@@ -112,18 +112,24 @@ string getSuffix(R)(OperatorBehavior behavior,string name,R types){ // TODO: rep
 		}
 		auto s0=getSuffix(t0);
 		auto s1=getSuffix(t1);
+		void unstar(){
+			if(s0=="x") s0="m";
+			if(s0=="X") s0="M";
+			if(s1=="x") s1="m";
+			if(s1=="X") s1="M";
+		}
 		final switch(behavior)with(OperatorBehavior){
 			case default_,nsub,mul,andb:
 				if(s0.among("s","S","u","U","m","M","x","X")&&s1=="N") s1="Z";
 				if(s1.among("s","S","u","U","m","M","x","X")&&s0=="N") s0="Z";
 				if(behavior!=mul||!!s0.among("x","X")!=!!s1.among("x","X")){
-					if(s0=="x") s0="m";
-					if(s0=="X") s0="M";
-					if(s1=="x") s1="m";
-					if(s1=="X") s1="M";
+					unstar();
 				}
 				break;
-			case comparison,div,mod:
+			case comparison:
+				unstar();
+				break;
+			case div,mod:
 				break;
 			case pow:
 				if(s0=="B"&&!s1.among("b","B","N")) s0="N";
