@@ -299,6 +299,7 @@ abstract class Scope{
 						auto nread=read.copy(cargs);
 						nread.scope_=this;
 						blockConst(decl,nread);
+						recordAccess(nread,decl);
 					}
 					prop.constBlock=[];
 				}
