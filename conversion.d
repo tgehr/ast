@@ -784,11 +784,13 @@ Ret!witness zmodVsUint(bool witness)(Expression from,Expression to,TypeAnnotatio
 					}else return true;
 				}
 			}
-			if(zmodFrom.isStar==zmodTo.isStar){
+			if(zmodFrom.isStar>=zmodTo.isStar){
 				if(zmodFrom.isClassical||!zmodTo.isClassical){
 					static if(witness){
-						auto tocl=to.getClassical(), checkN=annotationType==TypeAnnotationType.coercion;
-						return trans(new ℤmodCoercion(from,tocl,checkN),typeExplicitConversion!witness(tocl,to,annotationType));
+						if(zmodFrom.isClassical){
+							auto tocl=to.getClassical(), checkN=annotationType==TypeAnnotationType.coercion;
+							return trans(new ℤmodCoercion(from,tocl,checkN),typeExplicitConversion!witness(tocl,to,annotationType));
+						}else return new ℤmodCoercion(from,to,annotationType==TypeAnnotationType.coercion);
 					}else return true;
 				}
 			}
