@@ -7346,7 +7346,10 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.setSemError();
 	static if(language==silq) fsc.clearConsumed();
 	if(fd.ftype) foreach(id;fd.ftype.freeIdentifiers){
-		assert(!!id.meaning,text(id," ",fd.ftype," ",fd));
+		if(!id.meaning){
+			assert(id.isSemError(),text(id," ",id.sstate," ",fd.ftype," ",fd));
+			continue;
+		}
 		typeConstBlockDecl(id.meaning,fd,sc);
 	}
 	if(bdy){

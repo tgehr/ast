@@ -863,6 +863,12 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	bool[] isConst;
 	Id[] pnames;
 	Expression constUnpack=null;
+	foreach(id;r.returnType.freeIdentifiers){
+		if(!id.meaning){
+			sc.error("reversing functions whose domain depends on codomain not supported yet",fd.loc);
+			enforce(0,text("errors while reversing function"));
+		}
+	}
 	if(simplify&&r.constIndices.empty){
 		dom=r.returnType;
 		cod=r.movedType;
