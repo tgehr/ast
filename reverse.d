@@ -155,6 +155,9 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 		if(!tpl||ft.nargs!=tpl.length) return false;
 		return iota(ft.nargs).all!(i=>ft.isConstForReverse[i]||validDefEntry(tpl.e[i]));
 	}
+	if(auto tae=cast(TypeAnnotationExp)olhs)
+		if(tae.annotationType==TypeAnnotationType.coercion&&cast(CallExp)tae.e)
+			return validDefLhs!flags(tae.e,sc,unchecked,noImplicitDup);
 	return validDefEntry(olhs);
 }
 
@@ -455,9 +458,6 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		Expression newRhs;
 		if(tae.annotationType==TypeAnnotationType.coercion&&tae.e.type){
-			import ast.conversion: typeExplicitConversion;
-			if(orhs.type&&!typeExplicitConversion(orhs.type,tae.e.type,TypeAnnotationType.coercion))
-				return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked,noImplicitDup);
 			newRhs=new TypeAnnotationExp(orhs,tae.e.type,tae.annotationType);
 		}else{
 			// TOOD: only do this if lhs is variable

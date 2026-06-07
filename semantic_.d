@@ -2462,6 +2462,7 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 	}
 	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type,context.initializer));
 	static if(!isPresemantic){
+		if(cast(CallExp)unwrap(tae.e)) return tae.e;
 		return expressionSemantic(tae,context.expSem);
 	}else return tae;
 	// TODO: need to do anything else?
@@ -3273,7 +3274,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 					auto dep=be.e2.getDependency(sc);
 					addDependencyMulti(tpl1.e,dep);
 				}
-			}else if(auto ce=cast(CallExp)be.e1){
+			}else if(auto ce=cast(CallExp)unwrap(be.e1)){
 				auto dep=Dependency(true);
 				Expression[] lhs;
 				if(auto ft=cast(FunTy)ce.e.type){
