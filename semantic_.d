@@ -6411,7 +6411,19 @@ Expression powerType(Expression t1, Expression t2){
 	bool classical=t1.isClassical()&&t2.isClassical();
 	auto num1 = isNumericTy(t1);
 	auto num2 = isNumericTy(t2);
-	if(!(num1||isEmpty(t1))||!(num2||isEmpty(t2))) return null;
+	if(!(num1||isEmpty(t1))||!(num2||isEmpty(t2))){
+		if(auto zmod1=isℤmodTy(t1)){
+			if(zmod1.isStar&&zmod1.isClassical){
+				if(num2==NumericType.Bool||util.among(num2,NumericType.ℕt,NumericType.ℤt)&&t2.isClassical()){
+					return t2.isClassical()?t1:t1.getQuantum();
+				}
+				if(auto fty=isFixedIntTy(t2)) {
+					return fty.isClassical?t1:t1.getQuantum();
+				}
+			}
+		}
+		return null;
+	}
 	if(isEmpty(t1)) return bottom;
 	if(num1 == NumericType.Bool && num2 && num2 <= NumericType.ℕt) return Bool(classical);
 	if(num1 == NumericType.ℕt && num2 && num2 <= NumericType.ℕt) return ℕt(classical);
