@@ -2570,6 +2570,24 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 	}
 	auto l1=knownLength(ce.e1,true),l2=knownLength(ce.e2,true);
 	static if(!isPresemantic){
+		Expression speculativeLength(Expression e){ // TODO: use ce.e.type instead?
+			auto ce2=cast(CallExp)e;
+			if(!ce2) return null;
+			auto snap=sc.getStateSnapshot(true);
+			scope(exit) sc.restoreStateSnapshot(snap);
+			auto probe=cast(CallExp)ce2.copy();
+			if(!probe) return null;
+			foreach(id;probe.arg.freeIdentifiers){
+				if(id.meaning) continue;
+				if(!lookupMeaning(id,Lookup.probing,sc,false,null)) return null;
+			}
+			auto ncontext=expSemContext(sc,ConstResult.no,InType.no);
+			auto fwd=expressionSemantic(probe,ncontext.nestConsumed);
+			if(fwd.isSemError()) return null;
+			return knownLength(fwd,false);
+		}
+		if(!l1) l1=speculativeLength(ce.e1);
+		if(!l2) l2=speculativeLength(ce.e2);
 		Expression ntype1=null,ntype2=null;
 		if(!l1&&!l2||!context.type){
 			return defineLhsSemanticImplCurrentlyUnsupported(ce,context);
