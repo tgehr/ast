@@ -4266,7 +4266,7 @@ AAssignExp isInvertibleOpAssignExp(Expression e){
 		return r;
 	if(cast(MulAssignExp)e&&r.e2.type){
 		if(auto zmod=isℤmodTy(r.e2.type))
-			if(zmod.isStar && zmod.isClassical) // TODO: support quantum
+			if(zmod.isStar)
 				return r;
 	}
 	return null;
