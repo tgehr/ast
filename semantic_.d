@@ -2108,7 +2108,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
 							sc.error(format("cannot call reversed function with return type `%s` with a result type of `%s`",ce.type,context.type),ce.loc);
 							ok=false;
-						}else{
+						}else if(!isForgettableCallLhs(ce)){
 							auto nresult=new TypeAnnotationExp(result,context.type,TypeAnnotationType.coercion);
 							nresult.loc=result.loc;
 							nresult.type=context.type;

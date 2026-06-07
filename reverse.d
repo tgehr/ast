@@ -31,6 +31,15 @@ bool isClassicalExp(Expression e){
 	else return true;
 }
 
+bool isForgettableCallLhs(CallExp ce){
+	if(auto ft=cast(FunTy)ce.e.type){
+		bool base=ft.isSquare==ce.isSquare&&ft.annotation>=Annotation.qfree&&(ft.nargs||isEmptyTuple(ce.arg));
+		static if(language==silq) return base&&(ft.isConstForReverse.all||isClassicalExp(ce));
+		else return base&&ft.isConstForReverse.all;
+	}
+	return false;
+}
+
 enum LowerDefineFlags{
 	none=0,
 	createFresh=1,
@@ -431,10 +440,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	if(isLiftedBuiltIn(olhs)) return forget();
 	if(auto ce=cast(CallExp)olhs){
-		if(auto ft=cast(FunTy)ce.e.type){
-			if(ft.isSquare==ce.isSquare&&ft.annotation>=Annotation.qfree&&(ft.nargs||isEmptyTuple(ce.arg))&&ft.isConstForReverse.all)
-				return forget();
-		}
+		if(isForgettableCallLhs(ce))
+			return forget();
 	}
 	if(auto tae=cast(TypeAnnotationExp)olhs){
 		static if(reverseMode){
@@ -448,6 +455,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		Expression newRhs;
 		if(tae.annotationType==TypeAnnotationType.coercion&&tae.e.type){
+			import ast.conversion: typeExplicitConversion;
+			if(orhs.type&&!typeExplicitConversion(orhs.type,tae.e.type,TypeAnnotationType.coercion))
+				return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked,noImplicitDup);
 			newRhs=new TypeAnnotationExp(orhs,tae.e.type,tae.annotationType);
 		}else{
 			// TOOD: only do this if lhs is variable
