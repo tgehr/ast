@@ -750,6 +750,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked,bool noImplicitDup){
 	if(e.isSemError()) return e;
 	if(validDefLhs!flags(e.e1,sc,unchecked,noImplicitDup)) return null;
+	version(none){ // TODO: revisit
 	import ast.conversion:typeExplicitConversion;
 	if(auto tae=cast(TypeAnnotationExp)e.e1) // TODO: get rid of this
 		if(tae.annotationType==TypeAnnotationType.coercion&&cast(CallExp)tae.e
@@ -757,6 +758,7 @@ Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool uncheck
 		   &&e.e2.type&&tae.e.type
 		   &&!typeExplicitConversion!false(e.e2.type,tae.e.type,TypeAnnotationType.coercion))
 			return null;
+	}
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked,noImplicitDup);
 }
 
