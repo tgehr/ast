@@ -1985,8 +1985,16 @@ struct ForRange{
 	// semantic information
 	Expression elementType(){
 		auto r=joinTypes(left.type, right.type);
-		if(r==ℤt(true)&&isSubtype(left.type,ℕt(true))&&(!step||isSubtype(step.type,ℕt(true))))
-			return ℕt(true);
+		if(r==ℤt(true)){
+			if(isSubtype(left.type,ℕt(true))&&(!step||isSubtype(step.type,ℕt(true))))
+				return ℕt(true);
+			if(isSubtype(right.type,ℕt(true))&&step){
+				if(auto val=step.asIntegerConstant(true)){
+					if(val.get()<0)
+						return ℕt(true);
+				}
+			}
+		}
 		return r;
 	}
 }
