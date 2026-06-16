@@ -1729,12 +1729,12 @@ abstract class Scope{
 			assert(outer.scope_ is this);
 			assert(outer.splitInto.length==2,text(outer," ",outer.splitInto," ",outer.loc," ",outer.splitInto.map!(x=>x.loc)));
 			auto nonZeroIters=outer.splitInto[1];
-			assert(!!nonZeroIters);
-			assert(nonZeroIters.splitFrom is outer);
-			assert(!nonZeroIters.scope_||nonZeroIters.scope_ is loopScope);
 			auto zeroIters=outer.splitInto[0];
-			assert(!!zeroIters);
+			assert(nonZeroIters&&zeroIters);
+			assert(nonZeroIters.splitFrom is outer);
 			assert(zeroIters.splitFrom is outer);
+			if(nonZeroIters.isSemError()||zeroIters.isSemError()) continue;
+			assert(!nonZeroIters.scope_||nonZeroIters.scope_ is loopScope);
 			assert(!zeroIters.scope_||zeroIters.scope_ is forgetScope);
 			Declaration newOuter=null;
 			if(outer.getId !in origStateSnapshot.rnsymtab){
