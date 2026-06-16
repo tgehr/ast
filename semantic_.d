@@ -4363,6 +4363,11 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	}
 	if(be.isSemError()){
 		sc.resetLocalComponentReplacements();
+		if(auto id=cast(Identifier)be.e1){
+			if(id.meaning){
+				id.meaning.setSemForceError();
+			}
+		}
 		return be;
 	}
 	checkIndexReplacement(be,sc);

@@ -1302,6 +1302,8 @@ abstract class Scope{
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
 				pushDependencies(sym,false);
+				if(sym.isSemError())
+					var.setSemForceError();
 				sym=var;
 				needMerge=true;
 			}

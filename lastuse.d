@@ -734,7 +734,7 @@ struct LastUses{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		static if(language==silq){
 			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
-			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop);
+			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
 		}
 		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
 			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
