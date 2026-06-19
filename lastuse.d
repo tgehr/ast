@@ -407,6 +407,7 @@ final class LastUse{
 	}
 
 	Forgettability getForgettability(bool forceConsumed){
+		if(decl.typeConstBlocker) return Forgettability.none;
 		if(forwardTo) return forwardTo.getForgettability(forceConsumed);
 		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
 		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
