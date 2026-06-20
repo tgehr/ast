@@ -6987,6 +6987,12 @@ Expression resolveWildcards(Expression wildcards,Expression analyzed){
 				   ne=r;
 			}
 		}
+		if(auto tt=cast(TupleTy)analyzed){
+			auto lit=LiteralExp.makeInteger(tt.length);
+			lit.loc=na.loc;
+			if(auto r=resolveWildcards(na,lit))
+				na=r;
+		}
 		if(auto vt=cast(VectorTy)analyzed){
 			if(auto r=resolveWildcards(na,vt.num))
 				na=r;
