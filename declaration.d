@@ -180,6 +180,7 @@ class FunctionDef: Declaration{
 	VarDecl thisVar; // for constructors
 	Identifier[][Declaration] captures;
 	Declaration[] capturedDecls;
+	bool captureAnnotationReady=false;
 	bool sealed=false;
 	void addCapture(Declaration meaning,Identifier id)in{
 		assert(!!meaning&&(!meaning.isLinear||context&&context.vtype==contextTy(false)));
@@ -206,10 +207,14 @@ class FunctionDef: Declaration{
 			if(isConsumedCapture(capture)) hasConsumed=true;
 			else hasConst=true;
 		}
-		// if(!hasConsumed&&!hasConst) return CaptureAnnotation.none; // TODO?
+		if(!hasConsumed&&!hasConst) return CaptureAnnotation.none;
+		if(!captureAnnotationReady){
+			if(hasConsumed) return CaptureAnnotation.moved;
+			return CaptureAnnotation.none;
+		}
 		if(!hasConsumed) return CaptureAnnotation.const_;
-		if(hasConst) return CaptureAnnotation.once;
-		return CaptureAnnotation.moved;
+		if(!hasConst) return CaptureAnnotation.moved;
+		return CaptureAnnotation.once;
 	}
 	Expression ret; // return type
 	FunTy ftype;

@@ -7443,6 +7443,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.ret=bottom;
 		if(fd.rret) fd.unsealed=true;
 	}
+	fd.captureAnnotationReady=true;
 	if(!setFtype(fd,true))
 		fd.setSemError();
 	static if(language==silq) fsc.clearConsumed();

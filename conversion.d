@@ -385,7 +385,7 @@ class FunctionConversion: Conversion{
 		assert(isNoOpConversion(cod.from,from.cod.substitute(subst)),text(cod.from," ",from.cod," ",subst," ",to.cod," ",cod.to));
 		assert(from.isConstCompatible(to)); // TODO: explicit isConst conversion for classical parameters?
 		assert(from.isTuple==to.isTuple);
-		assert(captureAnnotationSubtype(from.captureKind,to.captureKind));
+		assert(captureAnnotationSubtype(from.captureAnnotation,to.captureAnnotation));
 		assert(from.annotation>=to.annotation);
 		assert(from.isClassical==to.isClassical);
 	}do{
@@ -449,7 +449,7 @@ Ret!witness functionToFunction(bool witness)(Expression from,Expression to,TypeA
 	auto nft1Cod=ft1.cod.substitute(subst);
 	assert(!ft2.cod.hasFreeVar(Id()));
 	auto nft2Cod=ft2.cod;
-	auto cod=typeExplicitConversion!witness(nft1Cod,nft2Cod,TypeAnnotationType.coercion);
+	auto cod=typeExplicitConversion!witness(nft1Cod,nft2Cod,TypeAnnotationType.annotation);
 	if(!cod) return typeof(return).init;
 	return new FunctionConversion(ft1,ft2,names,dom,cod);
 }

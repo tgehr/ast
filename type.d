@@ -920,7 +920,6 @@ class ProductTy: Type{
 		private ProductTy classicalTy;
 		bool isClassical_;
 	}else enum isClassical_=true;
-	CaptureAnnotation captureKind(){ return isClassical_ ? CaptureAnnotation.none : captureAnnotation; }
 	this(Parameter[] params, Expression cod, bool isSquare, bool isTuple, CaptureAnnotation captureAnnotation, Annotation annotation, bool isClassical_)in{
 		assert(cod);
 		// TODO: assert that all names are distinct
@@ -931,10 +930,10 @@ class ProductTy: Type{
 		this.isSquare = isSquare;
 		this.isTuple = isTuple;
 		this.cod = cod;
-		this.captureAnnotation = captureAnnotation;
+		this.captureAnnotation = isClassical_&&captureAnnotation==CaptureAnnotation.const_?CaptureAnnotation.none:captureAnnotation;
 		this.annotation = annotation;
 		static if(language==silq){
-			this.isClassical_=isClassical_;
+			this.isClassical_=isClassical_||captureAnnotation==CaptureAnnotation.none;
 		}
 	}
 	override void setSemCompleted() {
@@ -1108,7 +1107,7 @@ class ProductTy: Type{
 		r=r.setTuple(isTuple);
 		if(!r) return false;
 		if(isConst.length!=r.isConst.length) return false;
-		if(isSquare!=r.isSquare||annotation>r.annotation||!captureAnnotationSubtype(r.captureKind,captureKind)||
+		if(isSquare!=r.isSquare||annotation>r.annotation||!captureAnnotationSubtype(r.captureAnnotation,captureAnnotation)||
 		   isClassical_&&!r.isClassical_||nargs!=r.nargs)
 			return false;
 		foreach(name;names){
@@ -1230,7 +1229,7 @@ class ProductTy: Type{
 		if(!r) return false;
 		if(isSquare!=r.isSquare||nargs!=r.nargs||!isConstCompatible(r))
 			return false;
-		if(annotation<r.annotation||!captureAnnotationSubtype(captureKind,r.captureKind)||!isClassical_&&r.isClassical_)
+		if(annotation<r.annotation||!captureAnnotationSubtype(captureAnnotation,r.captureAnnotation)||!isClassical_&&r.isClassical_)
 			return false;
 		auto name=freshName(Id(),r);
 		auto vars=varTy(name,r.dom);
