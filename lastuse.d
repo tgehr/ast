@@ -634,6 +634,8 @@ final class LastUse{
 					}
 					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
 						nsc.lastUses.cancelImplicitDup(cdecl);
+						if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
+							nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
 						nsc.lastUses.forget(cdecl,false);
 						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
