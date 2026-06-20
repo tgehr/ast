@@ -1420,6 +1420,49 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 }
 
 // TODO: supertypes for define and assign?
+
+static if(language==silq){
+Declaration[] loopConstForgetCandidates(Scope sc,NestedScope bodyScope){
+	Declaration[] result;
+	foreach(_,decl;sc.rnsymtab){
+		if(cast(DeadDecl)decl||decl.isSemError()) continue;
+		if(decl.isToplevelDeclaration()) continue;
+		auto type=typeForDecl(decl);
+		if(!type) continue;
+		auto cdecl=bodyScope.getSplit(decl);
+		if(!bodyScope.lastUses.canForget(cdecl,true,false)) continue;
+		result~=decl;
+	}
+	return result;
+}
+Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates){
+	CompoundExp wrapper=null;
+	foreach(decl;candidates){
+		if(sc.rnsymtab.get(decl.getId,null) !is decl) continue;
+		if(decl.isSemError()) continue;
+		if(sc.lastUses.canForget(decl,true,false)) continue;
+		auto use=new Identifier(decl.getName);
+		use.loc=loopExp.loc;
+		use.scope_=sc;
+		use.meaning=decl;
+		use.constLookup=true;
+		use.byRef=true;
+		use.type=use.typeFromMeaning;
+		if(!use.type) continue;
+		use.setSemCompleted();
+		if(!wrapper){
+			wrapper=new CompoundExp([loopExp]);
+			wrapper.loc=loopExp.loc;
+			wrapper.type=unit;
+			if(loopExp.isSemError()) wrapper.setSemError();
+			else wrapper.setSemCompleted();
+		}
+		Expression parent=wrapper;
+		sc.lastUses.constUse(use,parent,true,false);
+	}
+	return wrapper?wrapper:loopExp;
+}
+}
 Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	assert(!fe.bdy.blscope_);
@@ -1428,6 +1471,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
+	static if(language==silq) Declaration[] constForgets;
 	if(!fe.var){
 		fe.var=new Identifier(freshName());
 		fe.var.loc=fe.pattern?fe.pattern.loc:fe.loc;
@@ -1519,6 +1563,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		propErr(bdy,fe);
 		bool returns=definitelyReturns(bdy);
 		static if(language==silq){
+			constForgets=loopConstForgetCandidates(sc,fesc);
 			if(sc.mergeLoop(returns,state.forgetScope,fesc)){
 				sc.note("possibly consumed in for loop", fe.loc);
 				fe.setSemError();
@@ -1545,9 +1590,13 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	fe.bdy=bdy;
 	fe.type=unit;
 	fe.setSemCompleted();
+	Expression result=fe;
 	if(fe.isSemCompleted()&&astopt.removeLoops)
-		return lowerLoop(fe,state,sc,flags);
-	return fe;
+		result=lowerLoop(fe,state,sc,flags);
+	static if(language==silq)
+		if(result.isSemCompleted())
+			result=anchorLoopConstForgets(sc,result,constForgets);
+	return result;
 }
 
 Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool resetConst=true){
@@ -1559,6 +1608,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	bool condSucceeded=false;
 	Expression ncond=null;
 	int numTries=-1;
+	static if(language==silq) Declaration[] constForgets;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=we.bdy.copy(cargs);
@@ -1575,6 +1625,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 			sc.note("variable declaration may be missing in while loop body", we.loc);
 		auto returns=definitelyReturns(bdy);
 		static if(language==silq){
+			constForgets=loopConstForgetCandidates(sc,bdy.blscope_);
 			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in while loop", we.loc);
 				we.setSemError();
@@ -1606,9 +1657,13 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	if(bdy) we.bdy=bdy;
 	we.type=isTrue(we.cond)?bottom:unit;
 	we.setSemCompleted();
+	Expression result=we;
 	if(we.isSemCompleted()&&astopt.removeLoops)
-		return lowerLoop(we,state,sc,flags);
-	return we;
+		result=lowerLoop(we,state,sc,flags);
+	static if(language==silq)
+		if(result.isSemCompleted())
+			result=anchorLoopConstForgets(sc,result,constForgets);
+	return result;
 }
 
 Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool resetConst=true){
@@ -1625,6 +1680,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
+	static if(language==silq) Declaration[] constForgets;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
@@ -1633,6 +1689,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 		propErr(bdy,re);
 		auto returns=definitelyReturns(bdy);
 		static if(language==silq){
+			constForgets=loopConstForgetCandidates(sc,bdy.blscope_);
 			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
 				sc.note("possibly consumed in repeat loop", re.loc);
 				re.setSemError();
@@ -1659,9 +1716,13 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	re.bdy=bdy;
 	re.type=isPositive(re.num)&&definitelyReturns(re.bdy)?bottom:unit;
 	re.setSemCompleted();
+	Expression result=re;
 	if(re.isSemCompleted()&&astopt.removeLoops)
-		return lowerLoop(re,state,sc,flags);
-	return re;
+		result=lowerLoop(re,state,sc,flags);
+	static if(language==silq)
+		if(result.isSemCompleted())
+			result=anchorLoopConstForgets(sc,result,constForgets);
+	return result;
 }
 
 Expression statementSemanticImpl(ObserveExp oe,Scope sc,ref StmFlags flags,bool resetConst=true){
