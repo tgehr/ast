@@ -189,7 +189,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 		}
 		assert(dsc.decl.dtype);
 	}else if(auto nsc=cast(NestedScope)sc){
-		fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name `outer` available
+		if(!fd.context) fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name `outer` available
 		static if(language==psi) fd.contextVal=fd.context;
 	}
 	if(fd.capturedDecls.any!(d=>d.isLinear)){
@@ -226,6 +226,8 @@ Expression presemantic(Declaration expr,Scope sc){
 		auto fsc=new FunctionScope(sc,fd);
 		fd.type=unit;
 		fd.fscope_=fsc;
+		if(!fd.context && cast(NestedScope)sc && !isInDataScope(sc))
+			fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null);
 		declareParameters(fd,fd.isSquare,fd.params,fsc); // parameter variables
 		if(fd.rret){
 			fd.rret=expressionSemantic(fd.rret, ExpSemContext.forType(fsc));
@@ -7071,7 +7073,9 @@ Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 	scope(exit) sc.restoreStateSnapshot(scopeState);
 	auto ncontext=context;
 	ncontext.inType=InType.no;
-	ty.e=expressionSemantic(ty.e,ncontext.nestConsumed);
+	bool typeOnlyId=context.inType&&!!cast(Identifier)ty.e; // partial solution
+	ty.e=expressionSemantic(ty.e,typeOnlyId?ncontext.nestConst:ncontext.nestConsumed);
+	//ty.e=expressionSemantic(ty.e,ncontext.nestConsumed); // TODO
 	propErr(ty.e,ty);
 	if(ty.isSemError())
 		return ty;

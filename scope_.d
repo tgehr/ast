@@ -1922,7 +1922,11 @@ class NestedScope: Scope{
 	override bool isNestedIn(Scope rhs){ return rhs is this || parent.isNestedIn(rhs); }
 
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
-		if(this is outermost) return true;
+		if(this is outermost){
+			if(!lastUses.get(meaning,true))
+				lastUses.definition(meaning,null);
+			return true;
+		}
 		foreach(sc;getSiblingScopes()){
 			if(meaning.getId in sc.rnsymtab) // TODO: make sure captures are inserted only once, remove this
 				sc.symtabRemove(sc.rnsymtab[meaning.getId]);
