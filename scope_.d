@@ -1234,11 +1234,11 @@ abstract class Scope{
 			sc.siblingsFinal=true;
 		}
 		mergedNestedScopes~=activeNestedScopes;
+		activeNestedScopes=[];
+		allowMerge=false;
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
-		activeNestedScopes=[];
-		allowMerge=false;
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
