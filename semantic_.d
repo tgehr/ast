@@ -2346,8 +2346,10 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto id=getIdFromIndex(idx)){
 					if(auto nt=updatedType(idx,context.type)){
 						if(auto vd=cast(VarDecl)id.meaning){
+							if(nt.isClassical) sc.removeDependency(vd);
 							vd.vtype=nt; // TODO: introduce new declarations to make types match in identifiers?
 							id.type=id.typeFromMeaning;
+							if(nt.isClassical) sc.addDefaultDependency(vd);
 							//context.sc.updateType(vd);
 							void updateIndexTypes(IndexExp idx){
 								if(auto nidx=cast(IndexExp)idx.e)
@@ -4237,8 +4239,10 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 								}
 								auto var=addVar(origId,ntype,lhs.loc,sc);
 								static if(language==silq){
-									if(var.scope_ is sc)
-										sc.addDependency(var,dependencies[decl]);
+									if(var.scope_ is sc){
+										if(ntype.isClassical) sc.addDefaultDependency(var);
+										else sc.addDependency(var,ntype.isClassical?Dependency(false):dependencies[decl]);
+									}
 								}
 								defined[decl.getId]=var;
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
