@@ -1274,7 +1274,7 @@ class ProductTy: Type{
 			vars.setSemCompleted();
 			auto lCod=tryApply(vars,isSquare);
 			auto rCod=r.tryApply(vars,isSquare);
-			assert(lCod&&rCod);
+			if(!lCod||!rCod) return null;
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
 			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
@@ -1289,7 +1289,7 @@ class ProductTy: Type{
 				lCod=cod;
 				rCod=r.cod;
 			}
-			assert(lCod&&rCod);
+			if(!lCod||!rCod) return null;
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
 			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
