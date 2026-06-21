@@ -222,17 +222,21 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		if(auto se1 = cast(BinaryExp!sub1)ne1){
 			if(auto ae = cast(BinaryExp!(Tok!"+"))se1.e1){
 				if(ne2.isDeterministic()){
-					// TODO: for sub1==Tok!"sub" this assumes `ae.eX >= se1.e2`.
-					if(ae.e1 == ne2) return make!op(loc, ae.e2, se1.e2);
-					if(ae.e2 == ne2) return make!op(loc, ae.e1, se1.e2);
+					bool ok = true; // TODO: assumes se1.e1 >= se1.e2 for sub1==Tok!"sub"
+					// static if(sub1==Tok!"sub") ok = nonNeg(make!(Tok!"-")(loc, se1.e1, se1.e2));
+					if(ok){
+						if(ae.e1 == ne2) return make!op(loc, ae.e2, se1.e2);
+						if(ae.e2 == ne2) return make!op(loc, ae.e1, se1.e2);
+					}
 				}
 			}
 		}
 	}
 	static foreach(sub2;[Tok!"-",Tok!"sub"]){
 		if(auto se2 = cast(BinaryExp!sub2)ne2){
-			// TODO: this assumes `se2.e1 >= se2.e2` for sub2==Tok!"sub"
-			return make!op(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
+			bool ok = true; // TODO: assumes `se2.e1 >= se2.e2` for sub2==Tok!"sub"
+			// static if(sub2==Tok!"sub") ok = nonNeg(make!(Tok!"-")(loc, se2.e1, se2.e2));
+			if(ok) return make!op(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
 		}
 	}
 	Expression[] ls, rs;
