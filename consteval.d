@@ -64,6 +64,34 @@ private Expression make(TokenType subop)(Location loc, Expression sub1, Expressi
 	return r.eval();
 }
 
+private bool isNumericSum(Expression e){
+	if(cast(BinaryExp!(Tok!"+"))e) return true;
+	if(cast(BinaryExp!(Tok!"-"))e) return true;
+	if(cast(BinaryExp!(Tok!"sub"))e) return true;
+	return false;
+}
+
+private void collectSummands(Expression e, ref Expression[] summands){
+	if(auto ae = cast(BinaryExp!(Tok!"+"))e){
+		collectSummands(ae.e1, summands);
+		collectSummands(ae.e2, summands);
+	}else summands ~= e;
+}
+
+private bool soundCommonFactor(TokenType op)(Expression factor){
+	static if(op == Tok!"sub") return isSubtype(factor.type, ℕt(false));
+	else return true;
+}
+
+private bool factorInnerOK(TokenType op)(Expression inner){
+	if(isNumericSum(inner)) return false;
+	static if(op == Tok!"sub"){
+		if(cast(UnaryExp!(Tok!"-"))inner) return false;
+		if(auto v = inner.asIntegerConstant()) if(v.get() < 0) return false;
+	}
+	return true;
+}
+
 Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) {
 	if(v1 && v2) return make(v1.get() + v2.get());
 	if(v1 && v1.get() == 0) return ne2;
@@ -114,7 +142,10 @@ Expression evalNumericBinop(TokenType op: Tok!"+")(Location loc, Expression ne1,
 }
 
 Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"-" || op == Tok!"sub") {
-	if(v1 && v2) return make(v1.get() - v2.get());
+	if(v1 && v2){
+		static if(op == Tok!"-") return make(v1.get() - v2.get());
+		else if(v1.get() >= v2.get()) return make(v1.get() - v2.get());
+	}
 	if(ne1.isDeterministic() && ne1 == ne2) return make(0);
 	if(v2){
 		if(v2.get() == 0) return ne1;
@@ -122,6 +153,7 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 			return make!(Tok!"+")(loc, ne1, make(-v2.get()));
 		}
 	}
+	static if(op == Tok!"-")
 	if(v1 && v1.get() == 0) return make!(Tok!"-")(loc, ne2);
 	static if(op == Tok!"-")
 	if(auto se2 = cast(UnaryExp!(Tok!"-")) ne2) {
@@ -149,8 +181,13 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 	}
 	if(ne1.isDeterministic()) {
 		if(auto ae2 = cast(BinaryExp!(Tok!"+"))ne2){
-			if(ae2.e1 == ne1) return make!(Tok!"-")(loc, ae2.e2);
-			if(ae2.e2 == ne1) return make!(Tok!"-")(loc, ae2.e1);
+			static if(op == Tok!"-"){
+				if(ae2.e1 == ne1) return make!(Tok!"-")(loc, ae2.e2);
+				if(ae2.e2 == ne1) return make!(Tok!"-")(loc, ae2.e1);
+			}else{
+				if(ae2.e1 == ne1) return make!(Tok!"sub")(loc, make(0), ae2.e2);
+				if(ae2.e2 == ne1) return make!(Tok!"sub")(loc, make(0), ae2.e1);
+			}
 		}
 		static foreach(sub;[Tok!"-",Tok!"sub"]){
 			if(auto se2 = cast(BinaryExp!sub)ne2){
@@ -172,6 +209,29 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 	static foreach(sub2;[Tok!"-",Tok!"sub"]){
 		if(auto se2 = cast(BinaryExp!sub2)ne2){
 			return make!(Tok!"-")(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
+		}
+	}
+	Expression[] ls, rs;
+	collectSummands(ne1, ls);
+	collectSummands(ne2, rs);
+	if(ls.length && rs.length){
+		auto usedR = new bool[rs.length];
+		auto keepL = new bool[ls.length];
+		bool any = false;
+		foreach(i, l; ls){
+			keepL[i] = true;
+			if(!l.isDeterministic()) continue;
+			foreach(j, r; rs){
+				if(!usedR[j] && l == r){
+					usedR[j] = true; keepL[i] = false; any = true; break;
+				}
+			}
+		}
+		if(any){
+			Expression lhs = null, rhs = null;
+			foreach(i, l; ls) if(keepL[i]) lhs = lhs ? make!(Tok!"+")(loc, lhs, l) : l;
+			foreach(j, r; rs) if(!usedR[j]) rhs = rhs ? make!(Tok!"+")(loc, rhs, r) : r;
+			return make!op(loc, lhs ? lhs : make(0), rhs ? rhs : make(0));
 		}
 	}
 	return evalNumericSum!op(loc, ne1, ne2);
@@ -233,6 +293,49 @@ Expression evalNumericSum(TokenType op)(Location loc, Expression ne1, Expression
 				auto a = make!op(loc, make(1), le2);
 				return make!(Tok!"·")(loc, a, ne1);
 			}
+		}
+	}
+	if(auto me1=cast(BinaryExp!(Tok!"·"))ne1){
+		if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
+			static foreach(i;0..2){
+				static foreach(j;0..2){{
+					auto f1 = i ? me1.e1 : me1.e2;
+					auto r1 = i ? me1.e2 : me1.e1;
+					auto f2 = j ? me2.e1 : me2.e2;
+					auto r2 = j ? me2.e2 : me2.e1;
+					if(!cast(LiteralExp)f1 && f1.isDeterministic() && f1==f2 && soundCommonFactor!op(f1)){
+						auto inner = make!op(loc, r1, r2);
+						if(factorInnerOK!op(inner))
+							return make!(Tok!"·")(loc, f1, inner);
+					}
+				}}
+			}
+		}
+	}
+	if(auto me1=cast(BinaryExp!(Tok!"·"))ne1){
+		if(ne2.isDeterministic()){
+			static foreach(i;0..2){{
+				auto f1 = i ? me1.e1 : me1.e2;
+				auto r1 = i ? me1.e2 : me1.e1;
+				if(!cast(LiteralExp)f1 && f1==ne2 && soundCommonFactor!op(f1)){
+					auto inner = make!op(loc, r1, make(1));
+					if(factorInnerOK!op(inner))
+						return make!(Tok!"·")(loc, inner, f1);
+				}
+			}}
+		}
+	}
+	if(auto me2=cast(BinaryExp!(Tok!"·"))ne2){
+		if(ne1.isDeterministic()){
+			static foreach(j;0..2){{
+				auto f2 = j ? me2.e1 : me2.e2;
+				auto r2 = j ? me2.e2 : me2.e1;
+				if(!cast(LiteralExp)f2 && f2==ne1 && soundCommonFactor!op(f2)){
+					auto inner = make!op(loc, make(1), r2);
+					if(factorInnerOK!op(inner))
+						return make!(Tok!"·")(loc, inner, f2);
+				}
+			}}
 		}
 	}
 	return null;
