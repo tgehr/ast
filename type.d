@@ -982,7 +982,7 @@ class ProductTy: Type{
 				auto ptup = pty.isTupleTy();
 				return (ptup && ptup.length > 1) ? "("~paramKind~pty.toString()~")" : addp(p.isConst, pty);
 			}).join(" × ");
-			if(isTuple && params.length == 1) {
+			if(isTuple&&params.length==1){
 				d="("~d~")¹";
 			}
 			static if(language==silq) auto arrow=(isClassical_?"!":"")~"→";
@@ -996,6 +996,9 @@ class ProductTy: Type{
 				auto pty = p.vtype ? p.vtype : p.dtype;
 				return paramKind~(p.name ? p.name.toString() : "_")~":"~pty.toString();
 			}).join(",");
+			if(isTuple&&params.length==1){
+				args~=",";
+			}
 			static if(language==silq) auto pi=(isClassical_?"!":"")~"∏";
 			else enum pi="Π";
 			r=pi~del[0]~args~del[1]~(captureAnnotation!=CaptureAnnotation.const_?captureAnnotationToString(captureAnnotation):"")
