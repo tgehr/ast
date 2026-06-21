@@ -992,7 +992,11 @@ class UnaryExp(TokenType op): AUnaryExp{
 	mixin PrecedenceToString;
 	override string toStringImpl(int cl,int cr){
 		import std.uni;
-		return _brk(TokChars!op~(TokChars!op[$-1].isAlpha()?" ":"")~e.toStringImpl(nbp,cr),cl,cr);
+		enum oc=TokChars!op;
+		auto inner=e.toStringImpl(nbp,cr);
+		static if(oc[$-1].isAlpha) inner=" "~inner;
+		else if(inner.length&&inner[0]==oc[$-1]) inner="("~inner~")";
+		return _brk(oc~inner,cl,cr);
 	}
 	static if(op==Tok!"&"){
 		override @property string kind(){

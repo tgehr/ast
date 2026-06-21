@@ -697,9 +697,10 @@ class VectorTy: Type, ITupleTy{
 		return vectorTy(next,len);
 	}
 	override string toString(){
+		import ast.parser: rbp;
+		import ast.lexer: Tok;
 		bool p=cast(FunTy)next||next.isTupleTy&&next!=unit;
-		bool q=!cast(Identifier)num&&!cast(LiteralExp)num; // TODO: improve
-		return (p?"("~next.toString()~")^":next.toString()~"^")~(q?"("~num.toString()~")":num.toString());
+		return (p?"("~next.toString()~")^":next.toString()~"^")~num.toStringImpl(rbp!(Tok!"^"),Expression.prNone);
 	}
 	override bool isConstant(){ return next.isConstant() && num.isConstant(); }
 	override bool isTotal(){ return next.isTotal() && num.isTotal(); }
