@@ -107,8 +107,17 @@ abstract class Expression: Node{
 		return r;
 	}
 
-	override string toString(){return _brk("{}()");}
-	protected string _brk(string s){return std.array.replicate("(",brackets)~(implicitDup?"dup(":"")~s~(implicitDup?")":"")~std.array.replicate(")",brackets);}
+	enum int prNone=-1;
+	enum int prInf=int.max;
+	@property int lprec(){ return prInf; }
+	@property int rprec(){ return prInf; }
+	override string toString(){ return _brk("{}()"); }
+	string toStringImpl(int cl,int cr){ return toString(); }
+	protected string _brk(string s,int cl=prNone,int cr=prNone){
+		auto br=brackets;
+		if(!implicitDup&&(lprec<=cl||rprec<cr)) br=max(br,1);
+		return std.array.replicate("(",br)~(implicitDup?"dup(":"")~s~(implicitDup?")":"")~std.array.replicate(")",br);
+	}
 
 	override @property string kind(){return "expression";}
 	bool isCompound(){ return false; }
@@ -328,6 +337,10 @@ enum TypeAnnotationType{
 	punning,
 }
 
+mixin template PrecedenceToString(){
+	override string toString(){ return toStringImpl(prNone,prNone); }
+}
+
 class TypeAnnotationExp: Expression{
 	Expression e,t;
 	TypeAnnotationType annotationType;
@@ -339,10 +352,28 @@ class TypeAnnotationExp: Expression{
 		return new TypeAnnotationExp(e.copy(args),t.copy(args),annotationType);
 	}
 	override @property string kind(){ return e.kind; }
-	override string toString(){
+	override @property int lprec(){
+		final switch(annotationType) with(TypeAnnotationType){
+			case annotation: return lbp!(Tok!":");
+			case conversion: return lbp!(Tok!"as");
+			case coercion: return lbp!(Tok!"coerce");
+			case punning: return lbp!(Tok!"pun");
+		}
+	}
+	override @property int rprec(){
+		final switch(annotationType) with(TypeAnnotationType){
+			case annotation: return rbp!(Tok!":");
+			case conversion: return rbp!(Tok!"as");
+			case coercion: return rbp!(Tok!"coerce");
+			case punning: return rbp!(Tok!"pun");
+		}
+	}
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
 		static immutable op=[": "," as "," coerce "," pun "];
 		static assert(TypeAnnotationType.max==TypeAnnotationType.punning);
-		return _brk(e.toString()~op[annotationType]~(type?type.toString():t.toString()));
+		auto myLbp=lprec, myRbp=rprec;
+		return _brk(e.toStringImpl(cl,myLbp)~op[annotationType]~(type?type.toStringImpl(myRbp,cr):t.toStringImpl(myRbp,cr)),cl,cr);
 	}
 	override bool isConstant(){
 		return e.isConstant() && (type ? type.isConstant() : t.isConstant());
@@ -957,9 +988,11 @@ class UnaryExp(TokenType op): AUnaryExp{
 	override UnaryExp!op copyImpl(CopyArgs args){
 		return new UnaryExp!op(e.copy(args));
 	}
-	override string toString(){
+	override @property int rprec(){ return nbp; } // prefix operator: operand parsed with min binding power nbp
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
 		import std.uni;
-		return _brk(TokChars!op~(TokChars!op[$-1].isAlpha()?" ":"")~e.toString());
+		return _brk(TokChars!op~(TokChars!op[$-1].isAlpha()?" ":"")~e.toStringImpl(nbp,cr),cl,cr);
 	}
 	static if(op==Tok!"&"){
 		override @property string kind(){
@@ -1015,7 +1048,8 @@ class PostfixExp(TokenType op): Expression{
 	override PostfixExp!op copyImpl(CopyArgs args){
 		return new PostfixExp!op(e.copy(args));
 	}
-	override string toString(){return _brk(e.toString()~TokChars!op);}
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){return _brk(e.toStringImpl(cl,lbp!op)~TokChars!op,cl,cr);}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return e.freeVarsImpl(dg);
@@ -1056,9 +1090,10 @@ class IndexExp: Expression{ //e[a]
 		r.isClassical_=isClassical_;
 		return r;
 	}
-	override string toString(){
-		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~a.tupleToString(true));
-		else return _brk(e.toString()~a.tupleToString(true));
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
+		static if(language==silq) return _brk((isClassical_?"!":"")~e.toStringImpl(cl,lbp!(Tok!"["))~a.tupleToString(true),cl,cr);
+		else return _brk(e.toStringImpl(cl,lbp!(Tok!"["))~a.tupleToString(true),cl,cr);
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
@@ -1165,8 +1200,9 @@ class SliceExp: Expression{
 	override SliceExp copyImpl(CopyArgs args){
 		return new SliceExp(e.copy(args),l.copy(args),r.copy(args));
 	}
-	override string toString(){
-		return _brk(e.toString()~'['~l.toString()~".."~r.toString()~']');
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
+		return _brk(e.toStringImpl(cl,lbp!(Tok!"["))~'['~l.toString()~".."~r.toString()~']',cl,cr);
 	}
 	override Expression evalImpl(){
 		auto ne=e.eval(), nl=l.eval(), nr=r.eval();
@@ -1260,9 +1296,10 @@ class CallExp: Expression{
 		static if(language==silq) r.checkReverse=checkReverse;
 		return r;
 	}
-	override string toString(){
-		static if(language==silq) return _brk((isClassical_?"!":"")~e.toString()~arg.tupleToString(isSquare));
-		else return _brk(e.toString()~arg.tupleToString(isSquare));
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
+		static if(language==silq) return _brk((isClassical_?"!":"")~e.toStringImpl(cl,lbp!(Tok!"("))~arg.tupleToString(isSquare),cl,cr);
+		else return _brk(e.toStringImpl(cl,lbp!(Tok!"("))~arg.tupleToString(isSquare),cl,cr);
 	}
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=e.freeVarsImpl(dg)) return r;
@@ -1524,6 +1561,9 @@ private bool isAssignToken(TokenType op){ return TokenTypeToString(op).endsWith(
 template BinaryExpParent(TokenType op)if(isAssignToken(op)){ alias BinaryExpParent = AAssignExp; }
 template BinaryExpParent(TokenType op)if(!isAssignToken(op)&&!isLogicToken(op)){ alias BinaryExpParent = ABinaryExp; }
 class BinaryExp(TokenType op): BinaryExpParent!op{
+	mixin PrecedenceToString;
+	override @property int lprec(){ return lbp!op; }
+	override @property int rprec(){ return rbp!op; }
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
 		Annotation annotation;
@@ -1534,16 +1574,16 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		override BinaryExp!op copyImpl(CopyArgs args){
 			return new BinaryExp!op(e1.copy(args),e2.copy(args),captureAnnotation,annotation,isLifted);
 		}
-		override string toString(){
-			return _brk(e1.toString() ~ " "~captureAnnotationToString(captureAnnotation)~TokChars!op~annotationToString(annotation)~" "~e2.toString());
+		override string toStringImpl(int cl,int cr){
+			return _brk(e1.toStringImpl(cl,lbp!op) ~ " "~captureAnnotationToString(captureAnnotation)~TokChars!op~annotationToString(annotation)~" "~e2.toStringImpl(rbp!op,cr),cl,cr);
 		}
 	}else{
 		this(Expression left, Expression right){super(left,right);}
 		override BinaryExp!op copyImpl(CopyArgs args){
 			return new BinaryExp!op(e1.copy(args),e2.copy(args));
 		}
-		override string toString(){
-			return _brk(e1.toString() ~ " "~TokChars!op~" "~e2.toString());
+		override string toStringImpl(int cl,int cr){
+			return _brk(e1.toStringImpl(cl,lbp!op) ~ " "~TokChars!op~" "~e2.toStringImpl(rbp!op,cr),cl,cr);
 		}
 	}
 	override bool isTotal(){
@@ -1704,8 +1744,9 @@ class FieldExp: Expression{
 		return new FieldExp(e.copy(args),f.copy(args));
 	}
 
-	override string toString(){
-		return _brk(e.toString()~"."~f.toString());
+	mixin PrecedenceToString;
+	override string toStringImpl(int cl,int cr){
+		return _brk(e.toStringImpl(cl,lbp!(Tok!"."))~"."~f.toString(),cl,cr);
 	}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
