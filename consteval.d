@@ -78,6 +78,12 @@ private void collectSummands(Expression e, ref Expression[] summands){
 	}else summands ~= e;
 }
 
+private Expression negatedSummand(Location loc, Expression s){
+	if(auto u = cast(UnaryExp!(Tok!"-"))s) return u.e;
+	if(auto v = s.asIntegerConstant()) if(v.get() < 0) return make(-v.get());
+	return null;
+}
+
 private bool soundCommonFactor(TokenType op)(Expression factor){
 	static if(op == Tok!"sub") return isSubtype(factor.type, â„•t(false));
 	else return true;
@@ -148,7 +154,11 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 	}
 	if(ne1.isDeterministic() && ne1 == ne2) return make(0);
 	if(v2){
-		if(v2.get() == 0) return ne1;
+		if(v2.get() == 0){
+			static if(op == Tok!"-") return ne1;
+			else if(isSubtype(ne1.type, â„•t(false))) return ne1;
+		}
+		static if(op == Tok!"-")
 		if(v2.get() < 0){
 			return make!(Tok!"+")(loc, ne1, make(-v2.get()));
 		}
@@ -174,8 +184,7 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		}
 		static foreach(sub;[Tok!"-",Tok!"sub"]){
 			if(auto se1 = cast(BinaryExp!sub)ne1){
-				if(se1.e1 == ne2) return make!(Tok!"-")(loc, se1.e2);
-				// TODO: if(se1.e2 == -ne2)
+				if(se1.e1 == ne2) return make!(Tok!"-")(loc, se1.e2); // TODO: fix
 			}
 		}
 	}
@@ -191,8 +200,7 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		}
 		static foreach(sub;[Tok!"-",Tok!"sub"]){
 			if(auto se2 = cast(BinaryExp!sub)ne2){
-				if(se2.e1 == ne1) return se2.e2.eval();
-				// TODO: if(se2.e2==-ne1
+				if(se2.e1 == ne1) return se2.e2.eval(); // TODO: fix
 			}
 		}
 	}
@@ -214,25 +222,30 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 	Expression[] ls, rs;
 	collectSummands(ne1, ls);
 	collectSummands(ne2, rs);
-	if(ls.length && rs.length){
-		auto usedR = new bool[rs.length];
-		auto keepL = new bool[ls.length];
-		bool any = false;
-		foreach(i, l; ls){
-			keepL[i] = true;
-			if(!l.isDeterministic()) continue;
-			foreach(j, r; rs){
-				if(!usedR[j] && l == r){
-					usedR[j] = true; keepL[i] = false; any = true; break;
-				}
+	bool moved = false;
+	static if(op == Tok!"sub"){
+		Expression[] L, R;
+		foreach(s; ls){ if(auto neg = negatedSummand(loc, s)){ R ~= neg; moved = true; } else L ~= s; }
+		foreach(s; rs){ if(auto neg = negatedSummand(loc, s)){ L ~= neg; moved = true; } else R ~= s; }
+		ls = L; rs = R;
+	}
+	bool any = false;
+	auto usedR = new bool[rs.length];
+	auto keepL = new bool[ls.length];
+	foreach(i, l; ls){
+		keepL[i] = true;
+		if(!l.isDeterministic()) continue;
+		foreach(j, r; rs){
+			if(!usedR[j] && l == r){
+				usedR[j] = true; keepL[i] = false; any = true; break;
 			}
 		}
-		if(any){
-			Expression lhs = null, rhs = null;
-			foreach(i, l; ls) if(keepL[i]) lhs = lhs ? make!(Tok!"+")(loc, lhs, l) : l;
-			foreach(j, r; rs) if(!usedR[j]) rhs = rhs ? make!(Tok!"+")(loc, rhs, r) : r;
-			return make!op(loc, lhs ? lhs : make(0), rhs ? rhs : make(0));
-		}
+	}
+	if(moved || any){
+		Expression lhs = null, rhs = null;
+		foreach(i, l; ls) if(keepL[i]) lhs = lhs ? make!(Tok!"+")(loc, lhs, l) : l;
+		foreach(j, r; rs) if(!usedR[j]) rhs = rhs ? make!(Tok!"+")(loc, rhs, r) : r;
+		return make!op(loc, lhs ? lhs : make(0), rhs ? rhs : make(0));
 	}
 	return evalNumericSum!op(loc, ne1, ne2);
 }
