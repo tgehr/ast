@@ -222,8 +222,9 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		if(auto se1 = cast(BinaryExp!sub1)ne1){
 			if(auto ae = cast(BinaryExp!(Tok!"+"))se1.e1){
 				if(ne2.isDeterministic()){
-					if(ae.e1 == ne2) return make!sub1(loc, ae.e2, se1.e2);
-					if(ae.e2 == ne2) return make!sub1(loc, ae.e1, se1.e2);
+					// TODO: for sub1==Tok!"sub" this assumes `ae.eX >= se1.e2`.
+					if(ae.e1 == ne2) return make!op(loc, ae.e2, se1.e2);
+					if(ae.e2 == ne2) return make!op(loc, ae.e1, se1.e2);
 				}
 			}
 		}
