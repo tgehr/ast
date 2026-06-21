@@ -1283,8 +1283,13 @@ class ProductTy: Type{
 			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
 		}else{
 			Expression lCod,rCod;
+			auto nnames=this.names;
 			if(names[0]!=Id()||r.names[0]!=Id()){
-				auto name=names[0]==r.names[0]?names[0]:freshName(Id(),r);
+				auto name=nnames[0];
+				if(names[0]!=r.names[0]){
+					name=freshName(Id(),r);
+					nnames=[name];
+				}
 				auto var=varTy(name,ndom);
 				lCod=tryApply(var,isSquare);
 				rCod=r.tryApply(var,isSquare);
@@ -1295,7 +1300,7 @@ class ProductTy: Type{
 			if(!lCod||!rCod) return null;
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
-			return productTy(nIsConst,names,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
+			return productTy(nIsConst,nnames,ndom,ncod,isSquare,isTuple,ncaptureAnnotation,nannotation,nisClassical);
 		}
 	}
 	final ProductTy setCaptureAnnotation(CaptureAnnotation captureAnnotation){
