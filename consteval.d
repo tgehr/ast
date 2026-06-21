@@ -84,8 +84,10 @@ private Expression negatedSummand(Location loc, Expression s){
 	return null;
 }
 
+private bool nonNeg(Expression e){ return isSubtype(e.type, â„•t(false)); }
+
 private bool soundCommonFactor(TokenType op)(Expression factor){
-	static if(op == Tok!"sub") return isSubtype(factor.type, â„•t(false));
+	static if(op == Tok!"sub") return nonNeg(factor);
 	else return true;
 }
 
@@ -156,7 +158,7 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 	if(v2){
 		if(v2.get() == 0){
 			static if(op == Tok!"-") return ne1;
-			else if(isSubtype(ne1.type, â„•t(false))) return ne1;
+			else if(nonNeg(ne1)) return ne1;
 		}
 		static if(op == Tok!"-")
 		if(v2.get() < 0){
@@ -184,7 +186,12 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		}
 		static foreach(sub;[Tok!"-",Tok!"sub"]){
 			if(auto se1 = cast(BinaryExp!sub)ne1){
-				if(se1.e1 == ne2) return make!(Tok!"-")(loc, se1.e2); // TODO: fix
+				if(se1.e1 == ne2){
+					auto mY = make!(Tok!"-")(loc, se1.e2);
+					static if(op == Tok!"-" && sub == Tok!"-") return mY;
+					else static if(op == Tok!"sub" && sub == Tok!"-"){ if(nonNeg(mY)) return mY; }
+					else { if(nonNeg(ne2) && nonNeg(mY)) return mY; }
+				}
 			}
 		}
 	}
@@ -200,7 +207,14 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 		}
 		static foreach(sub;[Tok!"-",Tok!"sub"]){
 			if(auto se2 = cast(BinaryExp!sub)ne2){
-				if(se2.e1 == ne1) return se2.e2.eval(); // TODO: fix
+				if(se2.e1 == ne1){
+					auto Y = se2.e2;
+					auto mY = make!(Tok!"-")(loc, Y);
+					static if(op == Tok!"-" && sub == Tok!"-") return Y.eval();
+					else static if(op == Tok!"sub" && sub == Tok!"-"){ if(nonNeg(Y)) return Y.eval(); }
+					else static if(op == Tok!"-" && sub == Tok!"sub"){ if(nonNeg(ne1) && nonNeg(mY)) return Y.eval(); }
+					else { if(nonNeg(ne1) && nonNeg(mY) && nonNeg(Y)) return Y.eval(); }
+				}
 			}
 		}
 	}
@@ -216,7 +230,8 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 	}
 	static foreach(sub2;[Tok!"-",Tok!"sub"]){
 		if(auto se2 = cast(BinaryExp!sub2)ne2){
-			return make!(Tok!"-")(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
+			// TODO: this assumes `se2.e1 >= se2.e2` for sub2==Tok!"sub"
+			return make!op(loc, make!(Tok!"+")(loc, ne1, se2.e2), se2.e1);
 		}
 	}
 	Expression[] ls, rs;
