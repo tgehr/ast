@@ -1162,7 +1162,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked,noImplicitDup,hoistClassical);
 		return classicalStatements~middle~quantumStatements;
 	}
-	return statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup)).array;
+	return chain(middle,statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup))).array;
 }
 
 Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false){
