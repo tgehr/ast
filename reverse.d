@@ -1235,8 +1235,38 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return error();
 	}
 	if(auto fd=cast(FunctionDef)e){
-		sc.error("reversal of quantum variable capturing not supported yet",fd.loc);
-		return error();
+		auto captureAnnotation=fd.ftype?fd.ftype.captureAnnotation:fd.getCaptureAnnotation();
+		if(captureAnnotation>CaptureAnnotation.const_){
+			sc.error("reversal of `moved` quantum variable capturing not supported yet",fd.loc);
+			return error();
+		}
+		bool useRecipe=captureAnnotation==CaptureAnnotation.const_;
+		if(useRecipe&&fd.body_){
+			foreach(sub;fd.body_.subexpressions){ // TODO: support recursion
+				if(auto id=cast(Identifier)sub){
+					if(id.meaning&&id.meaning.canonicalSource is fd.canonicalSource){
+						useRecipe=false;
+						break;
+					}
+				}
+			}
+		}
+		if(!useRecipe){
+			auto te=new TupleExp([]);
+			te.type=unit;
+			te.loc=fd.loc;
+			Expression.CopyArgs cargs={ preserveSemantic: true };
+			return lowerDefine!flags(te,te.copy(cargs),fd.loc,sc,unchecked,noImplicitDup);
+		}
+		assert(!!fd.name);
+		auto gid=new Identifier(fd.name.name);
+		gid.loc=fd.loc;
+		auto recipe=new LambdaExp(fd.copy());
+		recipe.loc=fd.loc;
+		auto res=new ForgetExp(gid,recipe);
+		res.isStatement=true;
+		res.loc=fd.loc;
+		return res;
 	}
 	// TODO: DatDecl?
 	if(auto ce=cast(CommaExp)e) assert(0);
