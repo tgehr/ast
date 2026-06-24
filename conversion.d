@@ -542,7 +542,9 @@ class ℤmodCoercion: Conversion{
 	bool checkN;
 	this(Expression from,Expression to,bool checkN)in{
 		assert(from.isClassical==to.isClassical);
-		assert(isℤmodTy(from) && isℤmodTy(to));
+		auto zmodFrom=isℤmodTy(from),zmodTo=isℤmodTy(to);
+		assert(zmodFrom&&zmodTo);
+		assert(zmodFrom.isStar>=zmodTo.isStar);
 	}do{
 		this.checkN=checkN;
 		super(from,to);
