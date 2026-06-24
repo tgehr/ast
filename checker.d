@@ -590,6 +590,13 @@ class Checker {
 		visCall(e, true);
 	}
 
+	void implLhs(ast_exp.TypeAnnotationExp e) {
+		visLhs(e.e);
+		visExpr(e.t);
+		visType(e.type);
+		expectConvertible(e.e, e.type, e.annotationType);
+	}
+
 	void implLhs(ast_exp.IndexExp e) {
 		visExpr(e.a);
 		auto expectedType = ast_sem.indexType(e.e.type, e.a);

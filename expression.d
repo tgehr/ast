@@ -1630,7 +1630,8 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 				return 0;
 			}
-			if(auto ce=cast(CallExp)e1){
+			import ast.semantic_:unwrap;
+			if(auto ce=cast(CallExp)unwrap(e1)){
 				auto ft=cast(ProductTy)ce.e.type;
 				if(!ft||ft.isSquare!=ce.isSquare)
 					return 0;
