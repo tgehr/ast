@@ -1617,11 +1617,13 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		}
 
 		int varDecls(scope int delegate(VarDecl) dg){
-			if(auto id=cast(Identifier)e1){
+			import ast.semantic_:unwrap;
+			auto e1u=unwrap(e1);
+			if(auto id=cast(Identifier)e1u){
 				auto decl=cast(VarDecl)id.meaning;
 				return dg(decl);
 			}
-			if(auto tpl1=cast(TupleExp)e1){
+			if(auto tpl1=cast(TupleExp)e1u){
 				foreach(e;tpl1.e){
 					auto id=cast(Identifier)e;
 					if(!id) continue;
@@ -1630,8 +1632,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				}
 				return 0;
 			}
-			import ast.semantic_:unwrap;
-			if(auto ce=cast(CallExp)unwrap(e1)){
+			if(auto ce=cast(CallExp)e1u){
 				auto ft=cast(ProductTy)ce.e.type;
 				if(!ft||ft.isSquare!=ce.isSquare)
 					return 0;
@@ -1655,8 +1656,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 					return 0;
 				}
 			}
-			if(auto ce=cast(CatExp)e1){
-				import ast.semantic_:unwrap;
+			if(auto ce=cast(CatExp)e1u){
 				if(auto id1=cast(Identifier)unwrap(ce.e1))
 					if(auto r=dg(cast(VarDecl)id1.meaning))
 					   return r;
