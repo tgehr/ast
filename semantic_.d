@@ -438,8 +438,31 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		success&=expr.isSemCompleted();
 	}
 	foreach(expr;exprs){ // TODO: ok?
-		if(expr.sstate==SemState.passive)
+		if(expr.sstate==SemState.passive){
+			if(auto fd=cast(FunctionDef)expr){
+				fd.tainted=false;
+				fd.ftypeFinal=true;
+				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
+					fd.finalPassDone=true;
+					fd.inferringReturnType=true;
+					fd.deferredSpecificityCheck=false;
+					fd.sstate=SemState.initial;
+					if(fd.origBody_) fd.body_=fd.origBody_.copy();
+					if(fd.origRret) fd.rret=fd.origRret.copy();
+					auto newfscope_=new FunctionScope(fd.scope_,fd);
+					fd.fscope_=newfscope_;
+					foreach(p;fd.params){
+						p.splitInto=[];
+						p.scope_=null;
+						newfscope_.insert(p);
+					}
+					if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
+					expr=functionDefSemantic(fd,fd.scope_);
+					continue;
+				}
+			}
 			expr.setSemCompleted();
+		}
 	}
 	if(!sc.allowsLinear()){
 		foreach(ref expr;exprs){
@@ -1611,7 +1634,6 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 			break;
 		}
 	}
-	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
 	if(!fe.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
 		state.beginIteration();
 		Expression.CopyArgs cargs2={preserveSemantic: true};
@@ -6933,7 +6955,7 @@ Expression concatType(Expression t1,Expression t2){
 		auto tt1=t1.isTupleTy(),tt2=t2.isTupleTy();
 		if(tt1&&tt2){
 			return tupleTy(chain(iota(tt1.length).map!(i=>tt1[i]),
-			                     iota(tt2.length).map!(i=>tt2[i])).array);
+					     iota(tt2.length).map!(i=>tt2[i])).array);
 		}
 		auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
 		if(vt1&&vt2){
@@ -7633,10 +7655,13 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.ftypeFinal){
 			fd.setSemCompleted();
 			resetFunctionDefsToUpdate(fd);
-		}else fd.sstate=SemState.passive;
+		}else{
+			fd.sstate=SemState.passive;
+			resetFunctionDefsToUpdate(fd);
+		}
 	}
 	static void notify(FunctionDef fd,FunctionDef ufd){
-		assert(fd.numUpdatesPending>0);
+		if(fd.numUpdatesPending==0) return; // already finalized
 		if(--fd.numUpdatesPending==0){
 			if(fd.sstate!=SemState.started){ // semantic analysis is still active
 				fd.ftypeFinal=true;
@@ -7676,8 +7701,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	finalize(fd);
 	static if(language==silq){
 		if(fd.sstate==SemState.passive){
-			fd.tainted=false;
-			if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
+			if(fd.numUpdatesPending==0) fd.tainted=false;
+			if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_ && !fd.tainted){
 				fd.finalPassDone=true;
 				fd.inferringReturnType=true;
 				fd.deferredSpecificityCheck=false;
