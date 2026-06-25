@@ -448,6 +448,14 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 					fd.sstate=SemState.initial;
 					if(fd.origBody_) fd.body_=fd.origBody_.copy();
 					if(fd.origRret) fd.rret=fd.origRret.copy();
+					auto newfscope_=new FunctionScope(fd.scope_,fd);
+					fd.fscope_=newfscope_;
+					fd.tainted=false;
+					foreach(p;fd.params){
+						p.splitInto=[];
+						p.scope_=null;
+						newfscope_.insert(p);
+					}
 					expr=functionDefSemantic(fd,fd.scope_);
 					continue;
 				}
@@ -1872,7 +1880,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 			if(nce.blscope_) bsc.merge(false,nce.blscope_);
 			break;
 		}
-		//imported!"util.io".	writeln("AFTER: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
+		//imported!"util.io".writeln("AFTER: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
 	}
 	ce.type=definitelyReturns(ce)?bottom:unit;
 	ce.setSemCompleted();
@@ -7573,7 +7581,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			while(n in vars) n~="'";
 			vars[n]=[];
 		}
-		fd.setSemCompleted();
 	}
 	static void resetFunction(FunctionDef fd,FunctionDef cause)in{
 		//imported!"util.io".writeln("RESETTING: ",fd," FROM ",cause);
@@ -7643,7 +7650,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	}
 	static void finalize()(FunctionDef fd){
 		if(fd.isSemError()) return;
-		//ximported!"util.io".writeln("FINALIZING: ",fd," ",fd.ftype," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
+		//imported!"util.io".writeln("FINALIZING: ",fd," ",fd.ftype," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
 		if(fd.ftypeFinal){
 			fd.setSemCompleted();
 			resetFunctionDefsToUpdate(fd);
@@ -7660,7 +7667,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
-	// Final mode-(b) pass: if ftypeFinal and deferred checks exist, re-run.
 	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal()){
 		fd.finalPassDone=true;
 		fd.ftypeFinal=false;
@@ -7669,6 +7675,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		resetFunction(fd,fd);
 		return functionDefSemantic(fd,sc);
 	}
+	if(fd.ftypeFinal) fd.setSemCompleted();
 	if(!fd.isSemError()&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate.length)||numCapturesAfter!=numCapturesBefore)){
 		//imported!"util.io".writeln("NOTIFYING: ",fd," ",ftypeBefore," ⇒ ",fd.ftype," ",numCapturesBefore," ⇒ ",numCapturesAfter);
 		if(!fd.isSemFinal()) resetFunction(fd,fd);
