@@ -235,6 +235,11 @@ class FunctionDef: Declaration{
 	CompoundExp origBody_=null;
 	int numInferenceRepetitions=0;
 	bool unsealed=false; // need to redo analysis of dependent declarations
+
+	// inference mode
+	bool tainted=false;
+	bool finalPassDone=false;
+	bool deferredSpecificityCheck=false;
 	void unseal()in{
 		assert(sealed);
 	}do{

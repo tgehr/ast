@@ -129,6 +129,12 @@ abstract class Scope{
 	bool allowsLinear(){
 		return true;
 	}
+	Scope parentScope(){
+		return null;
+	}
+	@property bool inferenceMode(){
+		return false;
+	}
 	final bool canInsert(Id id){
 		auto decl=symtabLookup(id,false,null);
 		return !decl||cast(DeadDecl)decl;
@@ -1817,6 +1823,10 @@ class NestedScope: Scope{
 	Scope parent;
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){ this.parent=parent; }
+	override Scope parentScope(){ return parent; }
+	override @property bool inferenceMode(){
+		return parent.inferenceMode;
+	}
 
 	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
 		assert(odecl is ndecl||!remove);
@@ -2163,8 +2173,13 @@ class FunctionScope: CapturingScope!FunctionDef{
 		return fd.annotation;
 	}
 	void forceClose(){}
-	// ~this(){ import std.stdio; writeln(fd.loc.rep); }
 	override FunctionDef getFunction(){ return fd; }
+	override @property bool inferenceMode(){
+		if(fd.finalPassDone) return false;
+		if(fd.inferringReturnType && !fd.ftypeFinal) return true;
+		if(fd.tainted) return true;
+		return parent.inferenceMode;
+	}
 }
 class DataScope: CapturingScope!DatDecl{
 	override bool allowsLinear(){
@@ -2182,6 +2197,13 @@ class BlockScope: NestedScope{
 		this.restriction_=restriction_;
 	}
 	Annotation restriction_;
+	bool isLoopBody=false;
+	bool loopFinalPass=false;
+	bool loopDeferredSpecificityCheck=false;
+	override @property bool inferenceMode(){
+		if(isLoopBody && !loopFinalPass) return true;
+		return parent.inferenceMode;
+	}
 	override Annotation restriction(ref FunctionDef reason){
 		FunctionDef parentReason=null;
 		auto parentRestriction=super.restriction(parentReason);

@@ -438,8 +438,22 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		success&=expr.isSemCompleted();
 	}
 	foreach(expr;exprs){ // TODO: ok?
-		if(expr.sstate==SemState.passive)
+		if(expr.sstate==SemState.passive){
+			if(auto fd=cast(FunctionDef)expr){
+				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
+					fd.finalPassDone=true;
+					fd.ftypeFinal=false;
+					fd.inferringReturnType=true;
+					fd.deferredSpecificityCheck=false;
+					fd.sstate=SemState.initial;
+					if(fd.origBody_) fd.body_=fd.origBody_.copy();
+					if(fd.origRret) fd.rret=fd.origRret.copy();
+					expr=functionDefSemantic(fd,fd.scope_);
+					continue;
+				}
+			}
 			expr.setSemCompleted();
+		}
 	}
 	if(!sc.allowsLinear()){
 		foreach(ref expr;exprs){
@@ -899,6 +913,7 @@ struct FixedPointIterState{
 		auto restriction_=prevFlags&StmFlags.quantumReturn?Annotation.mfree:Annotation.none;
 		forgetScope=new BlockScope(sc,restriction_);
 		loopScope=new BlockScope(sc,restriction_);
+		loopScope.isLoopBody=true;
 		return loopScope;
 	}
 	void endIteration(Scope sc,ref StmFlags flags){
@@ -1465,6 +1480,40 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 	return wrapper?wrapper:loopExp;
 }
 }
+// Common tail for one iteration of a loop (for/while/repeat).
+bool finalizeLoopIteration(
+	ref FixedPointIterState state,
+	Scope sc,
+	ref StmFlags flags,
+	CompoundExp bdy,
+	Expression loopExp,
+	string kind,
+	ref Declaration[] constForgets,
+	ref bool anyDeferredSpecificityCheck
+){
+	propErr(bdy,loopExp);
+	auto returns=definitelyReturns(bdy);
+	auto bsc=bdy.blscope_;
+	static if(language==silq){
+		constForgets=loopConstForgetCandidates(sc,bsc);
+		if(sc.mergeLoop(returns,state.forgetScope,bsc)){
+			sc.note("possibly consumed in "~kind~" loop", loopExp.loc);
+			loopExp.setSemError();
+		}
+		if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
+			sc.error("variables potentially consumed multiple times in "~kind~" loop",loopExp.loc);
+			foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
+				sc.note(format("variable `%s`",decl.name),decl.loc);
+			loopExp.setSemError();
+		}
+	}else sc.mergeLoop(returns,state.forgetScope,bsc);
+	anyDeferredSpecificityCheck|=bsc.loopDeferredSpecificityCheck;
+	state.endIteration(sc,flags);
+	return returns;
+}
+bool loopIterationConverged(CompoundExp bdy,Expression loopExp,bool returns,ref FixedPointIterState state){
+	return bdy.isSemError()||loopExp.isSemError()||returns||state.converged;
+}
 Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	assert(!fe.bdy.blscope_);
@@ -1473,6 +1522,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
+	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	static if(language==silq) Declaration[] constForgets;
 	if(!fe.var){
 		fe.var=new Identifier(freshName());
@@ -1534,11 +1584,8 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		ce.loc=fe.loc;
 		return statementSemanticImpl(ce,sc,flags,resetConst);
 	}
-	while(!converged){ // TODO: limit number of iterations?
-		state.beginIteration();
-		Expression.CopyArgs cargs={preserveSemantic: true};
-		bdy=fe.bdy.copy(cargs);
-		auto fesc=bdy.blscope_=state.makeScopes(sc);
+	// Setup the loop variable and scope for one ForExp iteration.
+	void setupForIter(BlockScope fesc){
 		auto id=new Identifier(fe.var.id);
 		id.loc=fe.var.loc;
 		auto vd=new VarDecl(id);
@@ -1560,33 +1607,35 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		}
 		vd.setSemCompleted();
 		if(vd.scope_) fesc.lastUses.definition(vd,null);
+	}
+	while(!converged){ // TODO: limit number of iterations?
+		state.beginIteration();
+		Expression.CopyArgs cargs={preserveSemantic: true};
+		bdy=fe.bdy.copy(cargs);
+		auto fesc=bdy.blscope_=state.makeScopes(sc);
+		setupForIter(fesc);
 		bdy=compoundExpSemantic(bdy,sc,flags);
 		assert(!!bdy);
-		propErr(bdy,fe);
-		bool returns=definitelyReturns(bdy);
-		static if(language==silq){
-			constForgets=loopConstForgetCandidates(sc,fesc);
-			if(sc.mergeLoop(returns,state.forgetScope,fesc)){
-				sc.note("possibly consumed in for loop", fe.loc);
-				fe.setSemError();
-				converged=true;
-			}
-			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
-				sc.error("variables potentially consumed multiple times in for loop",fe.loc);
-				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable `%s`",decl.name),decl.loc);
-				fe.setSemError();
-				converged=true;
-			}
-		}else sc.mergeLoop(returns,state.forgetScope,fesc);
-		state.endIteration(sc,flags);
-		converged|=bdy.isSemError()||returns||state.converged;
+		auto returns=finalizeLoopIteration(state,sc,flags,bdy,fe,"for",constForgets,anyDeferredSpecificityCheck);
+		converged|=loopIterationConverged(bdy,fe,returns,state);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in for loop",fe.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",fe.loc);
 			fe.setSemError();
 			break;
 		}
+	}
+	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
+	if(!fe.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
+		state.beginIteration();
+		Expression.CopyArgs cargs2={preserveSemantic: true};
+		bdy=fe.bdy.copy(cargs2);
+		auto fesc=bdy.blscope_=state.makeScopes(sc);
+		fesc.loopFinalPass=true;
+		setupForIter(fesc);
+		bdy=compoundExpSemantic(bdy,sc,flags);
+		assert(!!bdy);
+		finalizeLoopIteration(state,sc,flags,bdy,fe,"for",constForgets,anyDeferredSpecificityCheck);
 	}
 	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
@@ -1610,39 +1659,27 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	bool condSucceeded=false;
 	Expression ncond=null;
 	int numTries=-1;
+	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	static if(language==silq) Declaration[] constForgets;
-	while(!converged){ // TODO: limit number of iterations?
-		state.beginIteration();
-		bdy=we.bdy.copy(cargs);
-		auto wesc=bdy.blscope_=state.makeScopes(sc);
+	// Setup the condition and body scope for one WhileExp iteration.
+	void setupWhileIter(BlockScope wesc,ref Expression ncond){
 		FunctionDef reason;
 		ncond=we.cond.copy(cargs);
 		ncond=conditionSemantic(we,ncond,wesc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
 		static if(language==silq) wesc.clearConsumed();
 		propErr(ncond,we);
 		condSucceeded|=ncond.isSemCompleted();
+	}
+	while(!converged){ // TODO: limit number of iterations?
+		state.beginIteration();
+		bdy=we.bdy.copy(cargs);
+		auto wesc=bdy.blscope_=state.makeScopes(sc);
+		setupWhileIter(wesc,ncond);
 		bdy=compoundExpSemantic(bdy,sc,flags);
-		propErr(bdy,we);
 		if(condSucceeded&&ncond.isSemError())
 			sc.note("variable declaration may be missing in while loop body", we.loc);
-		auto returns=definitelyReturns(bdy);
-		static if(language==silq){
-			constForgets=loopConstForgetCandidates(sc,bdy.blscope_);
-			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
-				sc.note("possibly consumed in while loop", we.loc);
-				we.setSemError();
-				converged=true;
-			}
-			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
-				sc.error("variables potentially consumed multiple times in while loop", we.loc);
-				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable `%s`",decl.name),decl.loc);
-				we.setSemError();
-				converged=true;
-			}
-		}else sc.mergeLoop(returns,state.forgetScope,bdy.blscope_);
-		state.endIteration(sc,flags);
-		converged|=bdy.isSemError()||returns||state.converged;
+		auto returns=finalizeLoopIteration(state,sc,flags,bdy,we,"while",constForgets,anyDeferredSpecificityCheck);
+		converged|=loopIterationConverged(bdy,we,returns,state);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in while loop",we.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",we.loc);
@@ -1650,6 +1687,18 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 			break;
 		}
 
+	}
+	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
+	if(!we.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
+		state.beginIteration();
+		bdy=we.bdy.copy(cargs);
+		auto wesc=bdy.blscope_=state.makeScopes(sc);
+		wesc.loopFinalPass=true;
+		setupWhileIter(wesc,ncond);
+		bdy=compoundExpSemantic(bdy,sc,flags);
+		if(condSucceeded&&ncond.isSemError())
+			sc.note("variable declaration may be missing in while loop body", we.loc);
+		finalizeLoopIteration(state,sc,flags,bdy,we,"while",constForgets,anyDeferredSpecificityCheck);
 	}
 	state.fixSplitMergeGraph(sc);
 	auto fcond=we.cond.copy(cargs);
@@ -1682,37 +1731,30 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
+	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	static if(language==silq) Declaration[] constForgets;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
 		bdy.blscope_=state.makeScopes(sc);
 		bdy=compoundExpSemantic(bdy,sc,flags);
-		propErr(bdy,re);
-		auto returns=definitelyReturns(bdy);
-		static if(language==silq){
-			constForgets=loopConstForgetCandidates(sc,bdy.blscope_);
-			if(sc.mergeLoop(returns,state.forgetScope,bdy.blscope_)){
-				sc.note("possibly consumed in repeat loop", re.loc);
-				re.setSemError();
-				converged=true;
-			}
-			if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
-				sc.error("variables potentially consumed multiple times in repeat loop", re.loc);
-				foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-					sc.note(format("variable `%s`",decl.name),decl.loc);
-				re.setSemError();
-				converged=true;
-			}
-		}else sc.mergeLoop(returns,state.forgetScope,bdy.blscope_);
-		state.endIteration(sc,flags);
-		converged|=bdy.isSemError()||returns||state.converged;
+		auto returns=finalizeLoopIteration(state,sc,flags,bdy,re,"repeat",constForgets,anyDeferredSpecificityCheck);
+		converged|=loopIterationConverged(bdy,re,returns,state);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in repeat loop",re.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",re.loc);
 			re.setSemError();
 			break;
 		}
+	}
+	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
+	if(!re.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
+		state.beginIteration();
+		bdy=re.bdy.copy(cargs);
+		bdy.blscope_=state.makeScopes(sc);
+		bdy.blscope_.loopFinalPass=true;
+		bdy=compoundExpSemantic(bdy,sc,flags);
+		finalizeLoopIteration(state,sc,flags,bdy,re,"repeat",constForgets,anyDeferredSpecificityCheck);
 	}
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
@@ -2006,6 +2048,32 @@ auto nestConsumed(ref DefineLhsContext context,Expression newType,Expression new
 	return context.nest(ConstResult.no,newType,newInitializer);
 }
 
+// Mark that a specificity check was deferred during inference mode.
+void markDeferredSpecificityCheck(Scope sc){
+	for(auto s=sc; s; s=s.parentScope()){
+		if(auto fd=s.getFunction()){
+			fd.deferredSpecificityCheck=true;
+		}
+		if(auto bs=cast(BlockScope)s){
+			if(bs.isLoopBody) bs.loopDeferredSpecificityCheck=true;
+		}
+	}
+}
+// Report a specificity error, or defer it if in inference mode (a).
+void specificityErrorOrDefer(Scope sc,lazy string msg,Location loc,Expression errExp){
+	if(!sc.inferenceMode){
+		sc.error(msg,loc);
+		errExp.setSemError();
+	}else markDeferredSpecificityCheck(sc);
+}
+// Mark the function being analyzed as tainted by a speculative type.
+void markCallerTainted(Scope sc,FunctionDef speculativeFd){
+	if(!sc) return;
+	if(auto cfd=sc.getFunction()){
+		if(cfd !is speculativeFd) cfd.tainted=true;
+	}
+}
+
 template defineLhsSemanticImpls(bool isPresemantic){
 Expression defineLhsSemanticImpl(CompoundDecl cd,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(cd,context); // TODO: get rid of this case
@@ -2240,7 +2308,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 							id.setSemError();
 						}
 					}else vd.vtype=context.type;
-				}else id.setSemError();
+				}else if(!context.sc.inferenceMode) id.setSemError();
 				id.type=id.typeFromMeaning;
 				if(context.initializer){
 					assert(!vd.initializer||vd.initializer is context.initializer);
@@ -2255,9 +2323,13 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 			id.type=context.type;
 		}
 		if(!id.type){
-			context.sc.error(format("cannot determine type for `%s`",id),id.loc);
-			id.setSemError();
-			if(id.meaning) id.meaning.setSemForceError();
+			if(context.sc.inferenceMode){
+				id.type=bottom;
+			}else{
+				context.sc.error(format("cannot determine type for `%s`",id),id.loc);
+				id.setSemError();
+				if(id.meaning) id.meaning.setSemForceError();
+			}
 		}
 	}
 	return id;
@@ -2431,8 +2503,7 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 		if(context.type){
 			if(tt){
 				if(tpl.length!=tt.length){
-					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc);
-					tpl.setSemError();
+					specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc,tpl);
 				}
 			}else if(vt){
 				// TODO: technically this violates type refinement
@@ -2441,14 +2512,16 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 				neq=expressionSemantic(neq,context.expSem.nestConst);
 				assert(neq.isSemCompleted());
 				if(neq.eval()==LiteralExp.makeBoolean(1)){
-					sc.error(text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc);
-					tpl.setSemError();
+					specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc,tpl);
 				}
 			}else if(!at&&!isBottom){
 				sc.error(format("cannot unpack type %s as a tuple",context.type),tpl.loc);
 				tpl.setSemError();
 			}
-		}else tpl.setSemError(); // TODO: ok?
+		}else{
+			if(!sc.inferenceMode) tpl.setSemError(); // TODO: ok?
+			else markDeferredSpecificityCheck(sc);
+		}
 		if(isBottom) tpl.type=bottom;
 		else if(tpl.e.all!(e=>!!e.type))
 			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
@@ -2476,8 +2549,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 		if(context.type){
 			if(tt){
 				if(vec.e.length!=tt.length){
-					sc.error(text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",tt.length),vec.loc);
-					vec.setSemError();
+					specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",tt.length),vec.loc,vec);
 				}
 			}else if(vt){
 				// TODO: technically this violates type refinement
@@ -2486,14 +2558,16 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 				neq=expressionSemantic(neq,context.expSem.nestConst);
 				assert(neq.isSemCompleted());
 				if(neq.eval()==LiteralExp.makeBoolean(1)){
-					sc.error(text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc);
-					vec.setSemError();
+					specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc,vec);
 				}
 			}else if(!at){
 				sc.error(format("cannot unpack type %s as a vector",context.type),vec.loc);
 				vec.setSemError();
 			}
-		}else vec.setSemError(); // TODO: ok?
+		}else{
+			if(!sc.inferenceMode) vec.setSemError(); // TODO: ok?
+			else markDeferredSpecificityCheck(sc);
+		}
 		if(isBottom) vec.type=bottom;
 		if(vec.e.all!(e=>!!e.type)){
 			Expression t=bottom;
@@ -3705,73 +3779,73 @@ Expression replaceBaseIndex(T)(T e,Expression newBase)if(is(T==IndexExp)||is(T==
 }
 
 Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Location loc,Scope sc){
-    Scope.DeclProp.ComponentReplacement[][] result;
-    foreach(crepls;creplss){
-        void doIt(Scope.DeclProp.ComponentReplacement[] crepls){
-            Scope.DeclProp.ComponentReplacement[] curGroup;
-	        static struct MapEntry{
-		        IndexExp idx;
-		        Id name;
-	        }
-	        MapEntry[] entries;
-	        Scope.DeclProp.ComponentReplacement[][] newGroups;
-            foreach(crepl;crepls){
-	            assert(!!crepl.write);
-	            auto idx=getBaseIndex(crepl.write);
-	            assert(!!idx);
-	            if(idx is crepl.write){
-		            curGroup~=crepl;
-		            continue;
-	            }
-	            auto nname=freshName();
-	            curGroup~=Scope.DeclProp.ComponentReplacement(idx,nname);
-	            auto id=new Identifier(nname);
-	            id.loc=idx.loc;
-	            auto nidx=cast(IndexExp)replaceBaseIndex(crepl.write.copy(),id);
-	            assert(!!nidx,text(crepl.write," ",id));
-	            auto ncrepl=Scope.DeclProp.ComponentReplacement(nidx,crepl.name);
-                bool ok=false;
-                foreach(i,entry;entries){
-	                if(guaranteedSameLocations(entry.idx,idx,loc,sc,InType.no)){
-		                newGroups[i]~=ncrepl;
-                        ok=true;
-                        break;
-                    }
-                }
-                if(!ok){
-	                entries~=MapEntry(nidx,nname);
-                    newGroups~=[ncrepl];
-                }
-            }
-            bool ok=false;
-            foreach(i;0..curGroup.length){
-	            foreach(j;i+1..curGroup.length){
-		            auto a=curGroup[i],b=curGroup[j];
-		            assert(a.write&&b.write);
-		            if(a.write.isSemError()||b.write.isSemError())
-			            continue;
-		            if(!guaranteedDifferentLocations(a.write,b.write,loc,sc,InType.no)){
-			            if(guaranteedSameLocations(a.write,b.write,loc,sc,InType.no)){
-				            sc.error("aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
-			            }else{
-				            sc.error("potential aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
-			            }
-			            sc.note("other index is here",a.write.loc);
-			            a.write.setSemError();
-			            b.write.setSemError();
-			            ok=false;
-		            }
-	            }
-	            if(!ok) break;
-            }
+	Scope.DeclProp.ComponentReplacement[][] result;
+	foreach(crepls;creplss){
+		void doIt(Scope.DeclProp.ComponentReplacement[] crepls){
+			Scope.DeclProp.ComponentReplacement[] curGroup;
+			static struct MapEntry{
+				IndexExp idx;
+				Id name;
+			}
+			MapEntry[] entries;
+			Scope.DeclProp.ComponentReplacement[][] newGroups;
+			foreach(crepl;crepls){
+				assert(!!crepl.write);
+				auto idx=getBaseIndex(crepl.write);
+				assert(!!idx);
+				if(idx is crepl.write){
+					curGroup~=crepl;
+					continue;
+				}
+				auto nname=freshName();
+				curGroup~=Scope.DeclProp.ComponentReplacement(idx,nname);
+				auto id=new Identifier(nname);
+				id.loc=idx.loc;
+				auto nidx=cast(IndexExp)replaceBaseIndex(crepl.write.copy(),id);
+				assert(!!nidx,text(crepl.write," ",id));
+				auto ncrepl=Scope.DeclProp.ComponentReplacement(nidx,crepl.name);
+				bool ok=false;
+				foreach(i,entry;entries){
+					if(guaranteedSameLocations(entry.idx,idx,loc,sc,InType.no)){
+						newGroups[i]~=ncrepl;
+						ok=true;
+						break;
+					}
+				}
+				if(!ok){
+					entries~=MapEntry(nidx,nname);
+					newGroups~=[ncrepl];
+				}
+			}
+			bool ok=false;
+			foreach(i;0..curGroup.length){
+				foreach(j;i+1..curGroup.length){
+					auto a=curGroup[i],b=curGroup[j];
+					assert(a.write&&b.write);
+					if(a.write.isSemError()||b.write.isSemError())
+						continue;
+					if(!guaranteedDifferentLocations(a.write,b.write,loc,sc,InType.no)){
+						if(guaranteedSameLocations(a.write,b.write,loc,sc,InType.no)){
+							sc.error("aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+						}else{
+							sc.error("potential aliasing of partial index expression not supported yet by component-splitting lowering pass",b.write.loc);
+						}
+						sc.note("other index is here",a.write.loc);
+						a.write.setSemError();
+						b.write.setSemError();
+						ok=false;
+					}
+				}
+				if(!ok) break;
+			}
 
-            result~=curGroup;
-            foreach(newGroup;newGroups)
-	            doIt(newGroup);
-        }
-        doIt(crepls);
-    }
-    return result;
+			result~=curGroup;
+			foreach(newGroup;newGroups)
+				doIt(newGroup);
+		}
+		doIt(crepls);
+	}
+	return result;
 }
 
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
@@ -4132,8 +4206,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			if(auto tt=type.isTupleTy){
 				if(tpl.length!=tt.length){
 					// TODO: technically this violates monotonicity of type checking w.r.t. subtyping
-					sc.error(text("inconsistent number of tuple entries for assignment: ",tpl.length," vs. ",tt.length),lhs.loc);
-					ae.setSemError();
+					specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for assignment: ",tpl.length," vs. ",tt.length),lhs.loc,ae);
 				}else{
 					foreach(i,exp;tpl.e)
 						checkCompat(exp,tt[i]);
@@ -7401,6 +7474,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					cfd.numUpdatesPending+=1;
 				}
 				cfd.unsealed=true;
+				markCallerTainted(sc,fd);
 			}
 		}
 	}
@@ -7520,6 +7594,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.body_=fd.origBody_.copy();
 		auto newfscope_=new FunctionScope(fd.scope_,fd);
 		fd.sstate=SemState.initial;
+		fd.tainted=false; // tainted is per-analysis-pass; finalPassDone is sticky
+		fd.deferredSpecificityCheck=false; // reset for re-analysis
 		foreach(p;fd.params){
 			p.splitInto=[];
 			assert(p.scope_ is fd.fscope_);
@@ -7584,6 +7660,15 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
+	// Final mode-(b) pass: if ftypeFinal and deferred checks exist, re-run.
+	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal()){
+		fd.finalPassDone=true;
+		fd.ftypeFinal=false;
+		fd.inferringReturnType=true;
+		fd.deferredSpecificityCheck=false;
+		resetFunction(fd,fd);
+		return functionDefSemantic(fd,sc);
+	}
 	if(!fd.isSemError()&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate.length)||numCapturesAfter!=numCapturesBefore)){
 		//imported!"util.io".writeln("NOTIFYING: ",fd," ",ftypeBefore," ⇒ ",fd.ftype," ",numCapturesBefore," ⇒ ",numCapturesAfter);
 		if(!fd.isSemFinal()) resetFunction(fd,fd);
@@ -7593,7 +7678,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.isSemCompleted())
 				ufd=ufd.scope_.getFunction();
-			if(!ufd||!ufd.inferringReturnType&&!ufd.inferAnnotation) continue; // TODO: needed?
+			if(!ufd||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue;
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
@@ -7628,6 +7713,7 @@ void determineType(ref Expression e,ExpSemContext context,void delegate(Expressi
 		if(fd.ftype) return future(fd.ftype);
 		if(!fd.ftypeFinal){
 			fd.ftypeCallbacks~=future;
+			markCallerTainted(context.sc,fd);
 			//imported!"util.io".writeln("CALLBACK ADDED TO: ",fd," ",fd.ftype," ",fd.ftypeFinal," ",e.loc);
 		}
 	}
