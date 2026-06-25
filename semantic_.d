@@ -438,30 +438,8 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		success&=expr.isSemCompleted();
 	}
 	foreach(expr;exprs){ // TODO: ok?
-		if(expr.sstate==SemState.passive){
-			if(auto fd=cast(FunctionDef)expr){
-				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
-					fd.finalPassDone=true;
-					fd.ftypeFinal=false;
-					fd.inferringReturnType=true;
-					fd.deferredSpecificityCheck=false;
-					fd.sstate=SemState.initial;
-					if(fd.origBody_) fd.body_=fd.origBody_.copy();
-					if(fd.origRret) fd.rret=fd.origRret.copy();
-					auto newfscope_=new FunctionScope(fd.scope_,fd);
-					fd.fscope_=newfscope_;
-					fd.tainted=false;
-					foreach(p;fd.params){
-						p.splitInto=[];
-						p.scope_=null;
-						newfscope_.insert(p);
-					}
-					expr=functionDefSemantic(fd,fd.scope_);
-					continue;
-				}
-			}
+		if(expr.sstate==SemState.passive)
 			expr.setSemCompleted();
-		}
 	}
 	if(!sc.allowsLinear()){
 		foreach(ref expr;exprs){
@@ -7564,6 +7542,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.ftypeFinal=true;
 		fd.inferringReturnType=false;
 		fd.inferAnnotation=false;
+		fd.tainted=false;
 	}
 	if(fd.ftypeFinal){
 		foreach(ref n;fd.retNames){
@@ -7667,9 +7646,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
-	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal()){
+	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal() && !fd.tainted){
 		fd.finalPassDone=true;
-		fd.ftypeFinal=false;
 		fd.inferringReturnType=true;
 		fd.deferredSpecificityCheck=false;
 		resetFunction(fd,fd);
@@ -7696,6 +7674,18 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	finalize(fd);
+	static if(language==silq){
+		if(fd.sstate==SemState.passive){
+			fd.tainted=false;
+			if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
+				fd.finalPassDone=true;
+				fd.inferringReturnType=true;
+				fd.deferredSpecificityCheck=false;
+				resetFunction(fd,fd);
+				return functionDefSemantic(fd,fd.scope_);
+			}
+		}
+	}
 	return fd;
 }
 
@@ -7771,10 +7761,12 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 		if(auto nret=joinTypes(fd.ret,type)){
 			//imported!"util.io".writeln("WIDENTYPE: ",fd," ",fd.ret," ",type," ",nret);
-			if(fd.sealed) fd.unseal();
-			fd.ret=nret;
-			fd.ftype=null;
-			setFtype(fd,true);
+			if(nret!=fd.ret){
+				if(fd.sealed) fd.unseal();
+				fd.ret=nret;
+				fd.ftype=null;
+				setFtype(fd,true);
+			}
 			return true;
 		}
 		return false;
