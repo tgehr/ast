@@ -1199,10 +1199,8 @@ abstract class Scope{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
 	}do{
-		static if(language==silq){
-			r.controlDependency.joinWith(controlDependency);
+		static if(language==silq)
 			r.dependencies=dependencies.dup;
-		}
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		if(!allowMerge) lastUses.prepareNesting(this);
@@ -1288,6 +1286,7 @@ abstract class Scope{
 			void splitSym(){
 				auto nsym=scopes[0].split(sym,null);
 				if(nsym is sym) return;
+				pushUp(nestedControlDependency,sym); // TODO: needed?
 				symtabRemove(sym);
 				symtabInsert(nsym);
 				sym=nsym;
@@ -1296,6 +1295,7 @@ abstract class Scope{
 				addDeadMerge(sym);
 				removeOSym(this,sym);
 				removeOSym(scopes[0],psym);
+				pushUp(nestedControlDependency,psym); // TODO: needed?
 				symExists=false;
 			}
 			void promoteSym(Expression ntype){
@@ -1304,6 +1304,7 @@ abstract class Scope{
 				if(!dependencyTracked(sym))
 					addDefaultDependency(sym); // TODO: ideally can be removed
 				//dependencies.replace(sym,var); // reverse-inherit dependencies
+				pushUp(nestedControlDependency,sym); // TODO: needed?
 				auto dep=getDependency(sym);
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
