@@ -500,12 +500,41 @@ class LiteralExp: Expression{
 		return type.isTotal();
 	}
 
+	private static bool hasBasePrefix(string str){
+		if(str.length<2) return false;
+		if(str[0]!='0') return false;
+		switch(str[1]){
+			case 'b','B','o','O','x','X': return true;
+			default: return false;
+		}
+	}
+	private static ℤ parseIntegerConstant(string str)in{
+		assert(!!str.length);
+	}do{
+		if(str[0]=='+') return parseIntegerConstant(str[1..$]);
+		if(str[0]=='-') return -parseIntegerConstant(str[1..$]);
+		if(hasBasePrefix(str)){
+			if(str[1]=='b'||str[1]=='B'){
+				ℤ r=0;
+				foreach(c;str[2..$]) r=2*r+int(c=='1');
+				return r;
+			}
+			if(str[1]=='o'||str[1]=='O'){
+				ℤ r=0;
+				foreach(c;str[2..$]) r=8*r+int(c-'0');
+				return r;
+			}
+		}
+		return ℤ(str);
+	}
+
 	override Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(lit.type!=Tok!"0") return none!(ℤ);
-		return just(ℤ(lit.str));
+		return just(parseIntegerConstant(lit.str));
 	}
 	// returns (x, y, b, n) where the value is x/y * b**n; y > 0, b > 0
 	private static Maybe!(Q!(ℤ, ℤ, int, int)) parseRationalConstant(string str){
+		if(hasBasePrefix(str)) return just(q(parseIntegerConstant(str),ℤ(1),1,0));
 		int base = 10;
 		int exp = 0;
 		string numPart = str;
@@ -526,7 +555,7 @@ class LiteralExp: Expression{
 		return just(q(ℤ(intPart ~ fracPart), ℤ(1), base, exp));
 	}
 	override Maybe!(Q!(ℤ, ℤ, int, int)) asRationalConstant() {
-		if(lit.type == Tok!"0") return just(q(ℤ(lit.str), ℤ(1), 1, 0));
+		if(lit.type == Tok!"0") return just(q(parseIntegerConstant(lit.str), ℤ(1), 1, 0));
 		if(lit.type != Tok!".0") return none!(Q!(ℤ, ℤ, int, int));
 		return parseRationalConstant(lit.str);
 	}

@@ -919,13 +919,38 @@ private:
 	}
 	
 	private Token lexNumber(ref immutable(char)* p){
-		auto s=p;
-		while('0'<=*p && *p<='9') p++;
-		bool isFloat=false;
-		if(*p=='.'&&*(p+1)!='.'){ isFloat=true; p++; while('0'<=*p && *p<='9') p++; }
-		if(*p=='e'){ isFloat=true;p++; if(*p=='+'||*p=='-') p++; while('0'<=*p && *p<='9') p++; }
-		bool isImag=false;
-		if(*p=='i'){ isImag=true; p++; }
+		auto s = p;
+		static bool isDec(char c)=>'0'<=c&&c<='9';
+		static bool isBin(char c)=>c=='0'||c=='1';
+		static bool isOct(char c)=>'0'<=c&&c<='7';
+		static bool isHex(char c)=>'0'<=c&&c<='9'||'a'<=c&&c<='f'||'A'<=c&&c<='F';
+		bool isPrefixed=false,isFloat=false,isImag=false;
+		if(*p == '0'){
+			auto q = p + 1;
+			if(*q=='b'||*q=='B'){
+				isPrefixed=true,p+=2;
+				while(isBin(*p)) p++;
+			}else if(*q=='o'||*q=='O'){
+				isPrefixed=true,p+=2;
+				while(isOct(*p)) p++;
+			}else if(*q=='x'||*q=='X'){
+				isPrefixed=true,p+=2;
+				while(isHex(*p)) p++;
+			}
+		}
+		if(!isPrefixed){
+			while(isDec(*p)) p++;
+			if(*p=='.'&&*(p+1)!='.'){
+				isFloat=true,p++;
+				while(isDec(*p)) p++;
+			}
+			if(*p=='e'||*p=='E'){
+				isFloat=true,p++;
+				if(*p=='+'||*p=='-') p++;
+				while(isDec(*p)) p++;
+			}
+			if(*p=='i') isFloat=isImag=true,p++;
+		}
 		Token r;
 		r.type=isImag?Tok!".0i":isFloat?Tok!".0":Tok!"0";
 		r.str=s[0..p-s];
