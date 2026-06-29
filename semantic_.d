@@ -4412,7 +4412,7 @@ AAssignExp isInvertibleOpAssignExp(Expression e){
 	if(!r) return null;
 	if(cast(AddAssignExp)e||cast(SubAssignExp)e||cast(NSubAssignExp)e||cast(CatAssignExp)e||cast(BitXorAssignExp)e||cast(XorAssignExp)e)
 		return r;
-	if(cast(MulAssignExp)e&&r.e2.type){
+	if((cast(MulAssignExp)e||cast(DivAssignExp)e)&&r.e2.type){
 		if(auto zmod=isℤmodTy(r.e2.type))
 			if(zmod.isStar)
 				return r;
@@ -6500,7 +6500,21 @@ Expression divisionType(Expression t1, Expression t2){
 	auto r=arithmeticType!false(t1,t2);
 	if(!r) return null;
 	if(isFixedIntTy(r)) return null; // TODO: add a special operator for float and rat?
-	if(isℤmodTy(r)) return null; // TODO: support division on ℤstar?
+	if(isℤmodTy(r)){
+		if(auto zmod2=isℤmodTy(t2)){
+			if(zmod2.isStar){
+				if(isℤmodTy(t1)){
+					return zmod2.isClassical?t1:t1.getQuantum();
+				}
+				if(isSubtype(t1,ℤt(false))){
+					auto ce=cast(CallExp)t2, id=cast(Identifier)ce.e;
+					assert(!!id);
+					return getℤmodTy(zmod2.N,false,t1.isClassical()&&zmod2.isClassical,t2.loc,id.scope_);
+				}
+			}
+		}
+		return null;
+	}
 	return util.among(r,Bool(true),ℕt(true),ℤt(true))?ℚt(true):
 		util.among(r,Bool(false),ℕt(false),ℤt(false))?ℚt(false):r;
 }

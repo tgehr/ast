@@ -539,7 +539,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 			ae.sstate=SemState.completed;
 			return ae;
 		}
-		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"⊻←",Tok!"~←",Tok!"·←"].canFind(op)){
+		static if([Tok!"+←",Tok!"-←",Tok!"sub←",Tok!"⊕←",Tok!"⊻←",Tok!"~←",Tok!"·←",Tok!"/←"].canFind(op)){
 			Expression toReversible(){
 				auto id1=cast(Identifier)e.e1;
 				if(!id1) return null; // TODO: lower via `with x:=a do x op= b`
@@ -550,6 +550,7 @@ Expression getLowering(TokenType op)(BinaryExp!op e,Scope sc)if(is(BinaryExp!op:
 				else static if(op==Tok!"⊻←") enum name="__xor_assign", ob=OB.mul;
 				else static if(op==Tok!"~←") enum name="__cat", ob=OB.cat;
 				else static if(op==Tok!"·←") enum name="__mul_assign", ob=OB.mul;
+				else static if(op==Tok!"/←") enum name="__div_assign", ob=OB.mul;
 				else static assert(0);
 				auto fc=makeFunctionCall(ob,name,e,[id1,e.e2],e.loc,expSemContext(sc,ConstResult.no,InType.no));
 				auto id2=new Identifier(id1.name);
