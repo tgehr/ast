@@ -534,7 +534,9 @@ abstract class Scope{
 			}
 			return ConstBlockContext(constBlock,trackedTemporaries.length);
 		}
-		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType){
+		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType)in{
+			assert(decl&&constBlock);
+		}do{
 			if(constBlock is parent&&!(!constBlock.type||constBlock.type.isClassical())) return; // TODO: would be nice if we would not need this, can happen e.g. in consumeArray
 			if(auto lu=lastUses.get(decl,true)){
 				if(lu.isConsumption()){
@@ -570,7 +572,8 @@ abstract class Scope{
 			}
 			foreach(decl,ref prop;declProps.props){
 				auto nconstBlock=lookupSnapshot(decl);
-				if(prop.constBlock != nconstBlock) recordResetConst(decl,prop.constBlock.length?prop.constBlock[$-1]:null,parent,isStatement,inType);
+				if(prop.constBlock.length&&prop.constBlock!=nconstBlock)
+					recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
 				prop.constBlock=nconstBlock;
 			}
 			foreach(decl,constBlock;context.constBlock){
