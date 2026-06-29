@@ -209,16 +209,13 @@ final class LastUse{
 		//imported!"util.io".writeln("APPENDING: ",this," ⇒ ",next);
 	}
 
-	void pinSplits(){ return pinImpl(true); }
-	void pin(){ return pinImpl(false); }
-	void pinImpl(bool includingSplits){
+	void pin(){
 		if(forwardTo) forwardTo.pin();
 		if(splitFrom) splitFrom.pin();
-		if(!includingSplits&&kind==Kind.lazySplit) return;
 		if(isConsumption()) return;
 		//imported!"util.io".writeln("PINNING: ",this);
 		kind=Kind.constPinned;
-		if(splitFrom) splitFrom.pinSplits();
+		if(splitFrom) splitFrom.pin();
 	}
 
 	private void markConsumed(Identifier theUse,bool isForget){
@@ -769,7 +766,7 @@ struct LastUses{
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
 				if(lastUse.kind!=LastUse.Kind.lazySplitSink)
-					prevLastUse.pinSplits();
+					prevLastUse.pin();
 				lastUse.splitSource=prevLastUse;
 				keep=true;
 			}else if(prevLastUse.splitSource){
