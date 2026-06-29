@@ -553,13 +553,30 @@ abstract class Scope{
 				lastUses.constUse(constBlock,parent,isStatement,inType);
 		}
 		final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
+			Identifier[] lookupSnapshot(Declaration decl){
+				for(auto d=decl; d; d=d.splitFrom){
+					if(auto r=context.constBlock.get(d,null)) return r;
+				}
+				return null;
+			}
+			Declaration lookupCurrent(Declaration decl){
+				if(declProps.tryGet(decl)) return decl;
+				foreach(d,ref prop;declProps.props){
+					for(auto s=d.splitFrom; s; s=s.splitFrom){
+						if(s is decl) return d;
+					}
+				}
+				return null;
+			}
 			foreach(decl,ref prop;declProps.props){
-				auto nconstBlock=context.constBlock.get(decl,null);
-				if(prop.constBlock != nconstBlock) recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+				auto nconstBlock=lookupSnapshot(decl);
+				if(prop.constBlock != nconstBlock) recordResetConst(decl,prop.constBlock.length?prop.constBlock[$-1]:null,parent,isStatement,inType);
 				prop.constBlock=nconstBlock;
 			}
 			foreach(decl,constBlock;context.constBlock){
-				auto prop=declProps.tryGet(decl);
+				auto current=lookupCurrent(decl);
+				if(!current) continue; // declaration was consumed/removed entirely
+				auto prop=declProps.tryGet(current);
 				assert(prop&&prop.constBlock==constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
