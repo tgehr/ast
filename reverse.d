@@ -1199,6 +1199,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	if(auto ce=cast(CompoundExp)e){
 		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoistClassical));
 		res.loc=ce.loc;
+		foreach(s;res.s) propErr(s,res);
 		static if(language==silq){
 			if(ce.blscope_&&ce.blscope_.forgottenVars.any!(d=>d.isLinear())){
 				sc.error("reversal of implicit forget not supported yet",ce.loc);
@@ -1214,6 +1215,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		assert(!!othw==!!ite.othw);
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
+		propErr(then,res);
+		propErr(othw,res);
 		return res;
 	}
 	if(auto we=cast(WithExp)e){
@@ -1224,6 +1227,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		res.isIndices=we.isIndices;
 		if(we.itrans) res.itrans=we.itrans.copy();
 		res.loc=we.loc;
+		propErr(trans,res);
+		propErr(bdy,res);
 		return res;
 	}
 	if(auto ret=cast(ReturnExp)e){
@@ -1331,6 +1336,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		assert(!!bdy);
 		auto res=new ForExp(fe.var.copy(),fe.pattern?fe.pattern.copy():null,aggrRev,bdy);
 		res.loc=fe.loc;
+		propErr(bdy,res);
 		return res;
 	}
 	if(auto we=cast(WhileExp)e){
@@ -1342,6 +1348,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		assert(!!bdy);
 		auto res=new RepeatExp(re.num.copy(),bdy);
 		res.loc=re.loc;
+		propErr(bdy,re);
 		return res;
 	}
 	if(auto oe=cast(ObserveExp)e) enforce(0);
