@@ -914,6 +914,8 @@ struct FixedPointIterState{
 	StmFlags nextFlags;
 	BlockScope loopScope=null;
 	BlockScope forgetScope=null;
+	Declaration[Declaration] mustBeConstFromDummies;
+	bool dummyAnalysisRan=false;
 	void beginIteration(){
 		prevStateSnapshot=nextStateSnapshot;
 		prevFlags=nextFlags;
@@ -947,12 +949,123 @@ FixedPointIterState startFixedPointIteration(Scope sc,ref StmFlags flags){
 	auto origStateSnapshot=sc.getStateSnapshot(true);
 	return FixedPointIterState(origStateSnapshot,flags,origStateSnapshot,flags,origStateSnapshot,flags);
 }
+static if(language==silq){
+struct DummyAnalysisData{
+	Declaration[Declaration] dummies; // candidate -> dummy placeholder
+	bool contextPushed=false;
+}
+Declaration[] dummyAnalysisCandidates(Scope sc, ref Scope.ScopeState prevState, BlockScope oldLoopScope){
+	if(!oldLoopScope) return [];
+	Declaration[] result;
+	bool[Declaration] consumedOuterSet;
+	Declaration[Id] allDecls=sc.rnsymtab.dup;
+	foreach(decl;oldLoopScope.consumedOuter){
+		if(!decl||cast(DeadDecl)decl) continue;
+		consumedOuterSet[decl]=true;
+		allDecls[decl.getId]=decl;
+	}
+	foreach(id,decl;allDecls){
+		if(cast(DeadDecl)decl||decl.isSemError()) continue;
+		auto type=typeForDecl(decl);
+		if(!type||type.isClassical()) continue;
+		bool mayChange=!!(decl in consumedOuterSet);
+		if(!mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is oldLoopScope);
+		if(!mayChange) continue;
+		if(!prevState.loopEntryCanForget(decl.getId)) continue;
+		result~=sc.rnsymtab.get(decl.getId,decl);
+	}
+	return result;
+}
+DummyAnalysisData prepareDummyAnalysis(Scope sc, Declaration[] candidates){
+	DummyAnalysisData data;
+	if(!candidates.length) return data;
+	foreach(liveDecl;candidates){
+		auto dummyId=new Identifier(freshName());
+		dummyId.loc=liveDecl.loc;
+		auto dummyDecl=new VarDecl(dummyId);
+		dummyDecl.loc=liveDecl.loc;
+		dummyDecl.sstate=SemState.completed;
+		data.dummies[liveDecl]=dummyDecl;
+		auto dep=Dependency(false,SetX!Declaration.init);
+		dep.dependencies.insert(dummyDecl);
+		sc.addDependency(liveDecl,dep); // joins the placeholder into the current dependency
+	}
+	sc.pushDummyWitnessContext(data.dummies);
+	data.contextPushed=true;
+	return data;
+}
+Declaration[Declaration] collectDummyResults(Scope sc, ref FixedPointIterState state, ref DummyAnalysisData data, Declaration[] candidates)in{
+	assert(data.contextPushed);
+}do{
+	auto context=sc.popDummyWitnessContext();
+	bool[Declaration] dummySet;
+	foreach(v,vprime;context.dummies) dummySet[vprime]=true;
+	void resolveTransitively(ref Dependency dep){
+		if(dep.isTop) return;
+		bool[Declaration] visited;
+		Declaration[] worklist;
+		foreach(x;dep.dependencies) worklist~=x;
+		while(worklist.length){
+			auto decl=worklist[$-1];
+			worklist=worklist[0..$-1];
+			if(decl in visited) continue;
+			visited[decl]=true;
+			foreach(v,vprime;context.dummies)
+				if(decl is vprime)
+					context.results[v]=v;
+			if(auto cdep=decl in context.consumedDeps){
+				if(!cdep.isTop)
+					foreach(x;cdep.dependencies) worklist~=x;
+			}
+		}
+	}
+	void scanLastUses(ref imported!"ast.lastuse".LastUses lastUses){
+		alias LastUse=imported!"ast.lastuse".LastUse;
+		foreach(decl,lu;lastUses.lastUses){
+			if(lu.kind==LastUse.Kind.synthesizedForget)
+				resolveTransitively(lu.dep);
+		}
+		foreach(decl,lus;lastUses.retired){
+			foreach(lu;lus)
+				if(lu&&lu.kind==LastUse.Kind.synthesizedForget)
+					resolveTransitively(lu.dep);
+		}
+	}
+	scanLastUses(sc.lastUses);
+	if(state.loopScope) scanLastUses(state.loopScope.lastUses);
+	if(state.forgetScope) scanLastUses(state.forgetScope.lastUses);
+	if(auto fd=sc.getFunction()){
+		foreach(candidate;candidates)
+			if(candidate.getId in fd.loweredConstIds)
+				context.results[candidate]=candidate;
+	}
+	for(bool changed=true;changed;){
+		changed=false;
+		SetX!Id resultIds;
+		foreach(v;context.results.byValue) resultIds.insert(v.getId);
+		foreach(ref carried;context.nestedLoopCarried){
+			if(!carried.any!(id=>!!(id in resultIds))) continue;
+			foreach(candidate;candidates){
+				if(candidate.getId in carried && candidate !in context.results){
+					context.results[candidate]=candidate;
+					changed=true;
+				}
+			}
+		}
+	}
+	return context.results;
+}
+void restoreDummyDeps(Scope sc, ref DummyAnalysisData data){
+	foreach(decl,dummy;data.dummies)
+		sc.substituteDependency(dummy,Dependency(false));
+}
+}
 
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
 	enum returnOnlyMoved=false; // (experimental)
-	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_);
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan?&state.mustBeConstFromDummies:null);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
@@ -1326,6 +1439,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
 	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
+	foreach(p;constParams) if(p[3]) fd.loweredConstIds.insert(p[0]);
 	fd.attributes[Id.s!"silq-loop"] = LiteralExp.makeString(lowerf(T.stringof[0..$-"Exp".length]));
 	fd.annotation=pure_;
 	fd.inferAnnotation=true;
@@ -1523,7 +1637,79 @@ bool finalizeLoopIteration(
 bool loopIterationConverged(CompoundExp bdy,Expression loopExp,bool returns,ref FixedPointIterState state){
 	return bdy.isSemError()||loopExp.isSemError()||returns||state.converged;
 }
+// Whether `sc` is inside a loop body of the function it belongs to.
+bool insideLoopBody(Scope sc){
+	for(auto s=sc;s;s=s.parentScope()){
+		if(cast(FunctionScope)s) break;
+		if(auto bs=cast(BlockScope)s) if(bs.isLoopBody) return true;
+	}
+	return false;
+}
+// Whether the loop statement analyzed in `sc` should be lowered (and the dummy
+// dependency analysis preceding the lowering be performed) on this pass.
+//
+// A loop nested inside another loop's body is never lowered in place. This both
+// skips the fixed-point iterations of the enclosing loop and the enclosing
+// loop's final iteration: the lowering of the enclosing loop copies the nested
+// loop (without semantic information) into the body of the generated recursive
+// function, where it is analyzed and lowered on its own. This way, each loop is
+// lowered exactly once, at its final position. (Lowering nested loops in place
+// instead would mean that the code generated for them is copied and re-analyzed
+// as part of the enclosing lowering, duplicating the work and re-resolving the
+// identifiers the lowering synthesized in a context with different shadowing.
+// Note that lowering cannot simply be skipped while the scope is in inference
+// mode: functions generated by the lowering itself have inferred return types
+// that are finalized through type-update callbacks, without any further
+// analysis pass in which a deferred lowering could still happen.)
+bool shouldLowerLoop(Scope sc){
+	if(!astopt.removeLoops) return false;
+	return !insideLoopBody(sc);
+}
+// Run the final ("mode-(b)") loop iteration with `loopFinalPass` set, together
+// with the dummy dependency analysis of the loop-lowering pass when applicable.
+// The final iteration runs if a specificity check was deferred during inference,
+// or if the loop is about to be lowered and has a candidate for the dummy
+// analysis.
+void runFinalLoopIteration(T)(
+	T loop, Scope sc, ref StmFlags flags, ref FixedPointIterState state, ref CompoundExp bdy,
+	string kind, ref Declaration[] constForgets, ref bool anyDeferredSpecificityCheck,
+	scope void delegate(BlockScope) setupIter=null, scope void delegate() checkAfterBody=null,
+){
+	bool lowerThisPass=shouldLowerLoop(sc);
+	if(loop.isSemError()||bdy.isSemError()) return;
+	Declaration[] candidates;
+	if(lowerThisPass)
+		candidates=dummyAnalysisCandidates(sc,state.prevStateSnapshot,state.loopScope);
+	else if(astopt.removeLoops&&insideLoopBody(sc)&&sc.dummyWitnessActive){
+		// This loop will be lowered as part of the body of the recursive function
+		// generated for an enclosing loop whose dummy analysis is currently in
+		// progress; report which variables it carries (see `noteNestedLoopCarried`).
+		SetX!Id carried;
+		foreach(candidate;dummyAnalysisCandidates(sc,state.prevStateSnapshot,state.loopScope))
+			carried.insert(candidate.getId);
+		sc.noteNestedLoopCarried(carried);
+	}
+	if(!anyDeferredSpecificityCheck&&!candidates.length) return;
+	state.beginIteration();
+	auto dummyData=prepareDummyAnalysis(sc,candidates);
+	Expression.CopyArgs cargs={preserveSemantic: true};
+	bdy=loop.bdy.copy(cargs);
+	auto lsc=bdy.blscope_=state.makeScopes(sc);
+	lsc.loopFinalPass=true;
+	if(setupIter) setupIter(lsc);
+	bdy=compoundExpSemantic(bdy,sc,flags);
+	assert(!!bdy);
+	if(checkAfterBody) checkAfterBody();
+	finalizeLoopIteration(state,sc,flags,bdy,loop,kind,constForgets,anyDeferredSpecificityCheck);
+	if(dummyData.contextPushed){
+		state.dummyAnalysisRan=true;
+		foreach(v;collectDummyResults(sc,state,dummyData,candidates).byValue)
+			state.mustBeConstFromDummies[v]=v;
+		restoreDummyDeps(sc,dummyData);
+	}
+}
 Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool resetConst=true){
+	Expression.CopyArgs cargs={preserveSemantic: true};
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	assert(!fe.bdy.blscope_);
 	fe.aggr=forAggregateSemantic(fe.aggr,context,fe);
@@ -1619,7 +1805,6 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	}
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
-		Expression.CopyArgs cargs={preserveSemantic: true};
 		bdy=fe.bdy.copy(cargs);
 		auto fesc=bdy.blscope_=state.makeScopes(sc);
 		setupForIter(fesc);
@@ -1634,23 +1819,14 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 			break;
 		}
 	}
-	if(!fe.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
-		state.beginIteration();
-		Expression.CopyArgs cargs2={preserveSemantic: true};
-		bdy=fe.bdy.copy(cargs2);
-		auto fesc=bdy.blscope_=state.makeScopes(sc);
-		fesc.loopFinalPass=true;
-		setupForIter(fesc);
-		bdy=compoundExpSemantic(bdy,sc,flags);
-		assert(!!bdy);
-		finalizeLoopIteration(state,sc,flags,bdy,fe,"for",constForgets,anyDeferredSpecificityCheck);
-	}
+	runFinalLoopIteration(fe,sc,flags,state,bdy,"for",constForgets,anyDeferredSpecificityCheck,
+		(BlockScope fesc){ setupForIter(fesc); });
 	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
 	fe.type=unit;
 	fe.setSemCompleted();
 	Expression result=fe;
-	if(fe.isSemCompleted()&&astopt.removeLoops)
+	if(fe.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(fe,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())
@@ -1697,17 +1873,12 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 
 	}
 	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
-	if(!we.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
-		state.beginIteration();
-		bdy=we.bdy.copy(cargs);
-		auto wesc=bdy.blscope_=state.makeScopes(sc);
-		wesc.loopFinalPass=true;
-		setupWhileIter(wesc,ncond);
-		bdy=compoundExpSemantic(bdy,sc,flags);
-		if(condSucceeded&&ncond.isSemError())
-			sc.note("variable declaration may be missing in while loop body", we.loc);
-		finalizeLoopIteration(state,sc,flags,bdy,we,"while",constForgets,anyDeferredSpecificityCheck);
-	}
+	runFinalLoopIteration(we,sc,flags,state,bdy,"while",constForgets,anyDeferredSpecificityCheck,
+		(BlockScope wesc){ setupWhileIter(wesc,ncond); },
+		(){
+			if(condSucceeded&&ncond.isSemError())
+				sc.note("variable declaration may be missing in while loop body", we.loc);
+		});
 	state.fixSplitMergeGraph(sc);
 	auto fcond=we.cond.copy(cargs);
 	fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
@@ -1717,7 +1888,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	we.type=isTrue(we.cond)?bottom:unit;
 	we.setSemCompleted();
 	Expression result=we;
-	if(we.isSemCompleted()&&astopt.removeLoops)
+	if(we.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(we,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())
@@ -1726,6 +1897,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 }
 
 Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool resetConst=true){
+	Expression.CopyArgs cargs={preserveSemantic: true};
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	re.num=expressionSemantic(re.num,context.nestConst);
 	static if(language==silq) sc.clearConsumed();
@@ -1735,7 +1907,6 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 		re.setSemError();
 	}
 	bool converged=false;
-	Expression.CopyArgs cargs={preserveSemantic: true};
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
@@ -1756,20 +1927,13 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 		}
 	}
 	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
-	if(!re.isSemError() && !bdy.isSemError() && anyDeferredSpecificityCheck){
-		state.beginIteration();
-		bdy=re.bdy.copy(cargs);
-		bdy.blscope_=state.makeScopes(sc);
-		bdy.blscope_.loopFinalPass=true;
-		bdy=compoundExpSemantic(bdy,sc,flags);
-		finalizeLoopIteration(state,sc,flags,bdy,re,"repeat",constForgets,anyDeferredSpecificityCheck);
-	}
+	runFinalLoopIteration(re,sc,flags,state,bdy,"repeat",constForgets,anyDeferredSpecificityCheck);
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
 	re.type=isPositive(re.num)&&definitelyReturns(re.bdy)?bottom:unit;
 	re.setSemCompleted();
 	Expression result=re;
-	if(re.isSemCompleted()&&astopt.removeLoops)
+	if(re.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(re,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())

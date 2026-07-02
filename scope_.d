@@ -84,6 +84,13 @@ struct Dependencies{
 		dependencies[ndecl]=dependencies[decl];
 		dependencies.remove(decl);
 	}
+	void substitute(Declaration decl,Dependency dep){ // substitute `decl` by `dep` inside all tracked sets (`decl` itself has no entry)
+		foreach(k,ref v;dependencies){
+			v.replace(decl,dep);
+			if(k in v.dependencies)
+				v=Dependency(true); // TODO: get rid of this
+		}
+	}
 	Dependencies dup(){
 		typeof(Dependencies.dependencies) result;
 		foreach(k,ref v;dependencies)
@@ -113,6 +120,13 @@ struct Dependencies{
 		auto ids=getIds,rids=rhs.getIds;
 		return ids==rids;
 	}
+}
+
+struct DummyWitnessContext{
+	Declaration[Declaration] dummies; // candidate -> dummy placeholder
+	Declaration[Declaration] results; // candidates witnessed so far
+	Dependency[Declaration] consumedDeps; // dependency each decl had when it was consumed while this context was active
+	SetX!Id[] nestedLoopCarried; // the loop-carried candidates of each nested quantum loop analyzed while this context was active
 }
 }
 
@@ -693,7 +707,11 @@ abstract class Scope{
 	}do{
 		if(decl.scope_ is this) return true;
 		if(decl.isToplevelDeclaration()) return false;
-		if(decl.isConst||decl.typeConstBlocker||isConst(decl)&&!canRecompute(decl)) return false;
+		if(decl.isConst||decl.typeConstBlocker) return false;
+		if(isConst(decl)){
+			if(!canRecompute(decl)) return false;
+			static if(language==silq) noteDependencyResolved(getDependency(decl));
+		}
 		return true;
 	}
 	final Declaration split(Declaration decl,Identifier use)in{
@@ -1067,6 +1085,43 @@ abstract class Scope{
 	}
 
 	static if(language==silq){
+		// TODO: clean up
+		private DummyWitnessContext[] dummyWitnessContexts_; // populated on the root scope only
+		final ref DummyWitnessContext[] dummyWitnessContexts(){
+			if(auto p=parentScope()) return p.dummyWitnessContexts;
+			return dummyWitnessContexts_;
+		}
+		final void pushDummyWitnessContext(Declaration[Declaration] dummies){
+			dummyWitnessContexts~=DummyWitnessContext(dummies);
+		}
+		final DummyWitnessContext popDummyWitnessContext()in{
+			assert(dummyWitnessContexts.length);
+		}do{
+			auto result=dummyWitnessContexts[$-1];
+			dummyWitnessContexts=dummyWitnessContexts[0..$-1];
+			return result;
+		}
+		final bool dummyWitnessActive(){ return dummyWitnessContexts.length!=0; }
+		final void noteDependencyResolved(Dependency dep){
+			if(dep.isTop||!dummyWitnessActive) return;
+			foreach(ref context;dummyWitnessContexts){
+				foreach(v,vprime;context.dummies)
+					if(vprime in dep.dependencies)
+						context.results[v]=v;
+			}
+		}
+		final void noteDependencyConsumed(Declaration decl,Dependency dep){
+			if(!dummyWitnessActive) return;
+			foreach(ref context;dummyWitnessContexts)
+				if(decl !in context.consumedDeps)
+					context.consumedDeps[decl]=dep.dup;
+		}
+		final void noteNestedLoopCarried(SetX!Id ids){
+			if(!dummyWitnessActive||!ids.length) return;
+			foreach(ref context;dummyWitnessContexts)
+				context.nestedLoopCarried~=ids;
+		}
+
 		auto controlDependency=Dependency(false,SetX!Declaration.init);
 		void addControlDependency(Dependency dep){
 			controlDependency.joinWith(dep);
@@ -1097,6 +1152,7 @@ abstract class Scope{
 			//imported!"util.io".writeln("ADDING: ",deps);
 			foreach(i,ref dep;deps){
 				assert(!!dep[0]);
+				substituteConsumed(dep[1],consumedDepLog);
 				if(dep[0] in dependencies.dependencies){
 					//writeln(dep[0]," ",toRemove," ",dependencies)
 					dep[1].joinWith(dependencies.dependencies[dep[0]]);
@@ -1125,7 +1181,31 @@ abstract class Scope{
 		final void replaceDependencies(Declaration decl,Declaration rhs){
 			dependencies.replace(decl,rhs);
 		}
+		final void substituteDependency(Declaration decl,Dependency dep){
+			dependencies.substitute(decl,dep);
+			lastUses.substituteDependency(decl,dep);
+		}
+		Dependency[Declaration] consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
+		static void substituteConsumed(ref Dependency dep,ref Dependency[Declaration] consumedDepLog){
+			if(dep.isTop) return;
+			bool[Declaration] substituted; // stale sets can mention consumed declarations in cycles
+			for(bool changed=true;changed;){
+				changed=false;
+				foreach(m;dep.dependencies){
+					if(m in substituted) continue;
+					if(auto pd=m in consumedDepLog){
+						substituted[m]=true;
+						dep.replace(m,*pd);
+						changed=true;
+						break;
+					}
+				}
+				if(dep.isTop) break;
+			}
+		}
 		final void pushDependencies(Declaration decl,bool keep){
+			consumedDepLog[decl]=getDependency(decl).dup;
+			noteDependencyConsumed(decl,getDependency(decl));
 			if(getDependency(decl).isTop){
 				bool done=false;
 				do{ // TODO: improve
@@ -1441,6 +1521,13 @@ abstract class Scope{
 		static if(language==silq){
 			foreach(sc;scopes[1..$])
 				dependencies.joinWith(sc.dependencies);
+			foreach(sc;scopes){ // TODO: needed?
+				foreach(decl,ref dep;sc.consumedDepLog)
+					if(decl !in consumedDepLog)
+						consumedDepLog[decl]=dep;
+			}
+			foreach(k,ref v;dependencies.dependencies)
+				substituteConsumed(v,consumedDepLog);
 			foreach(k,v;dependencies.dependencies.dup){
 				if(k.getId !in rnsymtab)
 					if(dependencyTracked(k))
@@ -1466,6 +1553,10 @@ abstract class Scope{
 				dependencies.dependencies[decl]=dep;
 		}
 		lastUses.merge(isLoop,this,scopes);
+		static if(language==silq){ // TODO: needed?
+			foreach(k,ref v;dependencies.dependencies)
+				substituteConsumed(v,consumedDepLog);
+		}
 		return errors;
 	}
 
@@ -1528,6 +1619,12 @@ abstract class Scope{
 	}
 
 	struct ScopeState{
+		static if(language==silq)
+		bool loopEntryCanForget(Id id){ // whether the variable was forgettable at loop entry
+			auto decl=rnsymtab.get(id,null);
+			if(!decl) return false;
+			return dependencies.canForget(decl);
+		}
 		bool opEquals(ref ScopeState rhs){
 			static if(language==silq){
 				if(!dependencies.matches(rhs.dependencies))
@@ -1583,10 +1680,14 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope Declaration[Declaration]* mustBeConstFromDummies=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
+			SetX!Id mustBeConst;
+			if(mustBeConstFromDummies)
+				foreach(v;(*mustBeConstFromDummies).byValue)
+					mustBeConst.insert(v.getId);
 			foreach(id,decl;rnsymtab){
 				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
@@ -1599,11 +1700,8 @@ abstract class Scope{
 				if(!mayChange) continue; // use const captures
 				bool canForget=type.isClassical()||dependencies.canForget(decl);
 				bool isConstParamDecl=false;
-				if(canForget){
-					//auto nestedDecl=decl.splitInto.filter!(d=>d.scope_ is loopScope).front;
-					//auto lastUse=loopScope.lastUses.lastUses.get(nestedDecl,loopScope.lastUses.retired.get(nestedDecl,[null])[$-1]);
-					//isConstParamDecl=lastUse?lastUse.kind==LastUse.Kind.synthesizedForget:true;
-					isConstParamDecl=true;
+				if(canForget&&!type.isClassical()){
+					isConstParamDecl=mustBeConstFromDummies?decl.getId in mustBeConst:true;
 				}
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);

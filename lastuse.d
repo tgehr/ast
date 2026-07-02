@@ -228,6 +228,7 @@ final class LastUse{
 		if(isForget){
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
+			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
 		updateDependenciesOnConsumptionLocal();
 	}
@@ -259,6 +260,7 @@ final class LastUse{
 			lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
+				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
 				cdep.replace(lu.decl,lu.dep);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
@@ -296,6 +298,7 @@ final class LastUse{
 				//imported!"util.io".writeln("???? ",decl," ",use?text(use.loc):"<?>",nconstBlock is decl," ",scope_ is decl.scope_," ",nsc.parent is decl.scope_," ",this);
 			}
 		}
+		if(nconstBlock) scope_.noteDependencyResolved(dep);
 		if(nconstBlock&&dep.isTop){
 			if(!use){
 				scope_.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
@@ -735,6 +738,8 @@ struct LastUses{
 		static if(language==silq){
 			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
 			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
+			if(lastUse.kind==LastUse.Kind.synthesizedForget)
+				lastUse.scope_.noteDependencyResolved(lastUse.dep);
 		}
 		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
 			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
@@ -1030,6 +1035,14 @@ struct LastUses{
 	}
 
 	// TODO: snapshotting is a bit hacky
+	static if(language==silq)
+	void substituteDependency(Declaration decl,Dependency dep){
+		foreach(_,lu;lastUses)
+			lu.dep.replace(decl,dep);
+		foreach(_,lus;retired)
+			foreach(lu;lus)
+				if(lu) lu.dep.replace(decl,dep);
+	}
 	LastUse[Declaration] getSnapshot(Scope sc){
 		LastUse[Declaration] nlastUses;
 		foreach(k,decl;sc.rnsymtab){
