@@ -1299,8 +1299,10 @@ abstract class Scope{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
 	}do{
-		static if(language==silq)
+		static if(language==silq){
+			r.controlDependency.joinWith(controlDependency); // TODO: replace
 			r.dependencies=dependencies.dup;
+		}
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		if(!allowMerge) lastUses.prepareNesting(this);
