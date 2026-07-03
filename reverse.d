@@ -411,6 +411,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
 			lhs.implicitDup=true;
 	}
+	static if(language==silq){
+		if(auto le=cast(LetExp)olhs){
+			if(!le.isForward(true))
+				return res=lowerLetDefine(le,rhs,loc,sc);
+		}
+	}
 	if(validDefLhs!flags(olhs,sc,unchecked,noImplicitDup)){
 		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
 		if(auto ce=cast(CallExp)lhs) ce.checkReverse&=!unchecked;
@@ -756,6 +762,84 @@ Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool uncheck
 	if(e.isSemError()) return e;
 	if(validDefLhs!flags(e.e1,sc,unchecked,noImplicitDup)) return null;
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked,noImplicitDup);
+}
+
+static if(language==silq)
+Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
+	assert(!le.isForward(true));
+}do{
+	bool ok=true;
+	Expression err(Expression s){
+		ok=false;
+		auto r=s.copy();
+		r.setSemError();
+		return r;
+	}
+	Expression reverseLetStm(Expression s){ // TODO: avoid doing this separately
+		if(auto de=cast(DefineExp)s){
+			if(de.isSwap) return de.copy();
+			auto r=new DefineExp(de.e2.copy(),de.e1.copy());
+			r.loc=de.loc;
+			return r;
+		}
+		if(auto ce=cast(CompoundExp)s){
+			auto r=new CompoundExp(ce.s.retro.map!reverseLetStm.array);
+			r.loc=ce.loc;
+			return r;
+		}
+		if(auto ite=cast(IteExp)s){
+			auto then=cast(CompoundExp)reverseLetStm(ite.then);
+			assert(!!then);
+			auto othw=ite.othw?cast(CompoundExp)reverseLetStm(ite.othw):null;
+			auto r=new IteExp(ite.cond.copy(),then,othw);
+			r.loc=ite.loc;
+			return r;
+		}
+		if(auto fe=cast(ForgetExp)s){
+			if(!fe.val){
+				sc.error("cannot reverse `forget` without recipe within `let` pattern",fe.loc);
+				return err(s);
+			}
+			Expression nval=fe.val.copy();
+			if(auto dup=getDup(fe.val.loc,sc)){
+				nval=new CallExp(dup,nval,false,false);
+				nval.loc=fe.val.loc;
+			}
+			auto r=new DefineExp(fe.var.copy(),nval);
+			r.loc=fe.loc;
+			return r;
+		}
+		if(auto ce=cast(CallExp)s){
+			auto te=new TupleExp([]);
+			te.loc=ce.loc;
+			auto r=new DefineExp(ce.copy(),te);
+			r.loc=ce.loc;
+			return r;
+		}
+		if(auto ae=cast(AssertExp)s) return ae.copy();
+		if(auto ae=cast(AddAssignExp)s){
+			auto r=new SubAssignExp(ae.e1.copy(),ae.e2.copy());
+			r.loc=ae.loc;
+			return r;
+		}
+		if(auto ae=cast(SubAssignExp)s){
+			auto r=new AddAssignExp(ae.e1.copy(),ae.e2.copy());
+			r.loc=ae.loc;
+			return r;
+		}
+		if(auto ae=cast(BitXorAssignExp)s) return ae.copy();
+		if(auto ae=cast(XorAssignExp)s) return ae.copy();
+		sc.error("cannot reverse statement within `let` pattern",s.loc);
+		return err(s);
+	}
+	auto def=new DefineExp(le.e.copy(),orhs);
+	def.loc=loc;
+	Expression[] stmts=[cast(Expression)def];
+	foreach_reverse(s;le.s.s) stmts~=reverseLetStm(s);
+	auto r=new CompoundExp(stmts);
+	r.loc=loc;
+	if(!ok) r.setSemForceError();
+	return r;
 }
 
 private bool copyAttr(Id name) {

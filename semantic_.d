@@ -2105,10 +2105,38 @@ Dependency getDependencyImpl(CallExp ce,Scope sc){
 	return result;
 }
 
+static if(language==silq)
+private bool hasOnlyQfreeCalls(Expression e){
+	if(auto ce=cast(CallExp)e){
+		if(auto ft=cast(ProductTy)ce.e.type)
+			if(ft.annotation<Annotation.qfree)
+				return false;
+	}
+	if(cast(FunctionDef)e||cast(LambdaExp)e) return true;
+	foreach(c;e.components)
+		if(!hasOnlyQfreeCalls(c))
+			return false;
+	return true;
+}
+
+static if(language==silq)
+Dependency getDependencyImpl(LetExp le,Scope sc){
+	auto result=Dependency(false);
+	if(le.type&&le.type.isClassical()) return result;
+	if(!le.isForward(true)&&!le.s.s.all!(s=>hasOnlyQfreeCalls(s))){
+		result.isTop=true;
+		return result;
+	}
+	foreach(c;le.components)
+		result.joinWith(getDependency(c,sc));
+	return result;
+}
+
 Dependency getDependency(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
 	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
 	if(auto le=cast(LambdaExp)e) return getDependencyImpl(le,sc);
+	static if(language==silq) if(auto le=cast(LetExp)e) return getDependencyImpl(le,sc);
 	return getDependencyImpl(e,sc);
 }
 
@@ -2170,6 +2198,43 @@ bool isLiftedImpl(CallExp ce,Scope sc){
 	return true;
 }
 
+static if(language==silq)
+bool isLiftedImpl(LetExp le,Scope sc){
+	if(le.type&&le.type.isClassical()) return true;
+	if(le.isForward(true)) return isLiftedImpl(cast(Expression)le,sc);
+	auto bsc=le.s.blscope_;
+	bool isLocal(Declaration meaning){
+		if(!bsc||!meaning) return false;
+		for(auto d=meaning;d;d=d.splitFrom){
+			if(!d.scope_||!d.scope_.isNestedIn(bsc)) return false;
+			if(!d.splitFrom) return true;
+		}
+		return false;
+	}
+	bool check(Expression e){
+		if(auto id=cast(Identifier)e)
+			return id.constLookup||id.implicitDup||isLocal(id.meaning);
+		if(auto ce=cast(CallExp)e){
+			if(auto ft=cast(ProductTy)ce.e.type)
+				if(ft.annotation<Annotation.qfree)
+					return false;
+		}
+		foreach(c;e.components)
+			if(!check(c))
+				return false;
+		return true;
+	}
+	bool checkStm(Expression s){
+		if(auto ce=cast(CompoundExp)s) return ce.s.all!(x=>checkStm(x));
+		if(auto ite=cast(IteExp)s) return check(ite.cond)&&checkStm(ite.then)&&(!ite.othw||checkStm(ite.othw));
+		if(auto fe=cast(ForgetExp)s) return check(fe.var);
+		if(cast(FunctionDef)s) return true;
+		return check(s);
+	}
+	if(!le.s.s.all!(s=>checkStm(s))) return false;
+	return check(le.e);
+}
+
 bool isLifted(Expression e,Scope sc){
 	/+if(e.isQfree()){
 		if(!consumes(e)) return true;
@@ -2179,6 +2244,7 @@ bool isLifted(Expression e,Scope sc){
 	if(astopt.allowUnsafeCaptureConst&&!e.getDependency(sc).isTop) return true;
 	if(auto id=cast(Identifier)e) return isLiftedImpl(id,sc);
 	if(auto id=cast(CallExp)e) return isLiftedImpl(id,sc);
+	if(auto le=cast(LetExp)e) return isLiftedImpl(le,sc);
 	return isLiftedImpl(e,sc);
 }
 }
@@ -2363,6 +2429,15 @@ Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(LetExp let,DefineLhsContext context){
 	if(auto fwd=let.isForward(false)) return defineLhsSemantic(fwd,context);
+	static if(language==silq){
+		if(context.sc.allowsLinear()){
+			static if(!isPresemantic){
+				if(context.type&&!let.type)
+					let.type=context.type;
+			}
+			return let;
+		}
+	}
 	return defineLhsSemanticImplUnsupported(let,context);
 }
 Expression defineLhsSemanticImpl(LambdaExp le,DefineLhsContext context){
@@ -5777,11 +5852,8 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
-	if(!le.isForward(true)||context.constResult){
-		context.sc.error("currently not supported",le.loc);
-		le.setSemError();
-		return le;
-	}
+	if(!le.isForward(true)||context.constResult)
+		return generalLetExpSemantic(le,context);
 	auto de=cast(DefineExp)le.s.s[0];
 	assert(!!de);
 	de.e2=expressionSemantic(de.e2,context);
@@ -5813,6 +5885,58 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 	le.e=expressionSemantic(le.e,context);
 	propErr(le.e,le);
 	le.type=le.e.type;
+	if(!le.isSemError()) le.setSemCompleted();
+	return le;
+}
+
+Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
+	auto sc=context.sc, inType=context.inType;
+	StmFlags flags;
+	le.s=compoundExpSemantic(le.s,sc,flags);
+	propErr(le.s,le);
+	if(auto ret=mayReturn(le.s)){
+		sc.error("cannot return from within `let` expression",ret.loc);
+		le.setSemError();
+	}
+	auto bsc=le.s.blscope_;
+	le.e=expressionSemantic(le.e,expSemContext(bsc?bsc:sc,context.constResult,context.inType,context.inConst));
+	static if(language==silq) if(bsc) bsc.clearConsumed();
+	propErr(le.e,le);
+	le.type=le.e.type;
+	static if(language==silq){
+		if(bsc){
+			foreach(_,d;bsc.rnsymtab.dup){
+				if(cast(DeadDecl)d) continue;
+				if(d.isSemError()) continue;
+				if(bsc.rnsymtab.get(d.getId,null) !is d) continue; // TODO: this is a bit hacky
+				if(d.scope_ !is bsc) continue;
+				if(sc.rnsymtab.get(d.getId,null)) continue; // TODO: this is a bit hacky
+				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)){
+					d.setSemForceError();
+					continue;
+				}
+				if(!bsc.canForgetAppend(d)){
+					if(!d.isSemError()){
+						bool done=bsc.lastUses.betterUnforgettableError(d,bsc);
+						if(!done){
+							sc.error(format("%s `%s` is not consumed at the end of `let` expression",d.kind,d.getName),d.loc);
+							sc.note("perhaps carry it out through the trailing expression",le.e.loc);
+						}
+						d.setSemForceError();
+					}else bsc.symtabRemove(d);
+					le.setSemForceError();
+				}else{
+					bsc.consume(d,null);
+					bsc.clearConsumed();
+				}
+			}
+		}
+	}
+	if(bsc&&sc.merge(false,bsc)){
+		sc.note("at the end of `let` expression",le.loc);
+		le.setSemError();
+	}
+	if(inType) le.s.blscope_=null;
 	if(!le.isSemError()) le.setSemCompleted();
 	return le;
 }

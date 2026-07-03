@@ -2470,7 +2470,10 @@ class LetExp: Expression{
 					return r;
 			return 0;
 		}else{
-			assert(0); // TODO
+			// TODO: fix, returns bound variables
+			if(auto r=s.freeVarsImpl(dg))
+				return r;
+			return e.freeVarsImpl(dg);
 		}
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -2488,7 +2491,14 @@ class LetExp: Expression{
 		}
 	}
 	override Expression substituteImpl(Expression[Id] subst){
-		assert(0,"TODO");
+		// TODO: fix, replaces bound variables
+		auto ns=cast(CompoundExp)s.substitute(subst);
+		assert(!!ns);
+		auto ne=e.substitute(subst);
+		if(ns is s && ne is e) return this;
+		auto r=new LetExp(ns,ne);
+		r.loc=loc;
+		return r;
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return this is rhs; // TODO

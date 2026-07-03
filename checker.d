@@ -685,13 +685,39 @@ class Checker {
 	}
 
 	void implExpr(ast_exp.LetExp e) {
-		assert(e.isForward(true), format("let expression %s is not from supported subset at %s", e, e.loc));
 		auto prevStrictScope = strictScope;
 		strictScope = false; // e.g. a && let x := 0 in x
-		auto r = visStmt(e.s);
-		assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
-		visExpr(e.e);
-		strictScope = prevStrictScope;
+		scope(exit) strictScope = prevStrictScope;
+		if(!e.s.blscope_) {
+			auto r = visStmt(e.s);
+			assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
+			visExpr(e.e);
+			return;
+		}
+		Checker sub;
+		visSplit(sub, e.s.blscope_, e);
+		foreach(decl; e.s.blscope_.forgottenVarsOnEntry) {
+			sub.getVar(decl, false, "forgottenVarsOnEntry (let)", e);
+		}
+		StmtResult r = StmtResult.MayPass;
+		foreach(stmt; e.s.s) {
+			StmtResult sr = sub.visStmt(stmt);
+			assert(!(sr & StmtResult.MayReturn), "early return in let expression");
+			if(!(sr & StmtResult.MayPass)) { r = sr; break; }
+		}
+		if(r & StmtResult.MayPass) {
+			sub.visExpr(e.e);
+			if(e.constLookup) {
+				sub.expectConst(e.e, "let");
+			} else {
+				sub.expectMoved(e.e, "let");
+			}
+			foreach(decl; e.s.blscope_.forgottenVars) {
+				sub.getVar(decl, false, "forgottenVars (let)", e);
+			}
+			visMerge(sub, e);
+			sub.checkEmpty();
+		}
 	}
 
 	void implExpr(ast_exp.LambdaExp e) {

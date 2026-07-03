@@ -649,7 +649,7 @@ struct Parser{
 			s.loc=se.loc;
 		}else s=parseCompoundExp();
 		expect(Tok!"in");
-		auto e=parseExpression();
+		auto e=parseExpression(lbp!(Tok!":="));
 		return res=New!LetExp(s,e);
 	}
 
