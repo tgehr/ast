@@ -83,6 +83,11 @@ abstract class Expression: Node{
 	struct CopyArgs{
 		bool preserveSemantic=false;
 		bool preserveMeanings=false;
+		struct Rename{
+			Declaration decl;
+			Id nid;
+		}
+		Rename* rename;
 	}
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
@@ -733,6 +738,11 @@ class Identifier: Expression{
 			static if(language==silq){
 				r.outerWanted=outerWanted;
 				r.classical=classical;
+			}
+		}
+		if(args.rename){
+			if(meaning && args.rename.decl.canonicalSource is meaning.canonicalSource){
+				r.id=args.rename.nid;
 			}
 		}
 		return r;

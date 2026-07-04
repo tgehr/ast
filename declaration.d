@@ -170,6 +170,7 @@ class FunctionDef: Declaration{
 
 	override bool isCompound(){ return true; }
 	override bool isLinear(){ return ftype ? !ftype.isClassical() : context && context.vtype != contextTy(true) || capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
+	override Annotation getAnnotation(){ return pure_; }
 
 	@property override string kind(){ return "function"; }
 
