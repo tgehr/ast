@@ -172,6 +172,15 @@ class FunctionDef: Declaration{
 	override bool isLinear(){ return ftype ? !ftype.isClassical() : context && context.vtype != contextTy(true) || capturedDecls.any!(d=>d.isLinear()); } // TODO: ok?
 	override Annotation getAnnotation(){ return pure_; }
 
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		import ast.substitute:functionDefFreeVarsImpl;
+		return functionDefFreeVarsImpl(this,dg);
+	}
+	override Expression substituteImpl(Expression[Id] subst){
+		import ast.substitute:substituteFunctionDefExp;
+		return substituteFunctionDefExp(this,subst);
+	}
+
 	@property override string kind(){ return "function"; }
 
 	// semantic information

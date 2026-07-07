@@ -758,25 +758,23 @@ class Identifier: Expression{
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	override Expression substituteImpl(Expression[Id] subst){
+		if(id !in subst) return this;
 		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
-		if(id in subst){
-			auto result=subst[id];
-			assert(result.isSemCompleted());
-			static if(language==silq){
-				if(classical) {
-					return result.eval().getClassical();
-				}
+		auto result=subst[id];
+		assert(result.isSemCompleted());
+		static if(language==silq){
+			if(classical) {
+				return result.eval().getClassical();
 			}
-			if(constLookup!=result.constLookup && !type.isClassical() || implicitDup && !result.implicitDup){
-				Expression.CopyArgs cargs={preserveSemantic: true};
-				result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
-				if(constLookup != result.constLookup&& !type.isClassical()) result.setConstLookup(constLookup);
-				if(implicitDup) result.implicitDup=true;
-			}
-			assert(constLookup == result.constLookup || type.isClassical(), "bad setConstLookup");
-			return result;
 		}
-		return this;
+		if(constLookup!=result.constLookup && !type.isClassical() || implicitDup && !result.implicitDup){
+			Expression.CopyArgs cargs={preserveSemantic: true};
+			result=result.copy(cargs); // TODO: avoid multiple copies in same substitute call?
+			if(constLookup != result.constLookup&& !type.isClassical()) result.setConstLookup(constLookup);
+			if(implicitDup) result.implicitDup=true;
+		}
+		assert(constLookup == result.constLookup || type.isClassical(), "bad setConstLookup");
+		return result;
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(id !in subst) return meet?isSubtype(this,rhs):isSubtype(rhs,this);
@@ -831,7 +829,6 @@ class Identifier: Expression{
 					assert(type == r.type);
 					return true;
 				}
-				// In product types we have `Identifier`s without a `meaning`. Compare their types instead.
 				return type == r.type;
 			}
 		}
@@ -2420,7 +2417,21 @@ class LambdaExp: Expression{
 		return _brk(d[0]~join(map!(to!string)(fd.params),",")~d[1]~(fd.annotation?text(fd.annotation):"")~(fd.body_?fd.body_.toStringFunctionDef():";"));
 	}
 
-	mixin VariableFree; // TODO!
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		import ast.substitute:functionDefFreeVarsImpl;
+		return functionDefFreeVarsImpl(fd,dg);
+	}
+	override Expression substituteImpl(Expression[Id] subst){
+		import ast.substitute:substituteFunctionDefExp;
+		auto nfd=cast(FunctionDef)substituteFunctionDefExp(fd,subst);
+		if(nfd is fd) return this;
+		auto r=new LambdaExp(orig,nfd);
+		r.loc=loc;
+		return r;
+	}
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+		return this is rhs; // TODO
+	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		foreach(decl,ids;fd.captures){
 			foreach(c;ids)
@@ -2472,19 +2483,8 @@ class LetExp: Expression{
 	}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
-		if(auto fwd=isForward(true)){
-			if(auto r=fwd.freeVarsImpl(dg))
-				return r;
-			foreach(cs;s.s[1..$])
-				if(auto r=cs.freeVarsImpl(dg))
-					return r;
-			return 0;
-		}else{
-			// TODO: fix, returns bound variables
-			if(auto r=s.freeVarsImpl(dg))
-				return r;
-			return e.freeVarsImpl(dg);
-		}
+		import ast.substitute:blockFreeVarsImpl;
+		return blockFreeVarsImpl(s.s,e,dg);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto fwd=isForward(true)){
@@ -2501,21 +2501,84 @@ class LetExp: Expression{
 		}
 	}
 	override Expression substituteImpl(Expression[Id] subst){
-		// TODO: fix, replaces bound variables
-		auto ns=cast(CompoundExp)s.substitute(subst);
-		assert(!!ns);
-		auto ne=e.substitute(subst);
-		if(ns is s && ne is e) return this;
+		Expression[Id] active;
+		foreach(k,v;subst) if(freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
+		if(!active.length) return this;
+		bool[Id] taken;
+		foreach(k,v;subst) taken[k]=true;
+		freeVarsImpl((id){ taken[id.id]=true; return 0; });
+		import ast.substitute:collectBoundNamesImpl,BlockSubst,substituteBlockCompound,substituteLValue;
+		foreach(stmt;s.s) collectBoundNamesImpl(stmt,taken);
+		Declaration[Declaration] declMap;
+		auto ctx=BlockSubst(active,null,&taken,&declMap,false);
+		auto ns=substituteBlockCompound(s,ctx);
+		auto ne=substituteLValue(e,ctx);
+		if(ns is s&&ne is e&&!ctx.changed) return this;
 		auto r=new LetExp(ns,ne);
 		r.loc=loc;
 		return r;
+	}
+	override bool opEquals(Object o){
+		if(o is this) return true;
+		auto r=cast(LetExp)o;
+		if(!r) return false;
+		if(s.s.length!=r.s.s.length) return false;
+		foreach(i;0..s.s.length) if(s.s[i]!=r.s.s[i]) return false;
+		return e==r.e;
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return this is rhs; // TODO
 	}
 	override Expression evalImpl(){
 		if(auto fwd=isForward()) return fwd;
-		return this;
+		if(s.blscope_) return this;
+		Expression[] flat;
+		bool flatten(Expression[] ss){
+			foreach(x;ss){
+				if(auto ce=cast(CompoundExp)x){
+					if(ce.blscope_) return false;
+					if(!flatten(ce.s)) return false;
+					continue;
+				}
+				flat~=x;
+			}
+			return true;
+		}
+		if(!flatten(s.s)) return this;
+		alias stmts=flat;
+		foreach(stmt;stmts){
+			auto de=cast(DefineExp)stmt;
+			if(!de) return this;
+			if(!cast(Identifier)de.e1) return this;
+			if(!de.e2.type||!de.e2.type.isClassical()) return this;
+			if(de.e2.getAnnotation()<pure_) return this;
+			if(!de.e2.isSemCompleted()||de.e2.isSemError()) return this;
+		}
+		bool[Id] bound;
+		foreach(stmt;stmts) bound[(cast(Identifier)(cast(DefineExp)stmt).e1).id]=true;
+		if(type){
+			bool bad=false;
+			type.freeVarsImpl((id){ if(id.id in bound){ bad=true; return 1; } return 0; });
+			if(bad) return this;
+		}
+		bool okUses(Expression x){
+			bool ok=true;
+			x.freeVarsImpl((id){
+				if(id.id in bound&&!(id.constLookup||id.implicitDup)){ ok=false; return 1; }
+				return 0;
+			});
+			return ok;
+		}
+		foreach(stmt;stmts) if(!okUses((cast(DefineExp)stmt).e2)) return this;
+		if(!okUses(e)) return this;
+		Expression[Id] cur;
+		foreach(stmt;stmts){
+			auto de=cast(DefineExp)stmt;
+			auto id=cast(Identifier)de.e1;
+			auto rhs=cur.length?de.e2.substitute(cur):de.e2.eval();
+			cur[id.id]=rhs;
+		}
+		return cur.length?e.substitute(cur):e.eval();
 	}
 	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
 }

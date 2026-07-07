@@ -2314,7 +2314,7 @@ class DataScope: CapturingScope!DatDecl{
 class BlockScope: NestedScope{
 	this(Scope parent,Annotation restriction_=Annotation.none){
 		super(parent);
-		if(parent.allowsLinear()) parent.nest(this);
+		if(parent&&parent.allowsLinear()) parent.nest(this);
 		this.restriction_=restriction_;
 	}
 	Annotation restriction_;

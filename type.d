@@ -1597,8 +1597,14 @@ struct FreeIdentifiers{
 					if(pt.names.canFind(id.id)) continue;
 					if(auto r=dg(id)) return r;
 				}
+				return 0;
 			}
-			// TODO: LambdaExp
+			// statements bind local variables that are not free in the overall expression
+			import ast.substitute:blockFreeVarsImpl,functionDefFreeVarsImpl,blockFreeVarsImpl;
+			if(auto le=cast(LetExp)e) return blockFreeVarsImpl(le.s.s,le.e,dg);
+			if(auto lam=cast(LambdaExp)e) return functionDefFreeVarsImpl(lam.fd,dg);
+			if(auto fd=cast(FunctionDef)e) return functionDefFreeVarsImpl(fd,dg);
+			if(auto ce=cast(CompoundExp)e) return blockFreeVarsImpl(ce.s,null,dg);
 			foreach(x;e.components)
 				if(auto r=rec(x))
 					return r;

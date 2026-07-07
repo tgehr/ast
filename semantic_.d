@@ -5307,7 +5307,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}do{
 			if(exp.isSemError()) return;
 			if(i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
-				void report()(){
+				void reportImpure()(){
 					static if(language==silq){
 						sc.error(format("argument must be `qfree` (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
 						sc.note(format("perhaps store it in a local variable before passing it as an argument"),exp.loc);
@@ -5320,7 +5320,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					bool classical=exp.type.isClassical(), qfree=exp.isQfree();
 					if((!classical||!qfree)){
 						if(classical){ // TODO: could just automatically deduce existential type
-							report();
+							reportImpure();
 						}else{
 							sc.error(format("argument must be classical (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
 						}
@@ -5330,21 +5330,28 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}else static if(language==psi){
 					bool pure_=exp.isPure();
 					if(!isPure()){
-						report();
+						reportImpure();
 						ce.setSemError();
 						error=true;
 					}
+				}
+				void report(string msg,Location loc){
+					sc.error(msg,loc);
+					sc.note(format("return type `%s` of function call depends on parameter `%s`",ft.cod,ft.names[i]),ce.loc);
+					ce.setSemError();
+					error=true;
 				}
 				foreach(id;exp.freeVars){
 					if(!id.meaning) continue;
 					if(id.constLookup||id.implicitDup){
 						typeConstBlockDecl(id.meaning,ce,sc);
 					}else{
-						sc.error(format("cannot consume `%s`",id),id.loc);
-						sc.note(format("return type `%s` of function call depends on parameter `%s`",ft.cod,ft.names[i]),ce.loc);
-						ce.setSemError();
-						error=true;
+						report(format("cannot consume `%s`",id),id.loc);
 					}
+				}
+				foreach(e;exp.subexpressions){
+					if(cast(LetExp)e) report("`let` expressions in types not yet supported",e.loc); // TODO
+					if(cast(IteExp)e) report("`if` expressions in types not yet supported",e.loc); // TODO
 				}
 			}
 		}
@@ -5761,6 +5768,11 @@ Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumCo
 
 Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
+	if(inType){
+		sc.error("`if` expressions in types not yet supported",ite.loc); // TODO
+		ite.setSemError();
+		return ite;
+	}
 	ite.cond=conditionSemantic!true(ite, ite.cond, sc, inType);
 	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
 		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
@@ -5854,6 +5866,11 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 	if(!le.isForward(true)||context.constResult)
 		return generalLetExpSemantic(le,context);
+	if(context.inType){
+		context.sc.error("`let` expressions in types not yet supported",le.loc); // TODO
+		le.setSemError();
+		return le;
+	}
 	auto de=cast(DefineExp)le.s.s[0];
 	assert(!!de);
 	de.e2=expressionSemantic(de.e2,context);
