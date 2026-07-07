@@ -2105,12 +2105,18 @@ Dependency getDependencyImpl(CallExp ce,Scope sc){
 	return result;
 }
 
-static if(language==silq)
 private bool hasOnlyQfreeCalls(Expression e){
 	if(auto ce=cast(CallExp)e){
 		if(auto ft=cast(ProductTy)ce.e.type)
 			if(ft.annotation<Annotation.qfree)
 				return false;
+	}
+	if(auto vfe=cast(VectorForExp)e){
+		if(vfe.fd){
+			if(auto ft=cast(ProductTy)typeForDecl(vfe.fd))
+				if(ft.annotation<Annotation.qfree)
+					return false;
+		}
 	}
 	if(cast(FunctionDef)e||cast(LambdaExp)e) return true;
 	foreach(c;e.components)
@@ -2119,8 +2125,7 @@ private bool hasOnlyQfreeCalls(Expression e){
 	return true;
 }
 
-static if(language==silq)
-Dependency getDependencyImpl(LetExp le,Scope sc){
+Dependency getDependencyImpl(LetExp le,Scope sc){ // TODO: fix
 	auto result=Dependency(false);
 	if(le.type&&le.type.isClassical()) return result;
 	if(!le.isForward(true)&&!le.s.s.all!(s=>hasOnlyQfreeCalls(s))){
@@ -2132,11 +2137,27 @@ Dependency getDependencyImpl(LetExp le,Scope sc){
 	return result;
 }
 
+Dependency getDependencyImpl(VectorForExp vfe,Scope sc){
+	auto result=Dependency(false);
+	if(vfe.type&&vfe.type.isClassical()) return result;
+	if(vfe.fd){
+		if(auto ft=cast(ProductTy)typeForDecl(vfe.fd))
+			if(ft.annotation<Annotation.qfree){
+				result.isTop=true;
+				return result;
+			}
+	}
+	foreach(c;vfe.components)
+		result.joinWith(getDependency(c,sc));
+	return result;
+}
+
 Dependency getDependency(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
 	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
 	if(auto le=cast(LambdaExp)e) return getDependencyImpl(le,sc);
-	static if(language==silq) if(auto le=cast(LetExp)e) return getDependencyImpl(le,sc);
+	if(auto le=cast(LetExp)e) return getDependencyImpl(le,sc);
+	if(auto vfe=cast(VectorForExp)e) return getDependencyImpl(vfe,sc);
 	return getDependencyImpl(e,sc);
 }
 

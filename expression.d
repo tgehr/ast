@@ -2504,9 +2504,9 @@ class LetExp: Expression{
 		Expression[Id] active;
 		foreach(k,v;subst) if(freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
 		if(!active.length) return this;
-		bool[Id] taken;
-		foreach(k,v;subst) taken[k]=true;
-		freeVarsImpl((id){ taken[id.id]=true; return 0; });
+		void[0][Id] taken;
+		foreach(k,v;subst) taken[k]=[];
+		freeVarsImpl((id){ taken[id.id]=[]; return 0; });
 		import ast.substitute:collectBoundNamesImpl,BlockSubst,substituteBlockCompound,substituteLValue;
 		foreach(stmt;s.s) collectBoundNamesImpl(stmt,taken);
 		Declaration[Declaration] declMap;
@@ -2554,8 +2554,8 @@ class LetExp: Expression{
 			if(de.e2.getAnnotation()<pure_) return this;
 			if(!de.e2.isSemCompleted()||de.e2.isSemError()) return this;
 		}
-		bool[Id] bound;
-		foreach(stmt;stmts) bound[(cast(Identifier)(cast(DefineExp)stmt).e1).id]=true;
+		void[0][Id] bound;
+		foreach(stmt;stmts) bound[(cast(Identifier)(cast(DefineExp)stmt).e1).id]=[];
 		if(type){
 			bool bad=false;
 			type.freeVarsImpl((id){ if(id.id in bound){ bad=true; return 1; } return 0; });
@@ -2668,9 +2668,10 @@ class VectorForExp: Expression{
 			import ast.substitute:functionDefFreeVarsImpl;
 			return functionDefFreeVarsImpl(fd,dg);
 		}
-		bool[Id] bound;
-		if(fe.var) bound[fe.var.id]=true;
-		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=true; return 0; });
+		void[0][Id] bound;
+		if(fe.var) bound[fe.var.id]=[];
+		import ast.substitute:defineLhsBoundVarsImpl;
+		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
 		return fe.bdy.s[0].freeVarsImpl((id){ return id.id in bound?0:dg(id); });
 	}
 	override Expression substituteImpl(Expression[Id] subst){ return this; } // TODO
@@ -2709,8 +2710,9 @@ class VectorForExp: Expression{
 		auto r=fe.aggr.getAnnotation();
 		if(fd){
 			import ast.semantic_:typeForDecl;
-			if(auto ft=cast(FunTy)typeForDecl(fd))
+			if(auto ft=cast(FunTy)typeForDecl(fd)){
 				return min(r,ft.annotation);
+			}
 		}
 		return min(fe.bdy.s[0].getAnnotation(),r);
 	}

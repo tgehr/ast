@@ -119,9 +119,9 @@ int statementFreeVarsImpl(Expression stmt,scope int delegate(Identifier) dg){
 		}else if(auto cont=fe.aggr.isContainer()){
 			if(auto r=cont.e.freeVarsImpl(dg)) return r;
 		}
-		bool[Id] bound;
-		if(fe.var) bound[fe.var.id]=true;
-		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ bound[id.id]=true; return 0; });
+		void[0][Id] bound;
+		if(fe.var) bound[fe.var.id]=[];
+		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ bound[id.id]=[]; return 0; });
 		if(fe.pattern) if(auto r=defineLhsFreeVarsImpl(fe.pattern,dg)) return r;
 		return blockFreeVarsImpl(fe.bdy.s,null,(id)=>id.id in bound?0:dg(id));
 	}
@@ -143,31 +143,31 @@ int statementFreeVarsImpl(Expression stmt,scope int delegate(Identifier) dg){
 }
 
 int blockFreeVarsImpl(Expression[] stmts,Expression trailing,scope int delegate(Identifier) dg){
-	bool[Id] bound;
+	void[0][Id] bound;
 	int filtered(Identifier id){ return id.id in bound?0:dg(id); }
 	foreach(stmt;stmts){
 		if(auto r=statementFreeVarsImpl(stmt,&filtered)) return r;
-		statementBoundVarsImpl(stmt,(id){ bound[id.id]=true; return 0; });
+		statementBoundVarsImpl(stmt,(id){ bound[id.id]=[]; return 0; });
 	}
 	if(trailing) return trailing.freeVarsImpl(&filtered);
 	return 0;
 }
 
 int functionDefFreeVarsImpl(FunctionDef fd,scope int delegate(Identifier) dg){
-	bool[Id] bound;
-	if(fd.name){ bound[fd.getId]=true; bound[fd.name.id]=true; }
+	void[0][Id] bound;
+	if(fd.name){ bound[fd.getId]=[]; bound[fd.name.id]=[]; }
 	int filtered(Identifier id){ return id.id in bound?0:dg(id); }
 	foreach(p;fd.params){
 		if(auto pt=p.vtype?p.vtype:p.dtype) if(auto r=pt.freeVarsImpl(&filtered)) return r;
-		if(p.name){ bound[p.getId]=true; bound[p.name.id]=true; }
+		if(p.name){ bound[p.getId]=[]; bound[p.name.id]=[]; }
 	}
 	if(auto ret=fd.ret?fd.ret:fd.rret) if(auto r=ret.freeVarsImpl(&filtered)) return r;
 	if(fd.body_) if(auto r=blockFreeVarsImpl(fd.body_.s,null,&filtered)) return r;
 	return 0;
 }
 
-void collectBoundNamesImpl(Expression stmt,ref bool[Id] names){
-	statementBoundVarsImpl(stmt,(id){ names[id.id]=true; return 0; });
+void collectBoundNamesImpl(Expression stmt,ref void[0][Id] names){
+	statementBoundVarsImpl(stmt,(id){ names[id.id]=[]; return 0; });
 	if(auto de=cast(DefineExp)stmt){
 		if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
 		return;
@@ -185,8 +185,8 @@ void collectBoundNamesImpl(Expression stmt,ref bool[Id] names){
 		return;
 	}
 	if(auto fe=cast(ForExp)stmt){
-		if(fe.var) names[fe.var.id]=true;
-		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ names[id.id]=true; return 0; });
+		if(fe.var) names[fe.var.id]=[];
+		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ names[id.id]=[]; return 0; });
 		foreach(x;fe.bdy.s) collectBoundNamesImpl(x,names);
 		return;
 	}
@@ -194,17 +194,17 @@ void collectBoundNamesImpl(Expression stmt,ref bool[Id] names){
 	if(auto re=cast(RepeatExp)stmt){ foreach(x;re.bdy.s) collectBoundNamesImpl(x,names); return; }
 	if(auto le=cast(LetExp)stmt){ foreach(x;le.s.s) collectBoundNamesImpl(x,names); return; }
 }
-void collectFunctionBoundNames(FunctionDef fd,ref bool[Id] names){
+void collectFunctionBoundNames(FunctionDef fd,ref void[0][Id] names){
 	if(!fd) return;
-	if(fd.name){ names[fd.getId]=true; names[fd.name.id]=true; }
-	foreach(p;fd.params) if(p.name){ names[p.getId]=true; names[p.name.id]=true; }
+	if(fd.name){ names[fd.getId]=[]; names[fd.name.id]=[]; }
+	foreach(p;fd.params) if(p.name){ names[p.getId]=[]; names[p.name.id]=[]; }
 	if(fd.body_) foreach(x;fd.body_.s) collectBoundNamesImpl(x,names);
 }
 
 struct BlockSubst{
 	Expression[Id] subst;
 	Id[Id] forced;
-	bool[Id]* taken;
+	void[0][Id]* taken;
 	Declaration[Declaration]* declMap;
 	bool changed=false;
 
@@ -215,7 +215,7 @@ struct BlockSubst{
 	Id freshName(Id base){
 		auto nn=base?base:Id.intern("x");
 		do nn=nn.apos; while(nn in *taken||wouldCapture(nn));
-		(*taken)[nn]=true;
+		(*taken)[nn]=[];
 		return nn;
 	}
 	BlockSubst nested(){
@@ -707,9 +707,9 @@ Expression substituteFunctionDefExp(FunctionDef fd,Expression[Id] subst,bool bin
 	Expression[Id] active;
 	foreach(k,v;subst) if(functionDefFreeVarsImpl(fd,(id)=>id.id==k?1:0)) active[k]=v;
 	if(!active.length) return fd;
-	bool[Id] taken;
-	foreach(k,v;subst) taken[k]=true;
-	functionDefFreeVarsImpl(fd,(id){ taken[id.id]=true; return 0; });
+	void[0][Id] taken;
+	foreach(k,v;subst) taken[k]=[];
+	functionDefFreeVarsImpl(fd,(id){ taken[id.id]=[]; return 0; });
 	collectFunctionBoundNames(fd,taken);
 	Declaration[Declaration] declMap;
 	auto ctx=BlockSubst(active,null,&taken,&declMap,false);
