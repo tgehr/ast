@@ -2644,6 +2644,7 @@ class VectorForExp: Expression{
 		this.fe=fe;
 	}
 	override VectorForExp copyImpl(CopyArgs args){
+		if(args.preserveSemantic) enforce(!fd&&!len,"TODO");
 		return new VectorForExp(fe.copy(args));
 	}
 	override string toString(){ return _brk("["~fe.bdy.s[0].toString()~" "~fe.toStringNoBody()~"]"); }
@@ -2657,12 +2658,39 @@ class VectorForExp: Expression{
 		return fe==vfe.fe;
 	}
 
-	mixin VariableFree; // TODO!
+	// semantic information
+	FunctionDef fd; // synthesized function mapping one element of the aggregate to one element of the result
+	Expression len; // length of the result, `null` if the aggregate is an array of unknown length
+
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		if(auto r=fe.aggr.componentsImpl(e=>e.freeVarsImpl(dg))) return r;
+		if(fd){
+			import ast.substitute:functionDefFreeVarsImpl;
+			return functionDefFreeVarsImpl(fd,dg);
+		}
+		bool[Id] bound;
+		if(fe.var) bound[fe.var.id]=true;
+		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=true; return 0; });
+		return fe.bdy.s[0].freeVarsImpl((id){ return id.id in bound?0:dg(id); });
+	}
+	override Expression substituteImpl(Expression[Id] subst){ return this; } // TODO
+	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+		return combineTypes(this,rhs,meet)!is null; // TODO
+	}
 	override int componentsImpl(scope int delegate(Expression) dg){
+		if(fd){ // analyzed: like a lambda applied to the aggregate
+			foreach(decl,ids;fd.captures){
+				foreach(c;ids)
+					if(auto r=dg(c))
+						return r;
+			}
+			return fe.aggr.componentsImpl(dg);
+		}
 		if(auto r=dg(fe.bdy.s[0])) return r;
 		return fe.aggr.componentsImpl(dg);
 	}
 	override Expression evalImpl(){
+		if(fd) return this;
 		auto naggr=fe.aggr.eval();
 		auto ns=fe.bdy.s[0].eval();
 		if(naggr is fe.aggr&&ns is fe.bdy.s[0])
@@ -2678,7 +2706,13 @@ class VectorForExp: Expression{
 		return new VectorForExp(nfe);
 	}
 	override Annotation getAnnotation(){
-		return min(fe.bdy.s[0].getAnnotation(),fe.aggr.getAnnotation());
+		auto r=fe.aggr.getAnnotation();
+		if(fd){
+			import ast.semantic_:typeForDecl;
+			if(auto ft=cast(FunTy)typeForDecl(fd))
+				return min(r,ft.annotation);
+		}
+		return min(fe.bdy.s[0].getAnnotation(),r);
 	}
 }
 
@@ -2995,6 +3029,8 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 
 	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
 
+	if(auto vfe=cast(VectorForExp)e) return f(vfe,forward!args);
+
 	if(auto fa=cast(ClassicalTy)e) return f(fa,forward!args);
 	if(auto fa=cast(ProductTy)e) return f(fa,forward!args);
 	if(auto ty=cast(ArrayTy)e) return f(ty,forward!args);
@@ -3013,7 +3049,6 @@ auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T.
 		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
 		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
 		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
-		if(auto vfe=cast(VectorForExp)e) return f(vfe,forward!args); // TODO: turn into expression that may appear in analyzed AST
 	}
 
 	return default_(e,forward!args);

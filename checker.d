@@ -725,6 +725,32 @@ class Checker {
 		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
 	}
 
+	void implExpr(ast_exp.VectorForExp e) {
+		// like an application of the (const-capturing) element function to the aggregate
+		auto fd = e.fd;
+		assert(!!fd, format("vector comprehension not analyzed: << %s >> on %s", e, e.loc));
+		auto ft = cast(ast_ty.ProductTy) ast_sem.typeForDecl(fd);
+		assert(!!ft, format("vector comprehension element function has no type: << %s >> on %s", e, e.loc));
+		assert(ft.captureAnnotation <= ast_ty.CaptureAnnotation.const_, format("vector comprehension element function has moved captures: << %s >> on %s", e, e.loc));
+		checkFunction(fd);
+		getFunc(fd, fd.capturedDecls, true, e);
+		if(auto range = e.fe.aggr.isRange) {
+			expectConst(range.left, "vector comprehension range bound");
+			visExpr(range.left);
+			if(range.step) {
+				expectConst(range.step, "vector comprehension range step");
+				visExpr(range.step);
+			}
+			expectConst(range.right, "vector comprehension range bound");
+			visExpr(range.right);
+		} else {
+			auto cnt = e.fe.aggr.isContainer();
+			assert(!!cnt);
+			assert(!cnt.e.constLookup, "vector comprehension aggregate must be moved");
+			visExpr(cnt.e);
+		}
+	}
+
 	void implExpr(ast_exp.SliceExp e) {
 		bool isLifted = e.constLookup;
 		expectConst(e.l, "slice-left-index");

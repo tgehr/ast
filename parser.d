@@ -453,13 +453,31 @@ struct Parser{
 			restoreState(state);
 			return false;
 		}
+		bool sawComprehension=false;
 		do{
+			bool isSquare=ttype==Tok!"[";
 			nextToken();
-			skipToUnmatched();
+			if(isSquare){
+				int pnest=0,cnest=0,bnest=0;
+				loop: for(;;nextToken()){
+					switch(ttype){
+						case Tok!"(": pnest++; continue;
+						case Tok!"{": cnest++; continue;
+						case Tok!"[": bnest++; continue;
+						case Tok!")": if(pnest--) continue; break loop;
+						case Tok!"}": if(cnest--) continue; break loop;
+						case Tok!"]": if(bnest--) continue; break loop;
+						case Tok!"for": if(!pnest&&!cnest&&!bnest) sawComprehension=true; continue;
+						case Tok!"EOF": break loop;
+						default: continue;
+					}
+				}
+			}else skipToUnmatched();
 			nextToken();
 		}while(util.among(ttype,Tok!"(",Tok!"["));
 		auto peektt=ttype;
 		restoreState(state);
+		if(sawComprehension) return false;
 		if(!allowDot&&peektt==Tok!".") return false;
 		switch(peektt){
 			case Tok!"{",Tok!"⇒",Tok!"↦",Tok!"=>",Tok!".":

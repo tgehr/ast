@@ -500,6 +500,80 @@ private CompoundExp toCompound(Expression e){
 	ce.sstate=e.sstate;
 	return ce;
 }
+
+Expression getLowering(VectorForExp vfe,ExpSemContext context){
+	import ast.semantic_:freshName,typeForDecl;
+	if(!vfe.fd||!vfe.type) return null;
+	auto ft=cast(FunTy)typeForDecl(vfe.fd);
+	if(!ft) return null;
+	auto loc=vfe.loc;
+	Parameter[] params;
+	Expression[] args;
+	Identifier addParam(bool isConst,Expression type,Expression arg,Location ploc){
+		auto id=new Identifier(freshName());
+		id.loc=ploc;
+		auto p=new Parameter(isConst,id,type);
+		p.loc=ploc;
+		params~=p;
+		args~=arg;
+		auto use=new Identifier(id.name);
+		use.loc=ploc;
+		return use;
+	}
+	auto fle=new LambdaExp(vfe.fd,vfe.fd);
+	fle.loc=loc;
+	fle.type=ft;
+	fle.setSemCompleted();
+	auto fid=addParam(true,ft,fle,loc);
+	ForAggregate naggr;
+	if(auto range=vfe.fe.aggr.isRange){
+		auto lid=addParam(true,range.left.type,range.left,range.left.loc);
+		Identifier sid=null;
+		if(range.step) sid=addParam(true,range.step.type,range.step,range.step.loc);
+		auto rid=addParam(true,range.right.type,range.right,range.right.loc);
+		naggr=ForAggregate(ForRange(range.leftExclusive,lid,sid,range.rightExclusive,rid));
+	}else{
+		auto cnt=vfe.fe.aggr.isContainer();
+		assert(!!cnt);
+		naggr=ForAggregate(ForContainer(addParam(false,cnt.e.type,cnt.e,cnt.e.loc)));
+	}
+	auto rname=new Identifier(freshName());
+	rname.loc=loc;
+	auto empty=new VectorExp([]);
+	empty.loc=loc;
+	auto rde=new DefineExp(rname,empty);
+	rde.loc=loc;
+	auto xid=new Identifier(freshName());
+	xid.loc=loc;
+	auto fcall=new CallExp(fid.copy(),xid.copy(),false,false);
+	fcall.loc=loc;
+	auto vce=new VectorExp([cast(Expression)fcall]);
+	vce.loc=loc;
+	auto cae=new CatAssignExp(rname.copy(),vce);
+	cae.loc=loc;
+	auto lbdy=new CompoundExp([cast(Expression)cae]);
+	lbdy.loc=loc;
+	auto nfe=new ForExp(xid,null,naggr,lbdy);
+	nfe.loc=loc;
+	auto re=new ReturnExp(rname.copy());
+	re.loc=loc;
+	auto fbdy=new CompoundExp([rde,nfe,re]);
+	fbdy.loc=loc;
+	auto fd=new FunctionDef(null,params,true,null,fbdy);
+	fd.annotation=pure_;
+	fd.inferAnnotation=true;
+	fd.loc=loc;
+	auto le=new LambdaExp(fd);
+	le.loc=loc;
+	auto atpl=new TupleExp(args);
+	atpl.loc=loc;
+	auto lce=new CallExp(le,atpl,false,false);
+	lce.loc=loc;
+	auto tae=new TypeAnnotationExp(lce,vfe.type,TypeAnnotationType.coercion);
+	tae.loc=loc;
+	auto r=expressionSemantic(tae,context);
+	return r;
+}
 Expression getLowering(AndThenExp ae,ExpSemContext context){
 	auto false_=LiteralExp.makeBoolean(false);
 	false_.loc=ae.loc;

@@ -2830,9 +2830,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	return vec;
 }
 Expression defineLhsSemanticImpl(VectorForExp vfe,DefineLhsContext context){
-	auto lce=lowerVectorForExp(vfe,context.sc);
-	if(lce.isSemError()) return lce;
-	return defineLhsSemantic(lce,context);
+	return vfe; // handled by `lowerDefine`
 }
 
 Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context){
@@ -6601,106 +6599,213 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 	return vec;
 }
 
-Expression lowerVectorForExp(VectorForExp vfe,Scope sc){
-	assert(!!vfe.fe);
-	Expression len=null;
+Expression vectorForLength(VectorForExp vfe,ExpSemContext context){
+	auto sc=context.sc;
+	Expression error(){
+		vfe.setSemError();
+		return null;
+	}
 	if(auto range=vfe.fe.aggr.isRange){
-		if(!(!range.leftExclusive&&range.rightExclusive)){
-			sc.error(text("[("[range.leftExclusive],".."~"])"[range.rightExclusive],"-style ranges not yet supported in vector comprehension"),range.left.loc.to(range.right.loc));
-			vfe.setSemError();
-			return vfe;
-		}
-		bool isSimple(Expression e){ // TODO: lift restriction
-			if(cast(LiteralExp)e) return true;
-			if(cast(Identifier)e) return true;
-			if(auto tae=cast(TypeAnnotationExp)e) return isSimple(tae.e)&&isSimple(tae.t);
-			if(auto idx=cast(IndexExp)e) return isSimple(idx.e)&&isSimple(idx.a);
-			if(auto ue=cast(AUnaryExp)e) return isSimple(ue.e);
-			if(auto be=cast(ABinaryExp)e) return isSimple(be.e1)&&isSimple(be.e2);
-			return false;
-		}
-		if(!isSimple(range.left)||!isSimple(range.right)){
-			sc.error("range not yet supported in vector comprehension because it is not simple enough",range.left.loc.to(range.right.loc));
-			vfe.setSemError();
-			return vfe;
-		}
-		if(range.step){
-			sc.error("range with step not yet supported in vector comprehension",range.step.loc);
-			vfe.setSemError();
-			return vfe;
+		Expression len;
+		auto cleft=range.left.asIntegerConstant(true);
+		auto cright=range.right.asIntegerConstant(true);
+		import util.maybe:just;
+		auto cstep=range.step?range.step.asIntegerConstant(true):just(ℤ(1));
+		if(cleft&&cright&&cstep&&cstep.get()!=0&&(!range.leftExclusive||!range.step)){
+			auto lo=cleft.get()+cast(int)range.leftExclusive*(range.step?cstep.get():ℤ(1));
+			auto hi=cright.get();
+			auto s=cstep.get();
+			ℤ count=0;
+			if(s>0){
+				auto last=range.rightExclusive?hi-1:hi;
+				if(last>=lo) count=(last-lo)/s+1;
+			}else{
+				auto last=range.rightExclusive?hi+1:hi;
+				if(last<=lo) count=(lo-last)/(-s)+1;
+			}
+			len=LiteralExp.makeInteger(count);
+			len.loc=range.loc;
+			return expressionSemantic(len,context.nestConst);
 		}
 		auto left=range.left.copy();
 		auto right=range.right.copy();
-		len=new NSubExp(right,left);
-		len.loc=range.loc;
+		if(range.step){
+			if(range.leftExclusive){
+				sc.error(text("("~".."~"])"[range.rightExclusive],"-style ranges with step not yet supported in vector comprehension"),range.left.loc.to(range.right.loc));
+				return error();
+			}
+			auto step=range.step.copy();
+			bool negativeStep=false;
+			if(range.step.type&&!isSubtype(range.step.type,ℕt(true))){
+				auto sval=range.step.asIntegerConstant(true);
+				if(!sval){
+					sc.error("range step of unknown sign not yet supported in vector comprehension",range.step.loc);
+					return error();
+				}
+				negativeStep=sval.get()<0;
+			}
+			if(negativeStep){
+				auto sval=range.step.asIntegerConstant(true);
+				assert(!!sval);
+				step=LiteralExp.makeInteger(-sval.get());
+				step.loc=range.step.loc;
+				swap(left,right);
+			}
+			if(!range.rightExclusive){
+				auto one=LiteralExp.makeInteger(1);
+				one.loc=range.right.loc;
+				auto nright=new AddExp(right,one);
+				nright.loc=range.right.loc;
+				right=nright;
+			}
+			auto diff=new NSubExp(right,left);
+			diff.loc=range.loc;
+			auto one=LiteralExp.makeInteger(1);
+			one.loc=range.step.loc;
+			auto sm1=new NSubExp(step.copy(),one);
+			sm1.loc=range.step.loc;
+			auto num=new AddExp(diff,sm1);
+			num.loc=range.loc;
+			len=new IDivExp(num,step);
+			len.loc=range.loc;
+		}else{
+			auto one=LiteralExp.makeInteger(1);
+			one.loc=range.loc;
+			if(!range.rightExclusive){
+				auto nright=new AddExp(right,one.copy());
+				nright.loc=range.right.loc;
+				right=nright;
+			}
+			if(range.leftExclusive){
+				auto nleft=new AddExp(left,one.copy());
+				nleft.loc=range.left.loc;
+				left=nleft;
+			}
+			len=new NSubExp(right,left);
+			len.loc=range.loc;
+		}
+		len=expressionSemantic(len,context.nestConst);
+		if(len.isSemError()) return error();
+		if(len.type&&!isSubtype(len.type,ℕt(true))){
+			auto conv=new TypeAnnotationExp(len,ℕt(true),TypeAnnotationType.coercion);
+			conv.loc=len.loc;
+			len=expressionSemantic(conv,context.nestConst);
+			if(len.isSemError()){
+				sc.note("range does not determine a vector length of type `!ℕ`",range.loc);
+				return error();
+			}
+		}
+		return len;
 	}else if(auto cnt=vfe.fe.aggr.isContainer()){
-		Expression cntTypeExp=new TypeofExp(cnt.e.copy()); // TODO: solve without analyzing twice
-		cntTypeExp.loc=cnt.loc;
-		cntTypeExp=expressionSemantic(cntTypeExp,expSemContext(sc,ConstResult.yes,InType.yes));
-		propErr(cntTypeExp,vfe);
-		if(vfe.isSemError()) return vfe;
-		auto cntType=typeSemantic(cntTypeExp,sc);
-		if(!cntType){
-			vfe.setSemError();
-			return vfe;
-		}
-		propErr(cntType,vfe);
-		if(auto vt=cast(VectorTy)cntType){
-			len=vt.num.copy(); // TODO: ok?
+		auto cntType=cnt.e.type;
+		if(!cntType) return error();
+		if(auto vt=cast(VectorTy)cntType)
+			return vt.num;
+		if(auto tt=cast(TupleTy)cntType){
+			auto len=LiteralExp.makeInteger(tt.length);
 			len.loc=cnt.loc;
-		}else if(auto tt=cast(TupleTy)cntType){
-			len=LiteralExp.makeInteger(tt.length);
-			len.loc=cnt.loc;
+			return expressionSemantic(len,context.nestConst);
 		}
+		if(cast(ArrayTy)cntType)
+			return null; // array of unknown length
+		sc.error(format("cannot iterate over value of type `%s` in vector comprehension",cntType),cnt.loc);
+		return error();
 	}else{
 		sc.error("aggregate not yet supported in vector comprehension",vfe.fe.aggr.loc);
-		vfe.setSemError();
-		return vfe;
+		return error();
 	}
-	auto rname=new Identifier(freshName());
-	rname.loc=vfe.fe.bdy.s[0].loc;
-	auto empty=new VectorExp([]);
-	empty.loc=rname.loc;
-	auto de=new DefineExp(rname,empty);
-	de.loc=rname.loc;
-	auto fe=vfe.fe.copy();
-	auto ce=fe.bdy.s[0];
-	auto vce=new VectorExp([ce]);
-	vce.loc=ce.loc;
-	auto cae=new CatAssignExp(rname.copy(),vce);
-	cae.loc=vce.loc;
-	fe.bdy.s[0]=cae;
-	Expression ret=rname.copy();
-	if(len){
-		auto ty=new WildcardExp();
-		ty.loc=vfe.fe.aggr.loc;
-		auto rty=new PowExp(ty,len);
-		rty.loc=rname.loc;
-		auto tae=new TypeAnnotationExp(ret,rty,TypeAnnotationType.coercion);
-		tae.loc=rname.loc;
-		ret=tae;
+}
+
+FunctionDef vectorForFunction(VectorForExp vfe,Expression elemTy,ExpSemContext context){
+	auto sc=context.sc;
+	Identifier pname;
+	Expression[] stmts;
+	if(vfe.fe.var&&!vfe.fe.pattern){
+		pname=vfe.fe.var.copy();
+	}else{
+		pname=new Identifier(freshName());
+		pname.loc=vfe.fe.pattern?vfe.fe.pattern.loc:vfe.loc;
+		assert(!!vfe.fe.pattern);
+		auto pde=new DefineExp(vfe.fe.pattern.copy(),pname.copy());
+		pde.loc=vfe.fe.pattern.loc;
+		stmts~=pde;
 	}
-	auto re=new ReturnExp(ret);
-	re.loc=rname.loc;
-	Expression[] stmts=[de,fe,re];
+	auto param=new Parameter(false,pname,elemTy);
+	param.loc=pname.loc;
+	auto bodyExp=vfe.fe.bdy.s[0].copy();
+	auto ret=new ReturnExp(bodyExp);
+	ret.loc=bodyExp.loc;
+	stmts~=ret;
 	auto fbdy=new CompoundExp(stmts);
-	auto fd=new FunctionDef(null,[],true,null,fbdy);
+	fbdy.loc=vfe.fe.bdy.loc;
+	auto fd=new FunctionDef(null,[param],false,null,fbdy);
 	fd.annotation=pure_;
 	fd.inferAnnotation=true;
 	fd.loc=vfe.loc;
 	auto le=new LambdaExp(fd);
 	le.loc=vfe.loc;
-	auto etpl=new TupleExp([]);
-	etpl.loc=vfe.loc;
-	auto lce=new CallExp(le,etpl,false,false);
-	lce.loc=vfe.loc;
-	return lce;
+	auto fle=expressionSemantic(le,context.nestConsumed);
+	propErr(fle,vfe);
+	auto nle=cast(LambdaExp)fle;
+	if(!nle) return null;
+	return nle.fd;
 }
 
 Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
-	auto lce=lowerVectorForExp(vfe,context.sc);
-	if(lce.isSemError()) return lce;
-	return expressionSemantic(lce,context);
+	auto sc=context.sc;
+	assert(!!vfe.fe);
+	vfe.fe.aggr=forAggregateSemantic(vfe.fe.aggr,context,vfe.fe);
+	propErr(vfe.fe,vfe);
+	if(vfe.isSemError()) return vfe;
+	vfe.len=vectorForLength(vfe,context);
+	if(vfe.isSemError()) return vfe;
+	auto elemTy=vfe.fe.aggr.elementType();
+	if(!elemTy){
+		if(auto cnt=vfe.fe.aggr.isContainer())
+			sc.error(format("cannot iterate over value of type `%s` in vector comprehension",cnt.e.type),cnt.loc);
+		else sc.error("cannot determine element type of vector comprehension aggregate",vfe.fe.aggr.loc);
+		vfe.setSemError();
+		return vfe;
+	}
+	vfe.fd=vectorForFunction(vfe,elemTy,context);
+	if(vfe.isSemError()||!vfe.fd) return vfe;
+	auto ft=cast(FunTy)typeForDecl(vfe.fd);
+	if(!ft){
+		vfe.setSemError();
+		return vfe;
+	}
+	if(ft.captureAnnotation>CaptureAnnotation.const_){
+		sc.error("body of vector comprehension cannot consume variables other than the element variable",vfe.fe.bdy.s[0].loc);
+		vfe.setSemError();
+		return vfe;
+	}
+	if(ft.cod.hasAnyFreeVar(ft.names)){
+		sc.error("element type of vector comprehension cannot depend on the element variable",vfe.fe.bdy.s[0].loc);
+		vfe.setSemError();
+		return vfe;
+	}
+	FunctionDef reason=null;
+	auto restriction=sc.restriction(reason);
+	if(ft.annotation<restriction){
+		bool fixed=false;
+		if(reason&&reason.inferAnnotation&&ft.annotation<reason.annotation){
+			if(reason.sealed) reason.unseal();
+			reason.annotation=min(reason.annotation,ft.annotation);
+			reason.ftype=null;
+			setFtype(reason,true);
+			fixed=true;
+		}
+		if(!fixed){
+			if(ft.annotation==Annotation.none)
+				sc.error(format("cannot evaluate vector comprehension in `%s` context",annotationToString(restriction)),vfe.loc);
+			else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",ft.annotation,annotationToString(restriction)),vfe.loc);
+			vfe.setSemError();
+			return vfe;
+		}
+	}
+	if(vfe.len) vfe.len=vfe.len.eval();
+	vfe.type=vfe.len?vectorTy(ft.cod,vfe.len):arrayTy(ft.cod);
+	return vfe;
 }
 
 Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
