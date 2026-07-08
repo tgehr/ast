@@ -6632,17 +6632,20 @@ Expression vectorForLength(VectorForExp vfe,ExpSemContext context){
 		auto cright=range.right.asIntegerConstant(true);
 		import util.maybe:just;
 		auto cstep=range.step?range.step.asIntegerConstant(true):just(ℤ(1));
-		if(cleft&&cright&&cstep&&cstep.get()!=0&&(!range.leftExclusive||!range.step)){
-			auto lo=cleft.get()+cast(int)range.leftExclusive*(range.step?cstep.get():ℤ(1));
-			auto hi=cright.get();
-			auto s=cstep.get();
+		if(cleft&&cright&&cstep&&cstep.get()!=0){
+			// constant range: compute the length directly, consistently with `for` loop iteration
+			auto lz=cleft.get(),rz=cright.get(),sz=cstep.get();
+			ℤ mz=range.leftExclusive==range.rightExclusive?(lz+rz)>>1:range.leftExclusive?rz:lz;
+			auto adj=floormod(mz-lz,sz);
+			if(range.leftExclusive&&adj==0) adj=sz;
+			lz+=adj;
 			ℤ count=0;
-			if(s>0){
-				auto last=range.rightExclusive?hi-1:hi;
-				if(last>=lo) count=(last-lo)/s+1;
+			if(sz>0){
+				auto last=range.rightExclusive?rz-1:rz;
+				if(last>=lz) count=(last-lz)/sz+1;
 			}else{
-				auto last=range.rightExclusive?hi+1:hi;
-				if(last<=lo) count=(lo-last)/(-s)+1;
+				auto last=range.rightExclusive?rz+1:rz;
+				if(last<=lz) count=(lz-last)/(-sz)+1;
 			}
 			len=LiteralExp.makeInteger(count);
 			len.loc=range.loc;
@@ -6651,8 +6654,8 @@ Expression vectorForLength(VectorForExp vfe,ExpSemContext context){
 		auto left=range.left.copy();
 		auto right=range.right.copy();
 		if(range.step){
-			if(range.leftExclusive){
-				sc.error(text("("~".."~"])"[range.rightExclusive],"-style ranges with step not yet supported in vector comprehension"),range.left.loc.to(range.right.loc));
+			if(range.leftExclusive||!range.rightExclusive){
+				sc.error(text("[("[range.leftExclusive],"..","])"[range.rightExclusive],"-style ranges with step and non-constant bounds not yet supported in vector comprehension"),range.left.loc.to(range.right.loc));
 				return error();
 			}
 			auto step=range.step.copy();

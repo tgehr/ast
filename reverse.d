@@ -724,36 +724,64 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(auto vfe=cast(VectorForExp)olhs){
-		auto cnt=vfe.fe.aggr.isContainer();
-		if(!cnt){
-			sc.error("range aggregate not supported in vector comprehension on definition left-hand side",vfe.fe.aggr.loc);
+		if(auto range=vfe.fe.aggr.isRange){
+			auto restId=new Identifier(freshName());
+			restId.loc=orhs.loc;
+			auto restDef=new DefineExp(restId,rhs);
+			restDef.loc=loc;
+			auto xId=new Identifier(freshName());
+			xId.loc=vfe.fe.bdy.s[0].loc;
+			auto xTpl=new TupleExp([cast(Expression)xId]);
+			xTpl.loc=xId.loc;
+			auto peelLhs=new CatExp(xTpl,restId.copy());
+			peelLhs.loc=xId.loc;
+			auto peel=new DefineExp(peelLhs,restId.copy());
+			peel.loc=xId.loc;
+			auto bodyLhs=vfe.fe.bdy.s[0].copy();
+			auto bodyDef=new DefineExp(bodyLhs,xId.copy());
+			bodyDef.loc=bodyLhs.loc;
+			auto lbdy=new CompoundExp([cast(Expression)peel,bodyDef]);
+			lbdy.loc=vfe.fe.bdy.loc;
+			auto nrange=ForRange(range.leftExclusive,range.left.copy(),range.step?range.step.copy():null,range.rightExclusive,range.right.copy());
+			auto nvar=vfe.fe.var?vfe.fe.var.copy():null;
+			auto npat=vfe.fe.pattern?vfe.fe.pattern.copy():null;
+			auto nfe=new ForExp(nvar,npat,ForAggregate(nrange),lbdy);
+			nfe.loc=vfe.fe.loc;
+			auto unit=new TupleExp([]);
+			unit.loc=loc;
+			auto fin=new DefineExp(unit,restId.copy());
+			fin.loc=loc;
+			return res=new CompoundExp([restDef,cast(Expression)nfe,fin]);
+		}else if(auto cnt=vfe.fe.aggr.isContainer()){
+			auto yid=new Identifier(freshName());
+			yid.loc=orhs.loc;
+			auto bodyLhs=vfe.fe.bdy.s[0].copy();
+			auto yuse=yid.copy();
+			yuse.loc=orhs.loc;
+			auto inner=new DefineExp(bodyLhs,yuse);
+			inner.loc=vfe.fe.bdy.s[0].loc;
+			Expression result;
+			if(vfe.fe.pattern) result=vfe.fe.pattern.copy();
+			else{
+				assert(!!vfe.fe.var);
+				result=vfe.fe.var.copy();
+			}
+			result.loc=vfe.fe.pattern?vfe.fe.pattern.loc:vfe.fe.var.loc;
+			auto lstm=new CompoundExp([cast(Expression)inner]);
+			lstm.loc=inner.loc;
+			auto letExp=new LetExp(lstm,result);
+			letExp.loc=inner.loc;
+			auto nbdy=new CompoundExp([cast(Expression)letExp]);
+			nbdy.loc=vfe.fe.bdy.loc;
+			auto nfe=new ForExp(yid,null,ForAggregate(ForContainer(rhs)),nbdy);
+			nfe.loc=vfe.fe.loc;
+			auto nvfe=new VectorForExp(nfe);
+			nvfe.loc=loc;
+			return lowerDefine!flags(cnt.e,nvfe,loc,sc,unchecked,noImplicitDup);
+		}else{
+			sc.error("aggregate not supported in vector comprehension on definition left-hand side",vfe.fe.aggr.loc);
 			return error();
 		}
-		auto yid=new Identifier(freshName());
-		yid.loc=orhs.loc;
-		auto bodyLhs=vfe.fe.bdy.s[0].copy();
-		auto yuse=yid.copy();
-		yuse.loc=orhs.loc;
-		auto inner=new DefineExp(bodyLhs,yuse);
-		inner.loc=vfe.fe.bdy.s[0].loc;
-		Expression result;
-		if(vfe.fe.pattern) result=vfe.fe.pattern.copy();
-		else{
-			assert(!!vfe.fe.var);
-			result=vfe.fe.var.copy();
-		}
-		result.loc=vfe.fe.pattern?vfe.fe.pattern.loc:vfe.fe.var.loc;
-		auto lstm=new CompoundExp([cast(Expression)inner]);
-		lstm.loc=inner.loc;
-		auto letExp=new LetExp(lstm,result);
-		letExp.loc=inner.loc;
-		auto nbdy=new CompoundExp([cast(Expression)letExp]);
-		nbdy.loc=vfe.fe.bdy.loc;
-		auto nfe=new ForExp(yid,null,ForAggregate(ForContainer(rhs)),nbdy);
-		nfe.loc=vfe.fe.loc;
-		auto nvfe=new VectorForExp(nfe);
-		nvfe.loc=loc;
-		return lowerDefine!flags(cnt.e,nvfe,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto we=cast(WildcardExp)olhs){
 		auto tmp=new Identifier(freshName);
