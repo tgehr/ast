@@ -724,6 +724,105 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(auto vfe=cast(VectorForExp)olhs){
+		static Expression dupVariableUses(Expression e,void[0][Id] names,Scope sc){ // TODO: this is a hack
+			Expression dupWrap(Expression e){
+				auto ce=new CallExp(getDup(e.loc,sc),e,false,false);
+				ce.loc=e.loc;
+				return ce;
+			}
+			Expression rec(Expression e,out bool known){
+				known=false;
+				if(!e) return e;
+				Expression recWrap(Expression e){
+					bool k;
+					auto r=rec(e,k);
+					return k?dupWrap(r):r;
+				}
+				if(auto id=cast(Identifier)e){
+					known=!!(id.id in names);
+					return e;
+				}
+				if(cast(LiteralExp)e){
+					known=true;
+					return e;
+				}
+				if(auto tpl=cast(TupleExp)e){
+					auto ks=new bool[](tpl.e.length);
+					foreach(i,ref x;tpl.e) x=rec(x,ks[i]);
+					if(tpl.e.length&&ks.all){ known=true; return e; }
+					foreach(i,ref x;tpl.e) if(ks[i]) x=dupWrap(x);
+					return e;
+				}
+				if(auto vec=cast(VectorExp)e){
+					auto ks=new bool[](vec.e.length);
+					foreach(i,ref x;vec.e) x=rec(x,ks[i]);
+					if(vec.e.length&&ks.all){ known=true; return e; }
+					foreach(i,ref x;vec.e) if(ks[i]) x=dupWrap(x);
+					return e;
+				}
+				if(auto ce=cast(CallExp)e){
+					ce.e=recWrap(ce.e);
+					if(!ce.isSquare){
+						if(auto tpl=cast(TupleExp)ce.arg){
+							foreach(ref x;tpl.e) x=recWrap(x);
+						}else ce.arg=recWrap(ce.arg);
+					}
+					return e;
+				}
+				if(auto tae=cast(TypeAnnotationExp)e){
+					tae.e=rec(tae.e,known);
+					return e;
+				}
+				if(auto idx=cast(IndexExp)e){
+					bool ke,ka;
+					idx.e=rec(idx.e,ke);
+					idx.a=rec(idx.a,ka);
+					known=ke&&ka;
+					if(!known&&ke) idx.e=dupWrap(idx.e);
+					return e;
+				}
+				if(auto sl=cast(SliceExp)e){
+					bool ke;
+					sl.e=rec(sl.e,ke);
+					known=ke;
+					return e;
+				}
+				if(auto ue=cast(AUnaryExp)e){
+					ue.e=rec(ue.e,known);
+					return e;
+				}
+				if(auto be=cast(ABinaryExp)e){
+					bool k1,k2;
+					be.e1=rec(be.e1,k1);
+					be.e2=rec(be.e2,k2);
+					known=k1&&k2;
+					if(!known){
+						if(k1) be.e1=dupWrap(be.e1);
+						if(k2) be.e2=dupWrap(be.e2);
+					}
+					return e;
+				}
+				if(auto nvfe=cast(VectorForExp)e){
+					bool shadowed=nvfe.fe.var&&nvfe.fe.var.id in names;
+					if(nvfe.fe.pattern) nvfe.fe.pattern.freeVarsImpl((id){ if(id.id in names) shadowed=true; return 0; });
+					if(auto nrange=nvfe.fe.aggr.isRange){
+						nrange.left=recWrap(nrange.left);
+						if(nrange.step) nrange.step=recWrap(nrange.step);
+						nrange.right=recWrap(nrange.right);
+					}else if(auto ncnt=nvfe.fe.aggr.isContainer())
+						ncnt.e=recWrap(ncnt.e);
+					if(!shadowed){
+						bool kb;
+						nvfe.fe.bdy.s[0]=rec(nvfe.fe.bdy.s[0],kb);
+					}
+					return e;
+				}
+				return e;
+			}
+			bool k;
+			auto r=rec(e,k);
+			return k?dupWrap(r):r;
+		}
 		if(auto range=vfe.fe.aggr.isRange){
 			auto restId=new Identifier(freshName());
 			restId.loc=orhs.loc;
@@ -738,6 +837,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			auto peel=new DefineExp(peelLhs,restId.copy());
 			peel.loc=xId.loc;
 			auto bodyLhs=vfe.fe.bdy.s[0].copy();
+			void[0][Id] loopVarNames;
+			if(vfe.fe.var) loopVarNames[vfe.fe.var.id]=[];
+			if(vfe.fe.pattern) vfe.fe.pattern.freeVarsImpl((id){ loopVarNames[id.id]=[]; return 0; });
+			bodyLhs=dupVariableUses(bodyLhs,loopVarNames,sc);
 			auto bodyDef=new DefineExp(bodyLhs,xId.copy());
 			bodyDef.loc=bodyLhs.loc;
 			auto lbdy=new CompoundExp([cast(Expression)peel,bodyDef]);
@@ -1010,8 +1113,11 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 	bool retDefReplaced=false;
 	if(auto id=cast(Identifier)ret.e){
 		if(!id.implicitDup&&validDefLhs!flags(id,sc,unchecked,noImplicitDup)){
-			retDefReplaced=true;
-			rpname=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
+			auto name=(id.meaning&&id.meaning.name?id.meaning.name:id).id;
+			if(!r.constIndices.any!(i=>fd.params[i].name&&fd.params[i].name.id==name)){
+				retDefReplaced=true;
+				rpname=name;
+			}
 		}
 	}
 	if(!retDefReplaced) rpname=freshName();
