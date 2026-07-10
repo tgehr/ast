@@ -1682,7 +1682,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope Declaration[Declaration]* mustBeConstFromDummies=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope Declaration[Declaration]* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -1699,7 +1699,13 @@ abstract class Scope{
 					if(type.isClassical) continue;
 				}
 				if(mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is loopScope);
-				if(!mayChange) continue; // use const captures
+				if(!mayChange){
+					if(!separateConstParams||type.isClassical()) continue; // use const captures
+					if(!accessedDecls||decl.canonicalSource !in *accessedDecls) continue; // not captured
+					Expression.CopyArgs cargsConst;
+					r[0]~=q(id,decl,type.copy(cargsConst),false); // separate const parameter
+					continue;
+				}
 				bool canForget=type.isClassical()||dependencies.canForget(decl);
 				bool isConstParamDecl=false;
 				if(canForget&&!type.isClassical()){

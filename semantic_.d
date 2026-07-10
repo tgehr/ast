@@ -1065,7 +1065,19 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	assert(loop.isSemCompleted());
 }do{
 	enum returnOnlyMoved=false; // (experimental)
-	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan?&state.mustBeConstFromDummies:null);
+	enum separateConstParams=true; // (necessary inside a `with` transformation)
+	SetX!Declaration accessedDecls;
+	if(separateConstParams){
+		void collectAccesses(Expression e){
+			if(!e) return;
+			foreach(sub;e.subexpressions){
+				if(auto id=cast(Identifier)sub)
+					if(id.meaning) accessedDecls.insert(id.meaning.canonicalSource);
+			}
+		}
+		collectAccesses(loop.bdy);
+	}
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
