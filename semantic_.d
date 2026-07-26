@@ -957,11 +957,11 @@ struct DummyAnalysisData{
 Declaration[] dummyAnalysisCandidates(Scope sc, ref Scope.ScopeState prevState, BlockScope oldLoopScope){
 	if(!oldLoopScope) return [];
 	Declaration[] result;
-	bool[Declaration] consumedOuterSet;
+	void[0][Declaration] consumedOuterSet;
 	Declaration[Id] allDecls=sc.rnsymtab.dup;
 	foreach(decl;oldLoopScope.consumedOuter){
 		if(!decl||cast(DeadDecl)decl) continue;
-		consumedOuterSet[decl]=true;
+		consumedOuterSet[decl]=[];
 		allDecls[decl.getId]=decl;
 	}
 	foreach(id,decl;allDecls){
@@ -998,18 +998,18 @@ Declaration[Declaration] collectDummyResults(Scope sc, ref FixedPointIterState s
 	assert(data.contextPushed);
 }do{
 	auto context=sc.popDummyWitnessContext();
-	bool[Declaration] dummySet;
-	foreach(v,vprime;context.dummies) dummySet[vprime]=true;
+	void[0][Declaration] dummySet;
+	foreach(v,vprime;context.dummies) dummySet[vprime]=[];
 	void resolveTransitively(ref Dependency dep){
 		if(dep.isTop) return;
-		bool[Declaration] visited;
+		void[0][Declaration] visited;
 		Declaration[] worklist;
 		foreach(x;dep.dependencies) worklist~=x;
 		while(worklist.length){
 			auto decl=worklist[$-1];
 			worklist=worklist[0..$-1];
 			if(decl in visited) continue;
-			visited[decl]=true;
+			visited[decl]=[];
 			foreach(v,vprime;context.dummies)
 				if(decl is vprime)
 					context.results[v]=v;
@@ -2443,10 +2443,6 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 		if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 			sc.note("consumed in one branch of if expression", ite.loc);
 			ite.setSemError();
-		}
-		if(inType){
-			if(ite.then) ite.then.blscope_=null;
-			if(ite.othw) ite.othw.blscope_=null;
 		}
 		ite.setSemCompleted();
 	}
@@ -5380,10 +5376,6 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						report(format("cannot consume `%s`",id),id.loc);
 					}
 				}
-				foreach(e;exp.subexpressions){
-					if(cast(LetExp)e) report("`let` expressions in types not yet supported",e.loc); // TODO
-					if(cast(IteExp)e) report("`if` expressions in types not yet supported",e.loc); // TODO
-				}
 			}
 		}
 		static if(!isRhs){
@@ -5528,7 +5520,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					propErr(ce.arg,ce);
 					if(ce.arg.isSemError()) return true;
 					Expression garg;
-					auto tt=nft.tryMatch(ce.arg,garg);
+					auto tt=nft.tryMatch(ce.arg,garg,context.sc);
 					if(!tt) return false;
 					Expression.CopyArgs cargs={ preserveMeanings: true };
 					auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
@@ -5548,11 +5540,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			propErr(ce.arg,ce);
 			if(!ce.arg.isSemCompleted()) return true;
 			static if(isRhs){
-				ce.type=ft.tryApply(ce.arg,ce.isSquare);
+				ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				return !!ce.type;
 			}else{
 				if(!ce.type&&ce.arg.isSemCompleted()&&ft.isConstForReverse.all)
-					ce.type=ft.tryApply(ce.arg,ce.isSquare);
+					ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				if(!ce.type){
 					if(ft.cod.hasAnyFreeVar(ft.names)){
 						sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
@@ -5799,11 +5791,6 @@ Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumCo
 
 Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
-	if(inType){
-		sc.error("`if` expressions in types not yet supported",ite.loc); // TODO
-		ite.setSemError();
-		return ite;
-	}
 	ite.cond=conditionSemantic!true(ite, ite.cond, sc, inType);
 	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
 		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
@@ -5846,10 +5833,6 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("consumed in one branch of if expression", ite.loc);
 		ite.setSemError();
-	}
-	if(inType){
-		if(ite.then) ite.then.blscope_=null;
-		if(ite.othw) ite.othw.blscope_=null;
 	}
 	ite.setSemCompleted();
 	return ite;
@@ -5895,13 +5878,8 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
-	if(!le.isForward(true)||context.constResult)
+	if(!le.isForward(true)||context.constResult||context.inType)
 		return generalLetExpSemantic(le,context);
-	if(context.inType){
-		context.sc.error("`let` expressions in types not yet supported",le.loc); // TODO
-		le.setSemError();
-		return le;
-	}
 	auto de=cast(DefineExp)le.s.s[0];
 	assert(!!de);
 	de.e2=expressionSemantic(de.e2,context);
@@ -5984,7 +5962,6 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 		sc.note("at the end of `let` expression",le.loc);
 		le.setSemError();
 	}
-	if(inType) le.s.blscope_=null;
 	if(!le.isSemError()) le.setSemCompleted();
 	return le;
 }

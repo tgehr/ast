@@ -33,6 +33,7 @@ import std.array, std.algorithm, std.conv;
 import std.functional, std.range;
 import ast.expression, ast.declaration, util;
 import ast.modules: isInPrelude;
+import ast.scope_: Scope, TypeTransition;
 
 enum NumericType{
 	none,
@@ -126,7 +127,7 @@ string preludeNumericTypeName(Expression e){
 bool isFloat(Expression e){ return preludeNumericTypeName(e)=="float"; }
 bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
-bool isSubtype(Expression lhs,Expression rhs){
+bool isSubtype(Expression lhs,Expression rhs,EqualityContext* ctx=null){
 	if(!lhs||!rhs) return false;
 	assert(lhs.isSemEvaluated());
 	assert(rhs.isSemEvaluated());
@@ -138,7 +139,7 @@ bool isSubtype(Expression lhs,Expression rhs){
 	} else if(!lhs.isClassical()&&rhs.isClassical()) {
 		return false;
 	}
-	return lhs.isSubtypeImpl(rhs);
+	return lhs.isSubtypeImpl(rhs,ctx);
 }
 
 Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumeric=false){ // TODO: more general solution // TODO: ⊤/⊥?
@@ -164,7 +165,6 @@ Expression meetTypes(Expression lhs,Expression rhs){
 abstract class Type: Expression{
 	override @property string kind(){ return "type"; }
 	override string toString(){ return "T"; }
-	abstract override bool opEquals(Object r);
 	override Annotation getAnnotation(){ return pure_; }
 }
 
@@ -203,7 +203,7 @@ class NumericTy: Type{
 		if(meet) return numericTy(min(nty, ty.nty), classical || ty.classical);
 		return numericTy(max(nty, ty.nty), classical && ty.classical);
 	}
-	override bool isSubtypeImpl(Expression r){
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 		auto ty = cast(NumericTy)r;
 		if(!ty) return false;
 		assert(ty !is this);
@@ -229,9 +229,6 @@ class NumericTy: Type{
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		return o is this;
-	}
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -300,9 +297,8 @@ class AggregateTy: Type{
 	override AggregateTy copyImpl(CopyArgs args){
 		return this;
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		if(auto r=cast(AggregateTy)o)
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(AggregateTy)rhs)
 			return decl is r.decl && classical==r.classical;
 		return false;
 	}
@@ -340,10 +336,9 @@ class ContextTy: Type{
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto ctx=cast(ContextTy)o;
-		return ctx&&ctx.classical==classical;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(ContextTy)rhs;
+		return r&&r.classical==classical;
 	}
 	override string toString(){
 		static if(language==silq) return (classical?"!":"")~"`Ctx";
@@ -379,11 +374,10 @@ class BottomTy: Type{
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){
-		auto bot=cast(BottomTy)o;
-		return !!bot;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		return !!cast(BottomTy)rhs;
 	}
-	override bool isSubtypeImpl(Expression r){
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 		return true;
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){
@@ -412,6 +406,11 @@ class ClassicalTy: Expression{
 	override string toString(){
 		return "!" ~ inner.toString();
 	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(ClassicalTy)rhs;
+		if(!r) return false;
+		return isEqual(inner,r.inner,&ctx);
+	}
 	override ClassicalTy copyImpl(CopyArgs args){
 		return new ClassicalTy(inner.copy(args));
 	}
@@ -421,8 +420,8 @@ class ClassicalTy: Expression{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return inner.freeVarsImpl(dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst){
-		return new ClassicalTy(inner.substitute(subst));
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		return new ClassicalTy(inner.substitute(subst,tt));
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		assert(false);
@@ -473,9 +472,9 @@ class TupleTy: Type,ITupleTy{
 				return r;
 		return 0;
 	}
-	override Type substituteImpl(Expression[Id] subst){
+	override Type substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ntypes=types.dup;
-		foreach(ref t;ntypes) t=t.substitute(subst);
+		foreach(ref t;ntypes) t=t.substitute(subst,tt);
 		return tupleTy(ntypes);
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
@@ -484,18 +483,19 @@ class TupleTy: Type,ITupleTy{
 		return all!(i=>types[i].unify(tt[i],subst,meet))(iota(types.length));
 
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		if(auto r=cast(TupleTy)o)
-			return types==r.types;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(TupleTy)rhs){
+			if(types.length!=r.types.length) return false;
+			return all!(i=>isEqual(types[i],r.types[i],&ctx))(iota(types.length));
+		}
 		return false;
 	}
-	override bool isSubtypeImpl(Expression r){
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 		auto ltup=this,rtup=r.isTupleTy();
 		if(rtup&&ltup.types.length==rtup.length)
-			return all!(i=>isSubtype(ltup.types[i],rtup[i]))(iota(ltup.types.length));
+			return all!(i=>isSubtype(ltup.types[i],rtup[i],ctx))(iota(ltup.types.length));
 		auto rarr=cast(ArrayTy)r;
-		if(rarr) return all!(i=>isSubtype(ltup.types[i],rarr.next))(iota(ltup.types.length));
+		if(rarr) return all!(i=>isSubtype(ltup.types[i],rarr.next,ctx))(iota(ltup.types.length));
 		return false;
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){
@@ -591,8 +591,8 @@ class ArrayTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override ArrayTy substituteImpl(Expression[Id] subst){
-		return arrayTy(next.substitute(subst));
+	override ArrayTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		return arrayTy(next.substitute(subst,tt));
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VectorTy)rhs)
@@ -607,15 +607,15 @@ class ArrayTy: Type{
 		assert(isTypeTy(type) || isQNumericTy(type));
 		return arrayTy(next.eval());
 	}
-	override bool opEquals(Object o){
-		if(auto r=cast(ArrayTy)o)
-			return next==r.next;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(ArrayTy)rhs)
+			return isEqual(next,r.next,&ctx);
 		return false;
 	}
-	override bool isSubtypeImpl(Expression r){
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 		auto larr=this,rarr=cast(ArrayTy)r;
 		if(!rarr) return false;
-		return isSubtype(larr.next,rarr.next);
+		return isSubtype(larr.next,rarr.next,ctx);
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){
 		auto larr=this,rarr=cast(ArrayTy)r;
@@ -708,8 +708,8 @@ class VectorTy: Type, ITupleTy{
 		if(auto r=next.freeVarsImpl(dg)) return r;
 		return num.freeVarsImpl(dg);
 	}
-	override VectorTy substituteImpl(Expression[Id] subst){
-		return vectorTy(next.substitute(subst),num.substitute(subst));
+	override VectorTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		return vectorTy(next.substitute(subst,tt),num.substitute(subst,tt));
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
@@ -726,19 +726,19 @@ class VectorTy: Type, ITupleTy{
 		assert(isTypeTy(type) || isQNumericTy(type));
 		return vectorTy(next.eval(),num.eval());
 	}
-	override bool opEquals(Object o){
-		if(auto r=cast(VectorTy)o)
-			return next==r.next&&num==r.num;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(VectorTy)rhs)
+			return isEqual(next,r.next,&ctx)&&isEqual(num,r.num,&ctx);
 		return false;
 	}
-	override bool isSubtypeImpl(Expression r){
-		if(auto rarr=cast(ArrayTy)r) return isSubtype(next,rarr.next);
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
+		if(auto rarr=cast(ArrayTy)r) return isSubtype(next,rarr.next,ctx);
 		auto lvec=this,rvec=cast(VectorTy)r;
 		if(rvec){
-			if(num!=rvec.num) return false;
+			if(!isEqual(num,rvec.num,ctx)) return false;
 			if(auto nlit=num.asIntegerConstant())
 				if(nlit.get()==0) return true;
-			return isSubtype(lvec.next,rvec.next);
+			return isSubtype(lvec.next,rvec.next,ctx);
 		}
 		auto ltup=this.isTupleTy(),rtup=r.isTupleTy();
 		if(ltup&&rtup&&ltup.length==rtup.length)
@@ -838,7 +838,6 @@ class StringTy: Type{
 	}
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
-	override bool opEquals(Object o){ return o is this; }
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -1088,20 +1087,20 @@ class ProductTy: Type{
 		foreach(i;0..names.length) subst[names[i]]=varTy(nnames[i],argTy(i));
 		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
-	override ProductTy substituteImpl(Expression[Id] subst){
+	override ProductTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		foreach(n;names){
 			if(!n) continue;
 			bool ok=true;
 			foreach(k,v;subst) if(v.hasFreeVar(n)) ok=false;
 			if(ok) continue;
-			auto r=cast(ProductTy)relabelAway(n).substitute(subst);
+			auto r=cast(ProductTy)relabelAway(n).substitute(subst,tt);
 			assert(!!r);
 			return r;
 		}
-		auto ndom=dom.substitute(subst);
+		auto ndom=dom.substitute(subst,tt);
 		auto nsubst=subst.dup;
 		foreach(n;names) nsubst.remove(n);
-		auto ncod=cod.substitute(nsubst);
+		auto ncod=cod.substitute(nsubst,tt);
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
@@ -1131,7 +1130,7 @@ class ProductTy: Type{
 		foreach(k,v;nsubst) subst[k]=v;
 		return res;
 	}
-	Expression tryMatch(Expression arg,out Expression garg)in{assert(isSquare&&cast(ProductTy)cod);}do{
+	Expression tryMatch(Expression arg,out Expression garg,Scope target=null)in{assert(isSquare&&cast(ProductTy)cod);}do{
 		auto cod=cast(ProductTy)this.cod;
 		assert(!!cod);
 		auto nnames=freshNames(arg);
@@ -1174,9 +1173,9 @@ class ProductTy: Type{
 		}else garg=gargs[0];
 		cod=cast(ProductTy)tryApply(garg,true);
 		if(!cod) return null;
-		return cod.tryApply(arg,false);
+		return cod.tryApply(arg,false,target);
 	}
-	Expression tryApply(Expression arg,bool isSquare){
+	Expression tryApply(Expression arg,bool isSquare,Scope target=null){
 		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;
 		if(!isSubtype(arg.type,dom)) return null;
@@ -1194,11 +1193,13 @@ class ProductTy: Type{
 			assert(names.length==1);
 			subst[names[0]]=arg.eval();
 		}
-		return cod.substitute(subst);
+		// the codomain moves from the expression context of the callee into a
+		// type used at the call site; transition it to the type context first
+		import ast.substitute: transitionToType;
+		return transitionToType(cod,target).substitute(subst);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto r=cast(ProductTy)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(ProductTy)rhs;
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
 		r=r.setTuple(isTuple);
@@ -1207,7 +1208,7 @@ class ProductTy: Type{
 		if(isConst!=r.isConst||isSquare!=r.isSquare||annotation!=r.annotation||captureAnnotation!=r.captureAnnotation||
 		   isClassical_!=r.isClassical_||nargs!=r.nargs)
 			return false;
-		return this.isSubtypeImpl(r)&&r.isSubtypeImpl(this);
+		return this.isSubtypeImpl(r,&ctx)&&r.isSubtypeImpl(this,&ctx);
 	}
 	auto isConstForReverse(){
 		return iota(nargs).map!(i=>argConstForReverse(i));
@@ -1225,7 +1226,7 @@ class ProductTy: Type{
 		);
 	}
 
-	override bool isSubtypeImpl(Expression rhs){
+	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
 		auto r=cast(ProductTy)rhs;
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
@@ -1241,7 +1242,7 @@ class ProductTy: Type{
 		auto rCod=r.tryApply(vars,isSquare);
 		if(!lCod) return false;
 		assert(!!rCod);
-		return isSubtype(lCod,rCod);
+		return isSubtype(lCod,rCod,ctx);
 	}
 	override Expression combineTypesImpl(Expression rhs,bool meet){
 		auto r=cast(ProductTy)rhs;
@@ -1478,8 +1479,8 @@ class VariadicTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst){
-		return variadicTy(next.substitute(subst),isClassical_);
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		return variadicTy(next.substitute(subst,tt),isClassical_);
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		if(auto vt=cast(VariadicTy)rhs)
@@ -1516,22 +1517,21 @@ class VariadicTy: Type{
 		if(ne is next) return this;
 		return variadicTy(ne,isClassical_);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		if(auto r=cast(VariadicTy)o)
-			return next==r.next&&isClassical_==r.isClassical;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(VariadicTy)rhs)
+			return isEqual(next,r.next,&ctx)&&isClassical_==r.isClassical;
 		return false;
 	}
-	override bool isSubtypeImpl(Expression r){
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 		if(auto vt=cast(VariadicTy)r)
-			return next==vt.next && isClassical(this)>=isClassical(vt); // TODO: improve
+			return isEqual(next,vt.next,ctx) && isClassical(this)>=isClassical(vt); // TODO: improve
 		// if(auto vt=cast(VectorTy)rhs) ... // TODO
 		// if(auto at=cast(ArrayTy)rhs) ... // TODO
 		if(auto tt=r.isTupleTy()){
 			auto tpl=new TupleExp(iota(tt.length).map!(i=>tt[i]).array);
 			tpl.type=tupleTy(iota(tt.length).map!(i=>tt[i].type).array);
 			tpl.setSemCompleted();
-			return next==tpl; // TODO: improve
+			return isEqual(next,tpl,ctx); // TODO: improve
 		}
 		return false;
 	}
@@ -1667,7 +1667,7 @@ class TypeTy: Type{
 				case TypeType.badty: return "null";
 			}
 		}
-		override bool isSubtypeImpl(Expression r){
+		override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 			assert(r !is this);
 			auto ty=cast(TypeTy)r;
 			if(!ty) return false;
@@ -1687,7 +1687,7 @@ class TypeTy: Type{
 		override string toString(){
 			return "*";
 		}
-		override bool isSubtypeImpl(Expression r){
+		override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
 			assert(r !is this);
 			return false;
 		}
@@ -1698,9 +1698,6 @@ class TypeTy: Type{
 	}
 	override TypeTy copyImpl(CopyArgs args){
 		return this;
-	}
-	override bool opEquals(Object o){
-		return o is this;
 	}
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree;
@@ -1776,8 +1773,8 @@ class QNumericTy: Type{
 	override string toString(){
 		return "qnumeric";
 	}
-	override bool opEquals(Object o){
-		return !!cast(QNumericTy)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		return !!cast(QNumericTy)rhs;
 	}
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree;

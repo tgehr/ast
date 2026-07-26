@@ -164,18 +164,18 @@ abstract class Expression: Node{
 	final Expression substitute(Id name,Expression exp){
 		return substitute([name:exp]);
 	}
-	final Expression substitute(Expression[Id] subst){
+	final Expression substitute(Expression[Id] subst,TypeTransition* tt=null){
 		assert(isSemCompleted());
-		auto r=substituteImpl(subst);
+		auto r=substituteImpl(subst,tt);
 		if(r !is this) {
 			assert(type !is this);
 			assert(!r.type || r.type.isSemEvaluated(), format("eval %s -> %s, unevaluated type %s", this, r, r.type));
-			if(!r.type) r.type = type.substitute(subst);
+			if(!r.type) r.type = type.substitute(subst,tt);
 			r.setSemCompleted();
 		}
 		return r.eval();
 	}
-	abstract Expression substituteImpl(Expression[Id] subst); // TODO: name might be free in the _types_ of subexpressions
+	abstract Expression substituteImpl(Expression[Id] subst,TypeTransition* tt); // TODO: name might be free in the _types_ of subexpressions
 
 	static struct UnificationResult{
 		Expression lowerBound=null;
@@ -287,8 +287,18 @@ abstract class Expression: Node{
 	}do{
 		return Subexpressions(this);
 	}
-	bool isSubtypeImpl(Expression rhs){
-		return this == rhs;
+	final override bool opEquals(Object o){
+		if(o is this) return true;
+		auto r=cast(Expression)o;
+		if(!r) return false;
+		EqualityContext ctx;
+		return isEqualImpl(r,ctx);
+	}
+	bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		return this is rhs;
+	}
+	bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
+		return .isEqual(this,rhs,ctx);
 	}
 	Expression combineTypesImpl(Expression rhs,bool meet){
 		if(this == rhs) return this;
@@ -329,7 +339,7 @@ abstract class Expression: Node{
 
 mixin template VariableFree(){
 	override int freeVarsImpl(scope int delegate(Identifier)){ return 0; }
-	override Expression substituteImpl(Expression[Id] subst){ return this; }
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){ return this; }
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null;
 	}
@@ -399,9 +409,9 @@ class TypeAnnotationExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(type?type:t);
 	}
-	override TypeAnnotationExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
-		auto nt=t.substitute(subst);
+	override TypeAnnotationExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
+		auto nt=t.substitute(subst,tt);
 		if(ne is e && nt is t) return this;
 		auto r=new TypeAnnotationExp(ne, nt, annotationType);
 		r.loc=loc;
@@ -411,11 +421,10 @@ class TypeAnnotationExp: Expression{
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return e.unify(rhs,subst,meet);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto tae=cast(TypeAnnotationExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto tae=cast(TypeAnnotationExp)rhs;
 		if(!tae) return false;
-		return e==tae.e&&t==tae.t&&annotationType==tae.annotationType;
+		return isEqual(e,tae.e,&ctx)&&isEqual(t,tae.t,&ctx)&&annotationType==tae.annotationType;
 	}
 	override Annotation getAnnotation(){
 		return e.getAnnotation();
@@ -574,9 +583,8 @@ class LiteralExp: Expression{
 		return just(lit.str);
 	}
 
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto r=cast(LiteralExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(LiteralExp)rhs;
 		if(!r) return false;
 		if(lit.type!=r.lit.type) return false;
 		switch(lit.type){
@@ -703,6 +711,114 @@ struct Id {
 	}
 }
 
+struct EqualityContext{
+	private Declaration[Declaration] mapL, mapR;
+	private static Declaration source(Declaration d){
+		return d?d.canonicalSource:d;
+	}
+	bool isBound(Declaration d){
+		return source(d) in mapL||source(d) in mapR;
+	}
+	bool lookup(Declaration l,Declaration r){
+		l=source(l), r=source(r);
+		if(l is r) return true;
+		auto pl=l in mapL;
+		auto pr=r in mapR;
+		if(pl||pr) return pl&&pr&&*pl is r&&*pr is l;
+		return false;
+	}
+	void bind(Declaration ma,Declaration mb){
+		ma=source(ma), mb=source(mb);
+		if(auto p=ma in mapL){
+			if(*p is mb) return;
+			mapR.remove(*p);
+		}else if(auto p=mb in mapR){
+			mapL.remove(*p);
+		}
+		mapL[ma]=mb;
+		mapR[mb]=ma;
+	}
+	private bool pairBound(Expression sa,Expression sb){
+		import ast.substitute: statementBoundVarsImpl;
+		Declaration[] da,db;
+		static void collect(Expression stmt,ref Declaration[] acc){
+			statementBoundVarsImpl(stmt,(id){ if(id.meaning) acc~=id.meaning; return 0; });
+			// a function definition binds the definition itself (the name
+			// identifier may not carry a meaning)
+			if(auto fd=cast(FunctionDef)stmt)
+				if(!acc.length||acc[$-1] !is fd) acc~=fd;
+		}
+		collect(sa,da);
+		collect(sb,db);
+		if(da.length!=db.length) return false;
+		foreach(i;0..da.length) bind(da[i],db[i]);
+		return true;
+	}
+
+	private bool functionDefEquals(FunctionDef a,FunctionDef b){
+		if(a.isTuple!=b.isTuple||a.isSquare!=b.isSquare) return false;
+		if(a.params.length!=b.params.length) return false;
+		foreach(i;0..a.params.length){
+			auto pa=a.params[i],pb=b.params[i];
+			if(pa.isConst!=pb.isConst) return false;
+			if((pa.dtype is null)!=(pb.dtype is null)) return false;
+			if(pa.dtype&&!pa.dtype.isEqualImpl(pb.dtype,this)) return false;
+			if((pa.vtype is null)!=(pb.vtype is null)) return false;
+			if(pa.vtype&&!pa.vtype.isEqualImpl(pb.vtype,this)) return false;
+			bind(pa,pb);
+		}
+		if((a.rret is null)!=(b.rret is null)) return false;
+		if(a.rret&&!a.rret.isEqualImpl(b.rret,this)) return false;
+		if((a.ret is null)!=(b.ret is null)) return false;
+		if(a.ret&&!a.ret.isEqualImpl(b.ret,this)) return false;
+		if((a.body_ is null)!=(b.body_ is null)) return false;
+		if(a.body_&&!a.body_.isEqualImpl(b.body_,this)) return false;
+		return true;
+	}
+
+	private bool stmtEquals(Expression a,Expression b){
+		if(a is b) return true;
+		if(auto fa=cast(FunctionDef)a){
+			auto fb=cast(FunctionDef)b;
+			if(!fb) return false;
+			return functionDefEquals(fa,fb);
+		}
+		if(cast(FunctionDef)b) return false;
+		return a.isEqualImpl(b,this);
+	}
+
+	bool stmtsEquals(Expression[] sa,Expression[] sb){
+		static Expression[] flatten(Expression[] ss){
+			Expression[] r;
+			foreach(s;ss){
+				if(cast(ForgetExp)s) continue; // TODO: get rid of this
+				if(auto ce=cast(CompoundExp)s)
+					if(!cast(ComponentReplaceExp)s){
+						r~=flatten(ce.s);
+						continue;
+					}
+				r~=s;
+			}
+			return r;
+		}
+		auto fa=flatten(sa), fb=flatten(sb);
+		if(fa.length!=fb.length) return false;
+		foreach(i;0..fa.length){
+			if(!pairBound(fa[i],fb[i])) return false;
+			if(!stmtEquals(fa[i],fb[i])) return false;
+		}
+		return true;
+	}
+}
+
+bool isEqual(Expression a,Expression b,EqualityContext* ctx){
+	if(a is b) return true;
+	if(!a||!b) return false;
+	if(ctx) return a.isEqualImpl(b,*ctx);
+	EqualityContext fresh;
+	return a.isEqualImpl(b,fresh);
+}
+
 class Identifier: Expression{
 	Id id;
 	@property string name(){return id.str;}
@@ -734,6 +850,7 @@ class Identifier: Expression{
 		}else{
 			if(args.preserveMeanings){
 				r.meaning=meaning;
+				r.scope_=scope_; // TODO: make unnecessary
 			}
 			static if(language==silq){
 				r.outerWanted=outerWanted;
@@ -757,7 +874,7 @@ class Identifier: Expression{
 		return dg(this);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
-	override Expression substituteImpl(Expression[Id] subst){
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		if(id !in subst) return this;
 		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
 		auto result=subst[id];
@@ -821,21 +938,28 @@ class Identifier: Expression{
 		addSubst(rhs);
 		return true;
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		if(auto r=cast(Identifier)o){
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		if(auto r=cast(Identifier)rhs){
+			if(meaning&&r.meaning&&(ctx.isBound(meaning)||ctx.isBound(r.meaning))){
+				// at least one of the identifiers is bound within the
+				// expressions currently being compared: they are equal iff
+				// their meanings are paired up (alpha-equivalence)
+				return ctx.lookup(meaning,r.meaning)&&isEqual(type,r.type,&ctx);
+			}
 			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning) {
 				if(meaning) {
-					assert(type == r.type);
+					assert(isEqual(type,r.type,&ctx));
 					return true;
 				}
-				return type == r.type;
+				return isEqual(type,r.type,&ctx);
 			}
 		}
 		return false;
 	}
-	override bool isSubtypeImpl(Expression rhs){
+	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
 		if(auto r=cast(Identifier)rhs){
+			if(ctx&&meaning&&r.meaning&&(ctx.isBound(meaning)||ctx.isBound(r.meaning)))
+				return ctx.lookup(meaning,r.meaning);
 			if(id==r.id && (isClassical(this)||!isClassical(r)) && meaning==r.meaning)
 				return true;
 		}
@@ -1049,8 +1173,8 @@ class UnaryExp(TokenType op): AUnaryExp{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override UnaryExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
+	override UnaryExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new UnaryExp(ne);
 		r.loc=loc;
@@ -1061,10 +1185,9 @@ class UnaryExp(TokenType op): AUnaryExp{
 		if(!ue) return false;
 		return e.unify(ue.e,subst,meet);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto ue=cast(UnaryExp!op)o;
-		return ue&&e==ue.e;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto ue=cast(UnaryExp!op)rhs;
+		return ue&&isEqual(e,ue.e,&ctx);
 	}
 
 	override Annotation getAnnotation(){ return e.getAnnotation(); }
@@ -1097,8 +1220,8 @@ class PostfixExp(TokenType op): Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override PostfixExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
+	override PostfixExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new PostfixExp(ne);
 		r.loc=loc;
@@ -1145,9 +1268,9 @@ class IndexExp: Expression{ //e[a]
 		if(auto r=dg(a)) return r;
 		return 0;
 	}
-	override IndexExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
-		auto na=a.substitute(subst);
+	override IndexExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
+		auto na=a.substitute(subst,tt);
 		if(ne==e&&na==a) return this;
 		auto r=new IndexExp(ne,na);
 		r.isArraySyntax=isArraySyntax;
@@ -1160,13 +1283,12 @@ class IndexExp: Expression{ //e[a]
 		// TODO: improve
 		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
 	}
-	override bool opEquals(Object rhs){
-		if(rhs is this) return true;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto idx=cast(IndexExp)rhs;
-		return idx&&idx.e==e&&idx.a==a&&idx.isClassical_==isClassical_;
+		return idx&&isEqual(idx.e,e,&ctx)&&isEqual(idx.a,a,&ctx)&&idx.isClassical_==isClassical_;
 	}
-	override bool isSubtypeImpl(Expression rhs){
-		if(this == rhs) return true;
+	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
+		if(isEqual(this,rhs,ctx)) return true;
 		// TODO: improve
 		return false;
 	}
@@ -1286,10 +1408,10 @@ class SliceExp: Expression{
 		if(auto x=dg(r)) return x;
 		return 0;
 	}
-	override SliceExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
-		auto nl=l.substitute(subst);
-		auto nr=r.substitute(subst);
+	override SliceExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
+		auto nl=l.substitute(subst,tt);
+		auto nr=r.substitute(subst,tt);
 		if(ne is e && nl is l && nr is r) return this;
 		auto res=new SliceExp(ne,nl,nr);
 		res.loc=loc;
@@ -1299,10 +1421,10 @@ class SliceExp: Expression{
 		auto sl=cast(SliceExp)rhs;
 		return e.unify(sl.e,subst,meet)&&l.unify(sl.l,subst,meet)&&r.unify(sl.r,subst,meet);
 	}
-	override bool opEquals(Object rhs){
-		if(rhs is this) return true;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto sl=cast(SliceExp)rhs;
-		return e == sl.e && l == sl.l && r == sl.r;
+		if(!sl) return false;
+		return isEqual(e,sl.e,&ctx) && isEqual(l,sl.l,&ctx) && isEqual(r,sl.r,&ctx);
 	}
 
 	override Annotation getAnnotation(){ return min(e.getAnnotation(), l.getAnnotation(), r.getAnnotation()); }
@@ -1349,9 +1471,9 @@ class CallExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(arg);
 	}
-	override CallExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
-		auto narg=arg.substitute(subst);
+	override CallExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
+		auto narg=arg.substitute(subst,tt);
 		if(ne==e&&narg==arg) return this;
 		auto r=new CallExp(ne,narg,isSquare,isClassical_);
 		r.loc=loc;
@@ -1366,18 +1488,17 @@ class CallExp: Expression{
 		}
 		return e.unify(ce.e,subst,meet)&&arg.unify(ce.arg,subst,meet);
 	}
-	override bool opEquals(Object rhs){
-		if(rhs is this) return true;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto ce=cast(CallExp)rhs;
 		if(!ce) return false;
-		return e==ce.e&&arg==ce.arg&&isSquare==ce.isSquare&&isClassical_==ce.isClassical_;
+		return isEqual(e,ce.e,&ctx)&&isEqual(arg,ce.arg,&ctx)&&isSquare==ce.isSquare&&isClassical_==ce.isClassical_;
 	}
-	override bool isSubtypeImpl(Expression rhs){
-		if(this == rhs) return true;
+	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
+		if(isEqual(this,rhs,ctx)) return true;
 		if(auto rcall = cast(CallExp)rhs){
 			if(!isClassical_ && rcall.isClassical_) return false;
 			if(isType(this) && isType(rhs) && isSquare==rcall.isSquare){
-				if(e==rcall.e){
+				if(e.isEqual(rcall.e,ctx)){
 					if(auto id=cast(Identifier)e){
 						if(id.meaning){
 							if(auto dat=cast(DatDecl)id.meaning){
@@ -1385,9 +1506,9 @@ class CallExp: Expression{
 								assert(rid && rid.meaning == dat);
 								bool check(Variance variance,Expression t1,Expression t2){
 									final switch(variance){
-										case Variance.invariant_: return t1==t2;
-										case Variance.covariant: return isSubtype(t1,t2);
-										case Variance.contravariant: return isSubtype(t2,t1);
+										case Variance.invariant_: return t1.isEqual(t2,ctx);
+										case Variance.covariant: return isSubtype(t1,t2,ctx);
+										case Variance.contravariant: return isSubtype(t2,t1,ctx);
 									}
 								}
 								if(!dat.isTuple){
@@ -1409,7 +1530,7 @@ class CallExp: Expression{
 				}
 			}
 		}
-		return super.isSubtypeImpl(rhs);
+		return super.isSubtypeImpl(rhs,ctx);
 	}
 	override Expression combineTypesImpl(Expression rhs, bool meet){
 		if(this == rhs) return this;
@@ -1703,9 +1824,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			return 0;
 		}
 	}
-	override BinaryExp!op substituteImpl(Expression[Id] subst){
-		auto ne1=e1.substitute(subst);
-		auto ne2=e2.substitute(subst);
+	override BinaryExp!op substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne1=e1.substitute(subst,tt);
+		auto ne2=e2.substitute(subst,tt);
 		if(ne1==e1&&ne2==e2) return this;
 		static if(op==Tok!"→"){
 			auto r=new BinaryExp!op(ne1,ne2,captureAnnotation,annotation,isLifted);
@@ -1760,10 +1881,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		}
 	}
 
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto be=cast(BinaryExp!op)o;
-		return be && e1==be.e1&&e2==be.e2;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto be=cast(BinaryExp!op)rhs;
+		return be && isEqual(e1,be.e1,&ctx)&&isEqual(e2,be.e2,&ctx);
 	}
 	// semantic information
 	static if(op==Tok!":="){
@@ -1796,8 +1916,8 @@ class FieldExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override FieldExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
+	override FieldExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new FieldExp(ne,f);
 		r.loc=loc;
@@ -1808,11 +1928,10 @@ class FieldExp: Expression{
 		if(!fe||f!=fe.f) return false;
 		return e.unify(fe.e,subst,meet);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto fe=cast(FieldExp)o;
-		if(!fe||f!=fe.f) return false;
-		return e==fe.e;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto fe=cast(FieldExp)rhs;
+		if(!fe||!isEqual(f,fe.f,&ctx)) return false;
+		return isEqual(e,fe.e,&ctx);
 	}
 
 	override Annotation getAnnotation(){
@@ -1853,10 +1972,12 @@ class IteExp: Expression{
 		if(othw) if(auto r=othw.subexpressionsImpl(dg)) return r;
 		return 0;
 	}
-	override IteExp substituteImpl(Expression[Id] subst){
-		auto ncond=cond.substitute(subst);
-		auto nthen=cast(CompoundExp)then.substitute(subst);
-		auto nothw=othw?cast(CompoundExp)othw.substitute(subst):null;
+	override IteExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		import ast.substitute: ttTransitionIte;
+		if(tt) return cast(IteExp)ttTransitionIte(this,subst,tt);
+		auto ncond=cond.substitute(subst,tt);
+		auto nthen=cast(CompoundExp)then.substitute(subst,tt);
+		auto nothw=othw?cast(CompoundExp)othw.substitute(subst,tt):null;
 		assert(!!nthen && !!nothw==!!othw);
 		if(ncond==cond&&nthen==then&&nothw==othw) return this;
 		auto r=new IteExp(ncond,nthen,nothw);
@@ -1869,12 +1990,11 @@ class IteExp: Expression{
 		return cond.unify(ite.cond,subst,meet)&&then.unify(ite.then,subst,meet)
 			&&(!othw&&!ite.othw||othw&&ite.othw&&othw.unify(ite.othw,subst,meet));
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto ite=cast(IteExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto ite=cast(IteExp)rhs;
 		if(!ite) return false;
-		return cond==ite.cond&&then==ite.then
-			&&(!othw&&!ite.othw||othw&&ite.othw&&othw==ite.othw);
+		return isEqual(cond,ite.cond,&ctx)&&isEqual(then,ite.then,&ctx)
+			&&isEqual(othw,ite.othw,&ctx);
 	}
 	override Expression getClassical(){
 		static if(language==silq){
@@ -2298,9 +2418,9 @@ class CompoundExp: Expression{
 		foreach(x;s) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override Expression substituteImpl(Expression[Id] subst){
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ns=s.dup;
-		foreach(ref x;ns) x=x.substitute(subst);
+		foreach(ref x;ns) x=x.substitute(subst,tt);
 		if(ns==s) return this;
 		auto r=new CompoundExp(ns);
 		r.loc=loc;
@@ -2313,12 +2433,12 @@ class CompoundExp: Expression{
 		if(s.length!=ce.s.length) return false;
 		return iota(s.length).all!(i=>s[i].unify(ce.s[i],subst,meet));
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto ce=cast(CompoundExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto ce=cast(CompoundExp)rhs;
 		if(!ce) return false;
-		if(s.length!=ce.s.length) return false;
-		return iota(s.length).all!(i=>s[i]==ce.s[i]);
+		// compare up to alpha-equivalence: pair up the declarations bound by
+		// corresponding statements, then compare under the pairing
+		return ctx.stmtsEquals(s,ce.s);
 	}
 	override Annotation getAnnotation(){ return reduce!min(Annotation.max, s.map!(x=>x.getAnnotation())); }
 	override CompoundExp evalImpl(){
@@ -2366,9 +2486,9 @@ class TupleExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override TupleExp substituteImpl(Expression[Id] subst){
+	override TupleExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.dup;
-		foreach(ref x;ne) x=x.substitute(subst);
+		foreach(ref x;ne) x=x.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new TupleExp(ne);
 		r.loc=loc;
@@ -2379,10 +2499,10 @@ class TupleExp: Expression{
 		if(!te||e.length!=te.e.length) return false;
 		return all!(i=>e[i].unify(te.e[i],subst,meet))(iota(e.length));
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto tpl=cast(TupleExp)o;
-		return tpl&&e==tpl.e;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto tpl=cast(TupleExp)rhs;
+		if(!tpl||e.length!=tpl.e.length) return false;
+		return all!(i=>isEqual(e[i],tpl.e[i],&ctx))(iota(e.length));
 	}
 	override Annotation getAnnotation(){
 		return reduce!min(pure_, e.map!(x=>x.getAnnotation()));
@@ -2421,9 +2541,15 @@ class LambdaExp: Expression{
 		import ast.substitute:functionDefFreeVarsImpl;
 		return functionDefFreeVarsImpl(fd,dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst){
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(LambdaExp)rhs;
+		if(!r) return false;
+		// compare the definitions structurally (up to alpha-equivalence)
+		return ctx.functionDefEquals(fd,r.fd);
+	}
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		import ast.substitute:substituteFunctionDefExp;
-		auto nfd=cast(FunctionDef)substituteFunctionDefExp(fd,subst);
+		auto nfd=cast(FunctionDef)substituteFunctionDefExp(fd,subst,false,tt);
 		if(nfd is fd) return this;
 		auto r=new LambdaExp(orig,nfd);
 		r.loc=loc;
@@ -2452,7 +2578,42 @@ class LetExp: Expression{
 		this.e=e;
 	}
 	override LetExp copyImpl(CopyArgs args){
-		return new LetExp(s.copy(args),e.copy(args));
+		auto ns=s.copy(args), ne=e.copy(args);
+		if(args.preserveMeanings){
+			Declaration[Declaration] bound;
+			FunctionDef[] defs;
+			void pair(Expression src,Expression cpy){
+				if(auto sfd=cast(FunctionDef)src){
+					if(auto cfd=cast(FunctionDef)cpy){ bound[sfd]=cfd; defs~=cfd; }
+					return;
+				}
+				if(auto svd=cast(VarDecl)src){
+					if(auto cvd=cast(VarDecl)cpy) bound[svd]=cvd;
+					return;
+				}
+				if(auto ce=cast(CommaExp)src){
+					if(auto ce2=cast(CommaExp)cpy){ pair(ce.e1,ce2.e1); pair(ce.e2,ce2.e2); }
+					return;
+				}
+				if(auto ce=cast(CompoundExp)src){
+					if(auto ce2=cast(CompoundExp)cpy)
+						foreach(i,x;ce.s) if(i<ce2.s.length) pair(x,ce2.s[i]);
+					return;
+				}
+			}
+			foreach(i,stmt;s.s) if(i<ns.s.length) pair(stmt,ns.s[i]);
+			if(bound.length){
+				int rebind(Identifier id){
+					if(auto p=id.meaning in bound) id.meaning=*p;
+					return 0;
+				}
+				import ast.substitute: statementFreeVarsImpl, computeCapturesFromBody;
+				foreach(stmt;ns.s) statementFreeVarsImpl(stmt,&rebind);
+				ne.freeVarsImpl(&rebind);
+				foreach(fd;defs) computeCapturesFromBody(fd);
+			}
+		}
+		return new LetExp(ns,ne);
 	}
 	Expression isForward(bool allowForgets=false){
 		if(s.blscope_) return null;
@@ -2500,7 +2661,9 @@ class LetExp: Expression{
 			return dg(e);
 		}
 	}
-	override Expression substituteImpl(Expression[Id] subst){
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		import ast.substitute: ttTransitionLet;
+		if(tt) return ttTransitionLet(this,subst,tt);
 		Expression[Id] active;
 		foreach(k,v;subst) if(freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
 		if(!active.length) return this;
@@ -2518,20 +2681,17 @@ class LetExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto r=cast(LetExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(LetExp)rhs;
 		if(!r) return false;
-		if(s.s.length!=r.s.s.length) return false;
-		foreach(i;0..s.s.length) if(s.s[i]!=r.s.s[i]) return false;
-		return e==r.e;
+		if(!ctx.stmtsEquals(s.s,r.s.s)) return false;
+		return isEqual(e,r.e,&ctx);
 	}
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return this is rhs; // TODO
 	}
 	override Expression evalImpl(){
 		if(auto fwd=isForward()) return fwd;
-		if(s.blscope_) return this;
 		Expression[] flat;
 		bool flatten(Expression[] ss){
 			foreach(x;ss){
@@ -2596,10 +2756,10 @@ class VectorExp: Expression{
 	override bool isConstant(){ return e.all!(x=>x.isConstant()); }
 	override bool isTotal(){ return e.all!(x=>x.isTotal()); }
 
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto r=cast(VectorExp)o;
-		return r&&e==r.e;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(VectorExp)rhs;
+		if(!r||e.length!=r.e.length) return false;
+		return all!(i=>isEqual(e[i],r.e[i],&ctx))(iota(e.length));
 	}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
@@ -2610,9 +2770,9 @@ class VectorExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override VectorExp substituteImpl(Expression[Id] subst){
+	override VectorExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.dup;
-		foreach(ref x;ne) x=x.substitute(subst);
+		foreach(ref x;ne) x=x.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new VectorExp(ne);
 		r.loc=loc;
@@ -2652,10 +2812,10 @@ class VectorForExp: Expression{
 	override bool isConstant(){ return false; } // TODO?
 	override bool isTotal(){ return fe.isTotal(); }
 
-	override bool opEquals(Object o){
-		auto vfe=cast(VectorForExp)o;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto vfe=cast(VectorForExp)rhs;
 		if(!vfe) return false;
-		return fe==vfe.fe;
+		return isEqual(fe,vfe.fe,&ctx);
 	}
 
 	// semantic information
@@ -2674,7 +2834,7 @@ class VectorForExp: Expression{
 		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
 		return fe.bdy.s[0].freeVarsImpl((id){ return id.id in bound?0:dg(id); });
 	}
-	override Expression substituteImpl(Expression[Id] subst){ return this; } // TODO
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){ return this; } // TODO
 	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null; // TODO
 	}
@@ -2730,6 +2890,11 @@ class ReturnExp: Expression{
 	}
 	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" /+",forgottenVars,"+/"):""); }
 	override @property string kind(){ return "return statement"; }
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(ReturnExp)rhs;
+		if(!r) return false;
+		return isEqual(e,r.e,&ctx);
+	}
 
 	string expected;
 
@@ -2768,8 +2933,8 @@ class AssertExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override AssertExp substituteImpl(Expression[Id] subst){
-		auto ne=e.substitute(subst);
+	override AssertExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
 		if(ne==e) return this;
 		auto r=new AssertExp(ne);
 		r.loc=loc;
@@ -2780,10 +2945,9 @@ class AssertExp: Expression{
 		if(!ae) return false;
 		return e.unify(ae.e,subst,meet);
 	}
-	override bool opEquals(Object o){
-		if(o is this) return true;
-		auto ae=cast(AssertExp)o;
-		return ae&&e==ae.e;
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto ae=cast(AssertExp)rhs;
+		return ae&&isEqual(e,ae.e,&ctx);
 	}
 
 	override Annotation getAnnotation(){ return e.getAnnotation(); }
@@ -2861,6 +3025,11 @@ class ForgetExp: Expression{
 		if(auto r=dg(var)) return r;
 		if(!val) return 0;
 		return dg(val);
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(ForgetExp)rhs;
+		if(!r) return false;
+		return isEqual(var,r.var,&ctx)&&isEqual(val,r.val,&ctx);
 	}
 	// semantic information
 	bool isStatement=false; // TODO: get rid of this

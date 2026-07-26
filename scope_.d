@@ -1188,13 +1188,13 @@ abstract class Scope{
 		Dependency[Declaration] consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
 		static void substituteConsumed(ref Dependency dep,ref Dependency[Declaration] consumedDepLog){
 			if(dep.isTop) return;
-			bool[Declaration] substituted; // stale sets can mention consumed declarations in cycles
+			void[0][Declaration] substituted; // stale sets can mention consumed declarations in cycles
 			for(bool changed=true;changed;){
 				changed=false;
 				foreach(m;dep.dependencies){
 					if(m in substituted) continue;
 					if(auto pd=m in consumedDepLog){
-						substituted[m]=true;
+						substituted[m]=[];
 						dep.replace(m,*pd);
 						changed=true;
 						break;
@@ -2339,6 +2339,70 @@ class BlockScope: NestedScope{
 			return parentRestriction;
 		}
 		return restriction_;
+	}
+}
+
+class TypeScope: BlockScope{
+	Scope origin; // the scope at the call site
+	this(Scope origin){
+		super(null);
+		this.origin=origin;
+	}
+	override @property ErrorHandler handler(){ assert(origin,"TypeScope without origin"); return origin.handler; }
+	override @property bool inferenceMode(){ return false; }
+	override Annotation restriction(ref FunctionDef reason){
+		if(origin) return origin.restriction(reason);
+		return restriction_;
+	}
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		return null; // note: free identifiers carry their own scopes
+	}
+	override bool isNestedIn(Scope rhs){ return rhs is this || (parent && parent.isNestedIn(rhs)); }
+	override FunctionDef getFunction(){ return origin?origin.getFunction():null; } // TODO: ok?
+	override DatDecl getDatDecl(){ return origin?origin.getDatDecl():null; } // TODO: ok?
+	override NestedScope[] getSiblingScopes(){ return siblingScopes; }
+	override int outerDeclProps(scope int delegate(ref DeclProps) dg){ return 0; }
+	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
+		assert(odecl is ndecl||!remove);
+	}do{
+		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use);
+		return null;
+	}
+	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
+		if(this is outermost){
+			if(!lastUses.get(meaning,true))
+				lastUses.definition(meaning,null);
+			return true;
+		}
+		lastUses.definition(meaning,null);
+		return parent?parent.insertCaptureImpl(id,meaning,type,outermost):false;
+	}
+}
+
+struct TypeTransition{
+	Scope target;
+	void[0][Id] taken;
+	Declaration[Declaration] declMap;
+	void[0][Scope] codScopes;
+	Scope[Declaration] declRegion;
+	TypeScope[Scope] scopes;
+
+	Id freshName(Id b){
+		auto nb=b;
+		do nb=nb.apos; while(nb in taken);
+		taken[nb]=[];
+		return nb;
+	}
+
+	TypeScope mapScope(Scope sc){
+		if(auto p=sc in scopes) return *p;
+		auto ts=new TypeScope(target);
+		scopes[sc]=ts;
+		if(auto parent=sc.parentScope())
+			if(parent in codScopes)
+				ts.parent=mapScope(parent);
+		return ts;
 	}
 }
 class AggregateScope: NestedScope{

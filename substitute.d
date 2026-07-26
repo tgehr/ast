@@ -3,6 +3,135 @@ module ast.substitute;
 import ast.expression, ast.type, ast.declaration, ast.scope_;
 import astopt;
 
+Expression transitionToType(Expression e,Scope target){
+	assert(e.isSemCompleted());
+	CompoundExp[] regions;
+	void collect(Expression x){
+		if(auto ce=cast(CompoundExp)x)
+			if(ce.blscope_) regions~=ce;
+		if(cast(FunctionDef)x||cast(LambdaExp)x||cast(VectorForExp)x) return;
+		if(auto le=cast(LetExp)x)
+			if(le.s.blscope_) regions~=le.s;
+		foreach(c;x.components) collect(c);
+	}
+	collect(e);
+	if(!regions.length) return e;
+	TypeTransition tt;
+	tt.target=target;
+	foreach(ce;regions) tt.codScopes[ce.blscope_]=[];
+	e.freeVarsImpl((id){ tt.taken[id.id]=[]; return 0; });
+	foreach(ce;regions) foreach(stmt;ce.s) collectBoundNamesImpl(stmt,tt.taken);
+	for(auto sc=target;sc;sc=sc.parentScope())
+		foreach(id,_;sc.rnsymtab) tt.taken[id]=[];
+	Expression[Id] subst;
+	foreach(ce;regions){
+		void attr(Expression stmt){
+			if(auto de=cast(DefineExp)stmt){
+				defineLhsBoundVarsImpl(de.e1,(id){
+					if(id.meaning) tt.declRegion[id.meaning]=ce.blscope_;
+					return 0;
+				});
+				return;
+			}
+			if(auto fd=cast(FunctionDef)stmt){ tt.declRegion[fd]=ce.blscope_; return; }
+			if(auto ce2=cast(CommaExp)stmt){ attr(ce2.e1); attr(ce2.e2); return; }
+			if(auto ce2=cast(CompoundExp)stmt){
+				if(!ce2.blscope_) foreach(x;ce2.s) attr(x);
+				return;
+			}
+		}
+		foreach(stmt;ce.s) attr(stmt);
+	}
+	auto r=e.substitute(subst,&tt);
+	void[0][Declaration] twins;
+	foreach(orig,twin;tt.declMap){
+		twins[twin]=[];
+		Scope rs=null;
+		if(orig.scope_ in tt.codScopes) rs=orig.scope_;
+		if(auto p=orig in tt.declRegion) rs=*p;
+		if(rs){
+			auto ts=tt.mapScope(rs);
+			twin.scope_=ts;
+			ts.symtabInsert(twin);
+		}
+	}
+	void[0][Scope] tsSet;
+	foreach(_,ts;tt.scopes) tsSet[ts]=[];
+	void fixUses(Expression x,Scope cur){
+		if(cast(FunctionDef)x||cast(LambdaExp)x) return;
+		if(auto le=cast(LetExp)x){
+			if(le.s.blscope_ in tsSet) cur=le.s.blscope_;
+			fixUses(le.s,cur);
+			fixUses(le.e,cur);
+			return;
+		}
+		if(auto ce=cast(CompoundExp)x){
+			if(ce.blscope_ in tsSet) cur=ce.blscope_;
+			foreach(stmt;ce.s) fixUses(stmt,cur);
+			return;
+		}
+		if(auto id=cast(Identifier)x){
+			if(cur&&(id.scope_ in tt.codScopes||id.meaning&&id.meaning in twins))
+				id.scope_=cur;
+			return;
+		}
+		foreach(c;x.components) fixUses(c,cur);
+	}
+	fixUses(r,null);
+	return r;
+}
+
+Expression ttTransitionLet(LetExp le,Expression[Id] subst,TypeTransition* tt){
+	Expression[Id] active;
+	foreach(k,v;subst) if(le.freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
+	Id[Id] forced;
+	foreach(stmt;le.s.s)
+		statementBoundVarsImpl(stmt,(id){
+			forced[id.id]=tt.freshName(id.id);
+			return 0;
+		});
+	auto ctx=BlockSubst(active,forced,&tt.taken,&tt.declMap,false,tt);
+	auto ns=substituteBlockCompound(le.s,ctx);
+	auto ne=substituteLValue(le.e,ctx);
+	auto r=new LetExp(ns,ne);
+	r.loc=le.loc;
+	if(le.isSemError()) r.sstate=SemState.error;
+	else if(le.isSemCompleted()){
+		r.type=le.type?le.type.substitute(subst,tt):null;
+		if(r.type&&r.type.isSemEvaluated()) r.sstate=SemState.completed;
+	}
+	return r;
+}
+
+Expression ttTransitionIte(IteExp ite,Expression[Id] subst,TypeTransition* tt){
+	Expression[Id] active;
+	foreach(k,v;subst) if(ite.freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
+	Id[Id] forced;
+	foreach(branch;[ite.then,ite.othw])
+		if(branch) foreach(stmt;branch.s)
+			statementBoundVarsImpl(stmt,(id){
+				forced[id.id]=tt.freshName(id.id);
+				return 0;
+			});
+	auto ctx=BlockSubst(active,forced,&tt.taken,&tt.declMap,false,tt);
+	auto ncond=substituteLValue(ite.cond,ctx);
+	auto tctx=ctx.nested();
+	auto nthen=substituteBlockCompound(ite.then,tctx);
+	CompoundExp nothw=null;
+	if(ite.othw){
+		auto fctx=ctx.nested();
+		nothw=substituteBlockCompound(ite.othw,fctx);
+	}
+	auto r=new IteExp(ncond,nthen,nothw);
+	r.loc=ite.loc;
+	if(ite.isSemError()) r.sstate=SemState.error;
+	else if(ite.isSemCompleted()){
+		r.type=ite.type?ite.type.substitute(subst,tt):null;
+		if(r.type&&r.type.isSemEvaluated()) r.sstate=SemState.completed;
+	}
+	return r;
+}
+
 int defineLhsBoundVarsImpl(Expression lhs,scope int delegate(Identifier) dg){
 	if(auto id=cast(Identifier)lhs) return dg(id);
 	if(auto tae=cast(TypeAnnotationExp)lhs) return defineLhsBoundVarsImpl(tae.e,dg);
@@ -207,6 +336,7 @@ struct BlockSubst{
 	void[0][Id]* taken;
 	Declaration[Declaration]* declMap;
 	bool changed=false;
+	TypeTransition* tt=null;
 
 	bool wouldCapture(Id b){
 		foreach(k,v;subst) if(v.hasFreeVar(b)) return true;
@@ -219,7 +349,7 @@ struct BlockSubst{
 		return nn;
 	}
 	BlockSubst nested(){
-		return BlockSubst(subst.dup,forced.dup,taken,declMap,false);
+		return BlockSubst(subst.dup,forced.dup,taken,declMap,false,tt);
 	}
 	Identifier bindVar(Identifier id,Expression vtype=null){
 		auto b=id.id;
@@ -238,7 +368,7 @@ struct BlockSubst{
 		if(!use.type) use.type=vtype;
 		if(!use.isSemCompleted()&&!use.isSemError()&&use.type&&use.type.isSemEvaluated()) use.sstate=SemState.completed;
 		if(auto vd=cast(VarDecl)id.meaning){
-			auto dvtype=vd.vtype&&vd.vtype.isSemCompleted()&&subst.length?vd.vtype.substitute(subst):vd.vtype;
+			auto dvtype=vd.vtype&&vd.vtype.isSemCompleted()&&subst.length?vd.vtype.substitute(subst,tt):vd.vtype;
 			auto twin=getVarDeclTwin(vd,nid,dvtype);
 			nid.meaning=twin;
 			use.meaning=twin;
@@ -283,7 +413,7 @@ private Expression useSubstitute(Expression e,ref BlockSubst ctx){
 	if(!e) return null;
 	if(!e.isSemCompleted()) return e;
 	if(!ctx.subst.length) return e;
-	auto ne=e.substitute(ctx.subst);
+	auto ne=e.substitute(ctx.subst,ctx.tt);
 	if(ne !is e) ctx.changed=true;
 	return ne;
 }
@@ -293,7 +423,7 @@ private T finishStatement(T)(T r,Expression orig,ref BlockSubst ctx){
 	ctx.changed=true;
 	if(orig.isSemError()){ r.sstate=SemState.error; return r; }
 	if(orig.isSemCompleted()){
-		if(!r.type) r.type=orig.type&&ctx.subst.length?orig.type.substitute(ctx.subst):(orig.type?orig.type:unit);
+		if(!r.type) r.type=orig.type&&ctx.subst.length?orig.type.substitute(ctx.subst,ctx.tt):(orig.type?orig.type:unit);
 		if(r.type&&r.type.isSemEvaluated()) r.sstate=SemState.completed;
 	}
 	return r;
@@ -572,11 +702,12 @@ private Expression substituteStatement(Expression stmt,ref BlockSubst ctx){
 	}
 	if(auto re=cast(ReturnExp)stmt){
 		auto ne=re.e?substituteLValue(re.e,ctx):null;
-		if(ne is re.e) return stmt;
+		bool remapped=false;
+		auto nfv=remapDecls(re.forgottenVars,ctx.declMap,remapped);
+		if(ne is re.e&&!remapped) return stmt;
 		auto r=new ReturnExp(ne);
 		r.expected=re.expected;
-		bool remapped=false;
-		r.forgottenVars=remapDecls(re.forgottenVars,ctx.declMap,remapped);
+		r.forgottenVars=nfv;
 		return finishStatement(r,stmt,ctx);
 	}
 	if(auto fe=cast(ForgetExp)stmt){
@@ -604,7 +735,7 @@ private Expression substituteStatement(Expression stmt,ref BlockSubst ctx){
 CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 	auto entrySubst=ctx.subst.dup;
 	auto ns=ce.s.dup;
-	bool changed=false;
+	bool changed=ctx.tt&&ce.blscope_&&ce.blscope_ in ctx.tt.codScopes;
 	foreach(ref x;ns){
 		auto nx=substituteStatement(x,ctx);
 		if(nx !is x) changed=true;
@@ -614,24 +745,63 @@ CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 	auto r=new CompoundExp(ns);
 	r.loc=ce.loc;
 	r.blscope_=ce.blscope_;
-	if(ce.blscope_&&ctx.declMap&&(*ctx.declMap).length){
+	if(ctx.tt&&ce.blscope_&&ce.blscope_ in ctx.tt.codScopes){
+		Declaration[] filter(Declaration[] ds){
+			Declaration[] r;
+			foreach(d;ds){ if(!d.splitFrom&&d in ctx.tt.declRegion) r~=d; }
+			return r;
+		}
+		Declaration[] boundVars(){
+			Declaration[] r;
+			void walk(Expression stmt){
+				if(auto de=cast(DefineExp)stmt){
+					defineLhsBoundVarsImpl(de.e1,(id){
+						if(id.meaning&&!id.meaning.splitFrom) r~=id.meaning;
+						return 0;
+					});
+					return;
+				}
+				if(auto fd=cast(FunctionDef)stmt){ if(!fd.splitFrom) r~=fd; return; }
+				if(auto ce2=cast(CommaExp)stmt){ walk(ce2.e1); walk(ce2.e2); return; }
+				if(auto ce2=cast(CompoundExp)stmt){
+					if(!ce2.blscope_) foreach(x;ce2.s) walk(x);
+					return;
+				}
+			}
+			foreach(stmt;ce.s) walk(stmt);
+			return r;
+		}
+		bool remapped=false;
+		auto ts=ctx.tt.mapScope(ce.blscope_);
+		auto fv=filter(ce.blscope_.forgottenVars);
+		if(!fv.length) fv=boundVars();
+		ts.forgottenVars=remapDecls(fv,ctx.declMap,remapped);
+		ts.forgottenVarsOnEntry=remapDecls(filter(ce.blscope_.forgottenVarsOnEntry),ctx.declMap,remapped);
+		r.blscope_=ts;
+	}else if(ce.blscope_&&ctx.declMap&&(*ctx.declMap).length){
 		bool remapped=false;
 		auto nfv=remapDecls(ce.blscope_.forgottenVars,ctx.declMap,remapped);
 		auto nfve=remapDecls(ce.blscope_.forgottenVarsOnEntry,ctx.declMap,remapped);
 		auto nmv=remapDecls(ce.blscope_.mergedVars,ctx.declMap,remapped);
 		if(remapped){
-			auto nsc=new BlockScope(null,ce.blscope_.restriction_);
-			nsc.parent=ce.blscope_.parent;
-			nsc.forgottenVars=nfv;
-			nsc.forgottenVarsOnEntry=nfve;
-			nsc.mergedVars=nmv;
-			r.blscope_=nsc;
+			if(auto ts=cast(TypeScope)ce.blscope_){
+				ts.forgottenVars=nfv;
+				ts.forgottenVarsOnEntry=nfve;
+				ts.mergedVars=nmv;
+			}else{
+				auto nsc=new BlockScope(null,ce.blscope_.restriction_);
+				nsc.parent=ce.blscope_.parent;
+				nsc.forgottenVars=nfv;
+				nsc.forgottenVarsOnEntry=nfve;
+				nsc.mergedVars=nmv;
+				r.blscope_=nsc;
+			}
 		}
 	}
 	ctx.changed=true;
 	if(ce.isSemError()) r.sstate=SemState.error;
 	else if(ce.isSemCompleted()){
-		r.type=ce.type&&entrySubst.length?ce.type.substitute(entrySubst):(ce.type?ce.type:unit);
+		r.type=ce.type&&entrySubst.length?ce.type.substitute(entrySubst,ctx.tt):(ce.type?ce.type:unit);
 		if(r.type&&r.type.isSemEvaluated()) r.sstate=SemState.completed;
 	}
 	return r;
@@ -653,13 +823,40 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 		Identifier npname=pname;
 		if(pname) npname=bctx.bindVar(pname,nvtype?nvtype:ndtype);
 		if(ndtype is p.dtype&&nvtype is p.vtype&&npname is pname) continue;
+		auto edtype=p.dtype?p.dtype.eval():null;
+		auto evtype=p.vtype?p.vtype.eval():null;
+		if(edtype==ndtype&&evtype==nvtype&&npname is pname) continue;
 		auto np=new Parameter(p.isConst,npname,ndtype);
 		np.vtype=nvtype;
 		np.loc=p.loc;
 		np.scope_=p.scope_;
 		np.sstate=p.sstate;
+		auto origp=p;
 		p=np;
 		changed=true;
+		if(bctx.declMap){
+			(*bctx.declMap)[origp]=np;
+			void mapSplits(Declaration d){
+				foreach(sd; d.splitInto){
+					(*bctx.declMap)[sd]=np;
+					mapSplits(sd);
+				}
+			}
+			mapSplits(origp);
+		}
+		if(pname){
+			Expression.CopyArgs cargs={preserveSemantic:true};
+			auto puse=pname.copy(cargs);
+			puse.id=npname.id;
+			puse.meaning=np;
+			if(!puse.scope_) puse.scope_=np.scope_;
+			puse.constLookup=true;
+			puse.byRef=false;
+			puse.implicitDup=false;
+			if(!puse.type) puse.type=nvtype?nvtype:ndtype;
+			if(!puse.isSemCompleted()&&!puse.isSemError()&&puse.type&&puse.type.isSemEvaluated()) puse.sstate=SemState.completed;
+			bctx.subst[pname.id]=puse;
+		}
 	}
 	auto nrret=fd.rret&&fd.rret.isSemCompleted()?useSubstitute(fd.rret,bctx):fd.rret;
 	auto nret=fd.ret&&fd.ret.isSemCompleted()?useSubstitute(fd.ret,bctx):fd.ret;
@@ -685,25 +882,55 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	r.captureAnnotationReady=fd.captureAnnotationReady;
 	r.ftypeFinal=fd.ftypeFinal;
 	if(fd.ftype){
-		auto nftype=ftypeSubst.length?fd.ftype.substitute(ftypeSubst):fd.ftype;
+		auto nftype=ftypeSubst.length?fd.ftype.substitute(ftypeSubst,ctx.tt):fd.ftype;
 		r.ftype=cast(FunTy)nftype;
 		assert(!!r.ftype);
 	}
 	if(fd.isSemError()) r.sstate=SemState.error;
 	else if(fd.isSemCompleted()) r.sstate=SemState.completed;
-	functionDefFreeVarsImpl(r,(id){
-		auto m=id.meaning;
-		if(m&&m.scope_&&m.scope_.getFunction()){
-			if(m !in r.captures) r.capturedDecls~=m;
-			r.captures[m]~=id;
+	if(bctx.declMap) (*bctx.declMap)[fd]=r;
+	if(fname){
+		Expression.CopyArgs cargs={preserveSemantic:true};
+		auto use=fname.copy(cargs);
+		use.id=nname.id;
+		use.meaning=r;
+		if(!use.scope_) use.scope_=fd.scope_;
+		use.constLookup=true;
+		use.byRef=false;
+		use.implicitDup=false;
+		if(!use.type) use.type=fd.ftype;
+		if(!use.isSemCompleted()&&!use.isSemError()&&use.type&&use.type.isSemEvaluated()) use.sstate=SemState.completed;
+		(bindNameInEnclosing?ctx.subst:bctx.subst)[fname.id]=use;
+		if(r.body_){
+			Expression[Id] rsubst;
+			rsubst[nname.id]=use;
+			void[0][Id] rtaken;
+			auto rctx=BlockSubst(rsubst,null,&rtaken,null,false);
+			r.body_=substituteBlockCompound(r.body_,rctx);
 		}
-		return 0;
-	});
+	}
+	computeCapturesFromBody(r);
 	ctx.changed=true;
 	return r;
 }
 
-Expression substituteFunctionDefExp(FunctionDef fd,Expression[Id] subst,bool bindNameInEnclosing=false){
+void computeCapturesFromBody(FunctionDef fd){
+	fd.capturedDecls=[];
+	fd.captures=null;
+	if(!fd.body_) return;
+	functionDefFreeVarsImpl(fd,(id){
+		if(id.lazyCapture) return 0;
+		auto m=id.meaning;
+		if(m is fd||m&&m.isSplitFrom(fd)) return 0;
+		if(m&&m.scope_&&m.scope_.getFunction()){
+			if(m !in fd.captures) fd.capturedDecls~=m;
+			fd.captures[m]~=id;
+		}
+		return 0;
+	});
+}
+
+Expression substituteFunctionDefExp(FunctionDef fd,Expression[Id] subst,bool bindNameInEnclosing=false,TypeTransition* tt=null){
 	Expression[Id] active;
 	foreach(k,v;subst) if(functionDefFreeVarsImpl(fd,(id)=>id.id==k?1:0)) active[k]=v;
 	if(!active.length) return fd;
@@ -712,6 +939,6 @@ Expression substituteFunctionDefExp(FunctionDef fd,Expression[Id] subst,bool bin
 	functionDefFreeVarsImpl(fd,(id){ taken[id.id]=[]; return 0; });
 	collectFunctionBoundNames(fd,taken);
 	Declaration[Declaration] declMap;
-	auto ctx=BlockSubst(active,null,&taken,&declMap,false);
+	auto ctx=BlockSubst(active,null,&taken,&declMap,false,tt);
 	return substituteFunctionDefImpl(fd,ctx,bindNameInEnclosing);
 }

@@ -252,7 +252,8 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.CompoundExp e) {
-		if(!e.blscope_) {
+		if(!e.blscope_ || e.blscope_.parent !is nscope && !cast(ast_scope.TypeScope)e.blscope_) {
+			// compound without its own scope, e.g. within a type used in a different scope
 			return visCompoundStmt(e);
 		}
 
@@ -284,7 +285,7 @@ class Checker {
 	}
 
 	StmtResult visCompoundStmt(ast_exp.CompoundExp e) {
-		if(e.blscope_) {
+		if(e.blscope_ && e.blscope_ is nscope) {
 			foreach(decl; e.blscope_.forgottenVarsOnEntry) {
 				getVar(decl, false, "forgottenVarsOnEntry", e);
 			}
@@ -295,7 +296,7 @@ class Checker {
 			if(sub & StmtResult.MayReturn) r |= StmtResult.MayReturn;
 			if(!(sub & StmtResult.MayPass)) return r & ~StmtResult.MayPass;
 		}
-		if(e.blscope_) {
+		if(e.blscope_ && e.blscope_ is nscope) {
 			foreach(decl; e.blscope_.forgottenVars) {
 				getVar(decl, false, "forgottenVars", e);
 			}
@@ -688,12 +689,19 @@ class Checker {
 		auto prevStrictScope = strictScope;
 		strictScope = false; // e.g. a && let x := 0 in x
 		scope(exit) strictScope = prevStrictScope;
-		if(!e.s.blscope_) {
-			auto r = visStmt(e.s);
+		if(!e.s.blscope_ || e.s.blscope_.parent !is nscope && !cast(ast_scope.TypeScope)e.s.blscope_) {
+			// scope-free `let` expression, e.g. within a type used in a different scope
+			auto sub = new Checker(nscope, this);
+			sub.strictScope = false;
+			sub.scopeFree = true;
+			auto r = sub.visCompoundStmt(e.s);
 			assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
-			visExpr(e.e);
+			sub.visExpr(e.e);
 			return;
 		}
+		// scoped `let` expression: the scope either belongs to the surrounding
+		// checker, or is a TypeScope (a self-contained scope carried by a type
+		// produced by substitution; see ast.substitute.transitionToType)
 		Checker sub;
 		visSplit(sub, e.s.blscope_, e);
 		foreach(decl; e.s.blscope_.forgottenVarsOnEntry) {
@@ -805,8 +813,10 @@ class Checker {
 	}
 
 	void visSplit(ref Checker ifTrue, ast_scope.NestedScope scTrue, ref Checker ifFalse, ast_scope.NestedScope scFalse, ast_exp.Expression cause) {
-		assert(scTrue.parent is nscope);
-		assert(scFalse.parent is nscope);
+		// TypeScopes are self-contained scopes carried by types (see
+		// ast.substitute.transitionToType); they have no parent in this scope
+		assert(scTrue.parent is nscope || cast(ast_scope.TypeScope)scTrue);
+		assert(scFalse.parent is nscope || cast(ast_scope.TypeScope)scFalse);
 		ifTrue = new Checker(scTrue, this);
 		ifFalse = new Checker(scFalse, this);
 
@@ -852,8 +862,8 @@ class Checker {
 	void visMerge(Checker ifTrue, Checker ifFalse, ast_exp.Expression cause) {
 		auto scTrue = ifTrue.nscope;
 		auto scFalse = ifFalse.nscope;
-		assert(scTrue.parent is nscope);
-		assert(scFalse.parent is nscope);
+		assert(scTrue.parent is nscope || cast(ast_scope.TypeScope)scTrue);
+		assert(scFalse.parent is nscope || cast(ast_scope.TypeScope)scFalse);
 
 		struct Triple {
 			ast_decl.Declaration outer, dTrue, dFalse;
@@ -884,7 +894,7 @@ class Checker {
 	}
 
 	void visSplit(ref Checker nested, ast_scope.NestedScope scNested, ast_exp.Expression cause) {
-		assert(scNested is nscope || scNested.parent is nscope);
+		assert(scNested is nscope || scNested.parent is nscope || cast(ast_scope.TypeScope)scNested);
 		nested = new Checker(scNested, this);
 
 		foreach(vNested; scNested.splitVars) {
@@ -921,7 +931,14 @@ class Checker {
 		assert(ast_ty.isNumericTy(e.cond.type) == ast_ty.NumericType.Bool);
 		visExpr(e.cond);
 
-		if(e.then.blscope_ is null && e.othw.blscope_ is null) {
+		bool scopedBranch(ast_exp.CompoundExp branch) {
+			// the scope either belongs to the surrounding checker, or is a
+			// TypeScope (a self-contained scope carried by a type produced by
+			// substitution; see ast.substitute.transitionToType)
+			return branch.blscope_ && (branch.blscope_.parent is nscope || cast(ast_scope.TypeScope)branch.blscope_);
+		}
+		if(!scopedBranch(e.then) || !scopedBranch(e.othw)) {
+			// scope-free `if` expression, e.g. within a type used in a different scope
 			visExpr(e.then.s[0]);
 			visExpr(e.othw.s[0]);
 			return;
@@ -1197,7 +1214,14 @@ class Checker {
 		ast_decl.Declaration v;
 
 		if(!isBorrow) {
+			auto cur = this;
 			auto p = id in vars;
+			while(!p && cur.scopeFree) {
+				// scope-free checkers (e.g. for `let` expressions in types) share variables with their parents
+				cur = cur.parent;
+				assert(cur, format("ERROR: Variable %s undefined: %s on %s << %s >>", id.str, causeType, causeExpr.loc, causeExpr));
+				p = id in cur.vars;
+			}
 			assert(p, format("ERROR: Variable %s %s: %s on %s << %s >>", id.str, parent && id in parent.vars ? "not split from parent scope" : "undefined", causeType, causeExpr.loc, causeExpr));
 			v = *p;
 			*p = null;
@@ -1266,6 +1290,7 @@ class Checker {
 	ast_scope.NestedScope nscope;
 	IdMap!(ast_decl.Declaration) vars;
 	bool strictScope = true;
+	bool scopeFree = false;
 	Unit[void*] checked;
 }
 

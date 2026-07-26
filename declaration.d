@@ -125,7 +125,8 @@ class Parameter: VarDecl{
 	}
 	override Parameter copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
-		return new Parameter(isConst,copyNameImpl(args),dtype?dtype.copy(args):dtype);
+		auto r=new Parameter(isConst,copyNameImpl(args),dtype?dtype.copy(args):dtype);
+		return r;
 	}
 	override bool isLinear(){
 		return !isConst&&(!vtype||!vtype.isClassical());
@@ -161,6 +162,13 @@ class FunctionDef: Declaration{
 		r.annotation=annotation;
 		r.inferAnnotation=inferAnnotation;
 		r.attributes=attributes.dup;
+		if(args.preserveMeanings){
+			r.ret=ret;
+			r.hasReturn=hasReturn;
+			r.retNames=retNames;
+			import ast.substitute: computeCapturesFromBody;
+			computeCapturesFromBody(r);
+		}
 		return r;
 	}
 	override string toString(){
@@ -176,9 +184,9 @@ class FunctionDef: Declaration{
 		import ast.substitute:functionDefFreeVarsImpl;
 		return functionDefFreeVarsImpl(this,dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst){
+	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		import ast.substitute:substituteFunctionDefExp;
-		return substituteFunctionDefExp(this,subst);
+		return substituteFunctionDefExp(this,subst,false,tt);
 	}
 
 	@property override string kind(){ return "function"; }
