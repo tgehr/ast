@@ -2,6 +2,21 @@ module ast.substitute;
 
 import ast.expression, ast.type, ast.declaration, ast.scope_, ast.lastuse;
 import astopt;
+import std.meta: AliasSeq;
+
+private template isOneOf(T,List...){
+	enum isOneOf=List.length!=0&&(is(T==List[0])||isOneOf!(T,List[1..$]));
+}
+
+private alias genericLhsTypes=AliasSeq!(
+	IteExp,AssertExp,LiteralExp,LambdaExp,PlaceholderExp,ForgetExp,SliceExp,VectorExp,
+	UPlusExp,UMinusExp,UNotExp,UBitNotExp,
+	AddExp,SubExp,NSubExp,MulExp,DivExp,IDivExp,ModExp,PowExp,
+	BitOrExp,BitXorExp,BitAndExp,AndThenExp,OrElseExp,
+	OrExp,XorExp,AndExp,LtExp,LeExp,GtExp,GeExp,EqExp,NeqExp,
+	VectorForExp,ClassicalTy,ProductTy,ArrayTy,TupleTy,VectorTy,
+	VariadicTy,TypeTy,QNumericTy,BottomTy,NumericTy,StringTy
+);
 
 Expression transitionToType(Expression e,Scope target){
 	assert(e.isSemCompleted());
@@ -135,141 +150,197 @@ Expression ttTransitionIte(IteExp ite,Expression[Id] subst,TypeTransition* tt){
 }
 
 int defineLhsBoundVarsImpl(Expression lhs,scope int delegate(Identifier) dg){
-	if(auto id=cast(Identifier)lhs) return dg(id);
-	if(auto tae=cast(TypeAnnotationExp)lhs) return defineLhsBoundVarsImpl(tae.e,dg);
-	if(auto tpl=cast(TupleExp)lhs){
-		foreach(x;tpl.e) if(auto r=defineLhsBoundVarsImpl(x,dg)) return r;
+	return dispatchExp!(dlBoundVars,dlBoundVarsDefault)(lhs,dg);
+}
+private int dlBoundVars(Identifier id,scope int delegate(Identifier) dg){
+	return dg(id);
+}
+private int dlBoundVars(TypeAnnotationExp tae,scope int delegate(Identifier) dg){
+	return defineLhsBoundVarsImpl(tae.e,dg);
+}
+private int dlBoundVars(TupleExp tpl,scope int delegate(Identifier) dg){
+	foreach(x;tpl.e) if(auto r=defineLhsBoundVarsImpl(x,dg)) return r;
+	return 0;
+}
+private int dlBoundVars(CatExp ce,scope int delegate(Identifier) dg){
+	if(auto r=defineLhsBoundVarsImpl(ce.e1,dg)) return r;
+	return defineLhsBoundVarsImpl(ce.e2,dg);
+}
+private int dlBoundVars(CallExp ce,scope int delegate(Identifier) dg){
+	auto ft=cast(ProductTy)ce.e.type;
+	auto tpl=cast(TupleExp)ce.arg;
+	if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
+		foreach(i,x;tpl.e){
+			if(ft.isConstForReverse[i]) continue;
+			if(auto r=defineLhsBoundVarsImpl(x,dg)) return r;
+		}
 		return 0;
 	}
-	if(auto ce=cast(CatExp)lhs){
-		if(auto r=defineLhsBoundVarsImpl(ce.e1,dg)) return r;
-		return defineLhsBoundVarsImpl(ce.e2,dg);
-	}
-	if(auto ce=cast(CallExp)lhs){
-		auto ft=cast(ProductTy)ce.e.type;
-		auto tpl=cast(TupleExp)ce.arg;
-		if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
-			foreach(i,x;tpl.e){
-				if(ft.isConstForReverse[i]) continue;
-				if(auto r=defineLhsBoundVarsImpl(x,dg)) return r;
-			}
-			return 0;
-		}
-		if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) return 0;
-		return defineLhsBoundVarsImpl(ce.arg,dg);
-	}
-	if(auto ie=cast(IndexExp)lhs) return defineLhsBoundVarsImpl(ie.e,dg);
-	if(auto fe=cast(FieldExp)lhs) return defineLhsBoundVarsImpl(fe.e,dg);
-	if(auto le=cast(LetExp)lhs){
-		return le.freeVarsImpl((id)=>id.constLookup||id.implicitDup?0:dg(id));
-	}
+	if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) return 0;
+	return defineLhsBoundVarsImpl(ce.arg,dg);
+}
+private int dlBoundVars(IndexExp ie,scope int delegate(Identifier) dg){
+	return defineLhsBoundVarsImpl(ie.e,dg);
+}
+private int dlBoundVars(FieldExp fe,scope int delegate(Identifier) dg){
+	return defineLhsBoundVarsImpl(fe.e,dg);
+}
+private int dlBoundVars(LetExp le,scope int delegate(Identifier) dg){
+	return le.freeVarsImpl((id)=>id.constLookup||id.implicitDup?0:dg(id));
+}
+private int dlBoundVars(T)(T lhs,scope int delegate(Identifier) dg) if(isOneOf!(T,genericLhsTypes)){
+	return 0; // no names are bound in these positions
+}
+private int dlBoundVarsDefault(Expression lhs,scope int delegate(Identifier) dg){
 	return 0;
 }
 
 int defineLhsFreeVarsImpl(Expression lhs,scope int delegate(Identifier) dg){
-	if(cast(Identifier)lhs) return 0;
-	if(auto tae=cast(TypeAnnotationExp)lhs){
-		if(auto r=defineLhsFreeVarsImpl(tae.e,dg)) return r;
-		if(tae.t) return tae.t.freeVarsImpl(dg);
-		return 0;
-	}
-	if(auto tpl=cast(TupleExp)lhs){
-		foreach(x;tpl.e) if(auto r=defineLhsFreeVarsImpl(x,dg)) return r;
-		return 0;
-	}
-	if(auto ce=cast(CatExp)lhs){
-		if(auto r=defineLhsFreeVarsImpl(ce.e1,dg)) return r;
-		return defineLhsFreeVarsImpl(ce.e2,dg);
-	}
-	if(auto ce=cast(CallExp)lhs){
-		if(auto r=ce.e.freeVarsImpl(dg)) return r;
-		auto ft=cast(ProductTy)ce.e.type;
-		auto tpl=cast(TupleExp)ce.arg;
-		if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
-			foreach(i,x;tpl.e){
-				if(ft.isConstForReverse[i]){ if(auto r=x.freeVarsImpl(dg)) return r; }
-				else if(auto r=defineLhsFreeVarsImpl(x,dg)) return r;
-			}
-			return 0;
+	return dispatchExp!(dlFreeVars,dlFreeVarsDefault)(lhs,dg);
+}
+private int dlFreeVars(Identifier id,scope int delegate(Identifier) dg){
+	return 0;
+}
+private int dlFreeVars(TypeAnnotationExp tae,scope int delegate(Identifier) dg){
+	if(auto r=defineLhsFreeVarsImpl(tae.e,dg)) return r;
+	if(tae.t) return tae.t.freeVarsImpl(dg);
+	return 0;
+}
+private int dlFreeVars(TupleExp tpl,scope int delegate(Identifier) dg){
+	foreach(x;tpl.e) if(auto r=defineLhsFreeVarsImpl(x,dg)) return r;
+	return 0;
+}
+private int dlFreeVars(CatExp ce,scope int delegate(Identifier) dg){
+	if(auto r=defineLhsFreeVarsImpl(ce.e1,dg)) return r;
+	return defineLhsFreeVarsImpl(ce.e2,dg);
+}
+private int dlFreeVars(CallExp ce,scope int delegate(Identifier) dg){
+	if(auto r=ce.e.freeVarsImpl(dg)) return r;
+	auto ft=cast(ProductTy)ce.e.type;
+	auto tpl=cast(TupleExp)ce.arg;
+	if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
+		foreach(i,x;tpl.e){
+			if(ft.isConstForReverse[i]){ if(auto r=x.freeVarsImpl(dg)) return r; }
+			else if(auto r=defineLhsFreeVarsImpl(x,dg)) return r;
 		}
-		if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) return ce.arg.freeVarsImpl(dg);
-		return defineLhsFreeVarsImpl(ce.arg,dg);
+		return 0;
 	}
-	if(auto ie=cast(IndexExp)lhs) return lhs.freeVarsImpl(dg);
-	if(auto fe=cast(FieldExp)lhs) return lhs.freeVarsImpl(dg);
-	if(auto le=cast(LetExp)lhs)
-		return le.freeVarsImpl((id)=>id.constLookup||id.implicitDup?dg(id):0);
+	if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) return ce.arg.freeVarsImpl(dg);
+	return defineLhsFreeVarsImpl(ce.arg,dg);
+}
+private int dlFreeVars(IndexExp ie,scope int delegate(Identifier) dg){
+	return ie.freeVarsImpl(dg);
+}
+private int dlFreeVars(FieldExp fe,scope int delegate(Identifier) dg){
+	return fe.freeVarsImpl(dg);
+}
+private int dlFreeVars(LetExp le,scope int delegate(Identifier) dg){
+	return le.freeVarsImpl((id)=>id.constLookup||id.implicitDup?dg(id):0);
+}
+private int dlFreeVars(T)(T lhs,scope int delegate(Identifier) dg) if(isOneOf!(T,genericLhsTypes)){
+	return lhs.freeVarsImpl(dg);
+}
+private int dlFreeVarsDefault(Expression lhs,scope int delegate(Identifier) dg){
 	return lhs.freeVarsImpl(dg);
 }
 
 int statementBoundVarsImpl(Expression stmt,scope int delegate(Identifier) dg){
+	return dispatchStm!(stmtBoundVars,stmtBoundVarsDefault)(stmt,dg);
+}
+private int stmtBoundVars(FunctionDef fd,scope int delegate(Identifier) dg){
+	auto name=fd.rename?fd.rename:fd.name;
+	return name?dg(name):0;
+}
+private int stmtBoundVars(CommaExp ce,scope int delegate(Identifier) dg){
+	if(auto r=statementBoundVarsImpl(ce.e1,dg)) return r;
+	return statementBoundVarsImpl(ce.e2,dg);
+}
+private int stmtBoundVars(IteExp ite,scope int delegate(Identifier) dg){
+	foreach(x;ite.then.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
+	if(ite.othw) foreach(x;ite.othw.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
+	return 0;
+}
+private int stmtBoundVars(CompoundExp ce,scope int delegate(Identifier) dg){
+	if(!ce.blscope_)
+		foreach(x;ce.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
+	return 0;
+}
+private int stmtBoundVars(T)(T stmt,scope int delegate(Identifier) dg)
+	if(is(T==ForExp)||is(T==WhileExp)||is(T==RepeatExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+{
+	return 0; // these statement kinds bind no names in the enclosing block
+}
+static if(language==silq)
+private int stmtBoundVars(WithExp we,scope int delegate(Identifier) dg){
+	return 0; // names bound by a `with` block are local to the construct
+}
+private int stmtBoundVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
 	if(auto de=cast(DefineExp)stmt) return defineLhsBoundVarsImpl(de.e1,dg);
-	if(auto fd=cast(FunctionDef)stmt){
-		auto name=fd.rename?fd.rename:fd.name;
-		return name?dg(name):0;
-	}
-	if(auto ce=cast(CommaExp)stmt){
-		if(auto r=statementBoundVarsImpl(ce.e1,dg)) return r;
-		return statementBoundVarsImpl(ce.e2,dg);
-	}
-	if(auto ite=cast(IteExp)stmt){
-		foreach(x;ite.then.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
-		if(ite.othw) foreach(x;ite.othw.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
-		return 0;
-	}
-	if(auto ce=cast(CompoundExp)stmt){
-		if(!ce.blscope_)
-			foreach(x;ce.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
-		return 0;
-	}
 	return 0;
 }
 
 int statementFreeVarsImpl(Expression stmt,scope int delegate(Identifier) dg){
+	return dispatchStm!(stmtFreeVars,stmtFreeVarsDefault)(stmt,dg);
+}
+private int stmtFreeVars(FunctionDef fd,scope int delegate(Identifier) dg){
+	return functionDefFreeVarsImpl(fd,dg);
+}
+private int stmtFreeVars(CommaExp ce,scope int delegate(Identifier) dg){
+	if(auto r=statementFreeVarsImpl(ce.e1,dg)) return r;
+	return statementFreeVarsImpl(ce.e2,dg);
+}
+private int stmtFreeVars(CompoundExp ce,scope int delegate(Identifier) dg){
+	return blockFreeVarsImpl(ce.s,null,dg);
+}
+private int stmtFreeVars(IteExp ite,scope int delegate(Identifier) dg){
+	if(auto r=ite.cond.freeVarsImpl(dg)) return r;
+	if(auto r=blockFreeVarsImpl(ite.then.s,null,dg)) return r;
+	if(ite.othw) if(auto r=blockFreeVarsImpl(ite.othw.s,null,dg)) return r;
+	return 0;
+}
+private int stmtFreeVars(ForExp fe,scope int delegate(Identifier) dg){
+	if(auto rng=fe.aggr.isRange()){
+		if(auto r=rng.left.freeVarsImpl(dg)) return r;
+		if(rng.step) if(auto r=rng.step.freeVarsImpl(dg)) return r;
+		if(auto r=rng.right.freeVarsImpl(dg)) return r;
+	}else if(auto cont=fe.aggr.isContainer()){
+		if(auto r=cont.e.freeVarsImpl(dg)) return r;
+	}
+	void[0][Id] bound;
+	if(fe.var) bound[fe.var.id]=[];
+	if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ bound[id.id]=[]; return 0; });
+	if(fe.pattern) if(auto r=defineLhsFreeVarsImpl(fe.pattern,dg)) return r;
+	return blockFreeVarsImpl(fe.bdy.s,null,(id)=>id.id in bound?0:dg(id));
+}
+private int stmtFreeVars(WhileExp we,scope int delegate(Identifier) dg){
+	if(auto r=we.cond.freeVarsImpl(dg)) return r;
+	return blockFreeVarsImpl(we.bdy.s,null,dg);
+}
+private int stmtFreeVars(RepeatExp re,scope int delegate(Identifier) dg){
+	if(auto r=re.num.freeVarsImpl(dg)) return r;
+	return blockFreeVarsImpl(re.bdy.s,null,dg);
+}
+private int stmtFreeVars(ReturnExp re,scope int delegate(Identifier) dg){
+	return re.e?re.e.freeVarsImpl(dg):0;
+}
+private int stmtFreeVars(ForgetExp fe,scope int delegate(Identifier) dg){
+	if(auto r=fe.var.freeVarsImpl(dg)) return r;
+	return fe.val?fe.val.freeVarsImpl(dg):0;
+}
+private int stmtFreeVars(T)(T stmt,scope int delegate(Identifier) dg)
+	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+{
+	return stmt.freeVarsImpl(dg);
+}
+static if(language==silq)
+private int stmtFreeVars(WithExp we,scope int delegate(Identifier) dg){
+	return we.freeVarsImpl(dg);
+}
+private int stmtFreeVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
 	if(auto de=cast(DefineExp)stmt){
 		if(auto r=de.e2.freeVarsImpl(dg)) return r;
 		return defineLhsFreeVarsImpl(de.e1,dg);
 	}
-	if(auto fd=cast(FunctionDef)stmt) return functionDefFreeVarsImpl(fd,dg);
-	if(auto ce=cast(CommaExp)stmt){
-		if(auto r=statementFreeVarsImpl(ce.e1,dg)) return r;
-		return statementFreeVarsImpl(ce.e2,dg);
-	}
-	if(auto ce=cast(CompoundExp)stmt) return blockFreeVarsImpl(ce.s,null,dg);
-	if(auto ite=cast(IteExp)stmt){
-		if(auto r=ite.cond.freeVarsImpl(dg)) return r;
-		if(auto r=blockFreeVarsImpl(ite.then.s,null,dg)) return r;
-		if(ite.othw) if(auto r=blockFreeVarsImpl(ite.othw.s,null,dg)) return r;
-		return 0;
-	}
-	if(auto fe=cast(ForExp)stmt){
-		if(auto rng=fe.aggr.isRange()){
-			if(auto r=rng.left.freeVarsImpl(dg)) return r;
-			if(rng.step) if(auto r=rng.step.freeVarsImpl(dg)) return r;
-			if(auto r=rng.right.freeVarsImpl(dg)) return r;
-		}else if(auto cont=fe.aggr.isContainer()){
-			if(auto r=cont.e.freeVarsImpl(dg)) return r;
-		}
-		void[0][Id] bound;
-		if(fe.var) bound[fe.var.id]=[];
-		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ bound[id.id]=[]; return 0; });
-		if(fe.pattern) if(auto r=defineLhsFreeVarsImpl(fe.pattern,dg)) return r;
-		return blockFreeVarsImpl(fe.bdy.s,null,(id)=>id.id in bound?0:dg(id));
-	}
-	if(auto we=cast(WhileExp)stmt){
-		if(auto r=we.cond.freeVarsImpl(dg)) return r;
-		return blockFreeVarsImpl(we.bdy.s,null,dg);
-	}
-	if(auto re=cast(RepeatExp)stmt){
-		if(auto r=re.num.freeVarsImpl(dg)) return r;
-		return blockFreeVarsImpl(re.bdy.s,null,dg);
-	}
-	if(auto re=cast(ReturnExp)stmt) return re.e?re.e.freeVarsImpl(dg):0;
-	if(auto fe=cast(ForgetExp)stmt){
-		if(auto r=fe.var.freeVarsImpl(dg)) return r;
-		return fe.val?fe.val.freeVarsImpl(dg):0;
-	}
-	if(auto le=cast(LetExp)stmt) return le.freeVarsImpl(dg);
 	return stmt.freeVarsImpl(dg);
 }
 
@@ -299,31 +370,46 @@ int functionDefFreeVarsImpl(FunctionDef fd,scope int delegate(Identifier) dg){
 
 void collectBoundNamesImpl(Expression stmt,ref void[0][Id] names){
 	statementBoundVarsImpl(stmt,(id){ names[id.id]=[]; return 0; });
+	dispatchStm!(collectBoundNames,collectBoundNamesDefault)(stmt,names);
+}
+private void collectBoundNames(FunctionDef fd,ref void[0][Id] names){
+	collectFunctionBoundNames(fd,names);
+}
+private void collectBoundNames(CommaExp ce,ref void[0][Id] names){
+	collectBoundNamesImpl(ce.e1,names);
+	collectBoundNamesImpl(ce.e2,names);
+}
+private void collectBoundNames(CompoundExp ce,ref void[0][Id] names){
+	foreach(x;ce.s) collectBoundNamesImpl(x,names);
+}
+private void collectBoundNames(IteExp ite,ref void[0][Id] names){
+	foreach(x;ite.then.s) collectBoundNamesImpl(x,names);
+	if(ite.othw) foreach(x;ite.othw.s) collectBoundNamesImpl(x,names);
+}
+private void collectBoundNames(ForExp fe,ref void[0][Id] names){
+	if(fe.var) names[fe.var.id]=[];
+	if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ names[id.id]=[]; return 0; });
+	foreach(x;fe.bdy.s) collectBoundNamesImpl(x,names);
+}
+private void collectBoundNames(WhileExp we,ref void[0][Id] names){
+	foreach(x;we.bdy.s) collectBoundNamesImpl(x,names);
+}
+private void collectBoundNames(RepeatExp re,ref void[0][Id] names){
+	foreach(x;re.bdy.s) collectBoundNamesImpl(x,names);
+}
+private void collectBoundNames(T)(T stmt,ref void[0][Id] names)
+	if(is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+{
+}
+static if(language==silq)
+private void collectBoundNames(WithExp we,ref void[0][Id] names){
+}
+private void collectBoundNamesDefault(Expression stmt,ref void[0][Id] names){
 	if(auto de=cast(DefineExp)stmt){
 		if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
 		return;
 	}
-	if(auto fd=cast(FunctionDef)stmt){ collectFunctionBoundNames(fd,names); return; }
-	if(auto ce=cast(CommaExp)stmt){
-		collectBoundNamesImpl(ce.e1,names);
-		collectBoundNamesImpl(ce.e2,names);
-		return;
-	}
-	if(auto ce=cast(CompoundExp)stmt){ foreach(x;ce.s) collectBoundNamesImpl(x,names); return; }
-	if(auto ite=cast(IteExp)stmt){
-		foreach(x;ite.then.s) collectBoundNamesImpl(x,names);
-		if(ite.othw) foreach(x;ite.othw.s) collectBoundNamesImpl(x,names);
-		return;
-	}
-	if(auto fe=cast(ForExp)stmt){
-		if(fe.var) names[fe.var.id]=[];
-		if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ names[id.id]=[]; return 0; });
-		foreach(x;fe.bdy.s) collectBoundNamesImpl(x,names);
-		return;
-	}
-	if(auto we=cast(WhileExp)stmt){ foreach(x;we.bdy.s) collectBoundNamesImpl(x,names); return; }
-	if(auto re=cast(RepeatExp)stmt){ foreach(x;re.bdy.s) collectBoundNamesImpl(x,names); return; }
-	if(auto le=cast(LetExp)stmt){ foreach(x;le.s.s) collectBoundNamesImpl(x,names); return; }
+	if(auto le=cast(LetExp)stmt) foreach(x;le.s.s) collectBoundNamesImpl(x,names);
 }
 void collectFunctionBoundNames(FunctionDef fd,ref void[0][Id] names){
 	if(!fd) return;
@@ -385,13 +471,10 @@ struct BlockSubst{
 
 private VarDecl getVarDeclTwin(VarDecl orig,Identifier nname,Expression nvtype){
 	auto twin=new VarDecl(nname);
+	twin.copyAnalyzedFieldsFrom(orig);
 	twin.vtype=nvtype;
 	twin.dtype=orig.dtype;
 	twin.scope_=orig.scope_;
-	twin.loc=orig.loc;
-	twin.canonicalSource_=orig.canonicalSource;
-	if(orig.isSemError()) twin.sstate=SemState.error;
-	else if(orig.isSemCompleted()) twin.sstate=SemState.completed;
 	return twin;
 }
 
@@ -435,307 +518,338 @@ private T finishStatement(T)(T r,Expression orig,ref BlockSubst ctx){
 
 Expression substituteLValue(Expression lhs,ref BlockSubst ctx){
 	if(!lhs) return null;
-	if(auto id=cast(Identifier)lhs){
-		if(id.constLookup||id.implicitDup) return useSubstitute(id,ctx);
-		if(auto p=id.id in ctx.subst){
-			Expression.CopyArgs cargs={preserveSemantic:true};
-			auto nv=(*p).copy(cargs);
-			nv.setConstLookup(id.constLookup);
-			nv.byRef=id.byRef;
-			ctx.changed=true;
-			return nv;
-		}
-		return id;
+	return dispatchExp!(substLhs,substLhsDefault)(lhs,ctx);
+}
+private Expression substLhs(Identifier id,ref BlockSubst ctx){
+	if(id.constLookup||id.implicitDup) return useSubstitute(id,ctx);
+	if(auto p=id.id in ctx.subst){
+		Expression.CopyArgs cargs={preserveSemantic:true};
+		auto nv=(*p).copy(cargs);
+		nv.setConstLookup(id.constLookup);
+		nv.byRef=id.byRef;
+		ctx.changed=true;
+		return nv;
 	}
-	if(auto tae=cast(TypeAnnotationExp)lhs){
-		auto ne=substituteLValue(tae.e,ctx);
-		auto nt=useSubstitute(tae.t,ctx);
-		if(ne is tae.e&&nt is tae.t) return lhs;
-		auto r=new TypeAnnotationExp(ne,nt,tae.annotationType);
-		return finishStatement(r,lhs,ctx);
+	return id;
+}
+private Expression substLhs(TypeAnnotationExp tae,ref BlockSubst ctx){
+	auto ne=substituteLValue(tae.e,ctx);
+	auto nt=useSubstitute(tae.t,ctx);
+	if(ne is tae.e&&nt is tae.t) return tae;
+	auto r=new TypeAnnotationExp(ne,nt,tae.annotationType);
+	return finishStatement(r,tae,ctx);
+}
+private Expression substLhs(TupleExp tpl,ref BlockSubst ctx){
+	auto ne=tpl.e.dup;
+	bool chg=false;
+	foreach(ref x;ne){
+		auto nx=substituteLValue(x,ctx);
+		if(nx !is x) chg=true;
+		x=nx;
 	}
-	if(auto tpl=cast(TupleExp)lhs){
-		auto ne=tpl.e.dup;
-		bool chg=false;
-		foreach(ref x;ne){
-			auto nx=substituteLValue(x,ctx);
-			if(nx !is x) chg=true;
-			x=nx;
-		}
-		if(!chg) return lhs;
-		auto r=new TupleExp(ne);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ie=cast(IndexExp)lhs){
-		auto nagg=substituteLValue(ie.e,ctx);
-		auto na=useSubstitute(ie.a,ctx);
-		if(nagg is ie.e&&na is ie.a) return lhs;
-		auto r=new IndexExp(nagg,na);
-		r.isArraySyntax=ie.isArraySyntax;
-		static if(language==silq) r.isClassical_=ie.isClassical_;
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto fe=cast(FieldExp)lhs){
-		auto nagg=substituteLValue(fe.e,ctx);
-		if(nagg is fe.e) return lhs;
-		auto r=new FieldExp(nagg,fe.f);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ce=cast(CatExp)lhs){
-		auto ne1=substituteLValue(ce.e1,ctx);
-		auto ne2=substituteLValue(ce.e2,ctx);
-		if(ne1 is ce.e1&&ne2 is ce.e2) return lhs;
-		auto r=new CatExp(ne1,ne2);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ce=cast(CallExp)lhs){
-		auto ne=useSubstitute(ce.e,ctx);
-		auto narg=substituteLValue(ce.arg,ctx);
-		if(ne is ce.e&&narg is ce.arg) return lhs;
-		auto r=new CallExp(ne,narg,ce.isSquare,ce.isClassical_);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto le=cast(LetExp)lhs){
-		auto nctx=ctx.nested();
-		foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,*nctx.taken);
-		auto ns=substituteBlockCompound(le.s,nctx);
-		auto ne=substituteLValue(le.e,nctx);
-		if(nctx.changed) ctx.changed=true;
-		if(ns is le.s&&ne is le.e) return lhs;
-		auto r=new LetExp(ns,ne);
-		return finishStatement(r,lhs,ctx);
-	}
-	return useSubstitute(lhs,ctx);
+	if(!chg) return tpl;
+	auto r=new TupleExp(ne);
+	return finishStatement(r,tpl,ctx);
+}
+private Expression substLhs(IndexExp ie,ref BlockSubst ctx){
+	auto nagg=substituteLValue(ie.e,ctx);
+	auto na=useSubstitute(ie.a,ctx);
+	if(nagg is ie.e&&na is ie.a) return ie;
+	auto r=new IndexExp(nagg,na);
+	r.isArraySyntax=ie.isArraySyntax;
+	static if(language==silq) r.isClassical_=ie.isClassical_;
+	return finishStatement(r,ie,ctx);
+}
+private Expression substLhs(FieldExp fe,ref BlockSubst ctx){
+	auto nagg=substituteLValue(fe.e,ctx);
+	if(nagg is fe.e) return fe;
+	auto r=new FieldExp(nagg,fe.f);
+	return finishStatement(r,fe,ctx);
+}
+private Expression substLhs(CatExp ce,ref BlockSubst ctx){
+	auto ne1=substituteLValue(ce.e1,ctx);
+	auto ne2=substituteLValue(ce.e2,ctx);
+	if(ne1 is ce.e1&&ne2 is ce.e2) return ce;
+	auto r=new CatExp(ne1,ne2);
+	return finishStatement(r,ce,ctx);
+}
+private Expression substLhs(CallExp ce,ref BlockSubst ctx){
+	auto ne=useSubstitute(ce.e,ctx);
+	auto narg=substituteLValue(ce.arg,ctx);
+	if(ne is ce.e&&narg is ce.arg) return ce;
+	auto r=new CallExp(ne,narg,ce.isSquare,ce.isClassical_);
+	return finishStatement(r,ce,ctx);
+}
+private Expression substLhs(LetExp le,ref BlockSubst ctx){
+	auto nctx=ctx.nested();
+	foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,*nctx.taken);
+	auto ns=substituteBlockCompound(le.s,nctx);
+	auto ne=substituteLValue(le.e,nctx);
+	if(nctx.changed) ctx.changed=true;
+	if(ns is le.s&&ne is le.e) return le;
+	auto r=new LetExp(ns,ne);
+	return finishStatement(r,le,ctx);
+}
+private Expression substLhs(T)(T e,ref BlockSubst ctx) if(isOneOf!(T,genericLhsTypes)){
+	return useSubstitute(e,ctx);
+}
+private Expression substLhsDefault(Expression e,ref BlockSubst ctx){
+	return useSubstitute(e,ctx);
 }
 
 private Expression substituteDefineLhs(Expression lhs,ref BlockSubst ctx){
 	if(!lhs) return null;
-	if(auto id=cast(Identifier)lhs){
-		auto nid=ctx.bindVar(id,id.type);
-		return nid;
+	return dispatchExp!(substDefineLhs,substDefineLhsDefault)(lhs,ctx);
+}
+private Expression substDefineLhs(Identifier id,ref BlockSubst ctx){
+	auto nid=ctx.bindVar(id,id.type);
+	return nid;
+}
+private Expression substDefineLhs(TypeAnnotationExp tae,ref BlockSubst ctx){
+	auto nt=useSubstitute(tae.t,ctx);
+	auto ne=substituteDefineLhs(tae.e,ctx);
+	if(ne is tae.e&&nt is tae.t) return tae;
+	auto r=new TypeAnnotationExp(ne,nt,tae.annotationType);
+	return finishStatement(r,tae,ctx);
+}
+private Expression substDefineLhs(TupleExp tpl,ref BlockSubst ctx){
+	auto ne=tpl.e.dup;
+	bool chg=false;
+	foreach(ref x;ne){
+		auto nx=substituteDefineLhs(x,ctx);
+		if(nx !is x) chg=true;
+		x=nx;
 	}
-	if(auto tae=cast(TypeAnnotationExp)lhs){
-		auto nt=useSubstitute(tae.t,ctx);
-		auto ne=substituteDefineLhs(tae.e,ctx);
-		if(ne is tae.e&&nt is tae.t) return lhs;
-		auto r=new TypeAnnotationExp(ne,nt,tae.annotationType);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto tpl=cast(TupleExp)lhs){
-		auto ne=tpl.e.dup;
+	if(!chg) return tpl;
+	auto r=new TupleExp(ne);
+	return finishStatement(r,tpl,ctx);
+}
+private Expression substDefineLhs(CatExp ce,ref BlockSubst ctx){
+	auto ne1=substituteDefineLhs(ce.e1,ctx);
+	auto ne2=substituteDefineLhs(ce.e2,ctx);
+	if(ne1 is ce.e1&&ne2 is ce.e2) return ce;
+	auto r=new CatExp(ne1,ne2);
+	return finishStatement(r,ce,ctx);
+}
+private Expression substDefineLhs(CallExp ce,ref BlockSubst ctx){
+	auto ne=useSubstitute(ce.e,ctx);
+	auto ft=cast(ProductTy)ce.e.type;
+	auto tpl=cast(TupleExp)ce.arg;
+	Expression narg;
+	if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
+		auto nes=tpl.e.dup;
 		bool chg=false;
-		foreach(ref x;ne){
-			auto nx=substituteDefineLhs(x,ctx);
+		foreach(i,ref x;nes){
+			auto nx=ft.isConstForReverse[i]?substituteLValue(x,ctx):substituteDefineLhs(x,ctx);
 			if(nx !is x) chg=true;
 			x=nx;
 		}
-		if(!chg) return lhs;
-		auto r=new TupleExp(ne);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ce=cast(CatExp)lhs){
-		auto ne1=substituteDefineLhs(ce.e1,ctx);
-		auto ne2=substituteDefineLhs(ce.e2,ctx);
-		if(ne1 is ce.e1&&ne2 is ce.e2) return lhs;
-		auto r=new CatExp(ne1,ne2);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ce=cast(CallExp)lhs){
-		auto ne=useSubstitute(ce.e,ctx);
-		auto ft=cast(ProductTy)ce.e.type;
-		auto tpl=cast(TupleExp)ce.arg;
-		Expression narg;
-		if(ft&&ft.isTuple&&tpl&&ft.nargs==tpl.length){
-			auto nes=tpl.e.dup;
-			bool chg=false;
-			foreach(i,ref x;nes){
-				auto nx=ft.isConstForReverse[i]?substituteLValue(x,ctx):substituteDefineLhs(x,ctx);
-				if(nx !is x) chg=true;
-				x=nx;
-			}
-			if(!chg) narg=ce.arg;
-			else{
-				auto ntpl=new TupleExp(nes);
-				narg=finishStatement(ntpl,ce.arg,ctx);
-			}
-		}else if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) narg=substituteLValue(ce.arg,ctx);
-		else narg=substituteDefineLhs(ce.arg,ctx);
-		if(ne is ce.e&&narg is ce.arg) return lhs;
-		auto r=new CallExp(ne,narg,ce.isSquare,ce.isClassical_);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto ie=cast(IndexExp)lhs){
-		auto nagg=substituteLValue(ie.e,ctx);
-		auto na=useSubstitute(ie.a,ctx);
-		defineLhsBoundVarsImpl(ie.e,(id){ ctx.subst.remove(id.id); return 0; });
-		if(nagg is ie.e&&na is ie.a) return lhs;
-		auto r=new IndexExp(nagg,na);
-		r.isArraySyntax=ie.isArraySyntax;
-		static if(language==silq) r.isClassical_=ie.isClassical_;
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto fe=cast(FieldExp)lhs){
-		auto nagg=substituteLValue(fe.e,ctx);
-		defineLhsBoundVarsImpl(fe.e,(id){ ctx.subst.remove(id.id); return 0; });
-		if(nagg is fe.e) return lhs;
-		auto r=new FieldExp(nagg,fe.f);
-		return finishStatement(r,lhs,ctx);
-	}
-	if(auto le=cast(LetExp)lhs){
-		defineLhsBoundVarsImpl(le,(id){ ctx.subst.remove(id.id); return 0; });
-		return substituteLValue(le,ctx);
-	}
-	return substituteLValue(lhs,ctx);
+		if(!chg) narg=ce.arg;
+		else{
+			auto ntpl=new TupleExp(nes);
+			narg=finishStatement(ntpl,ce.arg,ctx);
+		}
+	}else if(ft&&!ft.isTuple&&ft.nargs==1&&ft.isConstForReverse[0]) narg=substituteLValue(ce.arg,ctx);
+	else narg=substituteDefineLhs(ce.arg,ctx);
+	if(ne is ce.e&&narg is ce.arg) return ce;
+	auto r=new CallExp(ne,narg,ce.isSquare,ce.isClassical_);
+	return finishStatement(r,ce,ctx);
+}
+private Expression substDefineLhs(IndexExp ie,ref BlockSubst ctx){
+	auto nagg=substituteLValue(ie.e,ctx);
+	auto na=useSubstitute(ie.a,ctx);
+	defineLhsBoundVarsImpl(ie.e,(id){ ctx.subst.remove(id.id); return 0; });
+	if(nagg is ie.e&&na is ie.a) return ie;
+	auto r=new IndexExp(nagg,na);
+	r.isArraySyntax=ie.isArraySyntax;
+	static if(language==silq) r.isClassical_=ie.isClassical_;
+	return finishStatement(r,ie,ctx);
+}
+private Expression substDefineLhs(FieldExp fe,ref BlockSubst ctx){
+	auto nagg=substituteLValue(fe.e,ctx);
+	defineLhsBoundVarsImpl(fe.e,(id){ ctx.subst.remove(id.id); return 0; });
+	if(nagg is fe.e) return fe;
+	auto r=new FieldExp(nagg,fe.f);
+	return finishStatement(r,fe,ctx);
+}
+private Expression substDefineLhs(LetExp le,ref BlockSubst ctx){
+	defineLhsBoundVarsImpl(le,(id){ ctx.subst.remove(id.id); return 0; });
+	return substituteLValue(le,ctx);
+}
+private Expression substDefineLhs(T)(T e,ref BlockSubst ctx) if(isOneOf!(T,genericLhsTypes)){
+	return substituteLValue(e,ctx);
+}
+private Expression substDefineLhsDefault(Expression e,ref BlockSubst ctx){
+	return substituteLValue(e,ctx);
 }
 
 private Expression substituteStatement(Expression stmt,ref BlockSubst ctx){
-	if(auto de=cast(DefineExp)stmt){
-		auto ne2=substituteLValue(de.e2,ctx);
-		auto ne1=substituteDefineLhs(de.e1,ctx);
-		if(ne1 is de.e1&&ne2 is de.e2) return stmt;
-		auto r=new DefineExp(ne1,ne2);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto fd=cast(FunctionDef)stmt){
-		auto nfd=substituteFunctionDefImpl(fd,ctx,true);
-		if(nfd !is fd){
-			if(ctx.declMap) (*ctx.declMap)[fd]=nfd;
-			auto fname=fd.rename?fd.rename:fd.name;
-			if(fname) if(auto p=fname.id in ctx.subst)
-				if(auto uid=cast(Identifier)(*p)){
-					if(uid.meaning is fd||uid.meaning is null) uid.meaning=nfd;
-					if(uid.meaning is nfd&&nfd.ftype&&nfd.ftype.isSemEvaluated()) uid.type=nfd.ftype;
-				}
-		}
-		return nfd;
-	}
-	if(auto ce=cast(CommaExp)stmt){
-		auto ne1=substituteStatement(ce.e1,ctx);
-		auto ne2=substituteStatement(ce.e2,ctx);
-		if(ne1 is ce.e1&&ne2 is ce.e2) return stmt;
-		auto r=new CommaExp(ne1,ne2);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto ite=cast(IteExp)stmt){
-		auto ncond=useSubstitute(ite.cond,ctx);
-		int decide(Identifier id){
-			auto b=id.id;
-			if(b in ctx.forced) return 0;
-			if(ctx.wouldCapture(b)) ctx.forced[b]=ctx.freshName(b);
-			return 0;
-		}
-		foreach(x;ite.then.s) statementBoundVarsImpl(x,&decide);
-		if(ite.othw) foreach(x;ite.othw.s) statementBoundVarsImpl(x,&decide);
-		auto tctx=ctx.nested();
-		auto nthen=substituteBlockCompound(ite.then,tctx);
-		auto octx=ctx.nested();
-		CompoundExp nothw=null;
-		if(ite.othw) nothw=substituteBlockCompound(ite.othw,octx);
-		void applyEscaping(Expression[] ss,ref BlockSubst src){
-			foreach(x;ss) statementBoundVarsImpl(x,(id){
-				auto b=id.id;
-				if(b in ctx.forced){
-					if(auto v=b in src.subst) ctx.subst[b]=*v;
-					else ctx.subst.remove(b);
-				}else ctx.subst.remove(b);
-				return 0;
-			});
-		}
-		applyEscaping(ite.then.s,tctx);
-		if(ite.othw) applyEscaping(ite.othw.s,octx);
-		if(tctx.changed||octx.changed) ctx.changed=true;
-		if(ncond is ite.cond&&nthen is ite.then&&nothw is ite.othw) return stmt;
-		auto r=new IteExp(ncond,nthen,nothw);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto ce=cast(CompoundExp)stmt){
-		if(!ce.blscope_) return substituteBlockCompound(ce,ctx);
-		auto nctx=ctx.nested();
-		auto r=substituteBlockCompound(ce,nctx);
-		if(nctx.changed) ctx.changed=true;
-		return r;
-	}
-	if(auto fe=cast(ForExp)stmt){
-		ForAggregate naggr=fe.aggr;
-		bool aggrChanged=false;
-		if(auto rng=fe.aggr.isRange()){
-			auto nleft=useSubstitute(rng.left,ctx);
-			auto nstep=rng.step?useSubstitute(rng.step,ctx):null;
-			auto nright=useSubstitute(rng.right,ctx);
-			if(nleft !is rng.left||nstep !is rng.step||nright !is rng.right){
-				naggr=ForAggregate(ForRange(rng.leftExclusive,nleft,nstep,rng.rightExclusive,nright));
-				aggrChanged=true;
-			}
-		}else if(auto cont=fe.aggr.isContainer()){
-			auto nce=useSubstitute(cont.e,ctx);
-			if(nce !is cont.e){
-				naggr=ForAggregate(ForContainer(nce));
-				aggrChanged=true;
-			}
-		}
-		auto bctx=ctx.nested();
-		Identifier nvar=fe.var;
-		if(fe.var) nvar=bctx.bindVar(fe.var,fe.var.type);
-		Expression npattern=fe.pattern?substituteDefineLhs(fe.pattern,bctx):null;
-		auto nbdy=substituteBlockCompound(fe.bdy,bctx);
-		if(bctx.changed) ctx.changed=true;
-		if(!aggrChanged&&nvar is fe.var&&npattern is fe.pattern&&nbdy is fe.bdy) return stmt;
-		auto r=new ForExp(nvar,npattern,naggr,nbdy);
-		r.fescope_=fe.fescope_;
-		r.loopVar=fe.loopVar;
-		if(fe.loopVar&&bctx.declMap)
-			if(auto p=cast(Declaration)fe.loopVar in *bctx.declMap)
-				if(auto nvd=cast(VarDecl)*p) r.loopVar=nvd;
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto we=cast(WhileExp)stmt){
-		auto ncond=useSubstitute(we.cond,ctx);
-		auto bctx=ctx.nested();
-		auto nbdy=substituteBlockCompound(we.bdy,bctx);
-		if(bctx.changed) ctx.changed=true;
-		if(ncond is we.cond&&nbdy is we.bdy) return stmt;
-		auto r=new WhileExp(ncond,nbdy);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto re=cast(RepeatExp)stmt){
-		auto nnum=useSubstitute(re.num,ctx);
-		auto bctx=ctx.nested();
-		auto nbdy=substituteBlockCompound(re.bdy,bctx);
-		if(bctx.changed) ctx.changed=true;
-		if(nnum is re.num&&nbdy is re.bdy) return stmt;
-		auto r=new RepeatExp(nnum,nbdy);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto re=cast(ReturnExp)stmt){
-		auto ne=re.e?substituteLValue(re.e,ctx):null;
-		bool remapped=false;
-		auto nfv=remapDecls(re.forgottenVars,ctx.declMap,remapped);
-		if(ne is re.e&&!remapped) return stmt;
-		auto r=new ReturnExp(ne);
-		r.expected=re.expected;
-		r.forgottenVars=nfv;
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto fe=cast(ForgetExp)stmt){
-		auto nvar=substituteLValue(fe.var,ctx);
-		auto nval=fe.val?useSubstitute(fe.val,ctx):null;
-		if(nvar is fe.var&&nval is fe.val) return stmt;
-		auto r=new ForgetExp(nvar,nval);
-		return finishStatement(r,stmt,ctx);
-	}
-	if(auto ae=cast(AAssignExp)stmt){
-		auto ne1=substituteLValue(ae.e1,ctx);
-		auto ne2=useSubstitute(ae.e2,ctx);
-		if(ne1 is ae.e1&&ne2 is ae.e2) return stmt;
-		auto r=cast(AAssignExp)stmt.copy();
-		assert(!!r);
-		r.e1=ne1;
-		r.e2=ne2;
-		r.type=null;
-		r.sstate=SemState.initial;
-		return finishStatement(r,stmt,ctx);
-	}
+	return dispatchStm!(substStm,substStmDefault)(stmt,ctx);
+}
+
+// the default handles the statement kinds that dispatchStm does not route
+private Expression substDefine(DefineExp de,ref BlockSubst ctx){
+	auto ne2=substituteLValue(de.e2,ctx);
+	auto ne1=substituteDefineLhs(de.e1,ctx);
+	if(ne1 is de.e1&&ne2 is de.e2) return de;
+	auto r=new DefineExp(ne1,ne2);
+	return finishStatement(r,de,ctx);
+}
+private Expression substAssign(AAssignExp ae,ref BlockSubst ctx){
+	auto ne1=substituteLValue(ae.e1,ctx);
+	auto ne2=useSubstitute(ae.e2,ctx);
+	if(ne1 is ae.e1&&ne2 is ae.e2) return ae;
+	auto r=cast(AAssignExp)(cast(Expression)ae).copy();
+	assert(!!r);
+	r.e1=ne1;
+	r.e2=ne2;
+	r.type=null;
+	r.sstate=SemState.initial;
+	return finishStatement(r,ae,ctx);
+}
+private Expression substStmDefault(Expression stmt,ref BlockSubst ctx){
+	if(auto de=cast(DefineExp)stmt) return substDefine(de,ctx);
+	if(auto ae=cast(AAssignExp)stmt) return substAssign(ae,ctx);
+	// expression-statements are substituted as lvalues
 	return substituteLValue(stmt,ctx);
+}
+
+private Expression substStm(FunctionDef fd,ref BlockSubst ctx){
+	auto nfd=substituteFunctionDefImpl(fd,ctx,true);
+	if(nfd !is fd){
+		if(ctx.declMap) (*ctx.declMap)[fd]=nfd;
+		auto fname=fd.rename?fd.rename:fd.name;
+		if(fname) if(auto p=fname.id in ctx.subst)
+			if(auto uid=cast(Identifier)(*p)){
+				if(uid.meaning is fd||uid.meaning is null) uid.meaning=nfd;
+				if(uid.meaning is nfd&&nfd.ftype&&nfd.ftype.isSemEvaluated()) uid.type=nfd.ftype;
+			}
+	}
+	return nfd;
+}
+private Expression substStm(CommaExp ce,ref BlockSubst ctx){
+	auto ne1=substituteStatement(ce.e1,ctx);
+	auto ne2=substituteStatement(ce.e2,ctx);
+	if(ne1 is ce.e1&&ne2 is ce.e2) return ce;
+	auto r=new CommaExp(ne1,ne2);
+	return finishStatement(r,ce,ctx);
+}
+private Expression substStm(IteExp ite,ref BlockSubst ctx){
+	auto ncond=useSubstitute(ite.cond,ctx);
+	int decide(Identifier id){
+		auto b=id.id;
+		if(b in ctx.forced) return 0;
+		if(ctx.wouldCapture(b)) ctx.forced[b]=ctx.freshName(b);
+		return 0;
+	}
+	foreach(x;ite.then.s) statementBoundVarsImpl(x,&decide);
+	if(ite.othw) foreach(x;ite.othw.s) statementBoundVarsImpl(x,&decide);
+	auto tctx=ctx.nested();
+	auto nthen=substituteBlockCompound(ite.then,tctx);
+	auto octx=ctx.nested();
+	CompoundExp nothw=null;
+	if(ite.othw) nothw=substituteBlockCompound(ite.othw,octx);
+	void applyEscaping(Expression[] ss,ref BlockSubst src){
+		foreach(x;ss) statementBoundVarsImpl(x,(id){
+			auto b=id.id;
+			if(b in ctx.forced){
+				if(auto v=b in src.subst) ctx.subst[b]=*v;
+				else ctx.subst.remove(b);
+			}else ctx.subst.remove(b);
+			return 0;
+		});
+	}
+	applyEscaping(ite.then.s,tctx);
+	if(ite.othw) applyEscaping(ite.othw.s,octx);
+	if(tctx.changed||octx.changed) ctx.changed=true;
+	if(ncond is ite.cond&&nthen is ite.then&&nothw is ite.othw) return ite;
+	auto r=new IteExp(ncond,nthen,nothw);
+	return finishStatement(r,ite,ctx);
+}
+private Expression substStm(CompoundExp ce,ref BlockSubst ctx){
+	if(!ce.blscope_) return substituteBlockCompound(ce,ctx);
+	auto nctx=ctx.nested();
+	auto r=substituteBlockCompound(ce,nctx);
+	if(nctx.changed) ctx.changed=true;
+	return r;
+}
+private Expression substStm(ForExp fe,ref BlockSubst ctx){
+	ForAggregate naggr=fe.aggr;
+	bool aggrChanged=false;
+	if(auto rng=fe.aggr.isRange()){
+		auto nleft=useSubstitute(rng.left,ctx);
+		auto nstep=rng.step?useSubstitute(rng.step,ctx):null;
+		auto nright=useSubstitute(rng.right,ctx);
+		if(nleft !is rng.left||nstep !is rng.step||nright !is rng.right){
+			naggr=ForAggregate(ForRange(rng.leftExclusive,nleft,nstep,rng.rightExclusive,nright));
+			aggrChanged=true;
+		}
+	}else if(auto cont=fe.aggr.isContainer()){
+		auto nce=useSubstitute(cont.e,ctx);
+		if(nce !is cont.e){
+			naggr=ForAggregate(ForContainer(nce));
+			aggrChanged=true;
+		}
+	}
+	auto bctx=ctx.nested();
+	Identifier nvar=fe.var;
+	if(fe.var) nvar=bctx.bindVar(fe.var,fe.var.type);
+	Expression npattern=fe.pattern?substituteDefineLhs(fe.pattern,bctx):null;
+	auto nbdy=substituteBlockCompound(fe.bdy,bctx);
+	if(bctx.changed) ctx.changed=true;
+	if(!aggrChanged&&nvar is fe.var&&npattern is fe.pattern&&nbdy is fe.bdy) return fe;
+	auto r=new ForExp(nvar,npattern,naggr,nbdy);
+	r.fescope_=fe.fescope_;
+	r.loopVar=fe.loopVar;
+	if(fe.loopVar&&bctx.declMap)
+		if(auto p=cast(Declaration)fe.loopVar in *bctx.declMap)
+			if(auto nvd=cast(VarDecl)*p) r.loopVar=nvd;
+	return finishStatement(r,fe,ctx);
+}
+private Expression substStm(WhileExp we,ref BlockSubst ctx){
+	auto ncond=useSubstitute(we.cond,ctx);
+	auto bctx=ctx.nested();
+	auto nbdy=substituteBlockCompound(we.bdy,bctx);
+	if(bctx.changed) ctx.changed=true;
+	if(ncond is we.cond&&nbdy is we.bdy) return we;
+	auto r=new WhileExp(ncond,nbdy);
+	return finishStatement(r,we,ctx);
+}
+private Expression substStm(RepeatExp re,ref BlockSubst ctx){
+	auto nnum=useSubstitute(re.num,ctx);
+	auto bctx=ctx.nested();
+	auto nbdy=substituteBlockCompound(re.bdy,bctx);
+	if(bctx.changed) ctx.changed=true;
+	if(nnum is re.num&&nbdy is re.bdy) return re;
+	auto r=new RepeatExp(nnum,nbdy);
+	return finishStatement(r,re,ctx);
+}
+private Expression substStm(ReturnExp re,ref BlockSubst ctx){
+	auto ne=re.e?substituteLValue(re.e,ctx):null;
+	bool remapped=false;
+	auto nfv=remapDecls(re.forgottenVars,ctx.declMap,remapped);
+	if(ne is re.e&&!remapped) return re;
+	auto r=new ReturnExp(ne);
+	r.expected=re.expected;
+	r.forgottenVars=nfv;
+	return finishStatement(r,re,ctx);
+}
+private Expression substStm(ForgetExp fe,ref BlockSubst ctx){
+	auto nvar=substituteLValue(fe.var,ctx);
+	auto nval=fe.val?useSubstitute(fe.val,ctx):null;
+	if(nvar is fe.var&&nval is fe.val) return fe;
+	auto r=new ForgetExp(nvar,nval);
+	return finishStatement(r,fe,ctx);
+}
+// expression-statements are substituted as lvalues
+private Expression substStm(T)(T stmt,ref BlockSubst ctx)
+	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+{
+	return substituteLValue(stmt,ctx);
+}
+static if(language==silq)
+private Expression substStm(WithExp we,ref BlockSubst ctx){
+	return substituteLValue(we,ctx);
 }
 
 CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
@@ -824,11 +938,9 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	auto nparams=fd.params.dup;
 	Parameter freshen(Parameter p,Expression ndtype,Expression nvtype,Identifier pname,Identifier npname){
 		auto np=new Parameter(p.isConst,npname,ndtype);
+		np.copyAnalyzedFieldsFrom(p);
 		np.vtype=nvtype;
-		np.loc=p.loc;
 		np.scope_=p.scope_;
-		np.sstate=p.sstate;
-		np.canonicalSource_=p.canonicalSource;
 		if(bctx.declMap) (*bctx.declMap)[p]=np;
 		return np;
 	}
@@ -859,31 +971,16 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 		foreach(i, p; fd.params) if(nparams[i] is p){ auto pname=p.rename?p.rename:p.name; nparams[i]=freshen(p,p.dtype,p.vtype,pname,pname); }
 	}
 	auto r=new FunctionDef(nname,nparams,fd.isTuple,nrret,nbody);
-	r.isSquare=fd.isSquare;
-	r.annotation=fd.annotation;
-	r.inferAnnotation=fd.inferAnnotation;
-	r.attributes=fd.attributes.dup;
+	r.copyAnalyzedFieldsFrom(fd);
 	r.ret=nret;
-	r.hasReturn=fd.hasReturn;
-	r.retNames=fd.retNames;
-	r.loc=fd.loc;
 	r.scope_=fd.scope_;
-	r.canonicalSource_=fd.canonicalSource;
 	r.fscope_=new FunctionScope(r.scope_,r);
 	foreach(np;r.params) np.scope_=r.fscope_;
-	r.context=fd.context;
-	r.thisVar=fd.thisVar;
-	r.isConstructor=fd.isConstructor;
-	r.sealed=fd.sealed;
-	r.captureAnnotationReady=fd.captureAnnotationReady;
-	r.ftypeFinal=fd.ftypeFinal;
 	if(fd.ftype){
 		auto nftype=ftypeSubst.length?fd.ftype.substitute(ftypeSubst,ctx.tt):fd.ftype;
 		r.ftype=cast(FunTy)nftype;
 		assert(!!r.ftype);
 	}
-	if(fd.isSemError()) r.sstate=SemState.error;
-	else if(fd.isSemCompleted()) r.sstate=SemState.completed;
 	if(bctx.declMap) (*bctx.declMap)[fd]=r;
 	if(fname){
 		Expression.CopyArgs cargs={preserveSemantic:true};
@@ -941,9 +1038,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 				a=nxt;
 			}
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
-			nd.loc=d.loc;
-			nd.sstate=d.sstate;
-			nd.canonicalSource_=d.canonicalSource;
+			nd.copyAnalyzedFieldsFrom(d);
 			// names inherited via the split/merge lineage already track the
 			// twin's own renaming; otherwise keep the template's rename
 			if(d.rename&&!fromChain) nd.rename=new Identifier(d.rename.id);
@@ -1080,46 +1175,12 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		}
 		return ns;
 	}
-	void walkStmts(Expression[] tpl,Expression[] twin,Scope fparent){
-		assert(tpl.length==twin.length);
-		foreach(i,stmt;tpl){
-			auto twstmt=twin[i];
-			if(auto tfd=cast(FunctionDef)stmt){
-				if(auto wfd=cast(FunctionDef)twstmt){ dmap[tfd]=wfd; wfd.canonicalSource_=tfd.canonicalSource; }
-				continue;
-			}
-			if(auto ce=cast(CompoundExp)stmt){
-				auto ce2=cast(CompoundExp)twstmt;
-				if(ce.blscope_){
-					auto ns=mapScopeTree(ce.blscope_,ce2.blscope_,fparent);
-					walkStmts(ce.s,ce2.s,ns);
-				}else walkStmts(ce.s,ce2.s,fparent);
-				continue;
-			}
-			if(auto ite=cast(IteExp)stmt){
-				auto ite2=cast(IteExp)twstmt;
-				walkStmts([ite.then],[ite2.then],fparent);
-				if(ite.othw) walkStmts([ite.othw],[ite2.othw],fparent);
-				continue;
-			}
-			if(auto fe=cast(ForExp)stmt){
-				auto fe2=cast(ForExp)twstmt;
-				if(fe.fescope_) mapScopeTree(fe.fescope_,fe2.fescope_,fparent);
-				walkStmts([fe.bdy],[fe2.bdy],fparent);
-				continue;
-			}
-			if(auto we=cast(WhileExp)stmt){ walkStmts([we.bdy],[(cast(WhileExp)twstmt).bdy],fparent); continue; }
-			if(auto re=cast(RepeatExp)stmt){ walkStmts([re.bdy],[(cast(RepeatExp)twstmt).bdy],fparent); continue; }
-			if(auto le=cast(LetExp)stmt){ walkStmts([le.s],[(cast(LetExp)twstmt).s],fparent); continue; }
-		}
-	}
-
 	cargs.mapDecl=&mapDecl; cargs.postCopy=&fixAssignFields;
 	cargs.mapScope=&mapScope;
 	cargs.mapExp=&mapExp;
 	auto bparent=cast(Scope)r.fscope_;
 	if(r.body_.blscope_) bparent=mapScopeTree(fd.body_.blscope_,r.body_.blscope_,r.fscope_);
-	walkStmts(fd.body_.s,r.body_.s,bparent);
+	walkStmts(fd.body_.s,r.body_.s,bparent,&dmap,&mapScopeTree);
 	Expression shareTy(Expression e){ return e?(e.isSemEvaluated()?e:rescopeCopy(e)):null; }
 	r.body_=cast(CompoundExp)rescopeCopy(r.body_);
 	if(r.rret) r.rret=shareTy(r.rret);
@@ -1162,6 +1223,79 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 				if(auto owner=p in luOwner) ns.lastUses.parent=&(*owner).lastUses;
 		}
 	}
+}
+
+// walks template/twin statement trees in parallel, rebuilding the twin's
+// scope tree and declaration map (see rescopeTwin)
+private alias MapScopeTreeDg = Scope delegate(Scope tpl,Scope twin,Scope fparent);
+private void walkStmt(FunctionDef tfd,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	if(auto wfd=cast(FunctionDef)twstmt){ (*dmap)[tfd]=wfd; wfd.canonicalSource_=tfd.canonicalSource; }
+}
+private void walkStmt(CompoundExp ce,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto ce2=cast(CompoundExp)twstmt;
+	assert(!!ce2);
+	if(ce.blscope_){
+		auto ns=mapFn(ce.blscope_,ce2.blscope_,fparent);
+		walkStmts(ce.s,ce2.s,ns,dmap,mapFn);
+	}else walkStmts(ce.s,ce2.s,fparent,dmap,mapFn);
+}
+private void walkStmt(IteExp ite,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto ite2=cast(IteExp)twstmt;
+	assert(!!ite2);
+	walkStmts([ite.then],[ite2.then],fparent,dmap,mapFn);
+	if(ite.othw) walkStmts([ite.othw],[ite2.othw],fparent,dmap,mapFn);
+}
+private void walkStmt(ForExp fe,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto fe2=cast(ForExp)twstmt;
+	assert(!!fe2);
+	if(fe.fescope_) mapFn(fe.fescope_,fe2.fescope_,fparent);
+	walkStmts([fe.bdy],[fe2.bdy],fparent,dmap,mapFn);
+}
+private void walkStmt(WhileExp we,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto we2=cast(WhileExp)twstmt;
+	assert(!!we2);
+	walkStmts([we.bdy],[we2.bdy],fparent,dmap,mapFn);
+}
+private void walkStmt(RepeatExp re,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto re2=cast(RepeatExp)twstmt;
+	assert(!!re2);
+	walkStmts([re.bdy],[re2.bdy],fparent,dmap,mapFn);
+}
+private void walkStmt(CommaExp ce,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto ce2=cast(CommaExp)twstmt;
+	assert(!!ce2);
+	walkStmts([ce.e1],[ce2.e1],fparent,dmap,mapFn);
+	walkStmts([ce.e2],[ce2.e2],fparent,dmap,mapFn);
+}
+static if(language==silq)
+private void walkStmt(WithExp we,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	auto we2=cast(WithExp)twstmt;
+	assert(!!we2);
+	void walkBlock(CompoundExp t,CompoundExp w){
+		if(t.blscope_){
+			auto ns=mapFn(t.blscope_,w.blscope_,fparent);
+			walkStmts(t.s,w.s,ns,dmap,mapFn);
+		}else walkStmts(t.s,w.s,fparent,dmap,mapFn);
+	}
+	if(we.trans) walkBlock(we.trans,we2.trans);
+	if(we.bdy) walkBlock(we.bdy,we2.bdy);
+	if(we.itrans) walkBlock(we.itrans,we2.itrans);
+}
+private void walkStmt(T)(T stmt,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn)
+	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+{
+	// statements without nested blocks need no scope remapping
+}
+private void walkStmtDefault(Expression stmt,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	if(auto le=cast(LetExp)stmt){
+		auto le2=cast(LetExp)twstmt;
+		assert(!!le2);
+		walkStmts([le.s],[le2.s],fparent,dmap,mapFn);
+	}
+}
+private void walkStmts(Expression[] tpl,Expression[] twin,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+	assert(tpl.length==twin.length);
+	foreach(i,stmt;tpl) dispatchStm!(walkStmt,walkStmtDefault)(stmt,twin[i],fparent,dmap,mapFn);
 }
 
 void computeCapturesFromBody(FunctionDef fd){

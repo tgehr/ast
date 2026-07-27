@@ -93,6 +93,22 @@ final class LastUse{
 		r~=")";
 		return r;
 	}
+	LastUse dup(){
+		// copies all fields; reference fields (decl, scope_, links, nested
+		// scopes) still refer to the original graph—callers remap them as
+		// needed (see LastUses.remapFrom)
+		auto r=new LastUse(kind,scope_,decl,use,parent,nestedScopes.dup);
+		r.constBlock=constBlock;
+		static if(language==silq) r.dep=dep;
+		r.forwardTo=forwardTo;
+		r.constConsume=constConsume;
+		r.prevImplicitDup=prevImplicitDup;
+		r.splitFrom=splitFrom;
+		r.splitSource=splitSource;
+		r.prev=prev;
+		r.next=next;
+		return r;
+	}
 	enum Kind{
 		definition,
 		constPinned,
@@ -952,15 +968,16 @@ struct LastUses{
 			if(auto p=lu in nmap) return *p;
 			auto ndecl=lu.decl?mapDecl(lu.decl):null;
 			if(lu.decl&&!ndecl) return null;
-			auto r=new LastUse(lu.kind,lu.scope_?mapScope(lu.scope_):null,ndecl,lu.use,lu.parent);
+			auto r=lu.dup;
 			nmap[lu]=r;
-			r.constBlock=lu.constBlock;
-			static if(language==silq) r.dep=lu.dep;
+			r.decl=ndecl;
+			r.scope_=lu.scope_?mapScope(lu.scope_):null;
 			r.forwardTo=remap(lu.forwardTo);
 			r.constConsume=remap(lu.constConsume);
 			r.prevImplicitDup=remap(lu.prevImplicitDup);
 			r.splitFrom=remap(lu.splitFrom);
 			r.splitSource=remap(lu.splitSource);
+			r.nestedScopes=null;
 			foreach(nsc;lu.nestedScopes)
 				if(auto nnsc=cast(NestedScope)mapScope(nsc)) r.nestedScopes~=nnsc;
 			r.prev=remap(lu.prev);

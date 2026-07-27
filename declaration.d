@@ -15,6 +15,13 @@ abstract class Declaration: Expression{
 	protected Identifier copyNameImpl(CopyArgs args){
 		return name?name.copy(args):null;
 	}
+	void copyAnalyzedFieldsFrom(Declaration d){
+		loc=d.loc;
+		if(d.isSemError()) sstate=SemState.error;
+		else if(d.isSemCompleted()) sstate=SemState.completed;
+		canonicalSource_=d.canonicalSource;
+		// scope, rename, split/merge links, type-const blockers are established per copy
+	}
 	override @property string kind(){ return "declaration"; }
 	final @property Id getId(){ auto r=rename?rename:name; return r?r.id:Id(); }
 	final @property string getName(){ auto r=rename?rename:name; return r?r.name:""; }
@@ -107,6 +114,11 @@ class VarDecl: Declaration{
 	}
 	override string toString(){ return (isConst()?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
 	@property override string kind(){ return "variable"; }
+	alias copyAnalyzedFieldsFrom=Declaration.copyAnalyzedFieldsFrom;
+	void copyAnalyzedFieldsFrom(VarDecl d){
+		copyAnalyzedFieldsFrom(cast(Declaration)d);
+		// dtype, vtype, initializer and definition are established per copy
+	}
 
 	override bool isLinear(){
 		return vtype&&!vtype.isClassical();
@@ -155,13 +167,31 @@ class FunctionDef: Declaration{
 	}do{
 		super(name); this.params=params; this.isTuple=isTuple; this.rret=rret; this.body_=body_;
 	}
+	void copyIntrinsicFieldsFrom(FunctionDef fd){
+		// non-semantic fields shared by all copies (see also copyImpl)
+		isSquare=fd.isSquare;
+		annotation=fd.annotation;
+		inferAnnotation=fd.inferAnnotation;
+		attributes=fd.attributes.dup;
+	}
+	alias copyAnalyzedFieldsFrom=Declaration.copyAnalyzedFieldsFrom;
+	void copyAnalyzedFieldsFrom(FunctionDef fd){
+		copyAnalyzedFieldsFrom(cast(Declaration)fd);
+		copyIntrinsicFieldsFrom(fd);
+		ret=fd.ret;
+		hasReturn=fd.hasReturn;
+		retNames=fd.retNames;
+		context=fd.context;
+		thisVar=fd.thisVar;
+		isConstructor=fd.isConstructor;
+		sealed=fd.sealed;
+		captureAnnotationReady=fd.captureAnnotationReady;
+		ftypeFinal=fd.ftypeFinal;
+	}
 	override FunctionDef copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
 		auto r=new FunctionDef(copyNameImpl(args),params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
-		r.isSquare=isSquare;
-		r.annotation=annotation;
-		r.inferAnnotation=inferAnnotation;
-		r.attributes=attributes.dup;
+		r.copyIntrinsicFieldsFrom(this);
 		if(args.preserveMeanings){
 			r.ret=ret;
 			r.hasReturn=hasReturn;
