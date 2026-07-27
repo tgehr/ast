@@ -88,9 +88,15 @@ abstract class Expression: Node{
 			Id nid;
 		}
 		Rename* rename;
+		// optional remapping of analyzed-tree references (see ast.substitute.rescopeTwin)
+		Declaration delegate(Declaration) mapDecl;
+		Scope delegate(Scope) mapScope;
+		Expression delegate(Expression, ref CopyArgs) mapExp;
+		void delegate(Expression,Expression) postCopy;
 	}
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
+		if(args.mapExp) if(auto r=cast(T)args.mapExp(this,args)) return r;
 		assert(!isSemCompleted() || type.isSemEvaluated());
 		auto self=cast(T)this;
 		auto r=self.copyImpl(args);
@@ -109,6 +115,7 @@ abstract class Expression: Node{
 		r.brackets=brackets;
 		r.byRef=byRef;
 		r.implicitDup=implicitDup;
+		if(args.postCopy) args.postCopy(this,r);
 		return r;
 	}
 
@@ -847,6 +854,15 @@ class Identifier: Expression{
 				r.outerWanted=outerWanted;
 				r.classical=classical;
 			}
+			if(args.mapDecl){
+				auto oldmeaning=r.meaning;
+				r.meaning=args.mapDecl(r.meaning);
+				// a template use may deliberately display an id different
+				// from its meaning's name; preserve that relationship
+				if(r.meaning&&r.meaning.name&&oldmeaning&&oldmeaning.name&&id==oldmeaning.name.id)
+					r.id=r.meaning.name.id;
+			}
+			if(args.mapScope) r.scope_=args.mapScope(r.scope_);
 		}else{
 			if(args.preserveMeanings){
 				r.meaning=meaning;
@@ -876,6 +892,7 @@ class Identifier: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
 	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		if(id !in subst) return this;
+		if(tt&&tt.localRoot&&meaning&&meaning.scope_&&meaning.scope_.isNestedIn(tt.localRoot)&&!cast(FunctionDef)meaning) return this;
 		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
 		auto result=subst[id];
 		assert(result.isSemCompleted());
@@ -940,10 +957,11 @@ class Identifier: Expression{
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		if(auto r=cast(Identifier)rhs){
-			if(meaning&&r.meaning&&(ctx.isBound(meaning)||ctx.isBound(r.meaning))){
+			if(meaning&&r.meaning&&(ctx.isBound(meaning)||ctx.isBound(r.meaning)||meaning.canonicalSource is r.meaning.canonicalSource)){
 				// at least one of the identifiers is bound within the
-				// expressions currently being compared: they are equal iff
-				// their meanings are paired up (alpha-equivalence)
+				// expressions currently being compared (or the meanings
+				// descend from a common canonical source): they are equal
+				// iff their meanings are paired up (alpha-equivalence)
 				return ctx.lookup(meaning,r.meaning)&&isEqual(type,r.type,&ctx);
 			}
 			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning) {
@@ -1175,7 +1193,7 @@ class UnaryExp(TokenType op): AUnaryExp{
 	}
 	override UnaryExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
-		if(ne==e) return this;
+		if(ne is e) return this;
 		auto r=new UnaryExp(ne);
 		r.loc=loc;
 		return r;
@@ -1222,7 +1240,7 @@ class PostfixExp(TokenType op): Expression{
 	}
 	override PostfixExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
-		if(ne==e) return this;
+		if(ne is e) return this;
 		auto r=new PostfixExp(ne);
 		r.loc=loc;
 		return r;
@@ -1271,7 +1289,7 @@ class IndexExp: Expression{ //e[a]
 	override IndexExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto na=a.substitute(subst,tt);
-		if(ne==e&&na==a) return this;
+		if(ne is e&&na is a) return this;
 		auto r=new IndexExp(ne,na);
 		r.isArraySyntax=isArraySyntax;
 		r.loc=loc;
@@ -1474,7 +1492,7 @@ class CallExp: Expression{
 	override CallExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto narg=arg.substitute(subst,tt);
-		if(ne==e&&narg==arg) return this;
+		if(ne is e&&narg is arg) return this;
 		auto r=new CallExp(ne,narg,isSquare,isClassical_);
 		r.loc=loc;
 		return r;
@@ -1827,7 +1845,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	override BinaryExp!op substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne1=e1.substitute(subst,tt);
 		auto ne2=e2.substitute(subst,tt);
-		if(ne1==e1&&ne2==e2) return this;
+		if(ne1 is e1&&ne2 is e2) return this;
 		static if(op==Tok!"→"){
 			auto r=new BinaryExp!op(ne1,ne2,captureAnnotation,annotation,isLifted);
 		}else{
@@ -1918,7 +1936,7 @@ class FieldExp: Expression{
 	}
 	override FieldExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
-		if(ne==e) return this;
+		if(ne is e) return this;
 		auto r=new FieldExp(ne,f);
 		r.loc=loc;
 		return r;
@@ -1979,7 +1997,7 @@ class IteExp: Expression{
 		auto nthen=cast(CompoundExp)then.substitute(subst,tt);
 		auto nothw=othw?cast(CompoundExp)othw.substitute(subst,tt):null;
 		assert(!!nthen && !!nothw==!!othw);
-		if(ncond==cond&&nthen==then&&nothw==othw) return this;
+		if(ncond is cond&&nthen is then&&nothw is othw) return this;
 		auto r=new IteExp(ncond,nthen,nothw);
 		r.loc=loc;
 		return r;
@@ -2377,7 +2395,9 @@ class CompoundExp: Expression{
 	Expression[] s;
 	this(Expression[] ss){s=ss;}
 	override CompoundExp copyImpl(CopyArgs args){
-		return new CompoundExp(s.map!(e=>e.copy(args)).array);
+		auto r=new CompoundExp(s.map!(e=>e.copy(args)).array);
+		if(args.mapScope) r.blscope_=cast(BlockScope)args.mapScope(blscope_);
+		return r;
 	}
 
 	override string toString(){
@@ -2420,8 +2440,9 @@ class CompoundExp: Expression{
 	}
 	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ns=s.dup;
-		foreach(ref x;ns) x=x.substitute(subst,tt);
-		if(ns==s) return this;
+		bool chg=false;
+		foreach(i,ref x;ns){ x=x.substitute(subst,tt); if(x !is s[i]) chg=true; }
+		if(!chg) return this;
 		auto r=new CompoundExp(ns);
 		r.loc=loc;
 		return r;
@@ -2488,8 +2509,9 @@ class TupleExp: Expression{
 	}
 	override TupleExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.dup;
-		foreach(ref x;ne) x=x.substitute(subst,tt);
-		if(ne==e) return this;
+		bool chg=false;
+		foreach(i,ref x;ne){ x=x.substitute(subst,tt); if(x !is e[i]) chg=true; }
+		if(!chg) return this;
 		auto r=new TupleExp(ne);
 		r.loc=loc;
 		return r;
@@ -2772,8 +2794,9 @@ class VectorExp: Expression{
 	}
 	override VectorExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.dup;
-		foreach(ref x;ne) x=x.substitute(subst,tt);
-		if(ne==e) return this;
+		bool chg=false;
+		foreach(i,ref x;ne){ x=x.substitute(subst,tt); if(x !is e[i]) chg=true; }
+		if(!chg) return this;
 		auto r=new VectorExp(ne);
 		r.loc=loc;
 		return r;
@@ -2886,6 +2909,7 @@ class ReturnExp: Expression{
 	override ReturnExp copyImpl(CopyArgs args){
 		auto r=new ReturnExp(e.copy(args));
 		r.expected=expected;
+		if(args.mapDecl) r.forgottenVars=forgottenVars.map!(d=>args.mapDecl(d)).array;
 		return r;
 	}
 	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" /+",forgottenVars,"+/"):""); }
@@ -2935,7 +2959,7 @@ class AssertExp: Expression{
 	}
 	override AssertExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
-		if(ne==e) return this;
+		if(ne is e) return this;
 		auto r=new AssertExp(ne);
 		r.loc=loc;
 		return r;

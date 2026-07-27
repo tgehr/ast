@@ -2382,6 +2382,7 @@ class TypeScope: BlockScope{
 
 struct TypeTransition{
 	Scope target;
+	Scope localRoot;
 	void[0][Id] taken;
 	Declaration[Declaration] declMap;
 	void[0][Scope] codScopes;

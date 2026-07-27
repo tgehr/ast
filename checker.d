@@ -885,11 +885,16 @@ class Checker {
 			auto t = name in mergedVars;
 			assert(t.dFalse, format("ERROR: Merged variable %s missing in if-false", name));
 			auto outer = t.outer;
-			// TODO types as part of merge result?
-			visExpr(typeForDecl(outer));
 			ifTrue.getVar(t.dTrue, false, "mergedVars-if-true", cause);
 			ifFalse.getVar(t.dFalse, false, "mergedVars-if-false", cause);
 			defineVar(outer, "mergedVars", cause);
+		}
+
+		// Make sure the merged types are evaluated in the outer scope.
+		// (only after all merged variables are defined: dependent types
+		// may reference sibling merged variables)
+		foreach(decl; scTrue.mergedVars) {
+			visExpr(typeForDecl(decl.mergedInto));
 		}
 	}
 
@@ -914,13 +919,13 @@ class Checker {
 
 		foreach(vNested; scNested.mergedVars) {
 			auto outer = vNested.mergedInto;
-			// TODO types as part of merge result?
-			visExpr(typeForDecl(outer));
 			nested.getVar(vNested, false, "mergedVars-nested", cause);
 			defineVar(outer, "mergedVars", cause);
 		}
 
 		// Make sure the merged types are evaluated in the outer scope.
+		// (only after all merged variables are defined: dependent types
+		// may reference sibling merged variables)
 		foreach(decl; scNested.mergedVars) {
 			visExpr(typeForDecl(decl.mergedInto));
 		}

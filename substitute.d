@@ -1,6 +1,6 @@
 module ast.substitute;
 
-import ast.expression, ast.type, ast.declaration, ast.scope_;
+import ast.expression, ast.type, ast.declaration, ast.scope_, ast.lastuse;
 import astopt;
 
 Expression transitionToType(Expression e,Scope target){
@@ -53,6 +53,8 @@ Expression transitionToType(Expression e,Scope target){
 			auto ts=tt.mapScope(rs);
 			twin.scope_=ts;
 			ts.symtabInsert(twin);
+			if(auto fdt=cast(FunctionDef)twin)
+				if(fdt.fscope_){ if(!ts.origin) ts.origin=rs; fdt.fscope_.parent=ts; }
 		}
 	}
 	void[0][Scope] tsSet;
@@ -372,6 +374,7 @@ struct BlockSubst{
 			auto twin=getVarDeclTwin(vd,nid,dvtype);
 			nid.meaning=twin;
 			use.meaning=twin;
+			if(!use.scope_) use.scope_=twin.scope_;
 			if(declMap) (*declMap)[vd]=twin;
 		}
 		subst[b]=use;
@@ -386,6 +389,7 @@ private VarDecl getVarDeclTwin(VarDecl orig,Identifier nname,Expression nvtype){
 	twin.dtype=orig.dtype;
 	twin.scope_=orig.scope_;
 	twin.loc=orig.loc;
+	twin.canonicalSource_=orig.canonicalSource;
 	if(orig.isSemError()) twin.sstate=SemState.error;
 	else if(orig.isSemCompleted()) twin.sstate=SemState.completed;
 	return twin;
@@ -598,8 +602,10 @@ private Expression substituteStatement(Expression stmt,ref BlockSubst ctx){
 			if(ctx.declMap) (*ctx.declMap)[fd]=nfd;
 			auto fname=fd.rename?fd.rename:fd.name;
 			if(fname) if(auto p=fname.id in ctx.subst)
-				if(auto uid=cast(Identifier)(*p))
+				if(auto uid=cast(Identifier)(*p)){
 					if(uid.meaning is fd||uid.meaning is null) uid.meaning=nfd;
+					if(uid.meaning is nfd&&nfd.ftype&&nfd.ftype.isSemEvaluated()) uid.type=nfd.ftype;
+				}
 		}
 		return nfd;
 	}
@@ -816,6 +822,16 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	if(fname&&!bindNameInEnclosing) nname=bctx.bindVar(fname,fd.ftype);
 	bool changed=nname !is fname;
 	auto nparams=fd.params.dup;
+	Parameter freshen(Parameter p,Expression ndtype,Expression nvtype,Identifier pname,Identifier npname){
+		auto np=new Parameter(p.isConst,npname,ndtype);
+		np.vtype=nvtype;
+		np.loc=p.loc;
+		np.scope_=p.scope_;
+		np.sstate=p.sstate;
+		np.canonicalSource_=p.canonicalSource;
+		if(bctx.declMap) (*bctx.declMap)[p]=np;
+		return np;
+	}
 	foreach(ref p;nparams){
 		auto ndtype=p.dtype&&p.dtype.isSemCompleted()?useSubstitute(p.dtype,bctx):p.dtype;
 		auto nvtype=p.vtype&&p.vtype.isSemCompleted()?useSubstitute(p.vtype,bctx):p.vtype;
@@ -826,44 +842,22 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 		auto edtype=p.dtype?p.dtype.eval():null;
 		auto evtype=p.vtype?p.vtype.eval():null;
 		if(edtype==ndtype&&evtype==nvtype&&npname is pname) continue;
-		auto np=new Parameter(p.isConst,npname,ndtype);
-		np.vtype=nvtype;
-		np.loc=p.loc;
-		np.scope_=p.scope_;
-		np.sstate=p.sstate;
-		auto origp=p;
-		p=np;
+		p=freshen(p,ndtype,nvtype,pname,npname);
 		changed=true;
-		if(bctx.declMap){
-			(*bctx.declMap)[origp]=np;
-			void mapSplits(Declaration d){
-				foreach(sd; d.splitInto){
-					(*bctx.declMap)[sd]=np;
-					mapSplits(sd);
-				}
-			}
-			mapSplits(origp);
-		}
-		if(pname){
-			Expression.CopyArgs cargs={preserveSemantic:true};
-			auto puse=pname.copy(cargs);
-			puse.id=npname.id;
-			puse.meaning=np;
-			if(!puse.scope_) puse.scope_=np.scope_;
-			puse.constLookup=true;
-			puse.byRef=false;
-			puse.implicitDup=false;
-			if(!puse.type) puse.type=nvtype?nvtype:ndtype;
-			if(!puse.isSemCompleted()&&!puse.isSemError()&&puse.type&&puse.type.isSemEvaluated()) puse.sstate=SemState.completed;
-			bctx.subst[pname.id]=puse;
-		}
 	}
+	Scope savedLocalRoot;
+	if(bctx.tt){ savedLocalRoot=bctx.tt.localRoot; bctx.tt.localRoot=fd.fscope_; }
+	scope(exit) if(bctx.tt) bctx.tt.localRoot=savedLocalRoot;
 	auto nrret=fd.rret&&fd.rret.isSemCompleted()?useSubstitute(fd.rret,bctx):fd.rret;
 	auto nret=fd.ret&&fd.ret.isSemCompleted()?useSubstitute(fd.ret,bctx):fd.ret;
 	CompoundExp nbody=null;
 	if(fd.body_) nbody=substituteBlockCompound(fd.body_,bctx);
 	if(bctx.changed) ctx.changed=true;
-	if(!changed&&nrret is fd.rret&&nret is fd.ret&&nbody is fd.body_) return fd;
+	bool freshParams=false;
+	foreach(i, p; fd.params) if(nparams[i] is p){ freshParams=true; break; }
+	if(freshParams){
+		foreach(i, p; fd.params) if(nparams[i] is p){ auto pname=p.rename?p.rename:p.name; nparams[i]=freshen(p,p.dtype,p.vtype,pname,pname); }
+	}
 	auto r=new FunctionDef(nname,nparams,fd.isTuple,nrret,nbody);
 	r.isSquare=fd.isSquare;
 	r.annotation=fd.annotation;
@@ -874,7 +868,9 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	r.retNames=fd.retNames;
 	r.loc=fd.loc;
 	r.scope_=fd.scope_;
-	r.fscope_=fd.fscope_;
+	r.canonicalSource_=fd.canonicalSource;
+	r.fscope_=new FunctionScope(r.scope_,r);
+	foreach(np;r.params) np.scope_=r.fscope_;
 	r.context=fd.context;
 	r.thisVar=fd.thisVar;
 	r.isConstructor=fd.isConstructor;
@@ -905,13 +901,267 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 			Expression[Id] rsubst;
 			rsubst[nname.id]=use;
 			void[0][Id] rtaken;
-			auto rctx=BlockSubst(rsubst,null,&rtaken,null,false);
+			Declaration[Declaration] rdeclMap;
+			auto rctx=BlockSubst(rsubst,null,&rtaken,&rdeclMap,false);
 			r.body_=substituteBlockCompound(r.body_,rctx);
 		}
 	}
+	rescopeTwin(r,fd,bctx);
 	computeCapturesFromBody(r);
 	ctx.changed=true;
 	return r;
+}
+
+// make a substituted function definition independent of the function it was
+// substituted from: fresh nested scopes with their own split/merge graphs and
+// forgottenVars, and identifiers rebound to the fresh declarations
+private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
+	if(!r.body_) return;
+	Declaration[Declaration] dmap;
+	Scope[Scope] smap;
+	foreach(i,p;fd.params) dmap[p]=r.params[i];
+	smap[fd.fscope_]=r.fscope_;
+	Expression.CopyArgs cargs={preserveSemantic:true};
+
+	Scope mapScope(Scope s){ return s is null?null:smap.get(s,s); }
+	Expression delegate(Expression) rescopeCopy;
+	Declaration mapDecl(Declaration d){
+		if(!d) return null;
+		if(d is fd) return r;
+		if(auto p=d in dmap) return *p;
+		if(!cast(FunctionDef)d&&d.scope_&&d.scope_.isNestedIn(fd.fscope_)){
+			auto vd=cast(VarDecl)d;
+			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
+			auto nid=d.name?d.name.id:Id();
+			bool fromChain=false;
+			for(Declaration a=d;;){
+				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null);
+				if(!nxt) break;
+				if(auto p=nxt in dmap){ if((*p).name){ nid=(*p).name.id; fromChain=true; } break; }
+				a=nxt;
+			}
+			auto nd=new VarDecl(d.name?new Identifier(nid):null);
+			nd.loc=d.loc;
+			nd.sstate=d.sstate;
+			nd.canonicalSource_=d.canonicalSource;
+			// names inherited via the split/merge lineage already track the
+			// twin's own renaming; otherwise keep the template's rename
+			if(d.rename&&!fromChain) nd.rename=new Identifier(d.rename.id);
+			dmap[d]=nd;
+			nd.scope_=mapScope(d.scope_);
+			nd.vtype=vd.vtype?(vd.vtype.isSemEvaluated()?vd.vtype:rescopeCopy(useSubstitute(vd.vtype,bctx))):null;
+			nd.dtype=vd.dtype?(vd.dtype.isSemEvaluated()?vd.dtype:rescopeCopy(useSubstitute(vd.dtype,bctx))):null;
+			return nd;
+		}
+		if(auto pe=d.getId in bctx.subst){
+			// declarations lexically outer to the substituted function are
+			// substituted away; others (e.g. from inserted values) stay
+			if(d.scope_&&fd.scope_&&fd.scope_.isNestedIn(d.scope_)){
+				if(auto id=cast(Identifier)*pe) if(id.meaning) return id.meaning;
+				return null;
+			}
+		}
+		return d;
+	}
+	// the generic BinaryExp copy drops checker-computed fields
+	void fixAssignFields(Expression e,Expression r){
+		import std.algorithm: map, endsWith;
+		import std.array: array;
+		if(auto sae=cast(AAssignExp)e){
+			auto rae=cast(AAssignExp)r;
+			if(sae.replacements.length)
+				rae.replacements=sae.replacements.map!(x=>AAssignExp.Replacement(mapDecl(x.previous),mapDecl(x.new_))).array;
+		}
+		import ast.parser, ast.lexer;
+		static foreach(op;binaryOps){
+			static if(op.endsWith("←")&&op!="←"){
+				if(auto se=cast(BinaryExp!(Tok!op))e)
+					if(se.operation) (cast(BinaryExp!(Tok!op))r).operation=rescopeCopy(se.operation);
+			}
+		}
+		if(auto se=cast(BinaryExp!(Tok!":="))e){
+			auto dr=cast(BinaryExp!(Tok!":="))r;
+			dr.isSwap=se.isSwap;
+			if(se.replacements.length)
+				dr.replacements=se.replacements.map!(x=>AAssignExp.Replacement(mapDecl(x.previous),mapDecl(x.new_))).array;
+		}
+	}
+	rescopeCopy=(Expression e){ return e?e.copy(cargs):null; };
+	void fixup(Expression r,Expression e){
+		r.loc=e.loc;
+		r.sstate=e.sstate;
+		r.type=e.type?(e.type.isSemEvaluated()?e.type:e.type.copy(cargs)):null;
+		r.constLookup=e.constLookup;
+		r.brackets=e.brackets;
+		r.byRef=e.byRef;
+		r.implicitDup=e.implicitDup;
+	}
+	Expression mapExp(Expression e,ref Expression.CopyArgs args){
+		if(auto nfd=cast(FunctionDef)e){
+			nfd.scope_=mapScope(nfd.scope_);
+			if(nfd.fscope_&&nfd.fscope_.parent) nfd.fscope_.parent=mapScope(nfd.fscope_.parent);
+			foreach(np;nfd.params){
+				if(np.dtype) np.dtype=np.dtype.isSemEvaluated()?np.dtype:rescopeCopy(np.dtype);
+				if(np.vtype) np.vtype=np.vtype.isSemEvaluated()?np.vtype:rescopeCopy(np.vtype);
+			}
+			if(nfd.rret) nfd.rret=nfd.rret.isSemEvaluated()?nfd.rret:rescopeCopy(nfd.rret);
+			if(nfd.ret) nfd.ret=nfd.ret.isSemEvaluated()?nfd.ret:rescopeCopy(nfd.ret);
+			if(nfd.body_) nfd.body_=cast(CompoundExp)rescopeCopy(nfd.body_);
+			computeCapturesFromBody(nfd);
+			return nfd;
+		}
+		if(auto le=cast(LambdaExp)e){
+			auto r=new LambdaExp(le.orig,cast(FunctionDef)mapExp(le.fd,args));
+			fixup(r,le);
+			return r;
+		}
+		if(auto fe=cast(ForExp)e){
+			ForAggregate naggr=fe.aggr;
+			if(auto rng=fe.aggr.isRange()){
+				naggr=ForAggregate(ForRange(rng.leftExclusive,rng.left?rescopeCopy(rng.left):null,rng.step?rescopeCopy(rng.step):null,rng.rightExclusive,rng.right?rescopeCopy(rng.right):null));
+			}else if(auto cont=fe.aggr.isContainer()){
+				naggr=ForAggregate(ForContainer(rescopeCopy(cont.e)));
+			}
+			auto r=new ForExp(fe.var?cast(Identifier)rescopeCopy(fe.var):null,fe.pattern?rescopeCopy(fe.pattern):null,naggr,cast(CompoundExp)rescopeCopy(fe.bdy));
+			r.fescope_=cast(BlockScope)mapScope(fe.fescope_);
+			r.loopVar=cast(VarDecl)mapDecl(fe.loopVar);
+			fixup(r,fe);
+			return r;
+		}
+		if(auto we=cast(WhileExp)e){
+			auto r=new WhileExp(rescopeCopy(we.cond),cast(CompoundExp)rescopeCopy(we.bdy));
+			fixup(r,we);
+			return r;
+		}
+		if(auto re=cast(RepeatExp)e){
+			auto r=new RepeatExp(rescopeCopy(re.num),cast(CompoundExp)rescopeCopy(re.bdy));
+			fixup(r,re);
+			return r;
+		}
+		if(auto ve=cast(VectorForExp)e){
+			auto r=new VectorForExp(cast(ForExp)mapExp(ve.fe,args));
+			r.fd=ve.fd?cast(FunctionDef)mapExp(ve.fd,args):null;
+			r.len=ve.len?rescopeCopy(ve.len):null;
+			fixup(r,ve);
+			return r;
+		}
+		return null;
+	}
+	Scope mapScopeTree(Scope s,Scope twincarried,Scope parent){
+		if(auto p=s in smap) return *p;
+		auto bs=cast(BlockScope)s;
+		BlockScope ns;
+		if(auto ts=cast(TypeScope)twincarried){
+			ns=ts;
+		}else{
+			assert(bs,"rescopeTwin: expected BlockScope");
+			ns=new BlockScope(parent,bs.restriction_);
+			ns.isLoopBody=bs.isLoopBody;
+		}
+		smap[s]=ns;
+		if(twincarried !is s) smap[twincarried]=ns;
+		if(bs){
+			foreach(d;bs.splitVars){
+				auto sf=mapDecl(d.splitFrom);
+				if(!sf) continue;
+				auto nd=mapDecl(d);
+				nd.splitFrom=sf;
+				ns.splitVars~=nd;
+			}
+			foreach(d;bs.mergedVars){
+				auto mi=mapDecl(d.mergedInto);
+				if(!mi) continue;
+				auto nd=mapDecl(d);
+				nd.mergedInto=mi;
+				ns.mergedVars~=nd;
+			}
+			foreach(d;bs.forgottenVars) if(auto nd=mapDecl(d)) ns.forgottenVars~=nd;
+			foreach(d;bs.forgottenVarsOnEntry) if(auto nd=mapDecl(d)) ns.forgottenVarsOnEntry~=nd;
+		}
+		return ns;
+	}
+	void walkStmts(Expression[] tpl,Expression[] twin,Scope fparent){
+		assert(tpl.length==twin.length);
+		foreach(i,stmt;tpl){
+			auto twstmt=twin[i];
+			if(auto tfd=cast(FunctionDef)stmt){
+				if(auto wfd=cast(FunctionDef)twstmt){ dmap[tfd]=wfd; wfd.canonicalSource_=tfd.canonicalSource; }
+				continue;
+			}
+			if(auto ce=cast(CompoundExp)stmt){
+				auto ce2=cast(CompoundExp)twstmt;
+				if(ce.blscope_){
+					auto ns=mapScopeTree(ce.blscope_,ce2.blscope_,fparent);
+					walkStmts(ce.s,ce2.s,ns);
+				}else walkStmts(ce.s,ce2.s,fparent);
+				continue;
+			}
+			if(auto ite=cast(IteExp)stmt){
+				auto ite2=cast(IteExp)twstmt;
+				walkStmts([ite.then],[ite2.then],fparent);
+				if(ite.othw) walkStmts([ite.othw],[ite2.othw],fparent);
+				continue;
+			}
+			if(auto fe=cast(ForExp)stmt){
+				auto fe2=cast(ForExp)twstmt;
+				if(fe.fescope_) mapScopeTree(fe.fescope_,fe2.fescope_,fparent);
+				walkStmts([fe.bdy],[fe2.bdy],fparent);
+				continue;
+			}
+			if(auto we=cast(WhileExp)stmt){ walkStmts([we.bdy],[(cast(WhileExp)twstmt).bdy],fparent); continue; }
+			if(auto re=cast(RepeatExp)stmt){ walkStmts([re.bdy],[(cast(RepeatExp)twstmt).bdy],fparent); continue; }
+			if(auto le=cast(LetExp)stmt){ walkStmts([le.s],[(cast(LetExp)twstmt).s],fparent); continue; }
+		}
+	}
+
+	cargs.mapDecl=&mapDecl; cargs.postCopy=&fixAssignFields;
+	cargs.mapScope=&mapScope;
+	cargs.mapExp=&mapExp;
+	auto bparent=cast(Scope)r.fscope_;
+	if(r.body_.blscope_) bparent=mapScopeTree(fd.body_.blscope_,r.body_.blscope_,r.fscope_);
+	walkStmts(fd.body_.s,r.body_.s,bparent);
+	Expression shareTy(Expression e){ return e?(e.isSemEvaluated()?e:rescopeCopy(e)):null; }
+	r.body_=cast(CompoundExp)rescopeCopy(r.body_);
+	if(r.rret) r.rret=shareTy(r.rret);
+	if(r.ret) r.ret=shareTy(r.ret);
+	foreach(np;r.params){
+		if(np.dtype) np.dtype=shareTy(np.dtype);
+		if(np.vtype) np.vtype=shareTy(np.vtype);
+	}
+	// rebuild split/merge links in template order (creation order)
+	void[0][Declaration] seen;
+	for(bool progress=true;progress;){
+		progress=false;
+		foreach(td,nd;dmap){
+			if(td in seen) continue;
+			seen[td]=[]; progress=true;
+			if(td.splitFrom) if(auto m=mapDecl(td.splitFrom)) nd.splitFrom=m;
+			if(td.mergedInto) if(auto m=mapDecl(td.mergedInto)) nd.mergedInto=m;
+			if(td.splitInto.length){
+				Declaration[] si;
+				foreach(x;td.splitInto) if(auto m=mapDecl(x)) si~=m;
+				nd.splitInto=si;
+			}
+			if(td.mergedFrom.length){
+				Declaration[] mf;
+				foreach(x;td.mergedFrom) if(auto m=mapDecl(x)) mf~=m;
+				nd.mergedFrom=mf;
+			}
+		}
+	}
+	// give twin scopes their own last-use state (hqir re-analyzes lowered
+	// fragments against them)
+	Scope[ast.lastuse.LastUses*] luOwner;
+	foreach(ts,ns;smap)
+		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_)))
+			luOwner[&ts.lastUses]=ns;
+	foreach(ts,ns;smap){
+		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_))){
+			ns.lastUses.remapFrom(ts.lastUses,&mapDecl,&mapScope);
+			if(auto p=ts.lastUses.parent)
+				if(auto owner=p in luOwner) ns.lastUses.parent=&(*owner).lastUses;
+		}
+	}
 }
 
 void computeCapturesFromBody(FunctionDef fd){

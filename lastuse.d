@@ -943,6 +943,37 @@ struct LastUses{
 		add(new LastUse(LastUse.Kind.capture,sc,decl,use,parent));
 	}
 
+	// copy another scope's final state, translating declarations and scopes
+	// (used to give independently scoped instantiation twins their own state)
+	void remapFrom(ref LastUses src,Declaration delegate(Declaration) mapDecl,Scope delegate(Scope) mapScope){
+		LastUse[LastUse] nmap;
+		LastUse remap(LastUse lu){
+			if(!lu) return null;
+			if(auto p=lu in nmap) return *p;
+			auto ndecl=lu.decl?mapDecl(lu.decl):null;
+			if(lu.decl&&!ndecl) return null;
+			auto r=new LastUse(lu.kind,lu.scope_?mapScope(lu.scope_):null,ndecl,lu.use,lu.parent);
+			nmap[lu]=r;
+			r.constBlock=lu.constBlock;
+			static if(language==silq) r.dep=lu.dep;
+			r.forwardTo=remap(lu.forwardTo);
+			r.constConsume=remap(lu.constConsume);
+			r.prevImplicitDup=remap(lu.prevImplicitDup);
+			r.splitFrom=remap(lu.splitFrom);
+			r.splitSource=remap(lu.splitSource);
+			foreach(nsc;lu.nestedScopes)
+				if(auto nnsc=cast(NestedScope)mapScope(nsc)) r.nestedScopes~=nnsc;
+			r.prev=remap(lu.prev);
+			r.next=remap(lu.next);
+			return r;
+		}
+		foreach(d,lu;src.lastUses)
+			if(auto nd=mapDecl(d)) if(auto r=remap(lu)) lastUses[nd]=r;
+		foreach(d,lus;src.retired)
+			if(auto nd=mapDecl(d)) foreach(lu;lus) if(auto r=remap(lu)) retired[nd]~=r;
+		lastLastUse=remap(src.lastLastUse);
+	}
+
 	LastUse get(Declaration decl,bool forceHere){
 		if(auto lu=lastUses.get(decl,null))
 			return lu;
