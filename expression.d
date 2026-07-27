@@ -3,6 +3,7 @@
 module ast.expression;
 
 import std.array, std.algorithm, std.range, std.conv, std.string, std.exception;
+import std.meta: AliasSeq;
 
 import ast.lexer, ast.parser, ast.scope_, ast.type, ast.declaration, util;
 import util.maybe;
@@ -3109,142 +3110,60 @@ alias AndExp=BinaryExp!(Tok!"∧");
 alias Exp=Expression;
 
 
+alias declKinds=AliasSeq!(
+	FunctionDef,DatDecl,DefineExp,CommaExp,ImportExp
+);
+private alias stmKindsCommon=AliasSeq!(
+	CallExp,TypeAnnotationExp,CompoundExp,IteExp,ReturnExp,FunctionDef,CommaExp,
+	ForExp,WhileExp,RepeatExp,ObserveExp,CObserveExp,AssertExp,ForgetExp
+);
+static if(language==silq) alias stmKinds=AliasSeq!(stmKindsCommon,WithExp);
+else static if(language==psi) alias stmKinds=AliasSeq!(stmKindsCommon,DatDecl);
+else alias stmKinds=stmKindsCommon;
+private alias expKindsCommon=AliasSeq!(
+	IteExp,AssertExp,LiteralExp,LetExp,LambdaExp,CallExp,ForgetExp,Identifier,
+	FieldExp,IndexExp,SliceExp,TupleExp,VectorExp,TypeAnnotationExp,
+	UPlusExp,UMinusExp,UNotExp,UBitNotExp,
+	AddExp,SubExp,NSubExp,MulExp,DivExp,IDivExp,ModExp,PowExp,
+	BitOrExp,BitXorExp,BitAndExp,AndThenExp,OrElseExp,OrExp,XorExp,AndExp,
+	LtExp,LeExp,GtExp,GeExp,EqExp,NeqExp,CatExp,VectorForExp,
+	ClassicalTy,ProductTy,ArrayTy,TupleTy,VectorTy,VariadicTy,TypeTy,
+	QNumericTy,BottomTy,NumericTy,StringTy
+);
+static if(language==psi) alias expKinds=AliasSeq!(expKindsCommon,PlaceholderExp);
+else alias expKinds=expKindsCommon;
+alias unanalyzedExpKinds=AliasSeq!(
+	WildcardExp,TypeofExp,BinaryExp!(Tok!"×"),BinaryExp!(Tok!"→")
+);
+
 private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown declaration: ",s?typeid(s):null," ",s));
 }
 auto dispatchDecl(alias f,alias default_=unknownDeclError,T...)(Expression d,auto ref T args){
 	import core.lifetime:forward;
-	// TODO: implement without cast cascade
-	if(auto fd=cast(FunctionDef)d) return f(fd,forward!args);
-	if(auto dd=cast(DatDecl)d) return f(dd,forward!args);
-
-	if(auto de=cast(DefineExp)d) return f(de,forward!args);
-	if(auto ce=cast(CommaExp)d) return f(ce,forward!args);
-
-	if(auto imp=cast(ImportExp)d) return f(imp,forward!args);
+	static foreach(K;declKinds) if(auto x=cast(K)d) return f(x,forward!args);
 	return default_(d,args);
 }
-
 
 private noreturn unknownStmError(T...)(Expression s,auto ref T args){
 	assert(0,text("unknown statement: ",s?typeid(s):null," ",s));
 }
 auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T...)(Expression s,auto ref T args){
 	import core.lifetime:forward;
-	// TODO: implement without cast cascade
-	if(auto ce=cast(CallExp)s) return f(ce,forward!args);
 	static if(unanalyzed) if(auto idx=cast(IndexExp)s) return f(idx,forward!args);
-	if(auto tae=cast(TypeAnnotationExp)s) return f(tae,forward!args);
-	if(auto ce=cast(CompoundExp)s) return f(ce,forward!args);
-	if(auto ite=cast(IteExp)s) return f(ite,forward!args);
-	static if(language==silq){
-		if(auto with_=cast(WithExp)s) return f(with_,forward!args);
-	}
-	if(auto ret=cast(ReturnExp)s) return f(ret,forward!args);
-	if(auto fd=cast(FunctionDef)s) return f(fd,forward!args);
-
-	static if(language==psi){
-		if(auto dd=cast(DatDecl)s) return f(dd,forward!args);
-	}
-
-	if(auto ce=cast(CommaExp)s) return f(ce,forward!args);
 	// TODO: supertypes for define and assign?
-
-	if(auto fe=cast(ForExp)s) return f(fe,forward!args);
-	if(auto we=cast(WhileExp)s) return f(we,forward!args);
-	if(auto re=cast(RepeatExp)s) return f(re,forward!args);
-
-	if(auto oe=cast(ObserveExp)s) return f(oe,forward!args);
-	if(auto oe=cast(CObserveExp)s) return f(oe,forward!args);
-
-	if(auto ae=cast(AssertExp)s) return f(ae,forward!args);
-
-	if(auto fe=cast(ForgetExp)s) return f(fe,forward!args);
-
+	static foreach(K;stmKinds) if(auto x=cast(K)s) return f(x,forward!args);
 	return default_(s,args);
 }
 
 // TODO: type dispatch
-
 
 private noreturn unknownExpError(T...)(Expression e,auto ref T args){
 	assert(0,text("unknown expression: ",e?typeid(e):null," ",e));
 }
 auto dispatchExp(alias f,alias default_=unknownExpError,bool unanalyzed=false,T...)(Expression e,auto ref T args){
 	import core.lifetime:forward;
-	// TODO: implement without cast cascade
-	if(auto ite=cast(IteExp)e) return f(ite,forward!args);
-	if(auto ae=cast(AssertExp)e) return f(ae,forward!args);
-	if(auto le=cast(LiteralExp)e) return f(le,forward!args);
-	if(auto le=cast(LetExp)e) return f(le,forward!args);
-	if(auto le=cast(LambdaExp)e) return f(le,forward!args);
-	if(auto ce=cast(CallExp)e) return f(ce,forward!args);
-	static if(language==psi) if(auto pl=cast(PlaceholderExp)e) return f(pl,forward!args);
-	if(auto fe=cast(ForgetExp)e) return f(fe,forward!args);
-	if(auto id=cast(Identifier)e) return f(id,forward!args);
-	if(auto fe=cast(FieldExp)e) return f(fe,forward!args);
-	if(auto idx=cast(IndexExp)e) return f(idx,forward!args);
-	if(auto sl=cast(SliceExp)e) return f(sl,forward!args);
-	if(auto tpl=cast(TupleExp)e) return f(tpl,forward!args);
-	if(auto vec=cast(VectorExp)e) return f(vec,forward!args);
-
-	if(auto tae=cast(TypeAnnotationExp)e) return f(tae,forward!args);
-
-	if(auto upe=cast(UPlusExp)e) return f(upe,forward!args);
-	if(auto ume=cast(UMinusExp)e) return f(ume,forward!args);
-	if(auto une=cast(UNotExp)e) return f(une,forward!args);
-	if(auto ubne=cast(UBitNotExp)e) return f(ubne,forward!args);
-
-	if(auto ae=cast(AddExp)e) return f(ae,forward!args);
-	if(auto se=cast(SubExp)e) return f(se,forward!args);
-	if(auto nse=cast(NSubExp)e) return f(nse,forward!args);
-	if(auto me=cast(MulExp)e) return f(me,forward!args);
-	if(auto de=cast(DivExp)e) return f(de,forward!args);
-	if(auto ide=cast(IDivExp)e) return f(ide,forward!args);
-	if(auto me=cast(ModExp)e) return f(me,forward!args);
-	if(auto pe=cast(PowExp)e) return f(pe,forward!args);
-
-	if(auto boe=cast(BitOrExp)e) return f(boe,forward!args);
-	if(auto bxe=cast(BitXorExp)e) return f(bxe,forward!args);
-	if(auto bae=cast(BitAndExp)e) return f(bae,forward!args);
-
-	if(auto ae=cast(AndThenExp)e) return f(ae,forward!args);
-	if(auto oe=cast(OrElseExp)e) return f(oe,forward!args);
-
-	if(auto oe=cast(OrExp)e) return f(oe,forward!args);
-	if(auto xe=cast(XorExp)e) return f(xe,forward!args);
-	if(auto ae=cast(AndExp)e) return f(ae,forward!args);
-
-	if(auto le=cast(LtExp)e) return f(le,forward!args);
-	if(auto le=cast(LeExp)e) return f(le,forward!args);
-	if(auto ge=cast(GtExp)e) return f(ge,forward!args);
-	if(auto ge=cast(GeExp)e) return f(ge,forward!args);
-	if(auto eq=cast(EqExp)e) return f(eq,forward!args);
-	if(auto ne=cast(NeqExp)e) return f(ne,forward!args);
-
-	if(auto ce=cast(CatExp)e) return f(ce,forward!args);
-
-	if(auto vfe=cast(VectorForExp)e) return f(vfe,forward!args);
-
-	if(auto fa=cast(ClassicalTy)e) return f(fa,forward!args);
-	if(auto fa=cast(ProductTy)e) return f(fa,forward!args);
-	if(auto ty=cast(ArrayTy)e) return f(ty,forward!args);
-	if(auto ty=cast(TupleTy)e) return f(ty,forward!args);
-	if(auto ty=cast(VectorTy)e) return f(ty,forward!args);
-	if(auto va=cast(VariadicTy)e) return f(va,forward!args);
-	if(auto va=cast(TypeTy)e) return f(va,forward!args);
-	if(auto va=cast(QNumericTy)e) return f(va,forward!args);
-	if(auto va=cast(BottomTy)e) return f(va,forward!args);
-	if(auto va=cast(NumericTy)e) return f(va,forward!args);
-	if(auto va=cast(StringTy)e) return f(va,forward!args);
-
-	static if(unanalyzed){
-		// expression types that only occur in unanalyzed expressions
-		if(auto we=cast(WildcardExp)e) return f(we,forward!args);
-		if(auto ty=cast(TypeofExp)e) return f(ty,forward!args);
-		if(auto pr=cast(BinaryExp!(Tok!"×"))e) return f(pr,forward!args);
-		if(auto ex=cast(BinaryExp!(Tok!"→"))e) return f(ex,forward!args);
-	}
-
+	static foreach(K;expKinds) if(auto x=cast(K)e) return f(x,forward!args);
+	static if(unanalyzed) static foreach(K;unanalyzedExpKinds) if(auto x=cast(K)e) return f(x,forward!args);
 	return default_(e,forward!args);
 }
