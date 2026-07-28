@@ -6,6 +6,7 @@ import astopt;
 import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 import util.tuple:Q=Tuple,q=tuple;
+import util: SetX;
 
 bool isEmptyTupleTy(Expression ty){
 	return isSubtype(ty,unit)&&isSubtype(unit,ty); // TODO: improve?
@@ -724,7 +725,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq)
 	if(auto vfe=cast(VectorForExp)olhs){
-		static Expression dupVariableUses(Expression e,void[0][Id] names,Scope sc){ // TODO: this is a hack
+		static Expression dupVariableUses(Expression e,SetX!Id names,Scope sc){ // TODO: this is a hack
 			Expression dupWrap(Expression e){
 				auto ce=new CallExp(getDup(e.loc,sc),e,false,false);
 				ce.loc=e.loc;
@@ -837,7 +838,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			auto peel=new DefineExp(peelLhs,restId.copy());
 			peel.loc=xId.loc;
 			auto bodyLhs=vfe.fe.bdy.s[0].copy();
-			void[0][Id] loopVarNames;
+			SetX!Id loopVarNames;
 			if(vfe.fe.var) loopVarNames[vfe.fe.var.id]=[];
 			if(vfe.fe.pattern) vfe.fe.pattern.freeVarsImpl((id){ loopVarNames[id.id]=[]; return 0; });
 			bodyLhs=dupVariableUses(bodyLhs,loopVarNames,sc);

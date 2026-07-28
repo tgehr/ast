@@ -214,7 +214,7 @@ class FunctionDef: Declaration{
 		import ast.substitute:functionDefFreeVarsImpl;
 		return functionDefFreeVarsImpl(this,dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		import ast.substitute:substituteFunctionDefExp;
 		return substituteFunctionDefExp(this,subst,false,tt);
 	}
@@ -226,7 +226,7 @@ class FunctionDef: Declaration{
 	VarDecl context;
 	static if(language==psi) VarDecl contextVal;
 	VarDecl thisVar; // for constructors
-	Identifier[][Declaration] captures;
+	MapX!(Declaration,Identifier[]) captures;
 	Declaration[] capturedDecls;
 	bool captureAnnotationReady=false;
 	bool sealed=false;
@@ -270,7 +270,7 @@ class FunctionDef: Declaration{
 	bool hasReturn;
 	bool isConstructor;
 	string[] retNames;
-	Expression[Id] attributes;
+	MapSX!(Id,Expression) attributes;
 
 	void seal(){
 		sealed=true;
@@ -314,7 +314,7 @@ class FunctionDef: Declaration{
 	}
 
 	bool boolAttribute(Id attr, bool default_=false) {
-		auto p = attr in attributes;
+		auto p = attributes.getPtr(attr);
 		if(!p||!*p) return default_;
 		auto val = *p;
 		if(!val) return default_;
@@ -324,7 +324,7 @@ class FunctionDef: Declaration{
 	}
 
 	string stringAttribute(Id attr, string default_=null) {
-		auto p = attr in attributes;
+		auto p = attributes.getPtr(attr);
 		if(!p) return default_;
 		auto e = cast(LiteralExp)*p;
 		if(!e) return default_;
@@ -390,8 +390,8 @@ class DatDecl: Declaration{
 	override bool isCompound(){ return true; }
 	override bool isLinear(){ return false; }
 
-	final Expression[Id] getSubst(Expression arg){
-		Expression[Id] subst;
+	final MapSX!(Id,Expression) getSubst(Expression arg){
+		MapSX!(Id,Expression) subst;
 		if(isTuple){
 			foreach(i,p;params)
 				subst[p.getId]=new IndexExp(arg,new LiteralExp(Token(Tok!"0",to!string(i)))).eval();
@@ -407,7 +407,7 @@ class DatDecl: Declaration{
 	FunctionDef constructor;
 	DataScope dscope_;
 	VarDecl context;
-	Identifier[][Declaration] captures;
+	MapX!(Declaration,Identifier[]) captures;
 	Declaration[] capturedDecls;
 	void addCapture(Declaration meaning,Identifier id){
 		if(meaning !in captures) capturedDecls~=meaning;

@@ -7,6 +7,7 @@ import std.algorithm: map, all, any;
 import std.range: repeat;
 
 import util.io: stderr;
+import util: MapX, MapSX;
 
 import ast_sem = ast.semantic_;
 import ast_low = ast.lowerings;
@@ -22,7 +23,7 @@ alias Unit = void[0];
 enum unit = Unit.init;
 
 alias Id = ast_exp.Id;
-alias IdMap(T) = T[Id];
+alias IdMap(T) = MapSX!(Id,T);
 alias IdSet=IdMap!Unit;
 
 ast_exp.Identifier[] uniqueIds(ast_exp.Identifier[] ids) {
@@ -452,7 +453,7 @@ class Checker {
 		auto sc = bdy.blscope_;
 		assert(sc.parent is nscope);
 
-		ast_decl.Declaration[Id] merged;
+		MapX!(Id,ast_decl.Declaration) merged;
 
 		auto sub = new Checker(sc, this);
 		if(loopVar) {
@@ -827,7 +828,7 @@ class Checker {
 		foreach(decl; scFalse.splitVars) {
 			assert(decl.scope_ is scFalse);
 			auto name = decl.splitFrom.getId;
-			Triple* t = name in splitVars;
+			Triple* t = splitVars.getPtr(name);
 			assert(t, format("ERROR: Split variable %s missing in if-true", name.str));
 			assert(decl.splitFrom is t.outer, format("ERROR: Split variable %s splitFrom scope mismatch", name.str));
 			t.dFalse = decl;
@@ -835,7 +836,7 @@ class Checker {
 
 		foreach(decl; scTrue.splitVars) {
 			auto name = decl.splitFrom.getId;
-			Triple* t = name in splitVars;
+			Triple* t = splitVars.getPtr(name);
 			assert(t.dFalse, format("ERROR: Split variable %s missing in if-false", name));
 			auto vTrue = t.dTrue;
 			auto vFalse = t.dFalse;
@@ -868,7 +869,7 @@ class Checker {
 		}
 		foreach(decl; scFalse.mergedVars) {
 			auto name = decl.mergedInto.getId;
-			auto t = name in mergedVars;
+			auto t = mergedVars.getPtr(name);
 			assert(t, format("ERROR: Merged variable %s missing in if-true", name));
 			assert(decl.mergedInto is t.outer, format("ERROR: Merged variable %s mergedInto mismatch", name));
 			t.dFalse = decl;
@@ -876,7 +877,7 @@ class Checker {
 
 		foreach(decl; scTrue.mergedVars) {
 			auto name = decl.mergedInto.getId;
-			auto t = name in mergedVars;
+			auto t = mergedVars.getPtr(name);
 			assert(t.dFalse, format("ERROR: Merged variable %s missing in if-false", name));
 			auto outer = t.outer;
 			ifTrue.getVar(t.dTrue, false, "mergedVars-if-true", cause);
@@ -1173,7 +1174,7 @@ class Checker {
 	void defineVar(ast_decl.Declaration d, string causeType, ast_exp.Expression causeExpr) {
 		auto id = d.getId;
 		assert(!strictScope || d.scope_ is nscope, format("ERROR: Variable %s defined in wrong scope: %s on %s << %s >>", id.str, causeType, causeExpr.loc, causeExpr));
-		auto p = id in vars;
+		auto p = vars.getPtr(id);
 		if(p && *p) {
 			// Allow classical redefinition in assignment LHS
 			assert(!strictScope && !ast_ty.hasQuantumComponent(typeForDecl(d)), format("ERROR: Variable %s already defined: %s on %s << %s >>", id.str, causeType, causeExpr.loc, causeExpr));
@@ -1210,23 +1211,23 @@ class Checker {
 
 		if(!isBorrow) {
 			auto cur = this;
-			auto p = id in vars;
+			auto p = vars.getPtr(id);
 			while(!p && cur.scopeFree) {
 				// scope-free checkers (e.g. for `let` expressions in types) share variables with their parents
 				cur = cur.parent;
 				assert(cur, format("ERROR: Variable %s undefined: %s on %s << %s >>", id.str, causeType, causeExpr.loc, causeExpr));
-				p = id in cur.vars;
+				p = cur.vars.getPtr(id);
 			}
 			assert(p, format("ERROR: Variable %s %s: %s on %s << %s >>", id.str, parent && id in parent.vars ? "not split from parent scope" : "undefined", causeType, causeExpr.loc, causeExpr));
 			v = *p;
 			*p = null;
 		} else {
 			auto cur = this;
-			auto p = id in vars;
+			auto p = vars.getPtr(id);
 			while(!p) {
 				cur = cur.parent;
 				assert(cur, format("ERROR: Variable %s undefined: %s on %s << %s >>", id.str, causeType, causeExpr.loc, causeExpr));
-				p = id in cur.vars;
+				p = cur.vars.getPtr(id);
 			}
 			v = *p;
 		}
@@ -1286,7 +1287,7 @@ class Checker {
 	IdMap!(ast_decl.Declaration) vars;
 	bool strictScope = true;
 	bool scopeFree = false;
-	Unit[void*] checked;
+	MapX!(void*,Unit) checked;
 }
 
 void checkFunction(ast_decl.FunctionDef fd) {

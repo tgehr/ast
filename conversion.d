@@ -396,10 +396,10 @@ class FunctionConversion: Conversion{
 	}
 }
 
-Expression[Id] functionConversionSubstitution(Id[] names,ProductTy from,ProductTy to)in{
+MapSX!(Id,Expression) functionConversionSubstitution(Id[] names,ProductTy from,ProductTy to)in{
 	assert(from.names==names&&to.names==names);
 }do{
-	Expression[Id] subst;
+	MapSX!(Id,Expression) subst;
 	foreach(i;0..names.length){
 		if(!names[i]) continue;
 		if(to.argTy(i) == from.argTy(i)) continue;

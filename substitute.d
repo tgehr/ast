@@ -3,6 +3,7 @@ module ast.substitute;
 import ast.expression, ast.type, ast.declaration, ast.scope_, ast.lastuse;
 import astopt;
 import std.meta: AliasSeq;
+import util: MapX, SetX, MapSX;
 
 private alias genericLhsTypes=AliasSeq!(
 	IteExp,AssertExp,LiteralExp,LambdaExp,PlaceholderExp,ForgetExp,SliceExp,VectorExp,
@@ -34,7 +35,7 @@ Expression transitionToType(Expression e,Scope target){
 	foreach(ce;regions) foreach(stmt;ce.s) collectBoundNamesImpl(stmt,tt.taken);
 	for(auto sc=target;sc;sc=sc.parentScope())
 		foreach(id,_;sc.rnsymtab) tt.taken[id]=[];
-	Expression[Id] subst;
+	MapSX!(Id,Expression) subst;
 	foreach(ce;regions){
 		void attr(Expression stmt){
 			if(auto de=cast(DefineExp)stmt){
@@ -54,12 +55,12 @@ Expression transitionToType(Expression e,Scope target){
 		foreach(stmt;ce.s) attr(stmt);
 	}
 	auto r=e.substitute(subst,&tt);
-	void[0][Declaration] twins;
+	SetX!Declaration twins;
 	foreach(orig,twin;tt.declMap){
 		twins[twin]=[];
 		Scope rs=null;
 		if(orig.scope_ in tt.codScopes) rs=orig.scope_;
-		if(auto p=orig in tt.declRegion) rs=*p;
+		if(auto p=tt.declRegion.getPtr(orig)) rs=*p;
 		if(rs){
 			auto ts=tt.mapScope(rs);
 			twin.scope_=ts;
@@ -68,7 +69,7 @@ Expression transitionToType(Expression e,Scope target){
 				if(fdt.fscope_){ if(!ts.origin) ts.origin=rs; fdt.fscope_.parent=ts; }
 		}
 	}
-	void[0][Scope] tsSet;
+	SetX!Scope tsSet;
 	foreach(_,ts;tt.scopes) tsSet[ts]=[];
 	void fixUses(Expression x,Scope cur){
 		if(cast(FunctionDef)x||cast(LambdaExp)x) return;
@@ -94,10 +95,10 @@ Expression transitionToType(Expression e,Scope target){
 	return r;
 }
 
-Expression ttTransitionLet(LetExp le,Expression[Id] subst,TypeTransition* tt){
-	Expression[Id] active;
+Expression ttTransitionLet(LetExp le,MapSX!(Id,Expression) subst,TypeTransition* tt){
+	MapSX!(Id,Expression) active;
 	foreach(k,v;subst) if(le.freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
-	Id[Id] forced;
+	MapSX!(Id,Id) forced;
 	foreach(stmt;le.s.s)
 		statementBoundVarsImpl(stmt,(id){
 			forced[id.id]=tt.freshName(id.id);
@@ -116,10 +117,10 @@ Expression ttTransitionLet(LetExp le,Expression[Id] subst,TypeTransition* tt){
 	return r;
 }
 
-Expression ttTransitionIte(IteExp ite,Expression[Id] subst,TypeTransition* tt){
-	Expression[Id] active;
+Expression ttTransitionIte(IteExp ite,MapSX!(Id,Expression) subst,TypeTransition* tt){
+	MapSX!(Id,Expression) active;
 	foreach(k,v;subst) if(ite.freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
-	Id[Id] forced;
+	MapSX!(Id,Id) forced;
 	foreach(branch;[ite.then,ite.othw])
 		if(branch) foreach(stmt;branch.s)
 			statementBoundVarsImpl(stmt,(id){
@@ -304,7 +305,7 @@ private int stmtFreeVars(ForExp fe,scope int delegate(Identifier) dg){
 	}else if(auto cont=fe.aggr.isContainer()){
 		if(auto r=cont.e.freeVarsImpl(dg)) return r;
 	}
-	void[0][Id] bound;
+	SetX!Id bound;
 	if(fe.var) bound[fe.var.id]=[];
 	if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ bound[id.id]=[]; return 0; });
 	if(fe.pattern) if(auto r=defineLhsFreeVarsImpl(fe.pattern,dg)) return r;
@@ -343,7 +344,7 @@ private int stmtFreeVarsDefault(Expression stmt,scope int delegate(Identifier) d
 }
 
 int blockFreeVarsImpl(Expression[] stmts,Expression trailing,scope int delegate(Identifier) dg){
-	void[0][Id] bound;
+	SetX!Id bound;
 	int filtered(Identifier id){ return id.id in bound?0:dg(id); }
 	foreach(stmt;stmts){
 		if(auto r=statementFreeVarsImpl(stmt,&filtered)) return r;
@@ -354,7 +355,7 @@ int blockFreeVarsImpl(Expression[] stmts,Expression trailing,scope int delegate(
 }
 
 int functionDefFreeVarsImpl(FunctionDef fd,scope int delegate(Identifier) dg){
-	void[0][Id] bound;
+	SetX!Id bound;
 	if(fd.name){ bound[fd.getId]=[]; bound[fd.name.id]=[]; }
 	int filtered(Identifier id){ return id.id in bound?0:dg(id); }
 	foreach(p;fd.params){
@@ -366,49 +367,49 @@ int functionDefFreeVarsImpl(FunctionDef fd,scope int delegate(Identifier) dg){
 	return 0;
 }
 
-void collectBoundNamesImpl(Expression stmt,ref void[0][Id] names){
+void collectBoundNamesImpl(Expression stmt,ref SetX!Id names){
 	statementBoundVarsImpl(stmt,(id){ names[id.id]=[]; return 0; });
 	dispatchStm!(collectBoundNames,collectBoundNamesDefault)(stmt,names);
 }
-private void collectBoundNames(FunctionDef fd,ref void[0][Id] names){
+private void collectBoundNames(FunctionDef fd,ref SetX!Id names){
 	collectFunctionBoundNames(fd,names);
 }
-private void collectBoundNames(CommaExp ce,ref void[0][Id] names){
+private void collectBoundNames(CommaExp ce,ref SetX!Id names){
 	collectBoundNamesImpl(ce.e1,names);
 	collectBoundNamesImpl(ce.e2,names);
 }
-private void collectBoundNames(CompoundExp ce,ref void[0][Id] names){
+private void collectBoundNames(CompoundExp ce,ref SetX!Id names){
 	foreach(x;ce.s) collectBoundNamesImpl(x,names);
 }
-private void collectBoundNames(IteExp ite,ref void[0][Id] names){
+private void collectBoundNames(IteExp ite,ref SetX!Id names){
 	foreach(x;ite.then.s) collectBoundNamesImpl(x,names);
 	if(ite.othw) foreach(x;ite.othw.s) collectBoundNamesImpl(x,names);
 }
-private void collectBoundNames(ForExp fe,ref void[0][Id] names){
+private void collectBoundNames(ForExp fe,ref SetX!Id names){
 	if(fe.var) names[fe.var.id]=[];
 	if(fe.pattern) defineLhsBoundVarsImpl(fe.pattern,(id){ names[id.id]=[]; return 0; });
 	foreach(x;fe.bdy.s) collectBoundNamesImpl(x,names);
 }
-private void collectBoundNames(WhileExp we,ref void[0][Id] names){
+private void collectBoundNames(WhileExp we,ref SetX!Id names){
 	foreach(x;we.bdy.s) collectBoundNamesImpl(x,names);
 }
-private void collectBoundNames(RepeatExp re,ref void[0][Id] names){
+private void collectBoundNames(RepeatExp re,ref SetX!Id names){
 	foreach(x;re.bdy.s) collectBoundNamesImpl(x,names);
 }
-private void collectBoundNames(DefineExp de,ref void[0][Id] names){
+private void collectBoundNames(DefineExp de,ref SetX!Id names){
 	if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
 }
-private void collectBoundNames(T)(T stmt,ref void[0][Id] names)
+private void collectBoundNames(T)(T stmt,ref SetX!Id names)
 	if(is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T:AAssignExp))
 {
 }
 static if(language==silq)
-private void collectBoundNames(WithExp we,ref void[0][Id] names){
+private void collectBoundNames(WithExp we,ref SetX!Id names){
 }
-private void collectBoundNamesDefault(Expression stmt,ref void[0][Id] names){
+private void collectBoundNamesDefault(Expression stmt,ref SetX!Id names){
 	if(auto le=cast(LetExp)stmt) foreach(x;le.s.s) collectBoundNamesImpl(x,names);
 }
-void collectFunctionBoundNames(FunctionDef fd,ref void[0][Id] names){
+void collectFunctionBoundNames(FunctionDef fd,ref SetX!Id names){
 	if(!fd) return;
 	if(fd.name){ names[fd.getId]=[]; names[fd.name.id]=[]; }
 	foreach(p;fd.params) if(p.name){ names[p.getId]=[]; names[p.name.id]=[]; }
@@ -416,10 +417,10 @@ void collectFunctionBoundNames(FunctionDef fd,ref void[0][Id] names){
 }
 
 struct BlockSubst{
-	Expression[Id] subst;
-	Id[Id] forced;
-	void[0][Id]* taken;
-	Declaration[Declaration]* declMap;
+	MapSX!(Id,Expression) subst;
+	MapSX!(Id,Id) forced;
+	SetX!Id* taken;
+	MapSX!(Declaration,Declaration)* declMap;
 	bool changed=false;
 	TypeTransition* tt=null;
 
@@ -439,7 +440,7 @@ struct BlockSubst{
 	Identifier bindVar(Identifier id,Expression vtype=null){
 		auto b=id.id;
 		Id nb=b;
-		if(auto f=b in forced) nb=*f;
+		if(auto f=forced.getPtr(b)) nb=*f;
 		else if(wouldCapture(b)) nb=freshName(b);
 		if(nb==b){
 			if(b in subst) subst.remove(b);
@@ -475,11 +476,11 @@ private VarDecl getVarDeclTwin(VarDecl orig,Identifier nname,Expression nvtype){
 	return twin;
 }
 
-private Declaration[] remapDecls(Declaration[] decls,Declaration[Declaration]* declMap,ref bool remapped){
+private Declaration[] remapDecls(Declaration[] decls,MapSX!(Declaration,Declaration)* declMap,ref bool remapped){
 	if(!declMap||!(*declMap).length||!decls.length) return decls;
 	bool c=false;
 	auto r=decls.dup;
-	foreach(ref d;r) if(auto p=d in *declMap){ d=*p; c=true; }
+	foreach(ref d;r) if(auto p=(*declMap).getPtr(d)){ d=*p; c=true; }
 	if(!c) return decls;
 	remapped=true;
 	return r;
@@ -519,7 +520,7 @@ Expression substituteLValue(Expression lhs,ref BlockSubst ctx){
 }
 private Expression substLhs(Identifier id,ref BlockSubst ctx){
 	if(id.constLookup||id.implicitDup) return useSubstitute(id,ctx);
-	if(auto p=id.id in ctx.subst){
+	if(auto p=ctx.subst.getPtr(id.id)){
 		Expression.CopyArgs cargs={preserveSemantic:true};
 		auto nv=(*p).copy(cargs);
 		nv.setConstLookup(id.constLookup);
@@ -713,7 +714,7 @@ private Expression substStm(FunctionDef fd,ref BlockSubst ctx){
 	if(nfd !is fd){
 		if(ctx.declMap) (*ctx.declMap)[fd]=nfd;
 		auto fname=fd.rename?fd.rename:fd.name;
-		if(fname) if(auto p=fname.id in ctx.subst)
+		if(fname) if(auto p=ctx.subst.getPtr(fname.id))
 			if(auto uid=cast(Identifier)(*p)){
 				if(uid.meaning is fd||uid.meaning is null) uid.meaning=nfd;
 				if(uid.meaning is nfd&&nfd.ftype&&nfd.ftype.isSemEvaluated()) uid.type=nfd.ftype;
@@ -747,7 +748,7 @@ private Expression substStm(IteExp ite,ref BlockSubst ctx){
 		foreach(x;ss) statementBoundVarsImpl(x,(id){
 			auto b=id.id;
 			if(b in ctx.forced){
-				if(auto v=b in src.subst) ctx.subst[b]=*v;
+				if(auto v=src.subst.getPtr(b)) ctx.subst[b]=*v;
 				else ctx.subst.remove(b);
 			}else ctx.subst.remove(b);
 			return 0;
@@ -796,7 +797,7 @@ private Expression substStm(ForExp fe,ref BlockSubst ctx){
 	r.fescope_=fe.fescope_;
 	r.loopVar=fe.loopVar;
 	if(fe.loopVar&&bctx.declMap)
-		if(auto p=cast(Declaration)fe.loopVar in *bctx.declMap)
+		if(auto p=(*bctx.declMap).getPtr(cast(Declaration)fe.loopVar))
 			if(auto nvd=cast(VarDecl)*p) r.loopVar=nvd;
 	return finishStatement(r,fe,ctx);
 }
@@ -989,11 +990,11 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 		if(!use.isSemCompleted()&&!use.isSemError()&&use.type&&use.type.isSemEvaluated()) use.sstate=SemState.completed;
 		(bindNameInEnclosing?ctx.subst:bctx.subst)[fname.id]=use;
 		if(r.body_){
-			Expression[Id] rsubst;
+			MapSX!(Id,Expression) rsubst;
 			rsubst[nname.id]=use;
-			void[0][Id] rtaken;
-			Declaration[Declaration] rdeclMap;
-			auto rctx=BlockSubst(rsubst,null,&rtaken,&rdeclMap,false);
+			SetX!Id rtaken;
+			MapSX!(Declaration,Declaration) rdeclMap;
+			auto rctx=BlockSubst(rsubst,MapSX!(Id,Id).init,&rtaken,&rdeclMap,false);
 			r.body_=substituteBlockCompound(r.body_,rctx);
 		}
 	}
@@ -1008,8 +1009,8 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 // forgottenVars, and identifiers rebound to the fresh declarations
 private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	if(!r.body_) return;
-	Declaration[Declaration] dmap;
-	Scope[Scope] smap;
+	MapSX!(Declaration,Declaration) dmap;
+	MapSX!(Scope,Scope) smap;
 	foreach(i,p;fd.params) dmap[p]=r.params[i];
 	smap[fd.fscope_]=r.fscope_;
 	Expression.CopyArgs cargs={preserveSemantic:true};
@@ -1019,7 +1020,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	Declaration mapDecl(Declaration d){
 		if(!d) return null;
 		if(d is fd) return r;
-		if(auto p=d in dmap) return *p;
+		if(auto p=dmap.getPtr(d)) return *p;
 		if(!cast(FunctionDef)d&&d.scope_&&d.scope_.isNestedIn(fd.fscope_)){
 			auto vd=cast(VarDecl)d;
 			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
@@ -1028,7 +1029,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			for(Declaration a=d;;){
 				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null);
 				if(!nxt) break;
-				if(auto p=nxt in dmap){ if((*p).name){ nid=(*p).name.id; fromChain=true; } break; }
+				if(auto p=dmap.getPtr(nxt)){ if((*p).name){ nid=(*p).name.id; fromChain=true; } break; }
 				a=nxt;
 			}
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
@@ -1042,7 +1043,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			nd.dtype=vd.dtype?(vd.dtype.isSemEvaluated()?vd.dtype:rescopeCopy(useSubstitute(vd.dtype,bctx))):null;
 			return nd;
 		}
-		if(auto pe=d.getId in bctx.subst){
+		if(auto pe=bctx.subst.getPtr(d.getId)){
 			// declarations lexically outer to the substituted function are
 			// substituted away; others (e.g. from inserted values) stay
 			if(d.scope_&&fd.scope_&&fd.scope_.isNestedIn(d.scope_)){
@@ -1137,7 +1138,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		return null;
 	}
 	Scope mapScopeTree(Scope s,Scope twincarried,Scope parent){
-		if(auto p=s in smap) return *p;
+		if(auto p=smap.getPtr(s)) return *p;
 		auto bs=cast(BlockScope)s;
 		BlockScope ns;
 		if(auto ts=cast(TypeScope)twincarried){
@@ -1184,7 +1185,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		if(np.vtype) np.vtype=shareTy(np.vtype);
 	}
 	// rebuild split/merge links in template order (creation order)
-	void[0][Declaration] seen;
+	SetX!Declaration seen;
 	for(bool progress=true;progress;){
 		progress=false;
 		foreach(td,nd;dmap){
@@ -1206,7 +1207,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	}
 	// give twin scopes their own last-use state (hqir re-analyzes lowered
 	// fragments against them)
-	Scope[ast.lastuse.LastUses*] luOwner;
+	MapSX!(ast.lastuse.LastUses*,Scope) luOwner;
 	foreach(ts,ns;smap)
 		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_)))
 			luOwner[&ts.lastUses]=ns;
@@ -1214,7 +1215,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_))){
 			ns.lastUses.remapFrom(ts.lastUses,&mapDecl,&mapScope);
 			if(auto p=ts.lastUses.parent)
-				if(auto owner=p in luOwner) ns.lastUses.parent=&(*owner).lastUses;
+				if(auto owner=luOwner.getPtr(p)) ns.lastUses.parent=&(*owner).lastUses;
 		}
 	}
 }
@@ -1222,10 +1223,10 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 // walks template/twin statement trees in parallel, rebuilding the twin's
 // scope tree and declaration map (see rescopeTwin)
 private alias MapScopeTreeDg = Scope delegate(Scope tpl,Scope twin,Scope fparent);
-private void walkStmt(FunctionDef tfd,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(FunctionDef tfd,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	if(auto wfd=cast(FunctionDef)twstmt){ (*dmap)[tfd]=wfd; wfd.canonicalSource_=tfd.canonicalSource; }
 }
-private void walkStmt(CompoundExp ce,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(CompoundExp ce,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto ce2=cast(CompoundExp)twstmt;
 	assert(!!ce2);
 	if(ce.blscope_){
@@ -1233,36 +1234,36 @@ private void walkStmt(CompoundExp ce,Expression twstmt,Scope fparent,Declaration
 		walkStmts(ce.s,ce2.s,ns,dmap,mapFn);
 	}else walkStmts(ce.s,ce2.s,fparent,dmap,mapFn);
 }
-private void walkStmt(IteExp ite,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(IteExp ite,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto ite2=cast(IteExp)twstmt;
 	assert(!!ite2);
 	walkStmts([ite.then],[ite2.then],fparent,dmap,mapFn);
 	if(ite.othw) walkStmts([ite.othw],[ite2.othw],fparent,dmap,mapFn);
 }
-private void walkStmt(ForExp fe,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(ForExp fe,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto fe2=cast(ForExp)twstmt;
 	assert(!!fe2);
 	if(fe.fescope_) mapFn(fe.fescope_,fe2.fescope_,fparent);
 	walkStmts([fe.bdy],[fe2.bdy],fparent,dmap,mapFn);
 }
-private void walkStmt(WhileExp we,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(WhileExp we,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto we2=cast(WhileExp)twstmt;
 	assert(!!we2);
 	walkStmts([we.bdy],[we2.bdy],fparent,dmap,mapFn);
 }
-private void walkStmt(RepeatExp re,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(RepeatExp re,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto re2=cast(RepeatExp)twstmt;
 	assert(!!re2);
 	walkStmts([re.bdy],[re2.bdy],fparent,dmap,mapFn);
 }
-private void walkStmt(CommaExp ce,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(CommaExp ce,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto ce2=cast(CommaExp)twstmt;
 	assert(!!ce2);
 	walkStmts([ce.e1],[ce2.e1],fparent,dmap,mapFn);
 	walkStmts([ce.e2],[ce2.e2],fparent,dmap,mapFn);
 }
 static if(language==silq)
-private void walkStmt(WithExp we,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmt(WithExp we,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto we2=cast(WithExp)twstmt;
 	assert(!!we2);
 	void walkBlock(CompoundExp t,CompoundExp w){
@@ -1275,26 +1276,26 @@ private void walkStmt(WithExp we,Expression twstmt,Scope fparent,Declaration[Dec
 	if(we.bdy) walkBlock(we.bdy,we2.bdy);
 	if(we.itrans) walkBlock(we.itrans,we2.itrans);
 }
-private void walkStmt(T)(T stmt,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn)
+private void walkStmt(T)(T stmt,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn)
 	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T==DefineExp)||is(T:AAssignExp))
 {
 	// statements without nested blocks need no scope remapping
 }
-private void walkStmtDefault(Expression stmt,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmtDefault(Expression stmt,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	if(auto le=cast(LetExp)stmt){
 		auto le2=cast(LetExp)twstmt;
 		assert(!!le2);
 		walkStmts([le.s],[le2.s],fparent,dmap,mapFn);
 	}
 }
-private void walkStmts(Expression[] tpl,Expression[] twin,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn){
+private void walkStmts(Expression[] tpl,Expression[] twin,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	assert(tpl.length==twin.length);
 	foreach(i,stmt;tpl) dispatchStm!(walkStmt,walkStmtDefault)(stmt,twin[i],fparent,dmap,mapFn);
 }
 
 void computeCapturesFromBody(FunctionDef fd){
 	fd.capturedDecls=[];
-	fd.captures=null;
+	fd.captures=typeof(fd.captures).init;
 	if(!fd.body_) return;
 	functionDefFreeVarsImpl(fd,(id){
 		if(id.lazyCapture) return 0;
@@ -1308,15 +1309,15 @@ void computeCapturesFromBody(FunctionDef fd){
 	});
 }
 
-Expression substituteFunctionDefExp(FunctionDef fd,Expression[Id] subst,bool bindNameInEnclosing=false,TypeTransition* tt=null){
-	Expression[Id] active;
+Expression substituteFunctionDefExp(FunctionDef fd,MapSX!(Id,Expression) subst,bool bindNameInEnclosing=false,TypeTransition* tt=null){
+	MapSX!(Id,Expression) active;
 	foreach(k,v;subst) if(functionDefFreeVarsImpl(fd,(id)=>id.id==k?1:0)) active[k]=v;
 	if(!active.length) return fd;
-	void[0][Id] taken;
+	SetX!Id taken;
 	foreach(k,v;subst) taken[k]=[];
 	functionDefFreeVarsImpl(fd,(id){ taken[id.id]=[]; return 0; });
 	collectFunctionBoundNames(fd,taken);
-	Declaration[Declaration] declMap;
-	auto ctx=BlockSubst(active,null,&taken,&declMap,false,tt);
+	MapSX!(Declaration,Declaration) declMap;
+	auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&taken,&declMap,false,tt);
 	return substituteFunctionDefImpl(fd,ctx,bindNameInEnclosing);
 }

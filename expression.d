@@ -7,6 +7,7 @@ import std.meta: AliasSeq;
 
 import ast.lexer, ast.parser, ast.scope_, ast.type, ast.declaration, util;
 import util.maybe;
+import util: MapX, SetX, MapSX;
 import util.tuple: Q=Tuple, q=tuple;
 import astopt;
 
@@ -170,9 +171,11 @@ abstract class Expression: Node{
 	abstract Expression evalImpl();
 
 	final Expression substitute(Id name,Expression exp){
-		return substitute([name:exp]);
+		MapSX!(Id,Expression) subst;
+		subst[name]=exp;
+		return substitute(subst);
 	}
-	final Expression substitute(Expression[Id] subst,TypeTransition* tt=null){
+	final Expression substitute(MapSX!(Id,Expression) subst,TypeTransition* tt=null){
 		assert(isSemCompleted());
 		auto r=substituteImpl(subst,tt);
 		if(r !is this) {
@@ -183,7 +186,7 @@ abstract class Expression: Node{
 		}
 		return r.eval();
 	}
-	abstract Expression substituteImpl(Expression[Id] subst,TypeTransition* tt); // TODO: name might be free in the _types_ of subexpressions
+	abstract Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt); // TODO: name might be free in the _types_ of subexpressions
 
 	static struct UnificationResult{
 		Expression lowerBound=null;
@@ -218,10 +221,10 @@ abstract class Expression: Node{
 		}
 	}
 
-	final bool unify(Expression rhs,ref UnificationResult[Id] subst, bool meet){
+	final bool unify(Expression rhs,ref MapSX!(Id,UnificationResult) subst, bool meet){
 		return unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet) || isSubtype(rhs,this);
 	}
-	abstract bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet);
+	abstract bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet);
 
 	abstract int freeVarsImpl(scope int delegate(Identifier) dg);
 	static struct FreeVars{
@@ -347,8 +350,8 @@ abstract class Expression: Node{
 
 mixin template VariableFree(){
 	override int freeVarsImpl(scope int delegate(Identifier)){ return 0; }
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){ return this; }
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){ return this; }
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null;
 	}
 }
@@ -417,7 +420,7 @@ class TypeAnnotationExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(type?type:t);
 	}
-	override TypeAnnotationExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override TypeAnnotationExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto nt=t.substitute(subst,tt);
 		if(ne is e && nt is t) return this;
@@ -426,7 +429,7 @@ class TypeAnnotationExp: Expression{
 		r.type=nt.eval();
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return e.unify(rhs,subst,meet);
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
@@ -645,7 +648,7 @@ bool isTrue(Expression e, bool eval=false){
 }
 
 struct Id {
-	static __gshared Id[string] interned;
+	static __gshared MapSX!(string,Id) interned;
 	size_t raw = 0;
 
 	@property
@@ -682,7 +685,7 @@ struct Id {
 		import core.stdc.string: memcpy;
 		size_t len = s.length;
 		if(len == 0) return Id();
-		if(auto p = s in interned) {
+		if(auto p = interned.getPtr(s)) {
 			assert((*p).str == s);
 			return *p;
 		}
@@ -720,7 +723,7 @@ struct Id {
 }
 
 struct EqualityContext{
-	private Declaration[Declaration] mapL, mapR;
+	private MapSX!(Declaration,Declaration) mapL, mapR;
 	private static Declaration source(Declaration d){
 		return d?d.canonicalSource:d;
 	}
@@ -730,17 +733,17 @@ struct EqualityContext{
 	bool lookup(Declaration l,Declaration r){
 		l=source(l), r=source(r);
 		if(l is r) return true;
-		auto pl=l in mapL;
-		auto pr=r in mapR;
+		auto pl = mapL.getPtr(l);
+		auto pr = mapR.getPtr(r);
 		if(pl||pr) return pl&&pr&&*pl is r&&*pr is l;
 		return false;
 	}
 	void bind(Declaration ma,Declaration mb){
 		ma=source(ma), mb=source(mb);
-		if(auto p=ma in mapL){
+		if(auto p = mapL.getPtr(ma)){
 			if(*p is mb) return;
 			mapR.remove(*p);
-		}else if(auto p=mb in mapR){
+		}else if(auto p = mapR.getPtr(mb)){
 			mapL.remove(*p);
 		}
 		mapL[ma]=mb;
@@ -891,7 +894,7 @@ class Identifier: Expression{
 		return dg(this);
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){ return 0; }
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		if(id !in subst) return this;
 		if(tt&&tt.localRoot&&meaning&&meaning.scope_&&meaning.scope_.isNestedIn(tt.localRoot)&&!cast(FunctionDef)meaning) return this;
 		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
@@ -911,7 +914,7 @@ class Identifier: Expression{
 		assert(constLookup == result.constLookup || type.isClassical(), "bad setConstLookup");
 		return result;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		if(id !in subst) return meet?isSubtype(this,rhs):isSubtype(rhs,this);
 		if(this==rhs){
 			if(subst[id].bound(meet)&&subst[id].bound(meet)!=this) return false;
@@ -1192,14 +1195,14 @@ class UnaryExp(TokenType op): AUnaryExp{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override UnaryExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override UnaryExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		if(ne is e) return this;
 		auto r=new UnaryExp(ne);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ue=cast(typeof(this))rhs;
 		if(!ue) return false;
 		return e.unify(ue.e,subst,meet);
@@ -1239,14 +1242,14 @@ class PostfixExp(TokenType op): Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override PostfixExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override PostfixExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		if(ne is e) return this;
 		auto r=new PostfixExp(ne);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto pe=cast(PostfixExp)rhs;
 		if(!pe) return false;
 		return e.unify(pe.e,subst,meet);
@@ -1287,7 +1290,7 @@ class IndexExp: Expression{ //e[a]
 		if(auto r=dg(a)) return r;
 		return 0;
 	}
-	override IndexExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override IndexExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto na=a.substitute(subst,tt);
 		if(ne is e&&na is a) return this;
@@ -1296,7 +1299,7 @@ class IndexExp: Expression{ //e[a]
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto idx=cast(IndexExp)rhs;
 		if(!idx) return false;
 		// TODO: improve
@@ -1427,7 +1430,7 @@ class SliceExp: Expression{
 		if(auto x=dg(r)) return x;
 		return 0;
 	}
-	override SliceExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override SliceExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto nl=l.substitute(subst,tt);
 		auto nr=r.substitute(subst,tt);
@@ -1436,7 +1439,7 @@ class SliceExp: Expression{
 		res.loc=loc;
 		return res;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto sl=cast(SliceExp)rhs;
 		return e.unify(sl.e,subst,meet)&&l.unify(sl.l,subst,meet)&&r.unify(sl.r,subst,meet);
 	}
@@ -1490,7 +1493,7 @@ class CallExp: Expression{
 		if(auto r=dg(e)) return r;
 		return dg(arg);
 	}
-	override CallExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override CallExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		auto narg=arg.substitute(subst,tt);
 		if(ne is e&&narg is arg) return this;
@@ -1498,7 +1501,7 @@ class CallExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ce=cast(CallExp)rhs;
 		if(!ce) return false;
 		auto zmod1=isℤmodTy(this),zmod2=isℤmodTy(this); // TODO: generalize
@@ -1843,7 +1846,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			return 0;
 		}
 	}
-	override BinaryExp!op substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override BinaryExp!op substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne1=e1.substitute(subst,tt);
 		auto ne2=e2.substitute(subst,tt);
 		if(ne1 is e1&&ne2 is e2) return this;
@@ -1855,7 +1858,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto be=cast(typeof(this))rhs;
 		if(!be) return false;
 		return e1.unify(be.e1,subst,meet)&&e2.unify(be.e2,subst,meet);
@@ -1935,14 +1938,14 @@ class FieldExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override FieldExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override FieldExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		if(ne is e) return this;
 		auto r=new FieldExp(ne,f);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto fe=cast(FieldExp)rhs;
 		if(!fe||f!=fe.f) return false;
 		return e.unify(fe.e,subst,meet);
@@ -1991,7 +1994,7 @@ class IteExp: Expression{
 		if(othw) if(auto r=othw.subexpressionsImpl(dg)) return r;
 		return 0;
 	}
-	override IteExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override IteExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		import ast.substitute: ttTransitionIte;
 		if(tt) return cast(IteExp)ttTransitionIte(this,subst,tt);
 		auto ncond=cond.substitute(subst,tt);
@@ -2003,7 +2006,7 @@ class IteExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ite=cast(IteExp)rhs;
 		if(!ite) return false;
 		return cond.unify(ite.cond,subst,meet)&&then.unify(ite.then,subst,meet)
@@ -2439,7 +2442,7 @@ class CompoundExp: Expression{
 		foreach(x;s) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ns=s.dup;
 		bool chg=false;
 		foreach(i,ref x;ns){ x=x.substitute(subst,tt); if(x !is s[i]) chg=true; }
@@ -2449,7 +2452,7 @@ class CompoundExp: Expression{
 		return r;
 
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ce=cast(CompoundExp)rhs;
 		if(!ce) return false;
 		if(s.length!=ce.s.length) return false;
@@ -2508,7 +2511,7 @@ class TupleExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override TupleExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override TupleExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.dup;
 		bool chg=false;
 		foreach(i,ref x;ne){ x=x.substitute(subst,tt); if(x !is e[i]) chg=true; }
@@ -2517,7 +2520,7 @@ class TupleExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto te=cast(TupleExp)rhs;
 		if(!te||e.length!=te.e.length) return false;
 		return all!(i=>e[i].unify(te.e[i],subst,meet))(iota(e.length));
@@ -2570,7 +2573,7 @@ class LambdaExp: Expression{
 		// compare the definitions structurally (up to alpha-equivalence)
 		return ctx.functionDefEquals(fd,r.fd);
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		import ast.substitute:substituteFunctionDefExp;
 		auto nfd=cast(FunctionDef)substituteFunctionDefExp(fd,subst,false,tt);
 		if(nfd is fd) return this;
@@ -2578,7 +2581,7 @@ class LambdaExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return this is rhs; // TODO
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -2603,7 +2606,7 @@ class LetExp: Expression{
 	override LetExp copyImpl(CopyArgs args){
 		auto ns=s.copy(args), ne=e.copy(args);
 		if(args.preserveMeanings){
-			Declaration[Declaration] bound;
+			MapSX!(Declaration,Declaration) bound;
 			FunctionDef[] defs;
 			void pair(Expression src,Expression cpy){
 				if(auto sfd=cast(FunctionDef)src){
@@ -2627,7 +2630,7 @@ class LetExp: Expression{
 			foreach(i,stmt;s.s) if(i<ns.s.length) pair(stmt,ns.s[i]);
 			if(bound.length){
 				int rebind(Identifier id){
-					if(auto p=id.meaning in bound) id.meaning=*p;
+					if(auto p = bound.getPtr(id.meaning)) id.meaning=*p;
 					return 0;
 				}
 				import ast.substitute: statementFreeVarsImpl, computeCapturesFromBody;
@@ -2684,19 +2687,19 @@ class LetExp: Expression{
 			return dg(e);
 		}
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		import ast.substitute: ttTransitionLet;
 		if(tt) return ttTransitionLet(this,subst,tt);
-		Expression[Id] active;
+		MapSX!(Id,Expression) active;
 		foreach(k,v;subst) if(freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
 		if(!active.length) return this;
-		void[0][Id] taken;
+		SetX!Id taken;
 		foreach(k,v;subst) taken[k]=[];
 		freeVarsImpl((id){ taken[id.id]=[]; return 0; });
 		import ast.substitute:collectBoundNamesImpl,BlockSubst,substituteBlockCompound,substituteLValue;
 		foreach(stmt;s.s) collectBoundNamesImpl(stmt,taken);
-		Declaration[Declaration] declMap;
-		auto ctx=BlockSubst(active,null,&taken,&declMap,false);
+		MapSX!(Declaration,Declaration) declMap;
+		auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&taken,&declMap,false);
 		auto ns=substituteBlockCompound(s,ctx);
 		auto ne=substituteLValue(e,ctx);
 		if(ns is s&&ne is e&&!ctx.changed) return this;
@@ -2710,7 +2713,7 @@ class LetExp: Expression{
 		if(!ctx.stmtsEquals(s.s,r.s.s)) return false;
 		return isEqual(e,r.e,&ctx);
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return this is rhs; // TODO
 	}
 	override Expression evalImpl(){
@@ -2737,7 +2740,7 @@ class LetExp: Expression{
 			if(de.e2.getAnnotation()<pure_) return this;
 			if(!de.e2.isSemCompleted()||de.e2.isSemError()) return this;
 		}
-		void[0][Id] bound;
+		SetX!Id bound;
 		foreach(stmt;stmts) bound[(cast(Identifier)(cast(DefineExp)stmt).e1).id]=[];
 		if(type){
 			bool bad=false;
@@ -2754,7 +2757,7 @@ class LetExp: Expression{
 		}
 		foreach(stmt;stmts) if(!okUses((cast(DefineExp)stmt).e2)) return this;
 		if(!okUses(e)) return this;
-		Expression[Id] cur;
+		MapSX!(Id,Expression) cur;
 		foreach(stmt;stmts){
 			auto de=cast(DefineExp)stmt;
 			auto id=cast(Identifier)de.e1;
@@ -2793,7 +2796,7 @@ class VectorExp: Expression{
 		foreach(x;e) if(auto r=dg(x)) return r;
 		return 0;
 	}
-	override VectorExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override VectorExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.dup;
 		bool chg=false;
 		foreach(i,ref x;ne){ x=x.substitute(subst,tt); if(x !is e[i]) chg=true; }
@@ -2802,7 +2805,7 @@ class VectorExp: Expression{
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ae=cast(VectorExp)rhs;
 		if(!ae||e.length!=ae.e.length) return false;
 		return all!(i=>e[i].unify(ae.e[i],subst,meet))(iota(e.length));
@@ -2852,14 +2855,14 @@ class VectorForExp: Expression{
 			import ast.substitute:functionDefFreeVarsImpl;
 			return functionDefFreeVarsImpl(fd,dg);
 		}
-		void[0][Id] bound;
+		SetX!Id bound;
 		if(fe.var) bound[fe.var.id]=[];
 		import ast.substitute:defineLhsBoundVarsImpl;
 		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
 		return fe.bdy.s[0].freeVarsImpl((id){ return id.id in bound?0:dg(id); });
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){ return this; } // TODO
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){ return this; } // TODO
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null; // TODO
 	}
 	override int componentsImpl(scope int delegate(Expression) dg){
@@ -2958,14 +2961,14 @@ class AssertExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return dg(e);
 	}
-	override AssertExp substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override AssertExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ne=e.substitute(subst,tt);
 		if(ne is e) return this;
 		auto r=new AssertExp(ne);
 		r.loc=loc;
 		return r;
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto ae=cast(AssertExp)rhs;
 		if(!ae) return false;
 		return e.unify(ae.e,subst,meet);

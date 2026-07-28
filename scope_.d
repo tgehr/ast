@@ -123,9 +123,9 @@ struct Dependencies{
 }
 
 struct DummyWitnessContext{
-	Declaration[Declaration] dummies; // candidate -> dummy placeholder
-	Declaration[Declaration] results; // candidates witnessed so far
-	Dependency[Declaration] consumedDeps; // dependency each decl had when it was consumed while this context was active
+	MapX!(Declaration,Declaration) dummies; // candidate -> dummy placeholder
+	MapX!(Declaration,Declaration) results; // candidates witnessed so far
+	MapSX!(Declaration,Dependency) consumedDeps; // dependency each decl had when it was consumed while this context was active
 	SetX!Id[] nestedLoopCarried; // the loop-carried candidates of each nested quantum loop analyzed while this context was active
 }
 }
@@ -274,10 +274,10 @@ abstract class Scope{
 			}
 		}
 		static struct DeclProps{
-			private DeclProp[Declaration] props;
+			private MapSX!(Declaration,DeclProp) props;
 			DeclProps dup(){ return DeclProps(props.dup); }
 			void clear(){ props.clear(); }
-			DeclProp* tryGet(Declaration decl){ return decl in props; }
+			DeclProp* tryGet(Declaration decl){ return props.getPtr(decl); }
 			ref DeclProp set(Declaration decl,DeclProp prop){
 				return props[decl]=prop;
 			}
@@ -537,11 +537,11 @@ abstract class Scope{
 			return null;
 		}
 		static struct ConstBlockContext{
-			private Identifier[][Declaration] constBlock;
+			private MapX!(Declaration,Identifier[]) constBlock;
 			private size_t numTrackedTemporaries;
 		}
 		final ConstBlockContext saveConst(){
-			Identifier[][Declaration] constBlock;
+			MapX!(Declaration,Identifier[]) constBlock;
 			foreach(decl,ref prop;declProps.props){
 				auto r=prop.constBlock;
 				if(r.length) constBlock[decl]=r;
@@ -646,11 +646,11 @@ abstract class Scope{
 			return r;
 		}
 		static struct ComponentReplacementContext{
-			private DeclProp.ComponentReplacement[][Declaration] componentReplacements;
+			private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
 			bool empty(){ return !componentReplacements.length; }
 		}
 		final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
-			DeclProp.ComponentReplacement[][Declaration] r;
+			MapX!(Declaration,DeclProp.ComponentReplacement[]) r;
 			foreach(decl,ref prop;declProps.props){
 				r[decl]=prop.componentReplacements;
 				prop.componentReplacements=[];
@@ -1091,7 +1091,7 @@ abstract class Scope{
 			if(auto p=parentScope()) return p.dummyWitnessContexts;
 			return dummyWitnessContexts_;
 		}
-		final void pushDummyWitnessContext(Declaration[Declaration] dummies){
+		final void pushDummyWitnessContext(MapX!(Declaration,Declaration) dummies){
 			dummyWitnessContexts~=DummyWitnessContext(dummies);
 		}
 		final DummyWitnessContext popDummyWitnessContext()in{
@@ -1185,15 +1185,15 @@ abstract class Scope{
 			dependencies.substitute(decl,dep);
 			lastUses.substituteDependency(decl,dep);
 		}
-		Dependency[Declaration] consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
-		static void substituteConsumed(ref Dependency dep,ref Dependency[Declaration] consumedDepLog){
+		MapSX!(Declaration,Dependency) consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
+		static void substituteConsumed(ref Dependency dep,ref MapSX!(Declaration,Dependency) consumedDepLog){
 			if(dep.isTop) return;
-			void[0][Declaration] substituted; // stale sets can mention consumed declarations in cycles
+			SetX!Declaration substituted; // stale sets can mention consumed declarations in cycles
 			for(bool changed=true;changed;){
 				changed=false;
 				foreach(m;dep.dependencies){
 					if(m in substituted) continue;
-					if(auto pd=m in consumedDepLog){
+					if(auto pd = consumedDepLog.getPtr(m)){
 						substituted[m]=[];
 						dep.replace(m,*pd);
 						changed=true;
@@ -1348,14 +1348,14 @@ abstract class Scope{
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
-		Dependency[Declaration] carryOverDependencies;
+		MapX!(Declaration,Dependency) carryOverDependencies;
 		foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
 		dependencies=scopes[0].dependencies.dup;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
-		DeadMerge[Id] deadMerges;
+		MapSX!(Id,DeadMerge) deadMerges;
 		DeadMerge addDeadMerge(Declaration sym){
-			if(auto dm=sym.name.id in deadMerges)
+			if(auto dm = deadMerges.getPtr(sym.name.id))
 				return *dm;
 			auto dm=new DeadMerge(sym.name);
 			if(sym.rename){
@@ -1376,7 +1376,7 @@ abstract class Scope{
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
 			void removeOSym(Scope sc,Declaration osym){
 				if(sc !is this)
-					if(auto dm=osym.name.id in deadMerges)
+					if(auto dm = deadMerges.getPtr(osym.name.id))
 						dm.mergedFrom~=osym;
 				if(sc.rnsymtab.get(osym.getId,null) is osym)
 					sc.symtabRemove(osym);
@@ -1640,7 +1640,7 @@ abstract class Scope{
 					return true;
 				return false;
 			}
-			bool compareTables(Declaration[Id] symtab,Declaration[Id] rsymtab){
+			bool compareTables(MapX!(Id,Declaration) symtab,MapX!(Id,Declaration) rsymtab){
 				foreach(name,decl;rsymtab){
 					if(cast(DeadDecl)decl) continue;
 					if(name !in symtab)
@@ -1682,7 +1682,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope Declaration[Declaration]* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -1724,16 +1724,16 @@ abstract class Scope{
 			Declaration[] toRemove;
 			TrackedTemporary[] trackedTemporaries;
 		}
-		Declaration[Id] symtab;
-		Declaration[Id] rnsymtab;
-		LastUse[Declaration] lastUses;
+		MapX!(Id,Declaration) symtab;
+		MapX!(Id,Declaration) rnsymtab;
+		MapX!(Declaration,LastUse) lastUses;
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
-		Declaration[Id] nsymtab=symtab.dup;
-		Declaration[Id] nrnsymtab=rnsymtab.dup;
-		LastUse[Declaration] nlastUses;
+		MapX!(Id,Declaration) nsymtab=symtab.dup;
+		MapX!(Id,Declaration) nrnsymtab=rnsymtab.dup;
+		MapX!(Declaration,LastUse) nlastUses;
 		static if(language==silq){
 			DeclProps declProps;
 			TrackedTemporary[] trackedTemporaries;
@@ -1783,7 +1783,7 @@ abstract class Scope{
 			}
 			state.prevCapturedDecls=fd.capturedDecls;
 		}
-		void splitSymtab(ref Declaration[Id] symtab,bool replace){
+		void splitSymtab(ref MapX!(Id,Declaration) symtab,bool replace){
 			Q!(Declaration,Declaration)[] splits;
 			foreach(id,ref decl;symtab){
 				auto splt=getSplit(decl);
@@ -1901,8 +1901,8 @@ abstract class Scope{
 		Dependencies dependencies;
 		DeclProps declProps;
 	}
-	Declaration[Id] symtab;
-	Declaration[Id] rnsymtab;
+	MapX!(Id,Declaration) symtab;
+	MapX!(Id,Declaration) rnsymtab;
 }
 
 class TopScope: Scope{
@@ -2383,11 +2383,11 @@ class TypeScope: BlockScope{
 struct TypeTransition{
 	Scope target;
 	Scope localRoot;
-	void[0][Id] taken;
-	Declaration[Declaration] declMap;
-	void[0][Scope] codScopes;
-	Scope[Declaration] declRegion;
-	TypeScope[Scope] scopes;
+	SetX!Id taken;
+	MapSX!(Declaration,Declaration) declMap;
+	SetX!Scope codScopes;
+	MapSX!(Declaration,Scope) declRegion;
+	MapSX!(Scope,TypeScope) scopes;
 
 	Id freshName(Id b){
 		auto nb=b;
@@ -2397,7 +2397,7 @@ struct TypeTransition{
 	}
 
 	TypeScope mapScope(Scope sc){
-		if(auto p=sc in scopes) return *p;
+		if(auto p = scopes.getPtr(sc)) return *p;
 		auto ts=new TypeScope(target);
 		scopes[sc]=ts;
 		if(auto parent=sc.parentScope())

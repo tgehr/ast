@@ -2,6 +2,7 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.lastuse;
 import astopt;
+import util: MapX, MapSX;
 
 import std.range, std.algorithm, std.conv, std.format;
 import ast.expression,ast.type,ast.declaration,ast.scope_;
@@ -701,8 +702,8 @@ final class LastUse{
 
 struct LastUses{
 	LastUses* parent;
-	LastUse[Declaration] lastUses;
-	LastUse[][Declaration] retired;
+	MapX!(Declaration,LastUse) lastUses;
+	MapX!(Declaration,LastUse[]) retired;
 	LastUse lastLastUse;
 
 	void prepareNesting(Scope parent)do{
@@ -962,10 +963,10 @@ struct LastUses{
 	// copy another scope's final state, translating declarations and scopes
 	// (used to give independently scoped instantiation twins their own state)
 	void remapFrom(ref LastUses src,Declaration delegate(Declaration) mapDecl,Scope delegate(Scope) mapScope){
-		LastUse[LastUse] nmap;
+		MapSX!(LastUse,LastUse) nmap;
 		LastUse remap(LastUse lu){
 			if(!lu) return null;
-			if(auto p=lu in nmap) return *p;
+			if(auto p = nmap.getPtr(lu)) return *p;
 			auto ndecl=lu.decl?mapDecl(lu.decl):null;
 			if(lu.decl&&!ndecl) return null;
 			auto r=lu.dup;
@@ -1091,8 +1092,8 @@ struct LastUses{
 			foreach(lu;lus)
 				if(lu) lu.dep.replace(decl,dep);
 	}
-	LastUse[Declaration] getSnapshot(Scope sc){
-		LastUse[Declaration] nlastUses;
+	MapX!(Declaration,LastUse) getSnapshot(Scope sc){
+		MapX!(Declaration,LastUse) nlastUses;
 		foreach(k,decl;sc.rnsymtab){
 			if(auto lu=get(decl,false))
 				nlastUses[decl]=lu;
@@ -1100,7 +1101,7 @@ struct LastUses{
 		}
 		return nlastUses;
 	}
-	void restoreSnapshot(LastUse[Declaration] snapshot,Scope sc){
+	void restoreSnapshot(MapX!(Declaration,LastUse) snapshot,Scope sc){
 		foreach(_,d;sc.rnsymtab){
 			if(auto nlu=lastUses.get(d,null)){
 				if(nlu.isConsumption()||nlu!is snapshot.get(d,null)){

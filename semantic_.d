@@ -921,7 +921,7 @@ struct FixedPointIterState{
 	StmFlags nextFlags;
 	BlockScope loopScope=null;
 	BlockScope forgetScope=null;
-	Declaration[Declaration] mustBeConstFromDummies;
+	MapX!(Declaration,Declaration) mustBeConstFromDummies;
 	bool dummyAnalysisRan=false;
 	void beginIteration(){
 		prevStateSnapshot=nextStateSnapshot;
@@ -958,14 +958,14 @@ FixedPointIterState startFixedPointIteration(Scope sc,ref StmFlags flags){
 }
 static if(language==silq){
 struct DummyAnalysisData{
-	Declaration[Declaration] dummies; // candidate -> dummy placeholder
+	MapX!(Declaration,Declaration) dummies; // candidate -> dummy placeholder
 	bool contextPushed=false;
 }
 Declaration[] dummyAnalysisCandidates(Scope sc, ref Scope.ScopeState prevState, BlockScope oldLoopScope){
 	if(!oldLoopScope) return [];
 	Declaration[] result;
-	void[0][Declaration] consumedOuterSet;
-	Declaration[Id] allDecls=sc.rnsymtab.dup;
+	SetX!Declaration consumedOuterSet;
+	MapX!(Id,Declaration) allDecls=sc.rnsymtab.dup;
 	foreach(decl;oldLoopScope.consumedOuter){
 		if(!decl||cast(DeadDecl)decl) continue;
 		consumedOuterSet[decl]=[];
@@ -1001,15 +1001,15 @@ DummyAnalysisData prepareDummyAnalysis(Scope sc, Declaration[] candidates){
 	data.contextPushed=true;
 	return data;
 }
-Declaration[Declaration] collectDummyResults(Scope sc, ref FixedPointIterState state, ref DummyAnalysisData data, Declaration[] candidates)in{
+MapX!(Declaration,Declaration) collectDummyResults(Scope sc, ref FixedPointIterState state, ref DummyAnalysisData data, Declaration[] candidates)in{
 	assert(data.contextPushed);
 }do{
 	auto context=sc.popDummyWitnessContext();
-	void[0][Declaration] dummySet;
+	SetX!Declaration dummySet;
 	foreach(v,vprime;context.dummies) dummySet[vprime]=[];
 	void resolveTransitively(ref Dependency dep){
 		if(dep.isTop) return;
-		void[0][Declaration] visited;
+		SetX!Declaration visited;
 		Declaration[] worklist;
 		foreach(x;dep.dependencies) worklist~=x;
 		while(worklist.length){
@@ -1020,7 +1020,7 @@ Declaration[Declaration] collectDummyResults(Scope sc, ref FixedPointIterState s
 			foreach(v,vprime;context.dummies)
 				if(decl is vprime)
 					context.results[v]=v;
-			if(auto cdep=decl in context.consumedDeps){
+			if(auto cdep=context.consumedDeps.getPtr(decl)){
 				if(!cdep.isTop)
 					foreach(x;cdep.dependencies) worklist~=x;
 			}
@@ -3409,7 +3409,7 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 		prologue.loc=loc;
 		if(prologue.isSemCompleted()){
-			Declaration[Declaration] replacements;
+			MapX!(Declaration,Declaration) replacements;
 			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
 				auto de=cast(DefineExp)read;
 				assert(!!de);
@@ -4519,11 +4519,11 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}
 	}
 	static if(language==silq){
-		Dependency[Declaration] dependencies;
+		MapX!(Declaration,Dependency) dependencies;
 		int curDependency;
 	}
-	Declaration[Declaration] consumed;
-	Declaration[Id] defined;
+	MapX!(Declaration,Declaration) consumed;
+	MapX!(Id,Declaration) defined;
 	void updateVars(Expression lhs,Expression rhs,Stage stage){
 		Dependency rhsdep(){
 			if(stage!=Stage.collectDeps) return Dependency(true);
@@ -8006,14 +8006,16 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(n is null) n="r";
 			else n=n.stripRight('\'');
 		}
-		void[0][string] vars;
+		SetX!string vars;
 		foreach(p;fd.params) vars[p.getName]=[];
-		int[string] counts1,counts2;
+		MapX!(string,int) counts1,counts2;
 		foreach(n;fd.retNames)
-			++counts1[n];
+			counts1[n] += 1;
 		foreach(ref n;fd.retNames){
-			if(counts1[n]>1)
-				n~=lowNum(++counts2[n]);
+			if(counts1[n]>1){
+				counts2[n] += 1;
+				n~=lowNum(counts2[n]);
+			}
 			while(n in vars) n~="'";
 			vars[n]=[];
 		}
@@ -8046,7 +8048,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			newfscope_.insert(p);
 		}
 		Declaration[] ncapturedDecls;
-		Identifier[][Declaration] ncaptures;
+		MapX!(Declaration,Identifier[]) ncaptures;
 		foreach(capture;fd.capturedDecls){ // undo consumption of captures
 			capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
 			if(fd.isConsumedCapture(capture)&&fd.scope_.canInsert(capture.name.id)){

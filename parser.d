@@ -6,6 +6,7 @@ import astopt;
 import std.array, std.typetuple, std.algorithm, std.conv;
 import std.traits: EnumMembers;
 import util.tuple: Q=Tuple,q=tuple;
+import util: MapX, MapSX;
 import ast.lexer, ast.error, ast.expression, ast.type, ast.declaration, util;
 // (re-purposed D parser, a little bit messy for now.)
 
@@ -939,7 +940,7 @@ struct Parser{
 		auto annotation=Annotation.none;
 		bool inferAnnotation=true;
 		bool isLifted=false;
-		Expression[Id] attributes;
+		MapSX!(Id,Expression) attributes;
 		while(ttype==Tok!"@"){
 			import std.stdio: stderr;
 			if(tok.name.length) {

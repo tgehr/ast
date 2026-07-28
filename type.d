@@ -34,6 +34,7 @@ import std.functional, std.range;
 import ast.expression, ast.declaration, util;
 import ast.modules: isInPrelude;
 import ast.scope_: Scope, TypeTransition;
+import util: MapX, MapSX;
 
 enum NumericType{
 	none,
@@ -420,10 +421,10 @@ class ClassicalTy: Expression{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return inner.freeVarsImpl(dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		return new ClassicalTy(inner.substitute(subst,tt));
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		assert(false);
 	}
 	override Annotation getAnnotation(){
@@ -472,12 +473,12 @@ class TupleTy: Type,ITupleTy{
 				return r;
 		return 0;
 	}
-	override Type substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Type substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ntypes=types.dup;
 		foreach(ref t;ntypes) t=t.substitute(subst,tt);
 		return tupleTy(ntypes);
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto tt=rhs.isTupleTy();
 		if(!tt||types.length!=tt.length) return false;
 		return all!(i=>types[i].unify(tt[i],subst,meet))(iota(types.length));
@@ -591,10 +592,10 @@ class ArrayTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override ArrayTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override ArrayTy substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		return arrayTy(next.substitute(subst,tt));
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		if(auto vt=cast(VectorTy)rhs)
 			return next.unify(vt.next,subst,meet);
 		if(auto tt=cast(TupleTy)rhs)
@@ -708,10 +709,10 @@ class VectorTy: Type, ITupleTy{
 		if(auto r=next.freeVarsImpl(dg)) return r;
 		return num.freeVarsImpl(dg);
 	}
-	override VectorTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override VectorTy substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		return vectorTy(next.substitute(subst,tt),num.substitute(subst,tt));
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		if(auto tt=cast(TupleTy)rhs)
 			return tt.types.all!(ty=>next.unify(ty,subst,meet)) && num.unify(LiteralExp.makeInteger(tt.length),subst,meet);
 		if(auto vt=cast(VectorTy)rhs){
@@ -1083,11 +1084,11 @@ class ProductTy: Type{
 		foreach(n;nnames) assert(!hasFreeVar(n));
 	}do{
 		if(nnames==names) return this;
-		Expression[Id] subst;
+		MapSX!(Id,Expression) subst;
 		foreach(i;0..names.length) subst[names[i]]=varTy(nnames[i],argTy(i));
 		return productTy(isConst,nnames,dom,cod.substitute(subst),isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
-	override ProductTy substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override ProductTy substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		foreach(n;names){
 			if(!n) continue;
 			bool ok=true;
@@ -1103,7 +1104,7 @@ class ProductTy: Type{
 		auto ncod=cod.substitute(nsubst,tt);
 		return productTy(isConst,names,ndom,ncod,isSquare,isTuple,captureAnnotation,annotation,isClassical_);
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto r=cast(ProductTy)rhs; // TODO: get rid of duplication (same code in opEquals)
 		if(!r) return false;
 		if(isTuple&&!r.dom.isTupleTy()) return false;
@@ -1124,7 +1125,7 @@ class ProductTy: Type{
 		// assert(!names.any!(name=>r.hasFreeVar(name)));
 		// assert(!r.names.any!(name=>hasFreeVar(name)));
 		r=r.relabelAll(iota(names.length).map!(i=>names[i]?names[i]:r.names[i]).array);
-		UnificationResult[Id] nsubst;
+		MapSX!(Id,UnificationResult) nsubst;
 		foreach(k,v;subst) if(!names.canFind(k)) nsubst[k]=v;
 		auto res=dom.unify(r.dom,nsubst,!meet)&&cod.unify(r.cod,nsubst,meet);
 		foreach(k,v;nsubst) subst[k]=v;
@@ -1141,7 +1142,7 @@ class ProductTy: Type{
 			atys=iota(tpl.length).map!(i=>tpl[i]).array;
 			if(atys.length!=cod.nargs) return null;
 		}else atys=[arg.type];
-		UnificationResult[Id] subst;
+		MapSX!(Id,UnificationResult) subst;
 		foreach(i,n;names) subst[n]=UnificationResult.init;
 		foreach(i,aty;atys){
 			if(i>=cod.nargs) continue;
@@ -1179,7 +1180,7 @@ class ProductTy: Type{
 		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;
 		if(!isSubtype(arg.type,dom)) return null;
-		Expression[Id] subst;
+		MapSX!(Id,Expression) subst;
 		if(isTuple){
 			auto targTy=arg.type.isTupleTy();
 			assert(!!tdom);
@@ -1387,7 +1388,7 @@ ProductTy productTy(bool[] isConst,Id[] names,Expression dom,Expression cod,bool
 		}
 		assert(types.length == names.length);
 		auto params = new Parameter[names.length];
-		Expression[Id] subst;
+		MapSX!(Id,Expression) subst;
 		foreach(i, name; names) {
 			Identifier id;
 			if(name) {
@@ -1479,10 +1480,10 @@ class VariadicTy: Type{
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		return next.freeVarsImpl(dg);
 	}
-	override Expression substituteImpl(Expression[Id] subst,TypeTransition* tt){
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		return variadicTy(next.substitute(subst,tt),isClassical_);
 	}
-	override bool unifyImpl(Expression rhs,ref UnificationResult[Id] subst,bool meet){
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		if(auto vt=cast(VariadicTy)rhs)
 			return next.unify(vt.next,subst,meet);
 		// if(auto vt=cast(VectorTy)rhs) return next.unify(vector(vt.next.num,vt.next.type),subst,meet); // TODO
