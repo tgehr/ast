@@ -410,6 +410,28 @@ abstract class Scope{
 		void pinLastUse(Declaration decl){
 			lastUses.pin(decl,true);
 		}
+		private struct TypeConstBlockEntry{
+			Declaration decl;
+			Expression previous;
+		}
+		private TypeConstBlockEntry[] typeConstBlockLog;
+		final void recordTypeConstBlock(Declaration decl)in{
+			assert(!!decl);
+		}do{
+			typeConstBlockLog~=TypeConstBlockEntry(decl,decl.typeConstBlocker);
+		}
+		final size_t saveTypeConstBlocks(){
+			return typeConstBlockLog.length;
+		}
+		final void releaseTypeConstBlocks(size_t save,bool doRelease)in{
+			assert(save<=typeConstBlockLog.length);
+		}do{
+			foreach_reverse(i;save..typeConstBlockLog.length){
+				auto entry=typeConstBlockLog[i];
+				if(doRelease) entry.decl.typeConstBlocker=entry.previous;
+			}
+			typeConstBlockLog.length=save;
+		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
 			assert(read.scope_);
@@ -707,7 +729,8 @@ abstract class Scope{
 	}do{
 		if(decl.scope_ is this) return true;
 		if(decl.isToplevelDeclaration()) return false;
-		if(decl.isConst||decl.typeConstBlocker) return false;
+		import ast.semantic_:typeConstBlocked;
+		if(decl.isConst||typeConstBlocked(decl,this)) return false;
 		if(isConst(decl)){
 			if(!canRecompute(decl)) return false;
 			static if(language==silq) noteDependencyResolved(getDependency(decl));
@@ -873,7 +896,8 @@ abstract class Scope{
 	}do{
 		if(!meaning) meaning=id.meaning;
 		if(!meaning) return true;
-		if(meaning.typeConstBlocker) return false;
+		import ast.semantic_:typeConstBlocked;
+		if(typeConstBlocked(meaning,this)) return false;
 		if(canRecompute(meaning)) return true;
 		if(isConst(meaning)) return false;
 		if(meaning.isConst) return false;
@@ -893,12 +917,12 @@ abstract class Scope{
 			}
 			return false;
 		}
-		if(meaning.typeConstBlocker){
+		import ast.semantic_:typeConstBlocked,typeConstBlockNote;
+		if(typeConstBlocked(meaning,this)){
 			if(!meaning.isSemError()){
 				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
 				meaning.setSemForceError();
 			}
-			import ast.semantic_:typeConstBlockNote;
 			typeConstBlockNote(meaning,this);
 			id.setSemForceError();
 			return false;
@@ -1370,6 +1394,7 @@ abstract class Scope{
 			deadMerges[sym.name.id]=dm;
 			return dm;
 		}
+		MapSX!(Id,Expression) mergeTypeSubst;
 		foreach(psym;rnsymtab.dup){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
@@ -1436,6 +1461,10 @@ abstract class Scope{
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
 						if(!st) st=ot;
+						if(mergeTypeSubst.length){ // compare types after, not before, merging the variables they mention
+							if(ot) ot=ot.substitute(mergeTypeSubst);
+							if(st) st=st.substitute(mergeTypeSubst);
+						}
 						bool trivialSplit=sym.canonicalSource is osym.canonicalSource;
 						if(ot&&st){
 							if(quantumControl&&!trivialSplit){ // automatically promote to quantum if possible
@@ -1483,6 +1512,18 @@ abstract class Scope{
 							dep.joinWith(nestedControlDependency);
 							sc.addDependency(sym,dep);
 							sc.pushDependencies(osym,false);
+						}
+					}
+					if(!cast(DeadDecl)sym){
+						if(auto mtype=typeForDecl(sym)){
+							auto nid=new Identifier(sym.getId);
+							nid.meaning=sym;
+							nid.scope_=this;
+							nid.loc=sym.loc;
+							nid.type=mtype;
+							nid.constLookup=true;
+							nid.setSemCompleted();
+							mergeTypeSubst[sym.getId]=nid;
 						}
 					}
 				}else{
@@ -1678,7 +1719,8 @@ abstract class Scope{
 		}
 		private bool isNonConstDecl(Declaration decl){ // TODO: get rid of code duplication?
 			if(!decl) return false;
-			if(!decl||decl.isConst||decl.typeConstBlocker||isConst(decl))
+			import ast.semantic_:typeConstBlocked;
+			if(!decl||decl.isConst||typeConstBlocked(decl,rnsymtab)||isConst(decl))
 				return false;
 			return true;
 		}
@@ -2186,7 +2228,8 @@ class CapturingScope(T): NestedScope{
 			if(free.meaning)
 				addCapture(free,free.meaning,Lookup.constant,origin);
 		}
-		bool isConstDecl=meaning.isConst||meaning.typeConstBlocker||origin.isConst(meaning);
+		import ast.semantic_:typeConstBlocked;
+		bool isConstDecl=meaning.isConst||typeConstBlocked(meaning,origin)||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstDecl;
 		static if(language==silq&&is(T==FunctionDef)){
 			auto captureAnnotation=decl.ftype?decl.ftype.captureAnnotation:CaptureAnnotation.const_; // TODO: store in function def

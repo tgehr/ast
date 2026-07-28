@@ -234,7 +234,7 @@ Expression presemantic(Declaration expr,Scope sc){
 			fd.rret=expressionSemantic(fd.rret, ExpSemContext.forType(fsc));
 			fd.ret=typeSemantic(fd.rret, fsc);
 			propErr(fd.rret,fd);
-			typeConstBlock(fd.ret,fd,sc);
+			typeConstBlockPermanent(fd.ret,fd,sc);
 			setFtype(fd,true);
 			if(!fd.body_){
 				switch(fd.getName){
@@ -2012,12 +2012,14 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 	assert(sc.allowsLinear());
 }do{
 	if(e.isSemCompleted()) return e;
+	static if(language==silq) auto typeConstBlockSave=sc.saveTypeConstBlocks();
 	e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
 	if(!e.type) e.type=unit;
 	e.setSemCompleted();
 	static if(language==silq){
 		if(resetConst&&!sc.resetConst(e,true,InType.no))
 			e.setSemForceError();
+		sc.releaseTypeConstBlocks(typeConstBlockSave,resetConst);
 		sc.clearConsumed();
 	}
 	return e;
@@ -3790,7 +3792,6 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			}
 		}
 	}
-	typeConstBlock(be.e2.type,be,sc);
 	be.type=isBottom?bottom:unit;
 	be.setSemCompleted();
 	Expression r=be;
@@ -4120,50 +4121,94 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
 	return result;
 }
 
-void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
+Expression typeForDeclNoAnalyze(Declaration decl){
+	// like typeForDecl, but never triggers further semantic analysis
+	if(auto vd=cast(VarDecl)decl) return vd.vtype;
+	if(auto fd=cast(FunctionDef)decl) return fd.ftype;
+	return null;
+}
+
+Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+	Declaration scan(MapX!(Id,Declaration) rnsymtab){
+		foreach(_,d;rnsymtab){
+			if(cast(DeadDecl)d) continue;
+			if(d.isSemError()) continue;
+			if(d.mergedInto) continue; // consumed by merging; the merged declaration is checked separately
+			auto type=typeForDeclNoAnalyze(d);
+			if(!type) continue;
+			foreach(id;type.freeIdentifiers){
+				if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
+					return d;
+			}
+		}
+		return null;
+	}
+	if(auto r=scan(rnsymtab)) return r;
+	if(decl.scope_&&decl.scope_.rnsymtab!is rnsymtab)
+		if(auto r=scan(decl.scope_.rnsymtab)) return r;
+	return null;
+}
+Declaration liveTypeDependent(Declaration decl,Scope sc){
+	return liveTypeDependent(decl,sc.rnsymtab);
+}
+
+bool typeConstBlocked(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,rnsymtab);
+}
+bool typeConstBlocked(Declaration decl,Scope sc){
+	return typeConstBlocked(decl,sc.rnsymtab);
+}
+
+void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc,bool permanent=false)in{
 	assert(!!decl&&blocker&&sc);
 }do{
+	if(!permanent) sc.recordTypeConstBlock(decl); // released at the end of the enclosing statement
 	decl.typeConstBlocker=blocker;
 	sc.pinLastUse(decl);
 	assert(!isAssignable(decl,sc));
 }
 
-void typeConstBlock(Expression type,Expression blocker,Scope sc){
+void typeConstBlockPermanent(Expression type,Expression blocker,Scope sc){ // TODO: get rid of this
 	if(!type||!type.isSemCompleted())
 		return;
 	foreach(id;type.freeIdentifiers){
 		assert(!!id.meaning);
-		typeConstBlockDecl(id.meaning,blocker,sc);
+		typeConstBlockDecl(id.meaning,blocker,sc,true);
 	}
 }
 
 bool isAssignable(Declaration meaning,Scope sc){
-	if(meaning.isConst||meaning.typeConstBlocker||sc.isConst(meaning)) return false;
+	if(meaning.isConst||typeConstBlocked(meaning,sc)||sc.isConst(meaning)) return false;
 	for(auto csc=sc;csc !is meaning.scope_&&cast(NestedScope)csc;csc=(cast(NestedScope)csc).parent)
 		if(auto fsc=cast(FunctionScope)csc)
 			return false;
 	return true;
 }
 
-void typeConstBlockNote(Declaration decl,Scope sc)in{
-	assert(!!decl.typeConstBlocker);
-}do{
-	string name;
-	if(auto blocker=cast(Declaration)decl.typeConstBlocker) name=blocker.getName;
-	if(name){
-		sc.note(format("`%s` was made `const` because it appeared in type of `%s`",decl.name,name),decl.typeConstBlocker.loc);
-	}else{
-		if(cast(Declaration)decl.typeConstBlocker||cast(DefineExp)decl.typeConstBlocker){
-			sc.note(format("`%s` was made `const` because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
+void typeConstBlockNote(Declaration decl,Scope sc){
+	if(auto dependent=liveTypeDependent(decl,sc)){
+		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",decl.name,typeForDecl(dependent),dependent.kind,dependent.getName),dependent.loc);
+		return;
+	}
+	if(decl.typeConstBlocker){
+		string name;
+		if(auto blocker=cast(Declaration)decl.typeConstBlocker) name=blocker.getName;
+		if(name.length){ // NB: `if(name)` would only test for null, not for the empty name of an anonymous function
+			sc.note(format("`%s` was made `const` because it appeared in type of `%s`",decl.name,name),decl.typeConstBlocker.loc);
 		}else{
-			sc.note(format("`%s` was made `const` because it appeared in type of expression",decl.name),decl.typeConstBlocker.loc);
+			if(cast(Declaration)decl.typeConstBlocker||cast(DefineExp)decl.typeConstBlocker){
+				sc.note(format("`%s` was made `const` because it appeared in type of local variable",decl.name),decl.typeConstBlocker.loc);
+			}else{
+				sc.note(format("`%s` was made `const` because it appeared in type of expression",decl.name),decl.typeConstBlocker.loc);
+			}
 		}
+		return;
 	}
 }
 
 bool isNonConstDecl(Declaration decl,Scope sc){
 	if(!decl) return false;
-	if(decl.isConst||decl.typeConstBlocker||sc.isConst(decl))
+	if(decl.isConst||typeConstBlocked(decl,sc)||sc.isConst(decl))
 		return false;
 	return true;
 }
@@ -4173,7 +4218,7 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 	if(isNonConstDecl(meaning,sc)) return true;
 	if(!meaning.isSemError()){
 		sc.error(text("cannot "~action~" `const` ",meaning.kind," ",meaning.name),loc);
-		if(meaning.typeConstBlocker) typeConstBlockNote(meaning,sc);
+		if(typeConstBlocked(meaning,sc)) typeConstBlockNote(meaning,sc);
 		else if(auto read=sc.isConst(meaning)) sc.note(text(meaning.kind," was made `const` here"), read.loc);
 	}
 	return false;
@@ -7888,12 +7933,12 @@ bool setFtype(FunctionDef fd,bool force){
 		if(fd.ret) foreach(id;fd.ret.freeIdentifiers){
 			if(!id.meaning) continue;
 			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
-			if(id.meaning.scope_&&id.meaning.scope_.isNestedIn(bdy.blscope_)){
+			if(id.meaning.scope_&&id.meaning.scope_.isNestedIn(bdy.blscope_)&&id.meaning.canonicalSource.scope_&&id.meaning.canonicalSource.scope_.isNestedIn(bdy.blscope_)){
 				fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), fd.loc);
 				fsc.note("variable declared here",id.meaning.loc);
 				fd.setSemError();
 			}
-			if(fd.scope_) typeConstBlockDecl(id.meaning,fd,fd.scope_);
+			if(fd.scope_) typeConstBlockDecl(id.meaning,fd,fd.scope_,true);
 		}
 	}
 	return true;
@@ -7979,7 +8024,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			assert(id.isSemError(),text(id," ",id.sstate," ",fd.ftype," ",fd));
 			continue;
 		}
-		typeConstBlockDecl(id.meaning,fd,sc);
+		typeConstBlockDecl(id.meaning,fd,sc,true);
 	}
 	if(bdy){
 		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(fd.scope_)) fd.setSemError();

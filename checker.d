@@ -847,11 +847,6 @@ class Checker {
 			ifTrue.defineVar(vTrue, "splitVars-if-true", cause);
 			ifFalse.defineVar(vFalse, "splitVars-if-false", cause);
 		}
-
-		// Make sure the merged types are evaluated in the outer scope.
-		foreach(decl; scTrue.mergedVars ~ scFalse.mergedVars) {
-			visExpr(typeForDecl(decl.mergedInto));
-		}
 	}
 
 	void visMerge(Checker ifTrue, Checker ifFalse, ast_exp.Expression cause) {
@@ -885,9 +880,6 @@ class Checker {
 			defineVar(outer, "mergedVars", cause);
 		}
 
-		// Make sure the merged types are evaluated in the outer scope.
-		// (only after all merged variables are defined: dependent types
-		// may reference sibling merged variables)
 		foreach(decl; scTrue.mergedVars) {
 			visExpr(typeForDecl(decl.mergedInto));
 		}
