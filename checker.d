@@ -198,12 +198,6 @@ class Checker {
 
 	// Check statement, return true iff it definitely returns
 	StmtResult visStmt(ast_exp.Expression e) {
-		if(auto et = cast(ast_exp.BinaryExp!(Tok!":=")) e) return implStmt(et);
-		static foreach(op; assignOps) {
-			if(auto et = cast(ast_exp.BinaryExp!(Tok!(op.aop))) e) {
-				return implStmt(et);
-			}
-		}
 		return ast_exp.dispatchStm!((auto ref e)=>this.implStmt(e))(e);
 	}
 
@@ -657,7 +651,7 @@ class Checker {
 		return StmtResult.MayPass;
 	}
 
-	StmtResult implStmt(ast_exp.Expression e) {
+	StmtResult implStmt(T)(T e) if(ast_exp.isOneOf!(T,ast_exp.exprStmKinds)) {
 		expectConst(e, "expression statement");
 		visExpr(e);
 		if(ast_ty.isEmpty(e.type)) return StmtResult.Diverges;
@@ -1174,10 +1168,6 @@ class Checker {
 		expectConst(e.e, "UnaryExp!\""~op~"\" argument");
 		if(visLoweredExpr(e)) return;
 		visExpr(e.e);
-	}
-
-	void implExpr(ast_exp.Expression e) {
-		assert(0, typeid(e).name);
 	}
 
 	void defineVar(ast_decl.Declaration d, string causeType, ast_exp.Expression causeExpr) {

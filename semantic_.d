@@ -4,6 +4,7 @@ module ast.semantic_;
 import astopt;
 
 import std.array,std.algorithm,std.range,std.exception;
+import std.meta: AliasSeq;
 import std.format, std.conv, util.tuple:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,ast.reverse,util;
@@ -903,6 +904,12 @@ Expression statementSemanticImpl(DatDecl dd,Scope sc,ref StmFlags flags,bool res
 }
 Expression statementSemanticImpl(CommaExp ce,Scope sc,ref StmFlags flags,bool resetConst=true){
 	return expectDefineOrAssignSemantic(ce,sc,flags,resetConst);
+}
+Expression statementSemanticImpl(DefineExp de,Scope sc,ref StmFlags flags,bool resetConst=true){
+	return defineSemantic(de,sc,flags,resetConst:resetConst);
+}
+Expression statementSemanticImpl(AAssignExp ae,Scope sc,ref StmFlags flags,bool resetConst=true){
+	return assignSemantic(ae,sc,flags);
 }
 
 struct FixedPointIterState{
@@ -2005,11 +2012,7 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 	assert(sc.allowsLinear());
 }do{
 	if(e.isSemCompleted()) return e;
-	if(isDefineOrAssign(e)) {
-		e = defineOrAssignSemantic(e,sc,flags,resetConst:resetConst);
-	} else {
-		e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
-	}
+	e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
 	if(!e.type) e.type=unit;
 	e.setSemCompleted();
 	static if(language==silq){
@@ -2165,12 +2168,7 @@ Dependency getDependencyImpl(VectorForExp vfe,Scope sc){
 }
 
 Dependency getDependency(Expression e,Scope sc){
-	if(auto id=cast(Identifier)e) return getDependencyImpl(id,sc);
-	if(auto id=cast(CallExp)e) return getDependencyImpl(id,sc);
-	if(auto le=cast(LambdaExp)e) return getDependencyImpl(le,sc);
-	if(auto le=cast(LetExp)e) return getDependencyImpl(le,sc);
-	if(auto vfe=cast(VectorForExp)e) return getDependencyImpl(vfe,sc);
-	return getDependencyImpl(e,sc);
+	return e.dispatchExp!(getDependencyImpl,getDependencyImpl)(sc);
 }
 
 Dependency getFunctionDependency(FunctionDef fd,Scope sc,bool constOnly=false){
@@ -7750,23 +7748,23 @@ Expression expressionSemanticImpl(StringTy e,ExpSemContext context){
 	assert(false, "unanalyzed built-in type");
 }
 
+Expression expressionSemanticImpl(CommaExp ce,ExpSemContext context){
+	context.sc.error("nested comma expressions are disallowed",ce.loc);
+	ce.setSemError();
+	return ce;
+}
+
 Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 	auto sc=context.sc;
 	bool ok=false;
-	if(auto ce=cast(CommaExp)expr){
-		sc.error("nested comma expressions are disallowed",ce.loc);
-		ok=true;
-	}
 	static if(language==silq){
-		if(!ok){
-			if(auto ce=cast(UnaryExp!(Tok!"const"))expr){
-				sc.error("invalid `const` annotation (note that `const` goes before parameter names)", ce.loc);
-				ok=true;
-			}
-			if(auto ce=cast(UnaryExp!(Tok!"moved"))expr){
-				sc.error("invalid `moved` annotation (note that `moved` goes before parameter names)", ce.loc);
-				ok=true;
-			}
+		if(auto ce=cast(UnaryExp!(Tok!"const"))expr){
+			sc.error("invalid `const` annotation (note that `const` goes before parameter names)", ce.loc);
+			ok=true;
+		}
+		if(auto ce=cast(UnaryExp!(Tok!"moved"))expr){
+			sc.error("invalid `moved` annotation (note that `moved` goes before parameter names)", ce.loc);
+			ok=true;
 		}
 	}
 	if(!ok){
@@ -8390,62 +8388,89 @@ Expression typeForDecl(Declaration decl){
 
 bool definitelyReturns(Expression e){
 	if(e.type) return isEmpty(e.type);
-	if(auto ret=cast(ReturnExp)e)
-		return true;
-	if(auto ae=cast(AssertExp)e)
-		return isFalse(ae.e);
-	if(auto oe=cast(ObserveExp)e)
-		return isFalse(oe.e);
-	if(auto ce=cast(CompoundExp)e)
-		return ce.s.any!(x=>definitelyReturns(x));
-	if(auto ite=cast(IteExp)e)
-		return definitelyReturns(ite.then) && definitelyReturns(ite.othw);
-	if(auto fe=cast(ForExp)e){
-		/+auto lle=cast(LiteralExp)fe.left;
-		auto rle=cast(LiteralExp)fe.right;
-		if(lle && rle && lle.isInteger() && rle.isInteger()){ // TODO: parse values correctly
-			ℤ l=ℤ(lle.lit.str), r=ℤ(rle.lit.str);
-			l+=cast(long)fe.leftExclusive;
-			r-=cast(long)fe.rightExclusive;
-			return l<=r && definitelyReturns(fe.bdy);
-		}+/
-		return false;
-	}
-	if(auto we=cast(WhileExp)e)
-		return isTrue(we.cond);
-	if(auto re=cast(RepeatExp)e)
-		return isPositive(re.num) && definitelyReturns(re.bdy);
+	return dispatchStm!(definitelyReturnsImpl,definitelyReturnsImplDefault)(e);
+}
+private bool definitelyReturnsImpl(ReturnExp ret){
+	return true;
+}
+private bool definitelyReturnsImpl(AssertExp ae){
+	return isFalse(ae.e);
+}
+private bool definitelyReturnsImpl(ObserveExp oe){
+	return isFalse(oe.e);
+}
+private bool definitelyReturnsImpl(CompoundExp ce){
+	return ce.s.any!(x=>definitelyReturns(x));
+}
+private bool definitelyReturnsImpl(IteExp ite){
+	return definitelyReturns(ite.then) && definitelyReturns(ite.othw);
+}
+private bool definitelyReturnsImpl(ForExp fe){
+	/+auto lle=cast(LiteralExp)fe.left;
+	auto rle=cast(LiteralExp)fe.right;
+	if(lle && rle && lle.isInteger() && rle.isInteger()){ // TODO: parse values correctly
+		ℤ l=ℤ(lle.lit.str), r=ℤ(rle.lit.str);
+		l+=cast(long)fe.leftExclusive;
+		r-=cast(long)fe.rightExclusive;
+		return l<=r && definitelyReturns(fe.bdy);
+	}+/
+	return false;
+}
+private bool definitelyReturnsImpl(WhileExp we){
+	return isTrue(we.cond);
+}
+private bool definitelyReturnsImpl(RepeatExp re){
+	return isPositive(re.num) && definitelyReturns(re.bdy);
+}
+static if(language==silq)
+private bool definitelyReturnsImpl(WithExp we){
+	return definitelyReturns(we.bdy);
+}
+private bool definitelyReturnsImpl(T)(T e)
+	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,CObserveExp,ForgetExp,FunctionDef,CommaExp,DefineExp))||is(T:AAssignExp))
+{
+	return false;
+}
+private bool definitelyReturnsImplDefault(Expression e){
 	return false;
 }
 
 ReturnExp mayReturn(Expression e){
-	if(auto ret=cast(ReturnExp)e)
-		return ret;
-	if(auto ce=cast(CompoundExp)e){
-		foreach(s;ce.s)
-			if(auto ret=mayReturn(s))
-				return ret;
-	}
-	if(auto ite=cast(IteExp)e){
-		if(auto ret=mayReturn(ite.then)) return ret;
-		if(auto ret=mayReturn(ite.othw)) return ret;
-	}
-	if(auto fe=cast(ForExp)e){
-		if(auto ret=mayReturn(fe.bdy)) return ret;
-	}
-	if(auto we=cast(WhileExp)e){
-		if(!isFalse(we.cond)){
-			if(auto ret=mayReturn(we.bdy)) return ret;
-		}
-	}
-	if(auto re=cast(RepeatExp)e){
-		if(!isZero(re.num)){
-			if(auto ret=mayReturn(re.bdy)) return ret;
-		}
-	}
-	if(auto we=cast(WithExp)e){
-		if(auto ret=mayReturn(we.bdy)) return ret;
-	}
+	return dispatchStm!(mayReturnImpl,mayReturnImplDefault)(e);
+}
+private ReturnExp mayReturnImpl(ReturnExp ret){
+	return ret;
+}
+private ReturnExp mayReturnImpl(CompoundExp ce){
+	foreach(s;ce.s)
+		if(auto ret=mayReturn(s))
+			return ret;
+	return null;
+}
+private ReturnExp mayReturnImpl(IteExp ite){
+	if(auto ret=mayReturn(ite.then)) return ret;
+	if(auto ret=mayReturn(ite.othw)) return ret;
+	return null;
+}
+private ReturnExp mayReturnImpl(ForExp fe){
+	return mayReturn(fe.bdy);
+}
+private ReturnExp mayReturnImpl(WhileExp we){
+	return isFalse(we.cond)?null:mayReturn(we.bdy);
+}
+private ReturnExp mayReturnImpl(RepeatExp re){
+	return isZero(re.num)?null:mayReturn(re.bdy);
+}
+static if(language==silq)
+private ReturnExp mayReturnImpl(WithExp we){
+	return mayReturn(we.bdy);
+}
+private ReturnExp mayReturnImpl(T)(T e)
+	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,AssertExp,ObserveExp,CObserveExp,ForgetExp,FunctionDef,CommaExp,DefineExp))||is(T:AAssignExp))
+{
+	return null;
+}
+private ReturnExp mayReturnImplDefault(Expression e){
 	return null;
 }
 

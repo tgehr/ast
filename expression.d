@@ -3110,16 +3110,27 @@ alias AndExp=BinaryExp!(Tok!"∧");
 alias Exp=Expression;
 
 
+template isOneOf(T,List...){
+	enum isOneOf=List.length!=0&&(is(T==List[0])||isOneOf!(T,List[1..$]));
+}
 alias declKinds=AliasSeq!(
 	FunctionDef,DatDecl,DefineExp,CommaExp,ImportExp
 );
+alias assignKinds=AliasSeq!(
+	AssignExp,OrElseAssignExp,AndThenAssignExp,OrAssignExp,XorAssignExp,AndAssignExp,
+	AddAssignExp,SubAssignExp,NSubAssignExp,MulAssignExp,DivAssignExp,IDivAssignExp,
+	ModAssignExp,PowAssignExp,CatAssignExp,BitOrAssignExp,BitXorAssignExp,BitAndAssignExp
+);
 private alias stmKindsCommon=AliasSeq!(
 	CallExp,TypeAnnotationExp,CompoundExp,IteExp,ReturnExp,FunctionDef,CommaExp,
+	DefineExp,assignKinds,
 	ForExp,WhileExp,RepeatExp,ObserveExp,CObserveExp,AssertExp,ForgetExp
 );
 static if(language==silq) alias stmKinds=AliasSeq!(stmKindsCommon,WithExp);
 else static if(language==psi) alias stmKinds=AliasSeq!(stmKindsCommon,DatDecl);
 else alias stmKinds=stmKindsCommon;
+// statement kinds that are handled by analyzing them as expressions
+alias exprStmKinds=AliasSeq!(CallExp,TypeAnnotationExp,ObserveExp,CObserveExp,AssertExp,ForgetExp);
 private alias expKindsCommon=AliasSeq!(
 	IteExp,AssertExp,LiteralExp,LetExp,LambdaExp,CallExp,ForgetExp,Identifier,
 	FieldExp,IndexExp,SliceExp,TupleExp,VectorExp,TypeAnnotationExp,
@@ -3133,7 +3144,7 @@ private alias expKindsCommon=AliasSeq!(
 static if(language==psi) alias expKinds=AliasSeq!(expKindsCommon,PlaceholderExp);
 else alias expKinds=expKindsCommon;
 alias unanalyzedExpKinds=AliasSeq!(
-	WildcardExp,TypeofExp,BinaryExp!(Tok!"×"),BinaryExp!(Tok!"→")
+	CommaExp,WildcardExp,TypeofExp,BinaryExp!(Tok!"×"),BinaryExp!(Tok!"→")
 );
 
 private noreturn unknownDeclError(T...)(Expression s,auto ref T args){
@@ -3151,7 +3162,6 @@ private noreturn unknownStmError(T...)(Expression s,auto ref T args){
 auto dispatchStm(alias f,alias default_=unknownStmError,bool unanalyzed=false,T...)(Expression s,auto ref T args){
 	import core.lifetime:forward;
 	static if(unanalyzed) if(auto idx=cast(IndexExp)s) return f(idx,forward!args);
-	// TODO: supertypes for define and assign?
 	static foreach(K;stmKinds) if(auto x=cast(K)s) return f(x,forward!args);
 	return default_(s,args);
 }

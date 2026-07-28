@@ -4,10 +4,6 @@ import ast.expression, ast.type, ast.declaration, ast.scope_, ast.lastuse;
 import astopt;
 import std.meta: AliasSeq;
 
-private template isOneOf(T,List...){
-	enum isOneOf=List.length!=0&&(is(T==List[0])||isOneOf!(T,List[1..$]));
-}
-
 private alias genericLhsTypes=AliasSeq!(
 	IteExp,AssertExp,LiteralExp,LambdaExp,PlaceholderExp,ForgetExp,SliceExp,VectorExp,
 	UPlusExp,UMinusExp,UNotExp,UBitNotExp,
@@ -265,8 +261,11 @@ private int stmtBoundVars(CompoundExp ce,scope int delegate(Identifier) dg){
 		foreach(x;ce.s) if(auto r=statementBoundVarsImpl(x,dg)) return r;
 	return 0;
 }
+private int stmtBoundVars(DefineExp de,scope int delegate(Identifier) dg){
+	return defineLhsBoundVarsImpl(de.e1,dg);
+}
 private int stmtBoundVars(T)(T stmt,scope int delegate(Identifier) dg)
-	if(is(T==ForExp)||is(T==WhileExp)||is(T==RepeatExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+	if(is(T==ForExp)||is(T==WhileExp)||is(T==RepeatExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T:AAssignExp))
 {
 	return 0; // these statement kinds bind no names in the enclosing block
 }
@@ -275,7 +274,6 @@ private int stmtBoundVars(WithExp we,scope int delegate(Identifier) dg){
 	return 0; // names bound by a `with` block are local to the construct
 }
 private int stmtBoundVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
-	if(auto de=cast(DefineExp)stmt) return defineLhsBoundVarsImpl(de.e1,dg);
 	return 0;
 }
 
@@ -328,7 +326,7 @@ private int stmtFreeVars(ForgetExp fe,scope int delegate(Identifier) dg){
 	return fe.val?fe.val.freeVarsImpl(dg):0;
 }
 private int stmtFreeVars(T)(T stmt,scope int delegate(Identifier) dg)
-	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T:AAssignExp))
 {
 	return stmt.freeVarsImpl(dg);
 }
@@ -336,11 +334,11 @@ static if(language==silq)
 private int stmtFreeVars(WithExp we,scope int delegate(Identifier) dg){
 	return we.freeVarsImpl(dg);
 }
+private int stmtFreeVars(DefineExp de,scope int delegate(Identifier) dg){
+	if(auto r=de.e2.freeVarsImpl(dg)) return r;
+	return defineLhsFreeVarsImpl(de.e1,dg);
+}
 private int stmtFreeVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
-	if(auto de=cast(DefineExp)stmt){
-		if(auto r=de.e2.freeVarsImpl(dg)) return r;
-		return defineLhsFreeVarsImpl(de.e1,dg);
-	}
 	return stmt.freeVarsImpl(dg);
 }
 
@@ -397,18 +395,17 @@ private void collectBoundNames(WhileExp we,ref void[0][Id] names){
 private void collectBoundNames(RepeatExp re,ref void[0][Id] names){
 	foreach(x;re.bdy.s) collectBoundNamesImpl(x,names);
 }
+private void collectBoundNames(DefineExp de,ref void[0][Id] names){
+	if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
+}
 private void collectBoundNames(T)(T stmt,ref void[0][Id] names)
-	if(is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+	if(is(T==ReturnExp)||is(T==ForgetExp)||is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T:AAssignExp))
 {
 }
 static if(language==silq)
 private void collectBoundNames(WithExp we,ref void[0][Id] names){
 }
 private void collectBoundNamesDefault(Expression stmt,ref void[0][Id] names){
-	if(auto de=cast(DefineExp)stmt){
-		if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
-		return;
-	}
 	if(auto le=cast(LetExp)stmt) foreach(x;le.s.s) collectBoundNamesImpl(x,names);
 }
 void collectFunctionBoundNames(FunctionDef fd,ref void[0][Id] names){
@@ -687,15 +684,14 @@ private Expression substituteStatement(Expression stmt,ref BlockSubst ctx){
 	return dispatchStm!(substStm,substStmDefault)(stmt,ctx);
 }
 
-// the default handles the statement kinds that dispatchStm does not route
-private Expression substDefine(DefineExp de,ref BlockSubst ctx){
+private Expression substStm(DefineExp de,ref BlockSubst ctx){
 	auto ne2=substituteLValue(de.e2,ctx);
 	auto ne1=substituteDefineLhs(de.e1,ctx);
 	if(ne1 is de.e1&&ne2 is de.e2) return de;
 	auto r=new DefineExp(ne1,ne2);
 	return finishStatement(r,de,ctx);
 }
-private Expression substAssign(AAssignExp ae,ref BlockSubst ctx){
+private Expression substStm(AAssignExp ae,ref BlockSubst ctx){
 	auto ne1=substituteLValue(ae.e1,ctx);
 	auto ne2=useSubstitute(ae.e2,ctx);
 	if(ne1 is ae.e1&&ne2 is ae.e2) return ae;
@@ -708,8 +704,6 @@ private Expression substAssign(AAssignExp ae,ref BlockSubst ctx){
 	return finishStatement(r,ae,ctx);
 }
 private Expression substStmDefault(Expression stmt,ref BlockSubst ctx){
-	if(auto de=cast(DefineExp)stmt) return substDefine(de,ctx);
-	if(auto ae=cast(AAssignExp)stmt) return substAssign(ae,ctx);
 	// expression-statements are substituted as lvalues
 	return substituteLValue(stmt,ctx);
 }
@@ -1282,7 +1276,7 @@ private void walkStmt(WithExp we,Expression twstmt,Scope fparent,Declaration[Dec
 	if(we.itrans) walkBlock(we.itrans,we2.itrans);
 }
 private void walkStmt(T)(T stmt,Expression twstmt,Scope fparent,Declaration[Declaration]* dmap,MapScopeTreeDg mapFn)
-	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp))
+	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T==DefineExp)||is(T:AAssignExp))
 {
 	// statements without nested blocks need no scope remapping
 }
