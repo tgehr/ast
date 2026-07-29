@@ -412,13 +412,18 @@ abstract class Scope{
 		}
 		private struct TypeConstBlockEntry{
 			Declaration decl;
-			Expression previous;
 		}
 		private TypeConstBlockEntry[] typeConstBlockLog;
+		private static void releaseTypeConstBlockEntry(TypeConstBlockEntry entry){
+			auto decl=entry.decl;
+			assert(decl.typeConstBlockDepth>0);
+			if(--decl.typeConstBlockDepth==0) decl.typeConstBlocker=null;
+		}
 		final void recordTypeConstBlock(Declaration decl)in{
 			assert(!!decl);
 		}do{
-			typeConstBlockLog~=TypeConstBlockEntry(decl,decl.typeConstBlocker);
+			typeConstBlockLog~=TypeConstBlockEntry(decl);
+			decl.typeConstBlockDepth++;
 		}
 		final size_t saveTypeConstBlocks(){
 			return typeConstBlockLog.length;
@@ -428,7 +433,7 @@ abstract class Scope{
 		}do{
 			foreach_reverse(i;save..typeConstBlockLog.length){
 				auto entry=typeConstBlockLog[i];
-				if(doRelease) entry.decl.typeConstBlocker=entry.previous;
+				if(doRelease) releaseTypeConstBlockEntry(entry);
 			}
 			typeConstBlockLog.length=save;
 		}
@@ -451,38 +456,9 @@ abstract class Scope{
 			foreach(i;save..typeConstBlockLog.length){
 				auto entry=typeConstBlockLog[i];
 				if(keep(entry.decl)) typeConstBlockLog[j++]=entry;
-			}
-			foreach_reverse(i;j..typeConstBlockLog.length){
-				auto entry=typeConstBlockLog[i];
-				entry.decl.typeConstBlocker=entry.previous;
+				else releaseTypeConstBlockEntry(entry);
 			}
 			typeConstBlockLog.length=j;
-		}
-		private struct PermanentTypeConstBlockEntry{
-			Declaration decl;
-			Expression blocker;
-		}
-		private PermanentTypeConstBlockEntry[] permanentTypeConstBlockLog;
-		final void recordTypeConstBlockPermanent(Declaration decl,Expression blocker)in{
-			assert(!!decl&&blocker);
-		}do{
-			permanentTypeConstBlockLog~=PermanentTypeConstBlockEntry(decl,blocker);
-		}
-		final void releaseDeadTypeConstBlocks(){
-			import ast.semantic_:liveTypeDependent;
-			for(auto csc=this;csc;csc=(cast(NestedScope)csc)?(cast(NestedScope)csc).parent:null){
-				foreach(ref entry;csc.permanentTypeConstBlockLog){
-					if(entry.decl.typeConstBlocker !is entry.blocker) continue;
-					bool live=false;
-					for(auto ssc=this;ssc;ssc=(cast(NestedScope)ssc)?(cast(NestedScope)ssc).parent:null){
-						if(liveTypeDependent(entry.decl,ssc.rnsymtab)){
-							live=true;
-							break;
-						}
-					}
-					if(!live) entry.decl.typeConstBlocker=null;
-				}
-			}
 		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));

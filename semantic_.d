@@ -234,7 +234,10 @@ Expression presemantic(Declaration expr,Scope sc){
 			fd.rret=expressionSemantic(fd.rret, ExpSemContext.forType(fsc));
 			fd.ret=typeSemantic(fd.rret, fsc);
 			propErr(fd.rret,fd);
-			typeConstBlockPermanent(fd.ret,fd,sc);
+			if(fd.ret&&fd.ret.isSemCompleted()) foreach(id;fd.ret.freeIdentifiers){
+				assert(!!id.meaning);
+				typeConstBlockDecl(id.meaning,fd,sc);
+			}
 			setFtype(fd,true);
 			if(!fd.body_){
 				switch(fd.getName){
@@ -4159,23 +4162,13 @@ bool typeConstBlocked(Declaration decl,Scope sc){
 	return typeConstBlocked(decl,sc.rnsymtab);
 }
 
-void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc,bool permanent=false)in{
+void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
 	assert(!!decl&&blocker&&sc);
 }do{
-	if(!permanent) sc.recordTypeConstBlock(decl);
-	else sc.recordTypeConstBlockPermanent(decl,blocker);
+	sc.recordTypeConstBlock(decl);
 	decl.typeConstBlocker=blocker;
 	sc.pinLastUse(decl);
 	assert(!isAssignable(decl,sc));
-}
-
-void typeConstBlockPermanent(Expression type,Expression blocker,Scope sc){ // TODO: get rid of this
-	if(!type||!type.isSemCompleted())
-		return;
-	foreach(id;type.freeIdentifiers){
-		assert(!!id.meaning);
-		typeConstBlockDecl(id.meaning,blocker,sc,true);
-	}
 }
 
 bool isAssignable(Declaration meaning,Scope sc){
@@ -6104,7 +6097,6 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				}
 				if(auto nmeaning=sc.consume(meaning,id))
 					meaning=nmeaning;
-				static if(language==silq) sc.releaseDeadTypeConstBlocks(); // the forgotten value may have been the last live value whose type mentions a blocked variable
 				static if(language==silq){
 					if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
 						id.scope_=sc;
@@ -7965,7 +7957,7 @@ bool setFtype(FunctionDef fd,bool force){
 				fsc.note("variable declared here",id.meaning.loc);
 				fd.setSemError();
 			}
-			if(fd.scope_) typeConstBlockDecl(id.meaning,fd,fd.scope_,true);
+			if(fd.scope_) typeConstBlockDecl(id.meaning,fd,fd.scope_);
 		}
 	}
 	return true;
@@ -8051,7 +8043,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			assert(id.isSemError(),text(id," ",id.sstate," ",fd.ftype," ",fd));
 			continue;
 		}
-		typeConstBlockDecl(id.meaning,fd,sc,true);
+		typeConstBlockDecl(id.meaning,fd,sc);
 	}
 	if(bdy){
 		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(fd.scope_)) fd.setSemError();

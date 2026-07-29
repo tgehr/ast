@@ -79,6 +79,7 @@ abstract class Declaration: Expression{
 	}
 	// semantic information
 	Expression typeConstBlocker=null;
+	uint typeConstBlockDepth=0;
 }
 
 class CompoundDecl: Expression{
