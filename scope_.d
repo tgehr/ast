@@ -435,23 +435,54 @@ abstract class Scope{
 		final void filterTypeConstBlocks(size_t save,Expression type)in{
 			assert(save<=typeConstBlockLog.length);
 		}do{
+			filterTypeConstBlocks(save,(Declaration decl){
+				if(!type) return false;
+				foreach(id;type.freeIdentifiers){
+					if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
+						return true;
+				}
+				return false;
+			});
+		}
+		final void filterTypeConstBlocks(size_t save,bool delegate(Declaration) keep)in{
+			assert(save<=typeConstBlockLog.length);
+		}do{
 			size_t j=save;
 			foreach(i;save..typeConstBlockLog.length){
 				auto entry=typeConstBlockLog[i];
-				bool keep=false;
-				if(type) foreach(id;type.freeIdentifiers){
-					if(id.meaning&&id.meaning.canonicalSource is entry.decl.canonicalSource){
-						keep=true;
-						break;
-					}
-				}
-				if(keep) typeConstBlockLog[j++]=entry;
+				if(keep(entry.decl)) typeConstBlockLog[j++]=entry;
 			}
 			foreach_reverse(i;j..typeConstBlockLog.length){
 				auto entry=typeConstBlockLog[i];
 				entry.decl.typeConstBlocker=entry.previous;
 			}
 			typeConstBlockLog.length=j;
+		}
+		private struct PermanentTypeConstBlockEntry{
+			Declaration decl;
+			Expression blocker;
+		}
+		private PermanentTypeConstBlockEntry[] permanentTypeConstBlockLog;
+		final void recordTypeConstBlockPermanent(Declaration decl,Expression blocker)in{
+			assert(!!decl&&blocker);
+		}do{
+			permanentTypeConstBlockLog~=PermanentTypeConstBlockEntry(decl,blocker);
+		}
+		final void releaseDeadTypeConstBlocks(){
+			import ast.semantic_:liveTypeDependent;
+			for(auto csc=this;csc;csc=(cast(NestedScope)csc)?(cast(NestedScope)csc).parent:null){
+				foreach(ref entry;csc.permanentTypeConstBlockLog){
+					if(entry.decl.typeConstBlocker !is entry.blocker) continue;
+					bool live=false;
+					for(auto ssc=this;ssc;ssc=(cast(NestedScope)ssc)?(cast(NestedScope)ssc).parent:null){
+						if(liveTypeDependent(entry.decl,ssc.rnsymtab)){
+							live=true;
+							break;
+						}
+					}
+					if(!live) entry.decl.typeConstBlocker=null;
+				}
+			}
 		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));

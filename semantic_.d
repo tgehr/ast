@@ -4162,7 +4162,8 @@ bool typeConstBlocked(Declaration decl,Scope sc){
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc,bool permanent=false)in{
 	assert(!!decl&&blocker&&sc);
 }do{
-	if(!permanent) sc.recordTypeConstBlock(decl); // released at the end of the enclosing statement
+	if(!permanent) sc.recordTypeConstBlock(decl);
+	else sc.recordTypeConstBlockPermanent(decl,blocker);
 	decl.typeConstBlocker=blocker;
 	sc.pinLastUse(decl);
 	assert(!isAssignable(decl,sc));
@@ -5449,16 +5450,28 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				if(!tpl.isSemError()){
 					static if(isRhs&&language==silq) auto callArgSave=sc.saveTypeConstBlocks();
-					static if(isRhs&&language==silq) bool callArgsConsume=true;
 					foreach(i,ref exp;tpl.e){
 						auto realIsConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
 						static if(isRhs&&language==silq){
-							if(i>0&&callArgsConsume&&ft.cod){
-								bool codClosed=true;
-								foreach(id;ft.cod.freeIdentifiers){ codClosed=false; break; } // TODO: more precise analysis
-								if(codClosed) sc.releaseTypeConstBlocks(callArgSave,true);
+							if(i>0){
+								sc.filterTypeConstBlocks(callArgSave,(Declaration decl){
+									bool mentions(Expression type){
+										if(!type) return false;
+										foreach(id;type.freeIdentifiers){
+											if(id.meaning){
+												if(id.meaning.canonicalSource is decl.canonicalSource)
+													return true;
+											}else if(id.name==decl.getName) return true;
+										}
+										return false;
+									}
+									foreach(j;0..i)
+										if(mentions(ft.argTy(j))) return true;
+									if(mentions(fun.type)) return true;
+									if(mentions(ft.cod)) return true;
+									return false;
+								});
 							}
-							if(realIsConst) callArgsConsume=false;
 						}
 						static if(isRhs){
 							auto isConst=realIsConst;
@@ -6091,6 +6104,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				}
 				if(auto nmeaning=sc.consume(meaning,id))
 					meaning=nmeaning;
+				static if(language==silq) sc.releaseDeadTypeConstBlocks(); // the forgotten value may have been the last live value whose type mentions a blocked variable
 				static if(language==silq){
 					if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
 						id.scope_=sc;
