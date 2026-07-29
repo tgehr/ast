@@ -5448,8 +5448,18 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}
 				if(!tpl.isSemError()){
+					static if(isRhs&&language==silq) auto callArgSave=sc.saveTypeConstBlocks();
+					static if(isRhs&&language==silq) bool callArgsConsume=true;
 					foreach(i,ref exp;tpl.e){
 						auto realIsConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
+						static if(isRhs&&language==silq){
+							if(i>0&&callArgsConsume&&ft.cod){
+								bool codClosed=true;
+								foreach(id;ft.cod.freeIdentifiers){ codClosed=false; break; } // TODO: more precise analysis
+								if(codClosed) sc.releaseTypeConstBlocks(callArgSave,true);
+							}
+							if(realIsConst) callArgsConsume=false;
+						}
 						static if(isRhs){
 							auto isConst=realIsConst;
 							auto ncontext=context.nest(isConst?ConstResult.yes:ConstResult.no);
@@ -7858,8 +7868,11 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 	if(expr.isSemCompleted()||expr.isSemError()) return expr;
 	assert(expr.sstate==SemState.initial||cast(Identifier)expr&&expr.sstate==SemState.started);
 	auto constSave=sc.saveConst(); // TODO: make this faster?
+	static if(language==silq) auto typeConstBlockSave=sc.saveTypeConstBlocks();
 	expr=expr.dispatchExp!(expressionSemanticImpl,expressionSemanticImplDefault,true)(context);
 	static if(language==silq){
+		if(!expr.isSemError()&&expr.type)
+			sc.filterTypeConstBlocks(typeConstBlockSave,expr.type);
 		if(!expr.isSemError()){
 			assert(!!expr.type,text(expr," ",expr.type));
 			if(auto id=cast(Identifier)expr){

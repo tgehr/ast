@@ -432,6 +432,27 @@ abstract class Scope{
 			}
 			typeConstBlockLog.length=save;
 		}
+		final void filterTypeConstBlocks(size_t save,Expression type)in{
+			assert(save<=typeConstBlockLog.length);
+		}do{
+			size_t j=save;
+			foreach(i;save..typeConstBlockLog.length){
+				auto entry=typeConstBlockLog[i];
+				bool keep=false;
+				if(type) foreach(id;type.freeIdentifiers){
+					if(id.meaning&&id.meaning.canonicalSource is entry.decl.canonicalSource){
+						keep=true;
+						break;
+					}
+				}
+				if(keep) typeConstBlockLog[j++]=entry;
+			}
+			foreach_reverse(i;j..typeConstBlockLog.length){
+				auto entry=typeConstBlockLog[i];
+				entry.decl.typeConstBlocker=entry.previous;
+			}
+			typeConstBlockLog.length=j;
+		}
 		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
 			assert(read.meaning&&read is isConst(read.meaning));
 			assert(read.scope_);
