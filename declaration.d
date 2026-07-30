@@ -546,6 +546,7 @@ class EarlyForgottenDecl: DeadDecl{
 	Declaration decl;
 	Declaration consumed;
 	Identifier use;
+	EarlyForgottenDecl reportVia=null;
 	this(Declaration decl,Declaration consumed,Identifier use)in{
 		assert(!!decl&&!!consumed&&!!use);
 	}do{
@@ -558,7 +559,8 @@ class EarlyForgottenDecl: DeadDecl{
 	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
 		import std.format:format;
 		import ast.semantic_:typeForDecl;
-		if(isSemError()) return true; // already reported, but suppress the undefined identifier error
+		if(reportVia) return reportVia.reportUndefinedIdentifier(id,sc);
+		if(isSemError()) return true;
 		setSemForceError();
 		sc.error(format("cannot consume `const` %s `%s`",consumed.kind,use),use.loc);
 		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",consumed.name,typeForDecl(decl),decl.kind,decl.getName),decl.loc);

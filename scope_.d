@@ -1356,6 +1356,7 @@ abstract class Scope{
 				lastUses.forget(d,false);
 				auto ed=new EarlyForgottenDecl(d,decl,use);
 				if(!firstEFD) firstEFD=ed;
+				else ed.reportVia=firstEFD;
 				if(d.rename){
 					ed.rename=new Identifier(d.rename.id);
 					ed.rename.loc=d.rename.loc;
