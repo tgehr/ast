@@ -42,6 +42,7 @@ abstract class Declaration: Expression{
 	Declaration[] splitInto=[];
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
+	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
 
 	Declaration canonicalSource_=null;
 	Declaration canonicalSource(){ // TODO: compute eagerly instead?
@@ -571,6 +572,19 @@ class EarlyForgottenDecl: DeadDecl{
 	}
 	override string toString(){
 		return text("earlyForgotten(",super.toString(),",",use?text(use.loc):"<?>",")");
+	}
+}
+
+class IllegalConsumedDecl: ConsumedDecl{
+	EarlyForgottenDecl earlyForgotten;
+	this(Declaration decl,Identifier use,EarlyForgottenDecl earlyForgotten)in{
+		assert(!!earlyForgotten);
+	}do{
+		super(decl,use);
+		this.earlyForgotten=earlyForgotten;
+	}
+	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		return earlyForgotten.reportUndefinedIdentifier(id,sc);
 	}
 }
 

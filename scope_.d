@@ -725,7 +725,11 @@ abstract class Scope{
 	final ConsumedDecl recordConsumption(Declaration decl,Identifier use){
 		if(allowMerge) return null;
 		if(!use) return null;
-		auto cd=new ConsumedDecl(decl,use);
+		static if(language==silq){
+			auto earlyForgotten=decl.earlyForgotten;
+			decl.earlyForgotten=null;
+			auto cd=earlyForgotten?new IllegalConsumedDecl(decl,use,earlyForgotten):new ConsumedDecl(decl,use);
+		}else auto cd=new ConsumedDecl(decl,use);
 		if(decl.rename){
 			cd.rename=new Identifier(decl.rename.id);
 			cd.rename.loc=decl.rename.loc;
@@ -1347,9 +1351,11 @@ abstract class Scope{
 			foreach(d;dependents)
 				if(!lastUses.canForget(d,true,false))
 					return false;
+			EarlyForgottenDecl firstEFD=null;
 			foreach(d;dependents){
 				lastUses.forget(d,false);
 				auto ed=new EarlyForgottenDecl(d,decl,use);
+				if(!firstEFD) firstEFD=ed;
 				if(d.rename){
 					ed.rename=new Identifier(d.rename.id);
 					ed.rename.loc=d.rename.loc;
@@ -1366,7 +1372,9 @@ abstract class Scope{
 				if(canInsert(ed.name.id))
 					symtabInsert(ed);
 			}
-			return !typeConstBlocked(decl,this);
+			auto result=!typeConstBlocked(decl,this);
+			if(result) decl.earlyForgotten=firstEFD;
+			return result;
 		}
 	}
 	Declaration[] mergedVars;
@@ -1605,7 +1613,7 @@ abstract class Scope{
 				}
 				if(auto dd=cast(DeadDecl)sym){
 					auto dm=addDeadMerge(sym);
-					static if(language==silq) bool force=!!cast(EarlyForgottenDecl)dd;
+					static if(language==silq) bool force=!!cast(EarlyForgottenDecl)dd||!!cast(IllegalConsumedDecl)dd;
 					else bool force=false;
 					if(force||dm.mergedFrom.all!(d=>cast(DeadDecl)d))
 					   dm.mergedFrom~=dd;
