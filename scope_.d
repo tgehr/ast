@@ -947,6 +947,10 @@ abstract class Scope{
 		}
 		import ast.semantic_:typeConstBlocked,typeConstBlockNote;
 		if(typeConstBlocked(meaning,this)){
+			static if(language==silq){
+				if(!meaning.typeConstBlocker&&tryUncomputeTypeDependents(meaning,id))
+					return true;
+			}
 			if(!meaning.isSemError()){
 				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
 				meaning.setSemForceError();
@@ -1333,6 +1337,37 @@ abstract class Scope{
 		}
 		final bool canForgetAppend(Declaration decl){
 			return canForgetAppend(this,decl);
+		}
+		static if(language==silq)
+		final bool tryUncomputeTypeDependents(Declaration decl,Identifier use){
+			import ast.semantic_:liveTypeDependents,typeConstBlocked;
+			if(allowMerge) return false;
+			auto dependents=liveTypeDependents(decl,rnsymtab);
+			if(!dependents.length) return false;
+			foreach(d;dependents)
+				if(!lastUses.canForget(d,true,false))
+					return false;
+			foreach(d;dependents){
+				lastUses.forget(d,false);
+				auto lu=lastUses.get(d,true);
+				auto ed=new EarlyForgottenDecl(d,lu&&lu.use?lu.use:use);
+				if(d.rename){
+					ed.rename=new Identifier(d.rename.id);
+					ed.rename.loc=d.rename.loc;
+				}
+				ed.setSemCompleted();
+				if(auto dsc=d.scope_)
+					dsc.consume(d,null); // remove from the home scope, if still there
+				if(rnsymtab.get(d.getId,null) is d){
+					symtabRemove(d);
+					if(dependencyTracked(d))
+						pushDependencies(d,false);
+				}
+				ed.scope_=this;
+				if(canInsert(ed.name.id))
+					symtabInsert(ed);
+			}
+			return !typeConstBlocked(decl,this);
 		}
 	}
 	Declaration[] mergedVars;

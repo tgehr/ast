@@ -540,6 +540,28 @@ class ConsumedDecl: DeadDecl{
 	}
 }
 
+class EarlyForgottenDecl: DeadDecl{
+	Declaration decl;
+	Identifier use;
+	this(Declaration decl,Identifier use)in{
+		assert(!!decl);
+	}do{
+		super(decl.name);
+		this.type=decl.type;
+		this.decl=decl;
+		this.use=use;
+	}
+	override void explain(string kind,Scope sc){
+		import std.format:format;
+		if(isSemError()) return; // report only once
+		setSemForceError();
+		sc.note(format("%s `%s` consumed here",kind,decl),use?use.loc:decl.loc);
+	}
+	override string toString(){
+		return text("earlyForgotten(",super.toString(),",",use?text(use.loc):"<?>",")");
+	}
+}
+
 class DeadMerge: DeadDecl{
 	bool quantumControl;
 	size_t numBranches=2;

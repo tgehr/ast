@@ -4155,6 +4155,29 @@ Declaration liveTypeDependent(Declaration decl,Scope sc){
 	return liveTypeDependent(decl,sc.rnsymtab);
 }
 
+Declaration[] liveTypeDependents(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+	Declaration[] r;
+	void scan(MapX!(Id,Declaration) rnsymtab){
+		foreach(_,d;rnsymtab){
+			if(cast(DeadDecl)d) continue;
+			if(d.isSemError()) continue;
+			if(d.mergedInto) continue; // consumed by merging; the merged declaration is checked separately
+			auto type=typeForDeclNoAnalyze(d);
+			if(!type) continue;
+			foreach(id;type.freeIdentifiers){
+				if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource){
+					if(!r.canFind(d)) r~=d;
+					break;
+				}
+			}
+		}
+	}
+	scan(rnsymtab);
+	if(decl.scope_&&decl.scope_.rnsymtab!is rnsymtab)
+		scan(decl.scope_.rnsymtab);
+	return r;
+}
+
 bool typeConstBlocked(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,rnsymtab);
 }
