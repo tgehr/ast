@@ -375,7 +375,9 @@ class TypeAnnotationExp: Expression{
 		this.annotationType=annotationType;
 	}
 	override TypeAnnotationExp copyImpl(CopyArgs args){
-		return new TypeAnnotationExp(e.copy(args),t.copy(args),annotationType);
+		auto r=new TypeAnnotationExp(e.copy(args),t.copy(args),annotationType);
+		r.fromElaboration=fromElaboration;
+		return r;
 	}
 	override @property string kind(){ return e.kind; }
 	override @property int lprec(){
@@ -455,6 +457,7 @@ class TypeAnnotationExp: Expression{
 		if(ne is e && type is t) return this;
 		return new TypeAnnotationExp(ne, type, annotationType);
 	}
+	bool fromElaboration=false;
 	// semantic information
 	override void setConstLookup(bool constLookup){
 		e.setConstLookup(constLookup);

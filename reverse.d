@@ -510,7 +510,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			w1.loc=ce.e1.loc;
 			auto ty1=new PowExp(w1,l1);
 			ty1.loc=ce.e1.loc;
-			ne1=new TypeAnnotationExp(ne1,ty1,TypeAnnotationType.coercion);
+			auto tae1=new TypeAnnotationExp(ne1,ty1,TypeAnnotationType.coercion);
+			tae1.fromElaboration=true;
+			ne1=tae1;
 			ne1.loc=ce.e1.loc;
 		}
 		if(!(known2&&valid2)&&l2){
@@ -519,7 +521,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			w2.loc=ce.e2.loc;
 			auto ty2=new PowExp(w2,l2);
 			ty2.loc=ce.e2.loc;
-			ne2=new TypeAnnotationExp(ne2,ty2,TypeAnnotationType.coercion);
+			auto tae2=new TypeAnnotationExp(ne2,ty2,TypeAnnotationType.coercion);
+			tae2.fromElaboration=true;
+			ne2=tae2;
 			ne2.loc=ce.e2.loc;
 		}
 		auto nce=new CatExp(ne1,ne2);
@@ -943,7 +947,7 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
 	Expression reverseLetStm(Expression s){ // TODO: avoid doing this separately
 		if(auto de=cast(DefineExp)s){
 			if(de.isSwap) return de.copy();
-			auto r=new DefineExp(de.e2.copy(),de.e1.copy());
+			auto r=new DefineExp(de.e2.copy(),stripElaborationCoercions(de.e1.copy()));
 			r.loc=de.loc;
 			return r;
 		}
@@ -1413,6 +1417,25 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 	return chain(middle,statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup))).array;
 }
 
+Expression stripElaborationCoercions(Expression e){ // re-derive pattern coercions against current types in the adjoint
+	if(auto tae=cast(TypeAnnotationExp)e){
+		auto inner=stripElaborationCoercions(tae.e);
+		if(tae.fromElaboration){
+			inner.loc=tae.loc;
+			return inner;
+		}
+		tae.e=inner;
+		return tae;
+	}
+	if(auto ce=cast(CatExp)e){
+		ce.e1=stripElaborationCoercions(ce.e1);
+		ce.e2=stripElaborationCoercions(ce.e2);
+	}
+	if(auto te=cast(TupleExp)e) foreach(ref x;te.e) x=stripElaborationCoercions(x);
+	if(auto ve=cast(VectorExp)e) foreach(ref x;ve.e) x=stripElaborationCoercions(x);
+	return e;
+}
+
 Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false){
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	if(!e) return e;
@@ -1524,8 +1547,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	if(auto ce=cast(CommaExp)e) assert(0);
 	if(auto de=cast(DefineExp)e){
 		if(de.isSwap) return de.copy(); // TODO: ok?
-		Expression nrhs=de.e1;
-		if(nrhs.type!=de.e2.type){
+		Expression nrhs=stripElaborationCoercions(de.e1.copy()); // re-derive pattern coercions against current types
+		if(de.e1.type!=de.e2.type){
 			nrhs=new TypeAnnotationExp(nrhs,de.e2.type,TypeAnnotationType.coercion);
 			nrhs.loc=de.e1.loc;
 			nrhs.type=de.e2.type;
