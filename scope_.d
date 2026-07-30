@@ -1349,8 +1349,7 @@ abstract class Scope{
 					return false;
 			foreach(d;dependents){
 				lastUses.forget(d,false);
-				auto lu=lastUses.get(d,true);
-				auto ed=new EarlyForgottenDecl(d,lu&&lu.use?lu.use:use);
+				auto ed=new EarlyForgottenDecl(d,decl,use);
 				if(d.rename){
 					ed.rename=new Identifier(d.rename.id);
 					ed.rename.loc=d.rename.loc;
@@ -1606,7 +1605,9 @@ abstract class Scope{
 				}
 				if(auto dd=cast(DeadDecl)sym){
 					auto dm=addDeadMerge(sym);
-					if(dm.mergedFrom.all!(d=>cast(DeadDecl)d))
+					static if(language==silq) bool force=!!cast(EarlyForgottenDecl)dd;
+					else bool force=false;
+					if(force||dm.mergedFrom.all!(d=>cast(DeadDecl)d))
 					   dm.mergedFrom~=dd;
 					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
 					continue;

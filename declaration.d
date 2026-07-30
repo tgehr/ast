@@ -519,6 +519,7 @@ abstract class DeadDecl: Declaration{
 	override DeadDecl copyImpl(CopyArgs cargs){
 		return this; // TODO: ok?
 	}
+	bool reportUndefinedIdentifier(Identifier id,Scope sc){ return false; }
 	abstract void explain(string kind,Scope sc);
 }
 
@@ -542,14 +543,25 @@ class ConsumedDecl: DeadDecl{
 
 class EarlyForgottenDecl: DeadDecl{
 	Declaration decl;
+	Declaration consumed;
 	Identifier use;
-	this(Declaration decl,Identifier use)in{
-		assert(!!decl);
+	this(Declaration decl,Declaration consumed,Identifier use)in{
+		assert(!!decl&&!!consumed&&!!use);
 	}do{
 		super(decl.name);
 		this.type=decl.type;
 		this.decl=decl;
+		this.consumed=consumed;
 		this.use=use;
+	}
+	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		import std.format:format;
+		import ast.semantic_:typeForDecl;
+		if(isSemError()) return true; // already reported, but suppress the undefined identifier error
+		setSemForceError();
+		sc.error(format("cannot consume `const` %s `%s`",consumed.kind,use),use.loc);
+		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",consumed.name,typeForDecl(decl),decl.kind,decl.getName),decl.loc);
+		return true;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
@@ -567,6 +579,13 @@ class DeadMerge: DeadDecl{
 	size_t numBranches=2;
 	this(Identifier name){
 		super(name);
+	}
+	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		bool handled=false;
+		foreach(d;mergedFrom)
+			if(auto dd=cast(DeadDecl)d)
+				handled=dd.reportUndefinedIdentifier(id,sc)||handled;
+		return handled;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;

@@ -6215,9 +6215,13 @@ Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisti
 }
 
 void undefinedIdentifierError(Identifier id,DeadDecl[] failures,Scope sc,bool showError=true){
-	if(showError) sc.error(format("undefined identifier %s",id.name),id.loc);
+	bool handled=false;
+	if(showError)
+		foreach(f;failures)
+			handled=f.reportUndefinedIdentifier(id,sc)||handled;
+	if(!handled&&showError) sc.error(format("undefined identifier %s",id.name),id.loc);
 	id.setSemError();
-	if(!failures.length) return;
+	if(!failures.length||handled) return;
 	auto failure=failures[0]; // TODO: consider the other ones too?
 	if(failures.length==1){
 		failure.explain("previous declaration",sc);
