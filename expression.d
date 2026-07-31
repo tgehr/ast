@@ -377,6 +377,7 @@ class TypeAnnotationExp: Expression{
 	override TypeAnnotationExp copyImpl(CopyArgs args){
 		auto r=new TypeAnnotationExp(e.copy(args),t.copy(args),annotationType);
 		r.fromElaboration=fromElaboration;
+		if(unresolvedT) r.unresolvedT=unresolvedT.copy(args);
 		return r;
 	}
 	override @property string kind(){ return e.kind; }
@@ -458,6 +459,7 @@ class TypeAnnotationExp: Expression{
 		return new TypeAnnotationExp(ne, type, annotationType);
 	}
 	bool fromElaboration=false;
+	Expression unresolvedT=null; // type expression before wildcard resolution
 	// semantic information
 	override void setConstLookup(bool constLookup){
 		e.setConstLookup(constLookup);

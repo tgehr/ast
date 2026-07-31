@@ -2870,8 +2870,10 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 	auto sc=context.sc;
 	static if(!isPresemantic){
 		if(context.type){
-			if(auto r=resolveWildcards(tae.t,context.type))
+			if(auto r=resolveWildcards(tae.t,context.type)){
+				if(!tae.unresolvedT) tae.unresolvedT=tae.t; // preserve for adjoints
 				tae.t=r;
+			}
 		}
 		tae.t = expressionSemantic(tae.t, context.expSem.nestType());
 		tae.type = typeSemantic(tae.t, context.sc);
@@ -6912,8 +6914,10 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	tae.e=expressionSemantic(tae.e,context);
 	propErr(tae.e,tae);
 	if(tae.e.type)
-		if(auto r=resolveWildcards(tae.t,tae.e.type))
+		if(auto r=resolveWildcards(tae.t,tae.e.type)){
+			if(!tae.unresolvedT) tae.unresolvedT=tae.t; // preserve for adjoints
 			tae.t=r;
+		}
 	tae.t = expressionSemantic(tae.t, context.nestType());
 	tae.type = typeSemantic(tae.t, sc);
 	propErr(tae.t,tae);

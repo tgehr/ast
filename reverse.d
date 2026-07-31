@@ -1424,6 +1424,10 @@ Expression stripElaborationCoercions(Expression e){ // re-derive pattern coercio
 			inner.loc=tae.loc;
 			return inner;
 		}
+		if(tae.unresolvedT){ // re-resolve wildcards against current types
+			tae.t=tae.unresolvedT.copy();
+			tae.unresolvedT=null;
+		}
 		tae.e=inner;
 		return tae;
 	}
