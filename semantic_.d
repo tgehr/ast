@@ -328,20 +328,39 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			vd.definition=be;
 			return vd;
 		}
+		bool declareLhsPattern(Expression e){
+			e=unwrap(e);
+			if(auto id=cast(Identifier)e){
+				if(!id.implicitDup)
+					propErr(makeVar(id),be);
+				return true;
+			}
+			if(cast(WildcardExp)e) return true;
+			if(auto tpl=cast(TupleExp)e){
+				bool ok=true;
+				foreach(exp;tpl.e) ok&=declareLhsPattern(exp);
+				return ok;
+			}
+			if(auto vec=cast(VectorExp)e){
+				bool ok=true;
+				foreach(exp;vec.e) ok&=declareLhsPattern(exp);
+				return ok;
+			}
+			if(auto ce=cast(CatExp)e){
+				if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
+					return false;
+				bool ok=true;
+				ok&=declareLhsPattern(ce.e1);
+				ok&=declareLhsPattern(ce.e2);
+				return ok;
+			}
+			if(cast(IndexExp)e||cast(SliceExp)e) return true;
+			return false;
+		}
 		if(auto id=cast(Identifier)unwrap(be.e1)){
 			if(id.implicitDup) return be;
 			auto vd=makeVar(id);
 			propErr(vd,be);
-			return be;
-		}else if(auto tpl=cast(TupleExp)unwrap(be.e1)){
-			VarDecl[] vds;
-			foreach(exp;tpl.e){
-				if(auto id=cast(Identifier)exp){
-					if(!id.implicitDup)
-						vds~=makeVar(id);
-				}else goto LbadDefLhs;
-			}
-			foreach(vd;vds) if(vd) propErr(vd,be);
 			return be;
 		}else if(auto ce=cast(CallExp)unwrap(be.e1)){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
@@ -379,16 +398,28 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			}else goto LbadDefLhs;
 		}else if(cast(IndexExp)unwrap(be.e1)||cast(SliceExp)unwrap(be.e1)){
 			return be;
+		}else if(!ignoreInvalidLhs&&declareLhsPattern(be.e1)){
+			return be;
+		}else if(auto tpl=cast(TupleExp)unwrap(be.e1)){
+			VarDecl[] vds;
+			foreach(exp;tpl.e){
+				if(auto id=cast(Identifier)exp){
+					if(!id.implicitDup)
+						vds~=makeVar(id);
+				}else goto LbadDefLhs;
+			}
+			foreach(vd;vds) if(vd) propErr(vd,be);
+			return be;
 		}else if(auto ce=cast(CatExp)unwrap(be.e1)){
 			if(!knownLength(ce.e1,true)&&!knownLength(ce.e2,true))
 				goto LbadDefLhs;
 			if(auto id=cast(Identifier)unwrap(ce.e1)){
 				if(!id.implicitDup)
 					propErr(makeVar(id),be);
-			}else if(!cast(IndexExp)unwrap(be.e1)) goto LbadDefLhs;
+			}else if(!cast(IndexExp)unwrap(ce.e1)) goto LbadDefLhs;
 			if(auto id=cast(Identifier)unwrap(ce.e2)){
 				if(!id.implicitDup) propErr(makeVar(id),be);
-			}else if(!cast(IndexExp)unwrap(be.e2)) goto LbadDefLhs;
+			}else if(!cast(IndexExp)unwrap(ce.e2)) goto LbadDefLhs;
 			return be;
 		}else LbadDefLhs:if(!ignoreInvalidLhs){
 			if(!be.isSemError()){
@@ -3604,7 +3635,10 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 	bool attemptLowering=sc.allowsLinear;
 	void updateLhs(){
 		if(be.e2.type){
-			auto dcontext=defineLhsContext(context,be.e2.type,be.e2);
+			auto initializer=be.e2;
+			if(initializer.isSemCompleted()&&initializer.isConstant())
+				if(auto folded=initializer.eval()) initializer=folded;
+			auto dcontext=defineLhsContext(context,be.e2.type,initializer);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
 		}
