@@ -5978,8 +5978,12 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 		return le;
 	}
 	if(auto v = le.asRationalConstant()) {
-		if(!le.type)
-			le.type = ℚt(true);
+		if(!le.type){
+			auto natural=le.asNaturalScientificValue();
+			if(natural<0) le.type = ℚt(true);
+			else if(natural<2) le.type = Bool(true);
+			else le.type = ℕt(true);
+		}
 		return le;
 	}
 	if(auto v = le.asImaginaryRationalConstant()) {

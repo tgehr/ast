@@ -589,6 +589,45 @@ class LiteralExp: Expression{
 		if(lit.type != Tok!".0") return none!(Q!(ℤ, ℤ, int, int));
 		return parseRationalConstant(lit.str);
 	}
+	// returns 0 if this is a scientific-notation literal whose value is zero, 1 if the value
+	// is one, 2 if the value is a larger natural number, and -1 if the value should be typed as !ℚ
+	int asNaturalScientificValue(){
+		if(lit.type!=Tok!".0") return -1;
+		auto str=lit.str;
+		ptrdiff_t epos=-1;
+		foreach(i,c;str) if(c=='e'||c=='E'){ epos=i; break; }
+		if(epos<0) return -1; // no scientific notation
+		long exp=0, esign=1;
+		auto i=epos+1;
+		if(i<str.length&&(str[i]=='+'||str[i]=='-')){ if(str[i]=='-') esign=-1; i++; }
+		if(i>=str.length||str[i]<'0'||str[i]>'9') return -1; // malformed exponent
+		enum long sat=1L<<40;
+		for(;i<str.length;i++) if(exp<sat) exp=10*exp+(str[i]-'0');
+		exp*=esign;
+		auto mantissa=str[0..epos], intPart=mantissa, fracPart="";
+		bool hasPeriod=false;
+		foreach(j,c;mantissa){
+			if(c=='.'){
+				intPart=mantissa[0..j];
+				hasPeriod=true;
+				fracPart=mantissa[j+1..$];
+				break;
+
+			}
+		}
+		if(hasPeriod) return -1; // TODO: type 2.0 and 2.0e0 as !ℕ ?
+		auto digits=intPart~fracPart;
+		long n=exp-cast(long)fracPart.length;
+		size_t lead=0;
+		while(lead<digits.length&&digits[lead]=='0') lead++;
+		auto s=digits[lead..$];
+		if(!s.length) return 0; // zero
+		size_t tz=0;
+		while(tz<s.length&&s[$-1-tz]=='0') tz++;
+		if(n<0&&cast(long)tz<-n) return -1; // value has fractional digits
+		if(s[0..$-tz]=="1"&&n+cast(long)tz==0) return 1; // one
+		return 2;
+	}
 	override Maybe!(Q!(ℤ, ℤ, int, int)) asImaginaryRationalConstant() {
 		if(lit.type != Tok!".0i") return none!(Q!(ℤ, ℤ, int, int));
 		if(!lit.str.endsWith("i"))  return none!(Q!(ℤ, ℤ, int, int));
