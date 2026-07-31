@@ -996,6 +996,16 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
 			r.loc=ae.loc;
 			return r;
 		}
+		if(auto me=cast(MulAssignExp)s){
+			auto r=new DivAssignExp(me.e1.copy(),me.e2.copy());
+			r.loc=me.loc;
+			return r;
+		}
+		if(auto de=cast(DivAssignExp)s){
+			auto r=new MulAssignExp(de.e1.copy(),de.e2.copy());
+			r.loc=de.loc;
+			return r;
+		}
 		if(auto ae=cast(BitXorAssignExp)s) return ae.copy();
 		if(auto ae=cast(XorAssignExp)s) return ae.copy();
 		sc.error("cannot reverse statement within `let` pattern",s.loc);
@@ -1588,6 +1598,16 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 			auto res=new AddAssignExp(ae.e1.copy(),ae.e2.copy());
 			res.loc=ae.loc;
 			return res;
+		}
+		if(auto me=cast(MulAssignExp)e){
+			auto r=new DivAssignExp(me.e1.copy(),me.e2.copy());
+			r.loc=me.loc;
+			return r;
+		}
+		if(auto de=cast(DivAssignExp)e){
+			auto r=new MulAssignExp(de.e1.copy(),de.e2.copy());
+			r.loc=de.loc;
+			return r;
 		}
 		if(auto ae=cast(CatAssignExp)e){
 			if(!cast(Identifier)ae.e1){
