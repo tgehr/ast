@@ -1185,6 +1185,7 @@ class ProductTy: Type{
 		MapSX!(Id,Expression) subst;
 		if(isTuple){
 			auto targTy=arg.type.isTupleTy();
+			if(!targTy) return null; // arg.type may be empty (⊥) even if dom is a tuple
 			assert(!!tdom);
 			foreach(i,n;names){
 				auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
