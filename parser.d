@@ -247,14 +247,20 @@ struct Parser{
 		}
 	}
 	void error(string err, Location loc=Location.init){
+		if(muteerr) return; // speculative parse
 		if(code.errors.length&&code.errors[0].loc.rep.ptr==loc.rep.ptr) return; // don't re-report lexer errors
 		if(!loc.line) loc=tok.loc;
 		handler.error(err,loc);
 	}
-	auto saveState(){muteerr++; return code.pushAnchor();} // saves the state and mutes all error messages until the state is restored
-	void restoreState(Anchor state){
-		muteerr--; code.popAnchor(state);
+	static struct SavedState{ Anchor anchor; bool displayExpectErr; }
+	auto saveState(){muteerr++; return SavedState(code.pushAnchor(),displayExpectErr);} // saves the state and mutes all error messages until the state is restored
+	void restoreState(SavedState state){
+		muteerr--; code.popAnchor(state.anchor);
+		displayExpectErr=state.displayExpectErr;
 		ttype=tok.type;
+	}
+	void commitState(SavedState state){
+		muteerr--; code.popAnchor(Anchor(code.s)); // release the anchor without rewinding
 	}
 	Token peek(int x=1){
 		if(x<code.e-code.s) return code.buffer[code.n+x & code.buffer.length-1]; // breaking encapsulation for efficiency
@@ -445,39 +451,69 @@ struct Parser{
 
 	bool isLambdaSyntax(){
 		auto state=saveState();
-		bool allowDot=false;
+		bool allowDot=false,checkParams=true;
 		if(util.among(ttype,Tok!"lambda",Tok!"λ")){
 			allowDot=true;
+			checkParams=false; // explicit lambda keyword: commit to lambda
 			nextToken();
 		}
 		if(!util.among(ttype,Tok!"(",Tok!"[")){
 			restoreState(state);
 			return false;
 		}
-		bool sawComprehension=false;
+		bool sawComprehension=false,validParams=true;
 		do{
-			bool isSquare=ttype==Tok!"[";
 			nextToken();
-			if(isSquare){
-				int pnest=0,cnest=0,bnest=0;
-				loop: for(;;nextToken()){
+			int pnest=0,cnest=0,bnest=0;
+			int phase=0; // 0: element start, 1: after const/moved, 2: after name, 3: in type annotation
+			loop: for(;;nextToken()){
+				if(!pnest&&!cnest&&!bnest){
+					switch(ttype){
+						case Tok!")": case Tok!"}": case Tok!"]": case Tok!"EOF":
+							break loop;
+						case Tok!",":
+							phase=0;
+							continue;
+						case Tok!"(": pnest++; goto checkContent;
+						case Tok!"{": cnest++; goto checkContent;
+						case Tok!"[": bnest++; goto checkContent;
+						case Tok!"for": sawComprehension=true; goto checkContent;
+						default: goto checkContent;
+						checkContent:
+							switch(phase){
+								case 0:
+									static if(language==silq)
+									if(util.among(ttype,Tok!"const",Tok!"moved")){ phase=1; continue; }
+									if(util.among(ttype,Tok!"i",Tok!"_",Tok!"λ")){ phase=2; continue; }
+									validParams=false; break loop;
+								case 1:
+									if(util.among(ttype,Tok!"i",Tok!"_",Tok!"λ")){ phase=2; continue; }
+									validParams=false; break loop;
+								case 2:
+									if(ttype==Tok!":"){ phase=3; continue; }
+									validParams=false; break loop;
+								default: continue; // in type annotation
+							}
+					}
+				}else{
 					switch(ttype){
 						case Tok!"(": pnest++; continue;
 						case Tok!"{": cnest++; continue;
 						case Tok!"[": bnest++; continue;
-						case Tok!")": if(pnest--) continue; break loop;
-						case Tok!"}": if(cnest--) continue; break loop;
-						case Tok!"]": if(bnest--) continue; break loop;
-						case Tok!"for": if(!pnest&&!cnest&&!bnest) sawComprehension=true; continue;
+						case Tok!")": if(pnest-->0) continue; break loop;
+						case Tok!"}": if(cnest-->0) continue; break loop;
+						case Tok!"]": if(bnest-->0) continue; break loop;
 						case Tok!"EOF": break loop;
 						default: continue;
 					}
 				}
-			}else skipToUnmatched();
+			}
+			if(!validParams) break;
 			nextToken();
 		}while(util.among(ttype,Tok!"(",Tok!"["));
 		auto peektt=ttype;
 		restoreState(state);
+		if(checkParams&&!validParams) return false;
 		if(sawComprehension) return false;
 		if(!allowDot&&peektt==Tok!".") return false;
 		switch(peektt){
@@ -1113,7 +1149,12 @@ struct Parser{
 				nextToken();
 				skipToUnmatched();
 				nextToken();
-				if(ttype!=Tok!"("&&ttype!=Tok!"["){
+				while(ttype==Tok!"("||ttype==Tok!"["){
+					nextToken();
+					skipToUnmatched();
+					nextToken();
+				}
+				if(ttype!=Tok!"{"){
 					restoreState(state);
 					return parseExpression(0,false);
 				}
@@ -1207,6 +1248,7 @@ struct Parser{
 		ForAggregate aggr;
 		auto exp=parseExpression();
 		if(ttype==Tok!".."){
+			commitState(save);
 			auto left=exp;
 			Expression step=null;
 			expect(Tok!"..");
@@ -1226,7 +1268,7 @@ struct Parser{
 			if(hasLeft){
 				restoreState(save);
 				exp=parseCondition();
-			}
+			}else commitState(save);
 			aggr=ForAggregate(ForContainer(exp));
 		}
 		return res=New!ForExp(var,pattern,aggr,null);

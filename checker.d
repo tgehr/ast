@@ -570,7 +570,7 @@ class Checker {
 		auto l2 = knownLength(e.e2, false);
 		if(cast(ast_ty.ArrayTy) e.type) {
 			assert(l1 || l2);
-		} else {
+		} else if(!ast_ty.isEmpty(e.type)) {
 			assert(cast(ast_ty.TupleTy) e.type || cast(ast_ty.VectorTy) e.type);
 			assert(l1 && l2);
 		}
