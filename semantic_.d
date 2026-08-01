@@ -2104,15 +2104,15 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 
 VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 	bool success=true;
-	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc,false,false);
 	vd.type=unit;
-	if(!success) vd.setSemError();
 	if(!vd.vtype){
 		assert(vd.dtype,text(vd));
 		vd.dtype=expressionSemantic(vd.dtype, ExpSemContext.forType(sc));
 		vd.vtype=typeSemantic(vd.dtype,sc);
 		propErr(vd.dtype, vd);
 	}
+	if(vd.name && !vd.scope_) makeDeclaration(vd,success,sc,false,false);
+	if(!success) vd.setSemError();
 	vd.setSemCompleted();
 	return vd;
 }
