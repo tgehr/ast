@@ -1153,13 +1153,15 @@ class ProductTy: Type{
 		foreach(i,n;names){
 			Expression value=null;
 			if(auto low=subst[n].bound(false)){
-				if(argTy(i)==qtypeTy)
+				if(argTy(i)==qtypeTy||isQNumericTy(argTy(i)))
 					low=low.getQuantum();
 				if(low&&!value) value=low;
 			}
 			if(auto high=subst[n].bound(true)){
 				if(argTy(i)==ctypeTy)
 					high=high.getClassical();
+				else if(isQNumericTy(argTy(i)))
+					high=high.getQuantum();
 				if(high&&!value) value=high;
 			}
 			if(!value) return null;
