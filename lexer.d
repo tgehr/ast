@@ -945,9 +945,15 @@ private:
 				while(isDec(*p)) p++;
 			}
 			if(*p=='e'||*p=='E'){
-				isFloat=true,p++;
-				if(*p=='+'||*p=='-') p++;
-				while(isDec(*p)) p++;
+				auto q=p+1;
+				if(*q=='+'||*q=='-') q++;
+				if(isDec(*q)){
+					isFloat=true;
+					long exp=0;
+					for(p=q;isDec(*p);p++)
+						if(exp<=int.max) exp=10*exp+(*p-'0');
+					if(exp>int.max) errors~=tokError("exponent too large",s[0..p-s]);
+				}
 			}
 			if(*p=='i') isFloat=isImag=true,p++;
 		}

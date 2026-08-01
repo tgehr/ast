@@ -569,9 +569,15 @@ class LiteralExp: Expression{
 		int exp = 0;
 		string numPart = str;
 		auto e = str.find("e");
+		if(auto f = str.find("E")) if(!e.length||f.ptr<e.ptr) e = f;
 		if(e.length > 0) {
 			numPart = str[0..(e.ptr - str.ptr)];
-			exp = e[1..$].to!int(); // TODO overflow
+			auto es = e[1..$];
+			long x = 0, sign = 1;
+			if(es.length&&(es[0]=='+'||es[0]=='-')){ if(es[0]=='-') sign=-1; es=es[1..$]; }
+			foreach(c;es) if(x<=int.max) x=10*x+(c-'0');
+			x*=sign;
+			exp = x<int.min?int.min:x>int.max?int.max:cast(int)x;
 		}
 
 		string intPart = numPart, fracPart = "";
