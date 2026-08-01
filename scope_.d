@@ -995,9 +995,10 @@ abstract class Scope{
 		//imported!"util.io".writeln("POSTPROCESSING: ",id.loc," ",meaning," ",kind);
 		static if(language==silq) enum performConsume=true;
 		else auto performConsume=id.byRef;
+		auto typeofSuppressedCapture=id.typeofSuppressedCapture;
 		if(performConsume){
 			if(!meaning) return meaning;
-			if(kind==Lookup.consuming){
+			if(kind==Lookup.consuming&&!typeofSuppressedCapture){
 				bool doConsume=true;
 				if(doConsume){
 					if(!checkConsumable(id,meaning))
@@ -1010,10 +1011,10 @@ abstract class Scope{
 				}
 			}
 			static if(language==silq)
-			if(kind==Lookup.constant&&!meaning.isConst&&!meaning.isToplevelDeclaration())
+			if(kind==Lookup.constant&&!meaning.isConst&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
 				blockConst(meaning,id);
 		}
-		if(kind!=Lookup.probing&&meaning){
+		if(kind!=Lookup.probing&&meaning&&!typeofSuppressedCapture){
 			recordAccess(id,meaning);
 		}
 		return meaning;
@@ -2010,8 +2011,11 @@ abstract class Scope{
 			}
 		}
 	}
-//private: // !!!
+	uint typeofOperand=0; // block modifications while analyzing `typeof`
+	SetX!Declaration[] typeofConsumed; // simulate consumption while analyzing `typeof`
+
 	LastUses lastUses;
+//private: // TODO
 	static if(language==silq){
 		Dependencies dependencies;
 		DeclProps declProps;
@@ -2398,6 +2402,24 @@ class CapturingScope(T): NestedScope{
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
 		if(auto pdecl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)){
+			if(typeofOperand){
+				if(kind==Lookup.probing) return pdecl; // tentative lookup: no side effects
+				if(!ident.typeofSuppressedCapture){
+					ident.typeofSuppressedCapture=true;
+					static if(language==silq)
+					if(kind==Lookup.consuming){
+						for(auto fsc=origin;fsc;fsc=fsc.parentScope()){
+							if(fsc.typeofConsumed.length){
+								if(pdecl in fsc.typeofConsumed[$-1])
+									return null; // consumed earlier in this `typeof` operand
+								fsc.typeofConsumed[$-1][pdecl]=[];
+								break;
+							}
+						}
+					}
+				}
+				return pdecl;
+			}
 			if(auto r=addCapture(ident,pdecl,kind,origin))
 				return r;
 			return pdecl;

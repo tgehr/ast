@@ -7727,6 +7727,11 @@ Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 	auto sc=context.sc;
 	auto scopeState=sc.getStateSnapshot(true);
 	scope(exit) sc.restoreStateSnapshot(scopeState);
+	// block typechecker state
+	for(auto csc=sc;csc;csc=csc.parentScope()) csc.typeofOperand++;
+	scope(exit) for(auto csc=sc;csc;csc=csc.parentScope()) csc.typeofOperand--;
+	sc.typeofConsumed.length=sc.typeofConsumed.length+1;
+	scope(exit) sc.typeofConsumed.length=sc.typeofConsumed.length-1;
 	auto ncontext=context;
 	ncontext.inType=InType.no;
 	bool typeOnlyId=context.inType&&!!cast(Identifier)ty.e; // partial solution

@@ -1160,6 +1160,7 @@ class Identifier: Expression{
 	Declaration meaning;
 	bool consumedDuringBorrow=false;
 	bool lazyCapture=false;
+	bool typeofSuppressedCapture=false;
 	Scope scope_;
 	static if(language==silq){
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
