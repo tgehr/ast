@@ -979,15 +979,20 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 				fd.setSemError();
 		}
 	}
-	/+if(fd.name){
-		auto scope_=fd.scope_; // TODO: this is a bit hacky
-		if(scope_.canInsert(fd.name.id)){
-			fd.scope_=null;
-			fd.rename=null;
-			if(!scope_.insert(fd,true))
-				fd.setSemError();
-		}
-	}+/
+	void resurrect(Declaration decl){ // TODO: this is a bit hacky
+		if(!decl||!decl.name||!decl.name.id) return;
+		auto scope_=decl.scope_;
+		if(!scope_||!scope_.canInsert(decl.name.id)) return;
+		decl.scope_=null;
+		decl.rename=null;
+		scope_.clearConsumed(); // TODO: get rid of this
+		if(!scope_.insert(decl,true))
+			fd.setSemError();
+	}
+	resurrect(fd);
+	for(auto c=sc;c;c=c.parentScope())
+		if(auto fsc=cast(FunctionScope)c)
+			resurrect(fsc.fd);
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
 	auto fbody_=fd.body_;
