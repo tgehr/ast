@@ -94,6 +94,7 @@ AggregateTy isDataTyId(Expression e){
 }
 
 void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if(is(P==Parameter)||is(P==DatParameter)){
+	SetX!P previous;
 	foreach(ref p;params){
 		if(!p.dtype){ // !ℝ is the default parameter type for () and * is the default parameter type for []
 			if(isSquare){
@@ -105,8 +106,29 @@ void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if
 		p=cast(P)varDeclSemantic(p,sc);
 		assert(!!p);
 		propErr(p,parent);
+		if(!p.isSemError()&&p.dtype){
+			Parameter dep;
+			Identifier depId;
+			foreach(id;p.dtype.freeIdentifiers){
+				auto pp=cast(P)id.meaning;
+				if(!pp) continue;
+				if(pp in previous){
+					dep=pp;
+					depId=id;
+					break;
+				}
+				if(dep) break;
+			}
+			if(dep){
+				sc.error(format("type of parameter `%s` depends on earlier parameter `%s`",p.getName,depId.name),depId.loc);
+				sc.note(format("parameter `%s` declared here",dep.getName),dep.loc);
+				p.setSemForceError();
+				propErr(p,parent);
+			}
+		}
 		sc.addDefaultDependency(p);
 		if(p.scope_) sc.lastUses.definition(p,null);
+		previous.insert(p);
 	}
 }
 
