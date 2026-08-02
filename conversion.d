@@ -650,6 +650,37 @@ Ret!witness vectorToFixed(bool witness)(Expression from,Expression to,TypeAnnota
 	return typeof(return).init;
 }
 
+class BoolToFixedConversion: Conversion{
+	bool allowZero; // n=0 is allowed
+	bool checkNonzero; // n≠0 is not known
+	this(Expression from,Expression to,bool allowZero,bool checkNonzero)in{
+		assert(isNumericTy(from)==NumericType.Bool);
+		auto toInt=isFixedIntTy(to);
+		assert(!!toInt);
+		assert(from.isClassical()==toInt.isClassical);
+	}do{
+		this.allowZero=allowZero;
+		this.checkNonzero=checkNonzero;
+		super(from,to);
+	}
+}
+
+pragma(inline,true)
+Ret!witness boolToFixed(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(annotationType<TypeAnnotationType.conversion) return typeof(return).init;
+	if(isNumericTy(from)!=NumericType.Bool) return typeof(return).init;
+	if(from.isClassical()) return typeof(return).init; // classical 𝔹 converts via ℤtoFixed
+	auto toInt=isFixedIntTy(to);
+	if(!toInt||toInt.isClassical) return typeof(return).init;
+	// consuming `as` conversions are rejected in semantic if n is not statically known to be nonzero
+	static if(witness){
+		bool isNonzero=isNonzero(toInt.bits,true);
+		bool allowZero=annotationType==TypeAnnotationType.conversion&&!isNonzero;
+		bool checkZero=!allowZero&&!isNonzero&&annotationType<TypeAnnotationType.punning;
+		return new BoolToFixedConversion(from,to,allowZero,checkZero);
+	}else return true;
+}
+
 class UintToℤmodCoercion: Conversion{
 	bool check;
 	this(Expression from,Expression to,bool check)in{
@@ -835,6 +866,7 @@ Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expressio
 		if(auto r=fixedToNumeric!witness(from,to,annotationType)) return r;
 		if(auto r=fixedToVector!witness(from,to,annotationType)) return r;
 		if(auto r=vectorToFixed!witness(from,to,annotationType)) return r;
+		if(auto r=boolToFixed!witness(from,to,annotationType)) return r;
 	}
 	if(auto r=tupleToTuple!witness(from,to,annotationType)) return r;
 	if(auto r=unmultiplex!witness(from,to,annotationType)) return r;
@@ -1002,6 +1034,7 @@ auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion
 	if(auto iconv=cast(IntToℤConversion)conv) return f(iconv,forward!args);
 	if(auto fconv=cast(FixedToVectorConversion)conv) return f(fconv,forward!args);
 	if(auto vconv=cast(VectorToFixedConversion)conv) return f(vconv,forward!args);
+	if(auto bconv=cast(BoolToFixedConversion)conv) return f(bconv,forward!args);
 	if(auto zconv=cast(ℤmodCoercion)conv) return f(zconv,forward!args);
 	if(auto zconv=cast(ℤtoℤmodConversion)conv) return f(zconv,forward!args);
 	if(auto zconv=cast(ℤmodToℕConversion)conv) return f(zconv,forward!args);

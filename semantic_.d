@@ -6993,6 +6993,20 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 		}
 		default: break;
 	}
+	static if(language==silq){
+		if(tae.annotationType==TypeAnnotationType.conversion&&!isConstLookup(tae,context)){
+			if(isNumericTy(tae.e.type)==NumericType.Bool&&!tae.e.type.isClassical()){
+				if(auto toInt=isFixedIntTy(tae.type)){
+					if(!isNonzero(toInt.bits,true)){
+						sc.error(format("cannot convert from type %s to %s: the conversion consumes its operand, but the width is not statically known to be nonzero",tae.e.type,tae.type),tae.loc);
+						sc.note("enclose the conversion with `dup` or use `coerce`",tae.loc);
+						tae.setSemError();
+						return tae;
+					}
+				}
+			}
+		}
+	}
 	if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
 		final switch(tae.annotationType){
 			case TypeAnnotationType.annotation:
