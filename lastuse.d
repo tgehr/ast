@@ -446,7 +446,21 @@ final class LastUse{
 				//imported!"util.io".writeln("RESULT: ",r);
 				return r;
 			case lazyMerge:
-				return getMergeForgettability(decl,nestedScopes,true);
+				auto r=getMergeForgettability(decl,nestedScopes,true);
+				static if(language==silq){
+					if(!forceConsumed){
+						foreach(nsc;nestedScopes){
+							foreach(ssc;nsc.siblingScopes){
+								if(auto bs=cast(BlockScope)ssc){
+									if(bs.isLoopBody&&bs.diverges){
+										return Forgettability.none;
+									}
+								}
+							}
+						}
+					}
+				}
+				return r;
 			case synthesizedForget:
 				return Forgettability.none; // TODO
 			case implicitDup:

@@ -1418,7 +1418,7 @@ abstract class Scope{
 		assert(equal(activeNestedScopes,only(forgetScope,loopScope)));
 	}do{
 		if(returns) loopScope.closeUnreachable(this);
-		return merge(false,true,forgetScope,loopScope);
+		return merge(false,!returns,forgetScope,loopScope);
 	}
 
 	bool merge(bool quantumControl,bool isLoop,NestedScope[] scopes...)in{
