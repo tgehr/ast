@@ -5334,14 +5334,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		if(auto ft=cast(FunTy)ce.e.type){
 			if(ft.captureAnnotation==CaptureAnnotation.once){
 				Dependency getDependency(Declaration meaning,bool isLambda){
-					if(auto fd=cast(FunctionDef)meaning){
-						auto cdep=getFunctionDependency(fd,context.sc,true);
-						if(isLambda) return cdep;
-						bool ok=true;
-						foreach(decl;cdep.dependencies)
-							ok&=context.sc.symtabLookup(decl.rename,true,null) is decl; // TODO: propagate
-						if(ok) return cdep;
-					}
+					if(auto fd=cast(FunctionDef)meaning)
+						return getFunctionDependency(fd,context.sc,true);
 					return context.sc.getDependency(meaning);
 				}
 				bool ok=false;
