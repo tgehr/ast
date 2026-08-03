@@ -2818,6 +2818,9 @@ class LetExp: Expression{
 		return cur.length?e.substitute(cur):e.eval();
 	}
 	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
+
+	// semantic information
+	bool forgetPatternVars=false;
 }
 
 class VectorExp: Expression{

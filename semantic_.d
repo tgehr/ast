@@ -3630,6 +3630,39 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 	return current;
 }
 
+static if(language==silq)  // e.g. `H(x[0]) = 1` has to forget the temporary
+Scope.DeclProp.ComponentReplacement*[] getPatternComponentForgets(DefineExp be,Scope sc){
+	Scope.DeclProp.ComponentReplacement*[] patternComponentForgets;
+	if(!sc.allowsLinear) return patternComponentForgets;
+	if(auto le=cast(LetExp)be.e2){
+		if(le.forgetPatternVars){
+			foreach(crepl;sc.localComponentReplacements()){
+				if(!crepl.write||crepl.write.isSemError()) continue;
+				auto fid=new Identifier(crepl.name);
+				fid.loc=crepl.write.loc;
+				auto fe=new ForgetExp(fid,null);
+				fe.loc=crepl.write.loc;
+				le.s.s~=fe;
+				if(auto id=getIdFromIndex(crepl.write)){
+					if(id.meaning){
+						foreach(p;sc.componentReplacements(id.meaning)){
+							if(p.name==crepl.name)
+								patternComponentForgets~=p;
+						}
+					}
+				}
+			}
+		}
+	}
+	return patternComponentForgets;
+}
+
+static if(language==silq)
+void resolvePatternComponentForgets(Scope.DeclProp.ComponentReplacement*[] patternComponentForgets,DefineExp be,Scope sc){
+	foreach(crepl;patternComponentForgets)
+		if(!crepl.read) crepl.read=crepl.write; // (consumed by the forget)
+}
+
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
@@ -3638,6 +3671,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc);
 	}
 	propErr(be.e1,be);
+	static if(language==silq) auto patternComponentForgets=getPatternComponentForgets(be,sc);
 	static if(language==psi){ // TODO: remove this?
 		if(auto ce=cast(CallExp)be.e2){
 			if(auto id=cast(Identifier)ce.e){
@@ -3670,6 +3704,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		auto preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 		propErr(be.e2,be);
+		static if(language==silq) resolvePatternComponentForgets(patternComponentForgets,be,sc);
 		checkIndexReplacement(be,sc);
 		updateLhs();
 		if(!be.isSemError()){
@@ -4516,8 +4551,82 @@ Expression indexType(Expression aty,Expression index){
 	return checkIndex(aty,index,null,null);
 }
 
+static if(language==silq){
+bool hasPatternLhs(Expression e){
+	e=unwrap(e);
+	if(cast(CallExp)e) return true;
+	if(auto tpl=cast(TupleExp)e) return tpl.e.any!hasPatternLhs;
+	if(auto vec=cast(VectorExp)e) return vec.e.any!hasPatternLhs;
+	return false;
+}
+LetExp patternForgetLet(Expression b,Identifier[] vars){
+	auto tmp=new Identifier(freshName);
+	tmp.loc=b.loc;
+	Expression[] ss=[new DefineExp(tmp,b)];
+	ss[0].loc=b.loc;
+	foreach(v;vars){
+		auto vid=new Identifier(v.name);
+		vid.loc=v.loc;
+		auto fe=new ForgetExp(vid,null);
+		fe.loc=v.loc;
+		ss~=fe;
+	}
+	auto le=new LetExp(new CompoundExp(ss),tmp.copy());
+	le.loc=b.loc;
+	le.s.loc=b.loc;
+	le.forgetPatternVars=true; // e.g. H(x[0])=1, temporary resolved later
+	return le;
+}
+}
+
 Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	static if(language==silq)
+	if(sc.allowsLinear&&hasPatternLhs(ae.e1)){ // TODO: handle via `with` instead?
+		Identifier[] vars;
+		ProductTy callPatternType(CallExp ce,Scope sc){
+			auto state=sc.getStateSnapshot(true);
+			auto analyzedFun=expressionSemantic(ce.e.copy(),context.nestCalled);
+			sc.restoreStateSnapshot(state);
+			if(analyzedFun.isSemError()) return null;
+			return cast(ProductTy)analyzedFun.type;
+		}
+		void collectPatternVars(Expression e){
+			e=unwrap(e);
+			if(auto id=cast(Identifier)e){ vars~=id; return; }
+			if(auto tpl=cast(TupleExp)e){ foreach(exp;tpl.e) collectPatternVars(exp); return; }
+			if(auto vec=cast(VectorExp)e){ foreach(exp;vec.e) collectPatternVars(exp); return; }
+			auto ce=cast(CallExp)e;
+			if(!ce) return;
+			void collectAll(Expression arg){
+				arg=unwrap(arg);
+				if(auto tpl=cast(TupleExp)arg) foreach(exp;tpl.e) collectPatternVars(exp);
+				else collectPatternVars(arg);
+			}
+			if(auto ft=callPatternType(ce,sc))
+			if(ft.isSquare==ce.isSquare){
+				if(auto tpl=cast(TupleExp)unwrap(ce.arg)){
+					if(tpl.length==ft.nargs){
+						foreach(i,exp;tpl.e)
+							if(!ft.isConstForReverse[i])
+								collectPatternVars(exp);
+						return;
+					}
+				}else if(!ft.nargs||!ft.isConstForReverse[0]){
+					collectPatternVars(ce.arg);
+					return;
+				}
+			}
+			collectAll(ce.arg); // (unresolved or invalid pattern; will error later)
+		}
+		collectPatternVars(ae.e1);
+		auto le=patternForgetLet(ae.e2,vars);
+		le.loc=ae.loc;
+		le.s.loc=ae.loc;
+		auto de=new DefineExp(ae.e1,le);
+		de.loc=ae.loc;
+		return statementSemantic(de,sc,flags);
+	}
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
 	Expression tde=null;
