@@ -707,6 +707,10 @@ abstract class Scope{
 			}
 			return typeof(return)(r);
 		}
+		final void isolateComponentReplacements(){ // TODO: this is a bit hacky
+			foreach(decl,ref prop;declProps.props)
+				prop.componentReplacements=prop.componentReplacements.dup;
+		}
 		final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
 			foreach(decl,crepls;previous.componentReplacements)
 				updateDeclProps(decl).componentReplacements=crepls;
@@ -1734,6 +1738,13 @@ abstract class Scope{
 		assert(id&&id.meaning);
 		updateDeclProps(id.meaning).nameIndex(index,name);
 	}
+	static if(language==silq)
+	void reregisterComponentReplacement(IndexExp write,Id name,IndexExp read){
+		import ast.semantic_:getIdFromIndex;
+		auto id=getIdFromIndex(write);
+		assert(id&&id.meaning);
+		updateDeclProps(id.meaning).componentReplacements~=DeclProp.ComponentReplacement(write,name,read);
+	}
 
 	struct ScopeState{
 		static if(language==silq)
@@ -2013,7 +2024,20 @@ abstract class Scope{
 	}
 	uint typeofOperand=0; // block modifications while analyzing `typeof`
 	SetX!Declaration[] typeofConsumed; // simulate consumption while analyzing `typeof`
-
+	static if(language==silq){ // support component replacement within `with` transformations
+		Scope withTransConsumption=null;
+		final Scope getWithTransConsumption(){
+			for(auto sc=this;sc;sc=sc.parentScope())
+				if(sc.withTransConsumption) return sc.withTransConsumption;
+			return null;
+		}
+		Scope withTransBody=null;
+		final Scope getWithTransBody(){
+			for(auto sc=this;sc;sc=sc.parentScope())
+				if(sc.withTransBody) return sc.withTransBody;
+			return null;
+		}
+	}
 	LastUses lastUses;
 //private: // TODO
 	static if(language==silq){

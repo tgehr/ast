@@ -893,6 +893,10 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			setDefLhsByRef(idx);
 		}
 	}
+	CompoundExp[] prologues,epilogues;
+	bool haveWithTransReplacements=false;
+	static if(language==silq)
+		haveWithTransReplacements=prepareWithTransReplacements(with_,sc,flags,prologues,epilogues);
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	if(auto ret=mayReturn(with_.trans)){
@@ -900,7 +904,32 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		with_.trans.setSemForceError();
 	}
 	propErr(with_.trans,with_);
+	static if(language==silq)
+	if(haveWithTransReplacements&&!with_.isSemError()){
+		foreach(crepl;sc.localComponentReplacements())
+			if(crepl.write)
+				refreshWithTransReplMeanings(crepl.write,sc);
+		auto bodyCrepls=sc.localComponentReplacements();
+		finishIndexReplacement(with_,sc);
+		sc.clearConsumed();
+		foreach(crepl;bodyCrepls)
+			if(crepl.write){
+				if(auto cid=getIdFromIndex(crepl.write)){
+					auto nid=new Identifier(cid.name);
+					nid.loc=crepl.write.loc;
+					if(auto meaning=lookupMeaning(nid,Lookup.probing,sc,false,null)){
+						cid.meaning=meaning;
+						cid.type=cid.typeFromMeaning;
+						sc.reregisterComponentReplacement(crepl.write,crepl.name,crepl.read);
+					}
+				}
+			}
+	}
+	static if(language==silq)
+	if(haveWithTransReplacements) sc.withTransBody=sc;
 	with_.bdy=compoundExpSemantic(with_.bdy, sc, flags, blscope: !with_.isIndices);
+	static if(language==silq)
+	if(haveWithTransReplacements) sc.withTransBody=null;
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
 	if(auto ret=mayReturn(with_.bdy)){
 		sc.error("early return in `with` body must be last statement",ret.loc);
@@ -936,6 +965,12 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	}
 	with_.type=unit;
 	with_.setSemCompleted();
+	static if(language==silq)
+	if(haveWithTransReplacements){
+		sc.resetLocalComponentReplacements();
+		if(!with_.isSemError())
+			return lowerIndexReplacement(prologues,epilogues,with_,sc,flags);
+	}
 	return with_;
 }
 
@@ -2782,6 +2817,29 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		if(auto id=cast(Identifier)unwrap(e.e)){
 			if(id.meaning){
 				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true);
+				static if(language==silq)
+				if(r&&sc.getWithTransBody()){
+					auto creplDecl=id.meaning;
+					auto crepls=sc.componentReplacements(creplDecl);
+					if(!crepls.length)
+						for(auto d=creplDecl.splitFrom;d&&!crepls.length;d=d.splitFrom){
+							creplDecl=d;
+							crepls=sc.componentReplacements(creplDecl);
+						}
+					foreach(crepl;crepls){
+						if(!crepl.write||crepl.write.isSemError()) continue;
+						if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,InType.no)) continue;
+						if(!idx.isSemError()){
+							if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,InType.no))
+								sc.error("indices refer to same value in reassignment",idx.loc);
+							else sc.error("indices may refer to same value in reassignment",idx.loc);
+							sc.note("other index is here",crepl.write.loc);
+						}
+						idx.setSemError();
+						r=false;
+						break;
+					}
+				}
 				if(!r) id.meaning.setSemForceError();
 				return r;
 			}
@@ -3442,6 +3500,11 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 	}
 	if(astopt.splitComponents)
 		creplss=unnestComponentReplacements(creplss,loc,sc);
+	return buildIndexReplacements(creplss,sc,flags,prologues,epilogues,loc);
+}
+
+static if(language==silq)
+bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
 	foreach(crepls;creplss){
 		assert(crepls.length);
 		Expression[] reads;
@@ -3563,6 +3626,104 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 		epilogues~=epilogue;
 	}
 	return true;
+}
+
+static if(language==silq){
+void refreshWithTransReplMeanings(Expression e,Scope sc){
+	if(auto id=cast(Identifier)e){
+		id.meaning=sc.updateDecl(id.meaning);
+		id.type=id.typeFromMeaning;
+		return;
+	}
+	if(auto idx=cast(IndexExp)e){
+		refreshWithTransReplMeanings(idx.e,sc);
+		refreshWithTransReplMeanings(idx.a,sc);
+		return;
+	}
+}
+Scope.DeclProp.ComponentReplacement[][] groupWithTransReplacements(Scope.DeclProp.ComponentReplacement[] crepls){
+	Declaration[] decls;
+	Scope.DeclProp.ComponentReplacement[][] r;
+	foreach(crepl;crepls){
+		if(!crepl.write) continue;
+		auto decl=getIdFromIndex(crepl.write).meaning;
+		auto i=decls.countUntil(decl);
+		if(i<0){
+			decls~=decl;
+			r~=[crepl];
+		}else r[i]~=crepl;
+	}
+	auto sorted=zip(decls,r).array.sort!"a[0].getName<b[0].getName";
+	return sorted.map!"a[1]".array;
+}
+bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues){
+	if(with_.isIndices) return false;
+	bool hasIndexExp=false;
+	foreach(e;with_.trans.subexpressions){
+		if(cast(IndexExp)e){
+			hasIndexExp=true;
+			break;
+		}
+	}
+	if(!hasIndexExp) return false;
+	auto preCrepls=sc.localComponentReplacements();
+	// TODO: avoid recursive snapshotting
+	Scope[] chain;
+	FunctionDef[] fds;
+	size_t[] nCapturedDecls;
+	MapX!(Declaration,size_t)[] captureLengths;
+	for(auto s=sc;s;s=s.parentScope()){
+		chain~=s;
+		if(auto fd=s.getFunction()){
+			if(!fds.canFind(fd)){
+				fds~=fd;
+				nCapturedDecls~=fd.capturedDecls.length;
+				MapX!(Declaration,size_t) lens;
+				foreach(decl,ids;fd.captures)
+					lens[decl]=ids.length;
+				captureLengths~=lens;
+			}
+		}
+	}
+	Scope.ScopeState[] states;
+	foreach(s;chain) states~=s.getStateSnapshot(true);
+	foreach(s;chain) s.isolateComponentReplacements();
+	sc.withTransConsumption=sc;
+	auto handler=sc.handler;
+	handler.suppress++;
+	scope(exit) handler.suppress--;
+	auto trans=with_.trans.copy();
+	trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true);
+	sc.withTransConsumption=null;
+	if(trans.blscope_) sc.merge(false,trans.blscope_);
+	auto crepls=sc.localComponentReplacements();
+	foreach(i,fd;fds){
+		foreach(decl;fd.capturedDecls[nCapturedDecls[i]..$])
+			fd.captures.remove(decl);
+		fd.capturedDecls=fd.capturedDecls[0..nCapturedDecls[i]];
+		foreach(decl,len;captureLengths[i])
+			if(decl in fd.captures)
+				fd.captures[decl]=fd.captures[decl][0..len];
+	}
+	foreach_reverse(i,s;chain)
+		s.restoreStateSnapshot(states[i]);
+	if(preCrepls.length){
+		SetX!Expression preWrites;
+		foreach(crepl;preCrepls)
+			if(crepl.write)
+				preWrites.insert(crepl.write);
+		crepls=crepls.filter!(crepl=>!crepl.write||crepl.write !in preWrites).array;
+	}
+	if(!crepls.length) return false;
+	auto creplss=groupWithTransReplacements(crepls);
+	auto r=buildIndexReplacements(creplss,sc,flags,prologues,epilogues,with_.loc);
+	foreach(crepl;crepls)
+		if(crepl.write){
+			refreshWithTransReplMeanings(crepl.write,sc);
+			sc.nameIndex(crepl.write,crepl.name);
+		}
+	return r;
+}
 }
 
 Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues,Expression r,Scope sc,ref StmFlags flags){
@@ -6560,6 +6721,22 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	}else return noMember();
 }
 
+static if(language==silq)
+bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,IndexExp idx,Scope sc,InType inType)in{
+	assert(!!crepl.write);
+}do{
+	if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)) return false;
+	if(!crepl.write.isSemError()&&!idx.isSemError()){
+		if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
+			sc.error("lookup of index refers to consumed value",idx.loc);
+		}else sc.error("lookup of index may refer to consumed value",idx.loc);
+		if(crepl.read) // should always be non-null
+			sc.note("consumed here",crepl.read.loc);
+		else sc.note("reassigned here",crepl.write.loc);
+	}
+	return true;
+}
+
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	if(idx.byRef){
@@ -6598,17 +6775,24 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		bool replaceIndex=false;
 		size_t replaceIndexLoc=size_t.max;
 		auto cid=getIdFromIndex(idx);
-		auto crepls=cid&&cid.meaning?sc.componentReplacements(cid.meaning):[];
+		auto creplDecl=cid?cid.meaning:null;
+		auto crepls=creplDecl?sc.componentReplacements(creplDecl):[];
+		if(!crepls.length&&creplDecl&&sc.getWithTransBody()){ // TODO: needed?
+			for(auto d=creplDecl.splitFrom;d&&!crepls.length;d=d.splitFrom){
+				creplDecl=d;
+				crepls=sc.componentReplacements(creplDecl);
+			}
+		}
 	}
 	static if(language==silq)
-	if(cid&&cid.meaning){
+	if(creplDecl){
 		foreach(i,crepl;crepls){
 			static assert(is(typeof(crepl):T*,T));
 			if(crepl.write&&!crepl.read&&guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
 				auto rid=getIdFromIndex(crepl.write);
 				assert(rid && rid.meaning);
 				assert(rid.name==cid.name);
-				assert(cid.meaning is rid.meaning);
+				assert(creplDecl is rid.meaning);
 				replaceIndex=true;
 				replaceIndexLoc=i;
 				break;
@@ -6619,19 +6803,15 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				if(crepl.write){
 					auto rid=getIdFromIndex(crepl.write);
 					assert(rid && rid.meaning);
-					if(rid.meaning is cid.meaning && cid.scope_ && rid.scope_ is cid.scope_){
+					auto sameScope=rid.scope_ is cid.scope_;
+					if(!sameScope&&sc.getWithTransBody()&&rid.scope_&&cid.scope_)
+						if(rid.scope_.getFunction()&&rid.scope_.getFunction() is cid.scope_.getFunction())
+							sameScope=true;
+					if(rid.meaning is creplDecl && cid.scope_ && sameScope){
 						cid.constLookup=true;
 						assert(cid.type==rid.type);
-						assert(cid.meaning is rid.meaning);
-						if(!guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)){
-							if(!crepl.write.isSemError()&&!idx.isSemError()){
-								if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
-									sc.error("lookup of index refers to consumed value",idx.loc);
-								}else sc.error("lookup of index may refer to consumed value",idx.loc);
-								if(crepl.read) // should always be non-null
-									sc.note("consumed here",crepl.read.loc);
-								else sc.note("reassigned here",crepl.write.loc);
-							}
+						assert(creplDecl is rid.meaning);
+						if(indexReplacementAliasError(crepl,idx,sc,inType)){
 							idx.setSemError();
 							break;
 						}
@@ -6675,6 +6855,23 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		if(auto id=getIdFromIndex(idx))
 			if(id.meaning)
 				sc.pushUp(dep,id.meaning);
+		if(auto wsc=sc.getWithTransConsumption()){
+			if(auto id=getIdFromIndex(idx))
+				if(id.meaning&&!idx.isSemError){
+					auto name=freshName();
+					wsc.nameIndex(idx,name);
+					auto var=addVar(name,idx.type,idx.loc,sc);
+					sc.addDependency(var,getDependency(idx,sc));
+					sc.lastUses.definition(var,idx);
+					auto tid=new Identifier(name);
+					tid.loc=idx.loc;
+					tid.meaning=var;
+					tid.byRef=true;
+					tid.type=tid.typeFromMeaning;
+					tid.setSemCompleted();
+					return tid;
+				}
+		}
 		if(dep.isTop){
 			sc.error("cannot consume component of quantum aggregate",idx.loc);
 			sc.note(format("did you mean to write `dup(%s)`?",idx.loc.rep),idx.loc);

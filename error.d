@@ -31,9 +31,11 @@ abstract class ErrorHandler{
 	//string source;
 	//string code;
 	int nerrors=0;
+	int suppress=0; // TODO: can we avoid this?
 	private int tabsize=8;
 
 	void report(ErrorType ty, lazy string msg, Location loc) {
+		if(suppress) return;
 		if(ty <= ErrorType.run_error) {
 			nerrors++;
 		}
@@ -66,6 +68,7 @@ abstract class ErrorHandler{
 }
 class SimpleErrorHandler: ErrorHandler{
 	override void report(ErrorType ty, lazy string err, Location loc){
+		if(suppress) return;
 		super.report(ty, err, loc);
 		if(loc.line == 0){ // just here for robustness
 			stderr.writef("(location missing): %s%s\n", ty.prefix(), err);
@@ -95,6 +98,7 @@ class JSONErrorHandler: ErrorHandler{
 	}
 
 	override void report(ErrorType ty, lazy string error, Location loc){
+		if(suppress) return;
 		super.report(ty, error, loc);
 		if(loc.line == 0||!loc.rep.length){ // just here for robustness
 			stderr.writef("(location missing): %s%s\n", ty.prefix(), error);
@@ -128,6 +132,7 @@ class JSONErrorHandler: ErrorHandler{
 
 class VerboseErrorHandler: ErrorHandler{
 	override void report(ErrorType ty, lazy string err, Location loc){
+		if(suppress) return;
 		super.report(ty, err, loc);
 		if(loc.line == 0||!loc.rep.length){ // just here for robustness
 			stderr.writef("(location missing): %s%s\n", ty.prefix(), err);
