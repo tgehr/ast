@@ -3554,7 +3554,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 						if(auto meaning=cid.meaning){
 							meaning=sc.consume(meaning,cid);
 							auto dep=getDependency(cid,sc);
-							auto type=cid.type.getQuantum();
+							auto type=updatedType(idx,idx.type);
 							assert(!!type);
 							auto var=addVar(meaning.name.id,type,idx.loc,sc);
 							sc.addDependency(var,dep);
@@ -4548,6 +4548,7 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 	Expression rec(Expression baseTy,Expression[] indices){
 		if(!indices.length) return rhsty;
 		Expression impl(){
+			bool quantumIndex=!indices[0].type.isClassical;
 			if(auto tt=baseTy.isTupleTy){
 				if(auto lit=indices[0].asIntegerConstant(true)){
 					auto c=lit.get();
@@ -4558,6 +4559,7 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 					Expression[] ntypes;
 					foreach(i;0..tt.length){
 						auto ntype=joinTypes(tt[i],rec(tt[i],indices[1..$]));
+						if(ntype&&quantumIndex) ntype=ntype.getQuantum();
 						if(!ntype) return null;
 						ntypes~=ntype;
 					}
@@ -4566,26 +4568,26 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 			}
 			if(auto vt=cast(VectorTy)baseTy){
 				auto nnext=joinTypes(vt.next,rec(vt.next,indices[1..$]));
+				if(nnext&&quantumIndex) nnext=nnext.getQuantum();
 				if(!nnext) return null;
 				return vectorTy(nnext,vt.num);
 			}
 			if(auto at=cast(ArrayTy)baseTy){
 				auto nnext=joinTypes(at.next,rec(at.next,indices[1..$]));
+				if(nnext&&quantumIndex) nnext=nnext.getQuantum();
 				if(!nnext) return null;
 				return arrayTy(nnext);
 			}
 			if(isFixedIntTy(baseTy)){
 				if(!isSubtype(rhsty,Bool(false))) return null;
 				auto rtype=baseTy;
-				if(!rhsty.isClassical||!indices[0].type.isClassical) rtype=rtype.getQuantum();
+				if(!rhsty.isClassical||quantumIndex) rtype=rtype.getQuantum();
 				return rtype;
 			}
 			if(isEmpty(baseTy)) return bottom;
 			return null;
 		}
-		auto nty=impl();
-		if(nty&&!indices[0].type.isClassical) nty=nty.getQuantum();
-		return nty;
+		return impl();
 	}
 	return rec(base.type,indices);
 }
