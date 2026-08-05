@@ -2159,7 +2159,7 @@ class WithExp: Expression{
 			assert(id);
 			if(!id.meaning) return null;
 			if(!meaning) meaning=id.meaning;
-			else assert(meaning is id.meaning);
+			else assert(meaning.getId==id.meaning.getId); // TODO: meaning is id.meaning?
 		}
 		return meaning;
 	}

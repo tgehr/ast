@@ -3533,40 +3533,6 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 		prologue.loc=loc;
 		if(prologue.isSemCompleted()){
 			MapX!(Declaration,Declaration) replacements;
-			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
-				auto de=cast(DefineExp)read;
-				assert(!!de);
-				auto idx=cast(IndexExp)de.e2;
-				if(!idx){
-					if(auto le=cast(LetExp)de.e2){
-						if(auto lef=le.isForward(true))
-							idx=cast(IndexExp)lef;
-					}
-				}
-				assert(idx&&idx.byRef,text(de));
-				bool anyQuantum=false;
-				for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
-					anyQuantum|=!idx2.a.type.isClassical();
-				if(anyQuantum){
-					auto cid=getIdFromIndex(idx);
-					assert(!!cid);
-					if(cid.meaning !in replacements&&cid.type&&!cid.type.isQuantum){
-						if(auto meaning=cid.meaning){
-							meaning=sc.consume(meaning,cid);
-							auto dep=getDependency(cid,sc);
-							auto type=updatedType(idx,idx.type);
-							assert(!!type);
-							auto var=addVar(meaning.name.id,type,idx.loc,sc);
-							sc.addDependency(var,dep);
-							idx.replacements~=AAssignExp.Replacement(meaning,var);
-							assert(cid.meaning is meaning);
-							replacements[meaning]=var;
-							sc.declProps.moveComponentReplacements(meaning,var);
-							sc.lastUses.definition(var,de);
-						}
-					}
-				}
-			}
 			void replaceMeaning(Expression e){
 				if(auto id=cast(Identifier)e){
 					auto prev=id.meaning;
@@ -3595,12 +3561,45 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 					return;
 				}
 			}
-			if(replacements.length){
-				foreach(read;reads){
-					auto de=cast(DefineExp)read;
-					assert(!!de);
-					replaceMeaning(de.e2);
+			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
+				auto de=cast(DefineExp)read;
+				assert(!!de);
+				auto idx=cast(IndexExp)de.e2;
+				if(!idx){
+					if(auto le=cast(LetExp)de.e2){
+						if(auto lef=le.isForward(true))
+							idx=cast(IndexExp)lef;
+					}
 				}
+				assert(idx&&idx.byRef,text(de));
+				bool anyQuantum=false;
+				for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
+					anyQuantum|=!idx2.a.type.isClassical();
+				if(anyQuantum){
+					auto cid=getIdFromIndex(idx);
+					assert(!!cid);
+					auto prev=cid.meaning?cast(VarDecl)replacements.get(cid.meaning,cid.meaning):null;
+					if(prev&&prev.vtype&&!prev.vtype.isQuantum){
+						auto type=updatedType(idx,idx.type,prev is cid.meaning?null:prev.vtype);
+						assert(!!type);
+						if(prev is cid.meaning||!isEqual(prev.vtype,type,null)){
+							if(auto meaning=sc.consume(prev,cid)){
+								assert(meaning is prev);
+								auto dep=getDependency(cid,sc);
+								auto var=addVar(meaning.name.id,type,idx.loc,sc);
+								sc.addDependency(var,dep);
+								idx.replacements~=AAssignExp.Replacement(meaning,var);
+								replacements[cid.meaning]=var;
+								sc.declProps.moveComponentReplacements(meaning,var);
+								sc.lastUses.definition(var,de);
+							}
+						}
+					}
+				}
+				if(replacements.length)
+					replaceMeaning(de.e2);
+			}
+			if(replacements.length){
 				foreach(crepl;crepls){
 					replaceMeaning(crepl.write);
 					replaceMeaning(crepl.read);
@@ -4530,7 +4529,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 	return true;
 }
 
-Expression updatedType(Expression lhs,Expression rhsty)in{
+Expression updatedType(Expression lhs,Expression rhsty,Expression baseTyOverride=null)in{
 	assert(lhs&&lhs.type);
 	assert(!!rhsty);
 }do{
@@ -4545,6 +4544,13 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 		indices~=idx.a;
 	}
 	collect(lhs);
+	return updatedType(baseTyOverride?baseTyOverride:base.type,indices,rhsty);
+}
+
+Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)in{
+	assert(!!baseTy);
+	assert(!!rhsty);
+}do{
 	Expression rec(Expression baseTy,Expression[] indices){
 		if(!indices.length) return rhsty;
 		Expression impl(){
@@ -4589,7 +4595,7 @@ Expression updatedType(Expression lhs,Expression rhsty)in{
 		}
 		return impl();
 	}
-	return rec(base.type,indices);
+	return rec(baseTy,indices);
 }
 
 Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
