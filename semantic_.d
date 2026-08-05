@@ -2816,7 +2816,10 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 	bool checkReplaceable(IndexExp e){
 		if(auto id=cast(Identifier)unwrap(e.e)){
 			if(id.meaning){
-				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true);
+				static if(language==silq)
+				auto allowComponentConstBlocks=!id.meaning.isSemError()&&sc.componentConstBlocksAllow(id.meaning,idx,idx.e.loc);
+				else enum allowComponentConstBlocks=false;
+				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true,allowComponentConstBlocks);
 				static if(language==silq)
 				if(r&&sc.getWithTransBody()){
 					auto creplDecl=id.meaning;
@@ -3583,7 +3586,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 						auto type=updatedType(idx,idx.type,prev is cid.meaning?null:prev.vtype);
 						assert(!!type);
 						if(prev is cid.meaning||!isEqual(prev.vtype,type,null)){
-							if(auto meaning=sc.consume(prev,cid)){
+							if(auto meaning=sc.consume(prev,cid,idx)){
 								assert(meaning is prev);
 								auto dep=getDependency(cid,sc);
 								auto var=addVar(meaning.name.id,type,idx.loc,sc);
@@ -4161,6 +4164,25 @@ bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,I
 	return false;
 }
 
+size_t numIndexes(Expression e){
+	if(auto idx=cast(IndexExp)unwrap(e)) return 1+numIndexes(idx.e);
+	return 0;
+}
+
+bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+	Expression[2] e=[unwrap(e1),unwrap(e2)];
+	size_t[2] d=[numIndexes(e[0]),numIndexes(e[1])];
+	foreach(k;0..2){
+		while(d[k]>d[!k]){
+			auto idx=cast(IndexExp)unwrap(e[k]);
+			assert(!!idx);
+			e[k]=idx.e;
+			d[k]--;
+		}
+	}
+	return guaranteedDifferentLocations(e[0],e[1],loc,sc,inType);
+}
+
 
 static if(language==silq){
 struct ArrayConsumer{
@@ -4172,6 +4194,7 @@ struct ArrayConsumer{
 	}
 	void consumeArray(IndexExp e,ExpSemContext context){
 		Identifier id=null;
+		auto component=e;
 		void doIt(IndexExp e){
 			if(auto idx=cast(IndexExp)unwrap(e.e)){
 				doIt(idx);
@@ -4193,9 +4216,9 @@ struct ArrayConsumer{
 			}
 			if(id.meaning) id.id=id.meaning.name.id;
 			if(id.meaning){
-				if(!context.sc.checkConsumable(id,id.meaning))
+				if(!context.sc.checkConsumable(id,id.meaning,component))
 					return;
-				if(auto nmeaning=context.sc.consume(id.meaning,id)){ // consume array
+				if(auto nmeaning=context.sc.consume(id.meaning,id,component)){ // consume array
 					id.meaning=nmeaning;
 					id.constLookup=false; // TODO: this is a bit hacky
 					context.sc.lastUses.consumption(nmeaning,id,context.sc);
@@ -4219,6 +4242,8 @@ struct ArrayConsumer{
 		foreach(origId,id;ids.map!(t=>t)){
 			if(id&&id.meaning&&id.type&&origId !in added){
 				auto var=addVar(origId,id.type,parent.loc,sc);
+				static if(language==silq)
+					sc.inheritConstBlocks(id.meaning,var);
 				if(origId in consumed)
 					sc.addDependency(var,consumed[origId][2]);
 				else sc.addDefaultDependency(var);
@@ -4476,16 +4501,22 @@ void typeConstBlockNote(Declaration decl,Scope sc){
 	}
 }
 
-bool isNonConstDecl(Declaration decl,Scope sc){
+bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=false){
 	if(!decl) return false;
-	if(decl.isConst||typeConstBlocked(decl,sc)||sc.isConst(decl))
+	if(decl.isConst||typeConstBlocked(decl,sc))
 		return false;
+	static if(language==silq)
+		if(allowComponentConstBlocks){
+			if(sc.hasNonComponentConstBlock(decl)) return false;
+			return true;
+		}
+	if(sc.isConst(decl)) return false;
 	return true;
 }
 
-bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Location loc,Scope sc){ // TODO: also use this for variables that were originally forgettable
+bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Location loc,Scope sc,bool allowComponentConstBlocks=false){ // TODO: also use this for variables that were originally forgettable
 	if(!meaning) return false;
-	if(isNonConstDecl(meaning,sc)) return true;
+	if(isNonConstDecl(meaning,sc,allowComponentConstBlocks)) return true;
 	if(!meaning.isSemError()){
 		sc.error(text("cannot "~action~" `const` ",meaning.kind," ",meaning.name),loc);
 		if(typeConstBlocked(meaning,sc)) typeConstBlockNote(meaning,sc);
@@ -4494,9 +4525,9 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 	return false;
 }
 
-bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible){
+bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible,bool allowComponentConstBlocks=false){
 	if(!meaning||meaning.isSemError()) return false;
-	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc))
+	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks))
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){
@@ -4835,9 +4866,12 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		return ae;
 	}
 	checkIndexReplacement(ae,sc);
-	void checkLhs(Expression lhs,bool indexed){
+	void checkLhs(Expression lhs,bool indexed,IndexExp component=null){
 		if(auto id=cast(Identifier)lhs){
-			if(!checkAssignable(id.meaning,id.loc,sc,false)){
+			static if(language==silq)
+			auto allowComponentConstBlocks=component&&id.meaning&&!id.meaning.isSemError()&&sc.componentConstBlocksAllow(id.meaning,component,component.loc);
+			else enum allowComponentConstBlocks=false;
+			if(!checkAssignable(id.meaning,id.loc,sc,false,allowComponentConstBlocks)){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
@@ -4852,15 +4886,15 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 				return;
 			}
 			foreach(exp;tpl.e)
-				checkLhs(exp,indexed);
+				checkLhs(exp,indexed,component);
 		}else if(auto idx=cast(IndexExp)lhs){
-			checkLhs(idx.e,true);
+			checkLhs(idx.e,true,component?component:idx);
 		}else if(auto fe=cast(FieldExp)lhs){
 			if(isBuiltIn(fe))
 				goto LbadAssgnmLhs;
-			checkLhs(fe.e,true);
+			checkLhs(fe.e,true,component);
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
-			checkLhs(tae.e,indexed);
+			checkLhs(tae.e,indexed,component);
 		}else{
 		LbadAssgnmLhs:
 			sc.error(format("cannot assign to %s",lhs),lhs.loc);
@@ -6885,6 +6919,12 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			sc.note(format("did you mean to write `dup(%s)`?",idx.loc.rep),idx.loc);
 			idx.setSemError();
 		}else idx.implicitDup=true;
+	}
+	static if(language==silq)
+	if(!idx.byRef&&context.constResult!=ConstResult.indexed&&!idx.isSemError()){
+		if(auto baseId=getIdFromIndex(idx))
+			if(baseId.meaning&&baseId.constLookup&&!baseId.meaning.isConst&&!baseId.meaning.isToplevelDeclaration()&&!baseId.typeofSuppressedCapture)
+				sc.recordComponentConstBlock(baseId.meaning,baseId,idx);
 	}
 	idx.setSemCompleted();
 	return idx;

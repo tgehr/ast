@@ -383,6 +383,64 @@ abstract class Scope{
 					props.constBlock~=constBlock;
 			}
 		}
+		static struct ComponentConstBlock{
+			Declaration decl;
+			IndexExp component;
+			Identifier read;
+		}
+		private ComponentConstBlock[] componentConstBlocks;
+		final void recordComponentConstBlock(Declaration decl,Identifier read,IndexExp component)in{
+			assert(decl&&!decl.isToplevelDeclaration);
+			assert(!!read);
+			assert(!!component);
+		}do{
+			if(auto props=declProps.tryGet(decl))
+				if(props.constBlock.length&&props.constBlock[$-1] is read)
+					componentConstBlocks~=ComponentConstBlock(decl,component,read);
+		}
+		int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+			return 0;
+		}
+		final int nestedComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+			foreach(ccb;componentConstBlocks)
+				if(auto r=dg(ccb)) return r;
+			return outerComponentConstBlocks(dg);
+		}
+		final bool isComponentConstBlock(Identifier read){
+			bool result=false;
+			nestedComponentConstBlocks((ComponentConstBlock ccb){
+				if(ccb.read is read) result=true;
+				return result;
+			});
+			return result;
+		}
+		final bool hasNonComponentConstBlock(Declaration decl){
+			for(auto d=decl;d;d=d.splitFrom)
+				foreach(ref prop;nestedDeclProp(d))
+					foreach(read;prop.constBlock)
+						if(!isComponentConstBlock(read)) return true;
+			return false;
+		}
+		final bool componentConstBlocksAllow(Declaration decl,IndexExp write,Location loc){
+			import ast.semantic_:guaranteedDisjointComponents,InType;
+			bool any=false,result=true;
+			for(auto d=decl;d;d=d.splitFrom)
+				foreach(ref prop;nestedDeclProp(d)){
+					foreach(read;prop.constBlock){
+						any=true;
+						bool component=false;
+						nestedComponentConstBlocks((ComponentConstBlock ccb){
+							if(ccb.read !is read) return 0;
+							component=true;
+							if(!guaranteedDisjointComponents(ccb.component,write,loc,this,InType.no))
+								result=false;
+							return 1;
+						});
+						if(!component||!result) return false;
+					}
+				}
+			return any&&result;
+		}
 		static struct TrackedTemporary{
 			Expression expr;
 			Dependency dep;
@@ -586,9 +644,24 @@ abstract class Scope{
 			}
 			return null;
 		}
+		final void inheritConstBlocks(Declaration prev,Declaration new_){ // new_ replaces prev, so it inherits prev's active const blocks
+			static if(language==silq){
+				foreach(ref props;&nestedDeclProps){
+					bool done=false;
+					for(auto d=prev;d&&!done;d=d.splitFrom)
+						if(auto prop=props.tryGet(d))
+							if(prop.constBlock.length){
+								if(!props.tryGet(new_)) props.set(new_,DeclProp.default_());
+								props.tryGet(new_).constBlock~=prop.constBlock;
+								done=true;
+							}
+				}
+			}
+		}
 		static struct ConstBlockContext{
 			private MapX!(Declaration,Identifier[]) constBlock;
 			private size_t numTrackedTemporaries;
+			private size_t numComponentConstBlocks;
 		}
 		final ConstBlockContext saveConst(){
 			MapX!(Declaration,Identifier[]) constBlock;
@@ -596,7 +669,7 @@ abstract class Scope{
 				auto r=prop.constBlock;
 				if(r.length) constBlock[decl]=r;
 			}
-			return ConstBlockContext(constBlock,trackedTemporaries.length);
+			return ConstBlockContext(constBlock,trackedTemporaries.length,componentConstBlocks.length);
 		}
 		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType)in{
 			assert(decl&&constBlock);
@@ -648,6 +721,7 @@ abstract class Scope{
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
 			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
+			componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
 			return success;
 		}
 		final bool resetConst(ref Expression parent,bool isStatement,bool inType){
@@ -659,6 +733,7 @@ abstract class Scope{
 			}
 			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
 			trackedTemporaries=[];
+			componentConstBlocks=[];
 			return success;
 		}
 		final void resetLocalComponentReplacements(){
@@ -744,14 +819,20 @@ abstract class Scope{
 			symtabInsert(cd);
 		return cd;
 	}
-	final Declaration consume(Declaration decl,Identifier use){
+	final Declaration consume(Declaration decl,Identifier use,IndexExp consumedComponent=null){
 		if(use&&!decl.isSemError&&!use.isSemError){
 			if(auto read=isConst(decl)){
-				foreach(prop;nestedDeclProp(decl)){
-					foreach(block;prop.constBlock)
-						block.consumedDuringBorrow=true;
+				bool blocked=true;
+				static if(language==silq)
+					if(consumedComponent&&componentConstBlocksAllow(decl,consumedComponent,use.loc))
+						blocked=false; // consumption only affects components that are not borrowed
+				if(blocked){
+					foreach(prop;nestedDeclProp(decl)){
+						foreach(block;prop.constBlock)
+							block.consumedDuringBorrow=true;
+					}
+					recordConstBlockedConsumption(read,use);
 				}
-				recordConstBlockedConsumption(read,use);
 			}
 		}
 		if(rnsymtab.get(decl.getId,null) !is decl) return null;
@@ -927,7 +1008,7 @@ abstract class Scope{
 		return rnsym?rnsymtab.get(name,null):symtab.get(name,null);
 	}
 
-	final bool isConsumable(Identifier id,Declaration meaning=null)in{
+	final bool isConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
@@ -935,11 +1016,14 @@ abstract class Scope{
 		import ast.semantic_:typeConstBlocked;
 		if(typeConstBlocked(meaning,this)) return false;
 		if(canRecompute(meaning)) return true;
+		static if(language==silq)
+			if(consumedComponent&&componentConstBlocksAllow(meaning,consumedComponent,id.loc))
+				return true; // consumption only affects components that are not borrowed
 		if(isConst(meaning)) return false;
 		if(meaning.isConst) return false;
 		return true;
 	}
-	final bool checkConsumable(Identifier id,Declaration meaning=null)in{
+	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
@@ -979,6 +1063,9 @@ abstract class Scope{
 		if(auto read=isConst(meaning)){
 			if(canRecompute(meaning))
 				return true;
+			static if(language==silq)
+				if(consumedComponent&&componentConstBlocksAllow(meaning,consumedComponent,id.loc))
+					return true; // consumption only affects components that are not borrowed
 			if(!meaning.isSemError()){
 				if(read !is id){
 					error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
@@ -2196,6 +2283,9 @@ class NestedScope: Scope{
 	static if(language==silq){
 		override int outerDeclProps(scope int delegate(ref DeclProps) dg){
 			return parent.nestedDeclProps(dg);
+		}
+		override int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+			return parent.nestedComponentConstBlocks(dg);
 		}
 	}
 
