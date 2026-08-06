@@ -441,6 +441,12 @@ abstract class Scope{
 				}
 			return any&&result;
 		}
+		final bool componentConstBlockRedefined(ConstBlockContext context){
+			foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
+				if(peekSymtab(ccb.decl.getId,true) !is ccb.decl)
+					return true;
+			return false;
+		}
 		static struct TrackedTemporary{
 			Expression expr;
 			Dependency dep;

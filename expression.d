@@ -2025,7 +2025,9 @@ class IteExp: Expression{
 		this.cond=cond; this.then=then; this.othw=othw;
 	}
 	override IteExp copyImpl(CopyArgs args){
-		return new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
+		auto r=new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
+		r.condForget=condForget?condForget.copy(args):null;
+		return r;
 	}
 	override string toString(){
 		bool othwForgets=othw&&othw.blscope_&&(othw.blscope_.forgottenVars.length||othw.blscope_.forgottenVarsOnEntry.length);
@@ -2116,6 +2118,7 @@ class IteExp: Expression{
 		othw.setConstLookup(constLookup);
 		super.setConstLookup(constLookup);
 	}
+	Expression condForget=null; // manual re-derivation of the condition
 }
 
 class WithExp: Expression{

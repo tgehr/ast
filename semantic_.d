@@ -825,6 +825,7 @@ CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc,ref StmFlags flags,boo
 }
 
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq) auto condConstContext=sc.saveConst();
 	ite.cond=conditionSemantic!true(ite,ite.cond,sc,InType.no);
 	static if(language==silq){
 		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
@@ -858,6 +859,23 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
+	}
+	static if(language==silq) // TODO: can we avoid doing this?
+	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)){
+		Expression.CopyArgs cargs={preserveSemantic:true};
+		ite.condForget=ite.cond.copy(cargs);
+		foreach(e;ite.condForget.subexpressions){
+			auto id=cast(Identifier)e;
+			if(!id||!id.meaning||id.meaning.isToplevelDeclaration()) continue;
+			auto nid=new Identifier(id.name);
+			nid.loc=id.loc;
+			if(auto meaning=lookupMeaning(nid,Lookup.probing,sc,false,null)){
+				if(meaning!is id.meaning){
+					id.meaning=meaning;
+					id.type=id.typeFromMeaning;
+				}
+			}
+		}
 	}
 	ite.type=definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
 	return ite;
