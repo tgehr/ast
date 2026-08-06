@@ -824,11 +824,66 @@ CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc,ref StmFlags flags,boo
 	return compoundExpSemantic(ce, sc, flags, blscope: false, resetConst: resetConst);
 }
 
+static if(language==silq)
+void collectNondeterministicSubexpressions(Expression e,ref Expression[] result){
+	if(e.type&&e.type.isClassical()&&!e.isDeterministic()){
+		result~=e; // non-determinism is upward-closed, so there is no need to descend further
+		return;
+	}
+	if(auto ite=cast(IteExp)e) // branches are only evaluated conditionally, so they cannot be hoisted
+		return collectNondeterministicSubexpressions(ite.cond,result);
+	if(cast(FunctionDef)e||cast(LambdaExp)e) return; // body is not evaluated here
+	foreach(c;e.components) collectNondeterministicSubexpressions(c,result);
+}
+
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
-	static if(language==silq) auto condConstContext=sc.saveConst();
+	static if(language==silq){ // hack is needed for explicit `condForget`, ideally we remove this. TODO: incomplete
+		auto condConstContext=sc.saveConst();
+		bool condMayContainCalls=false;
+		foreach(e;ite.cond.subexpressions) if(cast(CallExp)e){ condMayContainCalls=true; break; }
+		auto condStateSnapshot=condMayContainCalls?sc.getStateSnapshot(true):typeof(sc.getStateSnapshot(true)).init;
+	}
 	ite.cond=conditionSemantic!true(ite,ite.cond,sc,InType.no);
-	static if(language==silq){
+	static if(language==silq){ // hack is needed for explicit `condForget`, ideally we remove this. TODO: incomplete
 		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
+		if(quantumControl&&!ite.cond.isSemError()){
+			Expression[] nondeterministic;
+			collectNondeterministicSubexpressions(ite.cond,nondeterministic);
+			if(nondeterministic.length){
+				IdMapSX!(Expression,size_t) positions;
+				foreach(i,e;nondeterministic) positions[e]=i;
+				auto names=nondeterministic.map!(e=>freshName()).array;
+				Expression[] hoisted;
+				foreach(i,e;nondeterministic){
+					auto id=new Identifier(names[i]);
+					id.loc=e.loc;
+					Expression.CopyArgs cargs;
+					auto def=new DefineExp(id,e.copy(cargs));
+					def.loc=e.loc;
+					hoisted~=def;
+				}
+				size_t replaced=0;
+				Expression.CopyArgs cargs;
+				cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+					if(auto pos=positions.getPtr(e)){
+						replaced++;
+						auto id=new Identifier(names[*pos]);
+						id.loc=e.loc;
+						return id;
+					}
+					return null;
+				};
+				auto nite=ite.copy(cargs);
+				assert(replaced==nondeterministic.length,"could not replace all non-deterministic condition subexpressions");
+				if(replaced==nondeterministic.length){
+					auto compound=new CompoundExp(hoisted~[cast(Expression)nite]);
+					compound.loc=ite.loc;
+					sc.restoreConst(condConstContext);
+					sc.restoreStateSnapshot(condStateSnapshot);
+					return statementSemantic(compound,sc,flags,resetConst);
+				}
+			}
+		}
 		auto restriction_=quantumControl||flags&StmFlags.quantumReturn?Annotation.mfree:Annotation.none;
 	}else{
 		enum quantumControl=false;

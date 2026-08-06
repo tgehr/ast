@@ -309,7 +309,7 @@ abstract class Scope{
 		}
 		final DeclProps saveDeclProps(){ return declProps.dup; }
 		final void resetDeclProps(DeclProps previous){ declProps=previous; }
-		final void mergeDeclProps(ref DeclProps nested){
+		final void mergeDeclProps(ref DeclProps nested,ComponentConstBlock[] nestedComponentConstBlocks){
 			static if(language==silq){
 				foreach(decl,ref prop;nested.props){
 					if(!prop.constBlock.length) continue;
@@ -320,6 +320,9 @@ abstract class Scope{
 						nread.scope_=this;
 						blockConst(decl,nread);
 						recordAccess(nread,decl);
+						foreach(ccb;nestedComponentConstBlocks)
+							if(ccb.read is read)
+								componentConstBlocks~=ComponentConstBlock(decl,ccb.component,nread);
 					}
 					prop.constBlock=[];
 				}
@@ -741,6 +744,10 @@ abstract class Scope{
 			trackedTemporaries=[];
 			componentConstBlocks=[];
 			return success;
+		}
+		final void restoreConst(ConstBlockContext context){ // roll back const-related state for re-analysis
+			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
+			componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
 		}
 		final void resetLocalComponentReplacements(){
 			foreach(decl,ref prop;declProps.props)
@@ -1238,7 +1245,7 @@ abstract class Scope{
 		}
 		static if(language==silq)
 			if(mergeScope)
-				mergeScope.mergeDeclProps(this.declProps);
+				mergeScope.mergeDeclProps(this.declProps,this.componentConstBlocks);
 		return false;
 	}
 
@@ -1748,7 +1755,7 @@ abstract class Scope{
 						removeDependency(k);
 			}
 			foreach(sc;scopes){
-				mergeDeclProps(sc.declProps);
+				mergeDeclProps(sc.declProps,sc.componentConstBlocks);
 			}
 		}
 		foreach(_,dm;deadMerges){
