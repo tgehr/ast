@@ -745,10 +745,6 @@ abstract class Scope{
 			componentConstBlocks=[];
 			return success;
 		}
-		final void restoreConst(ConstBlockContext context){ // roll back const-related state for re-analysis
-			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
-			componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
-		}
 		final void resetLocalComponentReplacements(){
 			foreach(decl,ref prop;declProps.props)
 				prop.componentReplacements=[];

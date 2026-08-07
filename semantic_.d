@@ -830,60 +830,15 @@ void collectNondeterministicSubexpressions(Expression e,ref Expression[] result)
 		result~=e; // non-determinism is upward-closed, so there is no need to descend further
 		return;
 	}
-	if(auto ite=cast(IteExp)e) // branches are only evaluated conditionally, so they cannot be hoisted
-		return collectNondeterministicSubexpressions(ite.cond,result);
 	if(cast(FunctionDef)e||cast(LambdaExp)e) return; // body is not evaluated here
 	foreach(c;e.components) collectNondeterministicSubexpressions(c,result);
 }
 
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
-	static if(language==silq){ // hack is needed for explicit `condForget`, ideally we remove this. TODO: incomplete
-		auto condConstContext=sc.saveConst();
-		bool condMayContainCalls=false;
-		foreach(e;ite.cond.subexpressions) if(cast(CallExp)e){ condMayContainCalls=true; break; }
-		auto condStateSnapshot=condMayContainCalls?sc.getStateSnapshot(true):typeof(sc.getStateSnapshot(true)).init;
-	}
+	static if(language==silq) auto condConstContext=sc.saveConst();
 	ite.cond=conditionSemantic!true(ite,ite.cond,sc,InType.no);
-	static if(language==silq){ // hack is needed for explicit `condForget`, ideally we remove this. TODO: incomplete
+	static if(language==silq){
 		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
-		if(quantumControl&&!ite.cond.isSemError()){
-			Expression[] nondeterministic;
-			collectNondeterministicSubexpressions(ite.cond,nondeterministic);
-			if(nondeterministic.length){
-				IdMapSX!(Expression,size_t) positions;
-				foreach(i,e;nondeterministic) positions[e]=i;
-				auto names=nondeterministic.map!(e=>freshName()).array;
-				Expression[] hoisted;
-				foreach(i,e;nondeterministic){
-					auto id=new Identifier(names[i]);
-					id.loc=e.loc;
-					Expression.CopyArgs cargs;
-					auto def=new DefineExp(id,e.copy(cargs));
-					def.loc=e.loc;
-					hoisted~=def;
-				}
-				size_t replaced=0;
-				Expression.CopyArgs cargs;
-				cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
-					if(auto pos=positions.getPtr(e)){
-						replaced++;
-						auto id=new Identifier(names[*pos]);
-						id.loc=e.loc;
-						return id;
-					}
-					return null;
-				};
-				auto nite=ite.copy(cargs);
-				assert(replaced==nondeterministic.length,"could not replace all non-deterministic condition subexpressions");
-				if(replaced==nondeterministic.length){
-					auto compound=new CompoundExp(hoisted~[cast(Expression)nite]);
-					compound.loc=ite.loc;
-					sc.restoreConst(condConstContext);
-					sc.restoreStateSnapshot(condStateSnapshot);
-					return statementSemantic(compound,sc,flags,resetConst);
-				}
-			}
-		}
 		auto restriction_=quantumControl||flags&StmFlags.quantumReturn?Annotation.mfree:Annotation.none;
 	}else{
 		enum quantumControl=false;
@@ -917,20 +872,30 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	static if(language==silq) // TODO: can we avoid doing this?
 	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)){
+		Expression[] nondeterministic;
+		collectNondeterministicSubexpressions(ite.cond,nondeterministic);
+		IdMapSX!(Expression,bool) sharedNodes;
+		foreach(e;nondeterministic) sharedNodes[e]=true;
 		Expression.CopyArgs cargs={preserveSemantic:true};
-		ite.condForget=ite.cond.copy(cargs);
-		foreach(e;ite.condForget.subexpressions){
-			auto id=cast(Identifier)e;
-			if(!id||!id.meaning||id.meaning.isToplevelDeclaration()) continue;
-			auto nid=new Identifier(id.name);
-			nid.loc=id.loc;
-			if(auto meaning=lookupMeaning(nid,Lookup.probing,sc,false,null)){
-				if(meaning!is id.meaning){
-					id.meaning=meaning;
-					id.type=id.typeFromMeaning;
+		cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+			// nondeterministic subexpressions are shared with the entry condition;
+			// hqir.d reuses the values recorded at entry instead of re-evaluating them
+			if(e in sharedNodes) return e;
+			if(auto id=cast(Identifier)e){
+				if(!id.meaning||id.meaning.isToplevelDeclaration()) return null;
+				auto nid=new Identifier(id.name);
+				nid.loc=id.loc;
+				if(auto meaning=lookupMeaning(nid,Lookup.probing,sc,false,null)){
+					if(meaning!is id.meaning){
+						nid.meaning=meaning;
+						nid.type=nid.typeFromMeaning;
+						return nid;
+					}
 				}
 			}
-		}
+			return null;
+		};
+		ite.condForget=ite.cond.copy(cargs);
 	}
 	ite.type=definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
 	return ite;
