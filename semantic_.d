@@ -4540,7 +4540,7 @@ void typeConstBlockNote(Declaration decl,Scope sc){
 	}
 }
 
-bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=false){
+bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=false,bool allowRecomputable=false){
 	if(!decl) return false;
 	if(decl.isConst||typeConstBlocked(decl,sc))
 		return false;
@@ -4549,13 +4549,18 @@ bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=fal
 			if(sc.hasNonComponentConstBlock(decl)) return false;
 			return true;
 		}
-	if(sc.isConst(decl)) return false;
+	if(sc.isConst(decl)){
+		static if(language==silq)
+			if(allowRecomputable&&sc.canRecompute(decl)) // (const-blocked reads can be recomputed)
+				return true;
+		return false;
+	}
 	return true;
 }
 
-bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Location loc,Scope sc,bool allowComponentConstBlocks=false){ // TODO: also use this for variables that were originally forgettable
+bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Location loc,Scope sc,bool allowComponentConstBlocks=false,bool allowRecomputable=false){ // TODO: also use this for variables that were originally forgettable
 	if(!meaning) return false;
-	if(isNonConstDecl(meaning,sc,allowComponentConstBlocks)) return true;
+	if(isNonConstDecl(meaning,sc,allowComponentConstBlocks,allowRecomputable)) return true;
 	if(!meaning.isSemError()){
 		sc.error(text("cannot "~action~" `const` ",meaning.kind," ",meaning.name),loc);
 		if(typeConstBlocked(meaning,sc)) typeConstBlockNote(meaning,sc);
@@ -4566,7 +4571,7 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible,bool allowComponentConstBlocks=false){
 	if(!meaning||meaning.isSemError()) return false;
-	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks))
+	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks,true))
 		return false;
 	auto vd=cast(VarDecl)meaning;
 	static if(language==silq){

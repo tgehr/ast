@@ -1097,7 +1097,8 @@ class Checker {
 		assert(isConstForReverse.length == n);
 
 		if(!isReversed) {
-			foreach(i, arg; argVals) {
+			void visArg(size_t i) {
+				auto arg = argVals[i];
 				auto pTy = paramTypes[i];
 				if(!isConstForReverse[i]) {
 					expectMoved(arg, "argument");
@@ -1107,6 +1108,16 @@ class Checker {
 				visExpr(arg);
 				expectConvertible(arg, pTy, ast_exp.TypeAnnotationType.annotation);
 			}
+			bool consumes(size_t i) {
+				foreach(id; ast_ty.freeIdentifiers(argVals[i]))
+					if(id.meaning&&!id.constLookup&&!id.implicitDup)
+						return true;
+				return false;
+			}
+			// arguments that only borrow may refer to variables consumed by other arguments
+			// TODO: fix
+			foreach(i; 0..n) if(!consumes(i)) visArg(i);
+			foreach(i; 0..n) if(consumes(i)) visArg(i);
 			return;
 		}
 
