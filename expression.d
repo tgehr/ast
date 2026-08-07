@@ -2147,6 +2147,7 @@ class WithExp: Expression{
 	// semantic information
 	CompoundExp itrans; // inverse transform
 	bool isIndices=false;
+	AAssignExp.Replacement[] replacements;
 	Declaration aggregate(bool old)in{
 		assert(isIndices);
 		assert(old?!!trans:!!itrans);

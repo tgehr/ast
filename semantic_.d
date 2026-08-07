@@ -948,7 +948,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			if(crepl.write)
 				refreshWithTransReplMeanings(crepl.write,sc);
 		auto bodyCrepls=sc.localComponentReplacements();
-		finishIndexReplacement(with_,sc);
+		finishIndexReplacement(with_,sc,&with_.replacements);
 		sc.clearConsumed();
 		foreach(crepl;bodyCrepls)
 			if(crepl.write){
@@ -4325,7 +4325,7 @@ void checkIndexReplacement(Expression be,Scope sc){
 	}
 }
 
-void finishIndexReplacement(Expression be,Scope sc){
+void finishIndexReplacement(Expression be,Scope sc,AAssignExp.Replacement[]* replacements=null){
 	auto inType=InType.no;
 	auto context=expSemContext(sc,ConstResult.yes,inType);
 
@@ -4334,6 +4334,7 @@ void finishIndexReplacement(Expression be,Scope sc){
 	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 	ArrayConsumer consumer;
+	if(replacements) consumer.recordReplacementsInto(replacements);
 	foreach(theIndex;indicesToReplace)
 		consumer.consumeArray(theIndex,context);
 	consumer.redefineArrays(be,sc);
