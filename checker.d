@@ -7,7 +7,7 @@ import std.algorithm: map, all, any;
 import std.range: repeat;
 
 import util.io: stderr;
-import util: MapX, MapSX;
+import util: MapX, MapSX, SetX;
 
 import ast_sem = ast.semantic_;
 import ast_low = ast.lowerings;
@@ -1108,16 +1108,27 @@ class Checker {
 				visExpr(arg);
 				expectConvertible(arg, pTy, ast_exp.TypeAnnotationType.annotation);
 			}
-			bool consumes(size_t i) {
+			SetX!(ast_decl.Declaration) moved;
+			foreach(i; 0..n)
 				foreach(id; ast_ty.freeIdentifiers(argVals[i]))
 					if(id.meaning&&!id.constLookup&&!id.implicitDup)
-						return true;
-				return false;
+						moved.insert(id.meaning);
+			// arguments that only borrow may refer to variables consumed by other
+			// arguments; check those first, while the variables are still available
+			// TODO: can we simplify this? (e.g., make explicit temporaries or evaluate `const` before `moved` in general)
+			auto argVisited=new bool[n];
+			foreach(i; 0..n) {
+				bool aliases=false,consumes=false;
+				foreach(id; ast_ty.freeIdentifiers(argVals[i]))
+					if(id.meaning){
+						if((id.constLookup||id.implicitDup)&&id.meaning in moved)
+							aliases=true;
+						else if(!id.constLookup&&!id.implicitDup)
+							consumes=true;
+					}
+				if(aliases&&!consumes) { visArg(i); argVisited[i]=true; }
 			}
-			// arguments that only borrow may refer to variables consumed by other arguments
-			// TODO: fix
-			foreach(i; 0..n) if(!consumes(i)) visArg(i);
-			foreach(i; 0..n) if(consumes(i)) visArg(i);
+			foreach(i; 0..n) if(!argVisited[i]) visArg(i);
 			return;
 		}
 
