@@ -889,6 +889,9 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 					if(meaning!is id.meaning){
 						nid.meaning=meaning;
 						nid.type=nid.typeFromMeaning;
+						nid.scope_=sc;
+						nid.constLookup=id.constLookup;
+						nid.setSemCompleted();
 						return nid;
 					}
 				}
