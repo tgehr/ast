@@ -11,9 +11,9 @@ import ast.declaration,ast.error,ast.reverse,util;
 import ast.lowerings;
 import ast.modules: importModule, getPreludeScope, isInPrelude;
 
+private int freshNameCounter=0;
 Id freshName(){ // TODO: improve mechanism for generating temporaries
-	static int counter=0;
-	return Id.intern(text("__tmp",counter++));
+	return Id.intern(text("__tmp",freshNameCounter++));
 }
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
@@ -903,6 +903,10 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 
 static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq){
+		auto nacr=sc.aliasedConstReads.length;
+		scope(exit) if(sc.aliasedConstReads.length>nacr) sc.aliasedConstReads.length=nacr;
+	}
 	if(with_.bdy.s.length){
 		if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
 			if(ret.e.sstate==SemState.initial){
@@ -987,6 +991,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	}
 	if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
+			static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 			with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
@@ -994,6 +999,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		enum unchecked=false,noImplicitDup=true;
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,unchecked,noImplicitDup)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
+		static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 		with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		if(with_.itrans.isSemError()){
@@ -1032,12 +1038,58 @@ Expression statementSemanticImpl(DatDecl dd,Scope sc,ref StmFlags flags,bool res
 	return datDeclSemantic(dd,sc);
 }
 Expression statementSemanticImpl(CommaExp ce,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq){ // TODO: replace hoisting with more general solution
+		auto nacr=sc.aliasedConstReads.length;
+		scope(exit) if(sc.aliasedConstReads.length>nacr) sc.aliasedConstReads.length=nacr;
+		if(sc.allowsLinear&&!sc.getWithTransBody()&&!sc.getWithTransConsumption()&&!sc.getAliasedConstReadHoistingScope()&&containsCollidingDefineOrAssign(ce)){
+			sc.aliasedConstReadHoisting=true;
+			sc.aliasedConstReadStmt=ce;
+			sc.aliasedConstReadFlags=cast(int)flags;
+			scope(exit){
+				sc.aliasedConstReadHoisting=false;
+				sc.aliasedConstReadStmt=null;
+			}
+			auto r=expectDefineOrAssignSemantic(ce,sc,flags,resetConst);
+			return wrapAliasedConstReadDefs(r,ce,sc);
+		}
+	}
 	return expectDefineOrAssignSemantic(ce,sc,flags,resetConst);
 }
 Expression statementSemanticImpl(DefineExp de,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq){ // TODO: replace hoisting with more general solution
+		auto nacr=sc.aliasedConstReads.length;
+		scope(exit) if(sc.aliasedConstReads.length>nacr) sc.aliasedConstReads.length=nacr;
+		if(sc.allowsLinear&&!sc.getWithTransBody()&&!sc.getWithTransConsumption()&&!sc.getAliasedConstReadHoistingScope()&&containsIndexLookup(de.e1)&&containsIndexLookup(de.e2)){
+			sc.aliasedConstReadHoisting=true;
+			sc.aliasedConstReadStmt=de;
+			sc.aliasedConstReadFlags=cast(int)flags;
+			scope(exit){
+				sc.aliasedConstReadHoisting=false;
+				sc.aliasedConstReadStmt=null;
+			}
+			auto r=defineSemantic(de,sc,flags,resetConst:resetConst);
+			return wrapAliasedConstReadDefs(r,de,sc);
+		}
+	}
 	return defineSemantic(de,sc,flags,resetConst:resetConst);
 }
 Expression statementSemanticImpl(AAssignExp ae,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq) // TODO: replace hoisting with more general solution
+	if(!cast(AssignExp)ae){
+		auto nacr=sc.aliasedConstReads.length;
+		scope(exit) if(sc.aliasedConstReads.length>nacr) sc.aliasedConstReads.length=nacr;
+		if(sc.allowsLinear&&!sc.getWithTransBody()&&!sc.getWithTransConsumption()&&!sc.getAliasedConstReadHoistingScope()&&containsIndexLookup(ae.e1)&&containsIndexLookup(ae.e2)){
+			sc.aliasedConstReadHoisting=true;
+			sc.aliasedConstReadStmt=ae;
+			sc.aliasedConstReadFlags=cast(int)flags;
+			scope(exit){
+				sc.aliasedConstReadHoisting=false;
+				sc.aliasedConstReadStmt=null;
+			}
+			auto r=assignSemantic(ae,sc,flags);
+			return wrapAliasedConstReadDefs(r,ae,sc);
+		}
+	}
 	return assignSemantic(ae,sc,flags);
 }
 
@@ -3861,7 +3913,10 @@ Scope.DeclProp.ComponentReplacement*[] getPatternComponentForgets(DefineExp be,S
 static if(language==silq)
 void resolvePatternComponentForgets(Scope.DeclProp.ComponentReplacement*[] patternComponentForgets,DefineExp be,Scope sc){
 	foreach(crepl;patternComponentForgets)
-		if(!crepl.read) crepl.read=crepl.write; // (consumed by the forget)
+		if(!crepl.read){
+			crepl.read=crepl.write; // (consumed by the forget)
+			crepl.constRead=null;
+		}
 }
 
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
@@ -4331,6 +4386,22 @@ void finishIndexReplacement(Expression be,Scope sc,AAssignExp.Replacement[]* rep
 
 	auto crepls=sc.localComponentReplacements();
 	scope(exit) sc.resetLocalComponentReplacements();
+	static if(language==silq)
+	if(!replacements)
+		foreach(crepl;crepls){
+			// a component that was read (or may have been read) as `const`
+			// for its last access cannot be written back (the evaluation
+			// order of the right-hand side decides whether this is valid)
+			if(!crepl.write||!crepl.constRead) continue;
+			if(crepl.write.isSemError()) continue;
+			if(guaranteedSameLocations(crepl.write,crepl.constRead,crepl.constRead.loc,sc,InType.no)){
+				sc.error("cannot write back component that was read as `const`",crepl.write.loc);
+				sc.note("component was read as `const` here",crepl.constRead.loc);
+			}else{
+				sc.error("cannot write back component that may have been read as `const`",crepl.write.loc);
+				sc.note("component may have been read as `const` here",crepl.constRead.loc);
+			}
+		}
 	auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
 	assert(indicesToReplace.all!(x=>!!getIdFromIndex(x)));
 	ArrayConsumer consumer;
@@ -5240,6 +5311,10 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}
 		}
 		prepareLhs(be.e1);
+		// the moved operand of an op assignment is accessed before the
+		// right-hand side (see the __op_assign lowering), even though it
+		// is analyzed after it
+		static if(language==silq){ sc.opAssignMovedOperand=true; scope(exit) sc.opAssignMovedOperand=false; }
 		be.e1=expressionSemantic(be.e1,context.nestConsumed);
 		propErr(be.e1,be);
 		if(auto id=cast(Identifier)be.e1){
@@ -6807,11 +6882,115 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	}else return noMember();
 }
 
+static if(language==silq){
+
+bool containsExpression(Expression haystack,Expression needle){
+	foreach(x;haystack.subexpressions)
+		if(x is needle) return true;
+	return false;
+}
+
+bool containsIndexLookup(Expression e){ // TODO: get rid of this
+	if(cast(FunctionDef)e||cast(LambdaExp)e) return true; // the body may be analyzed within this scope
+	if(cast(IndexExp)e) return true;
+	foreach(c;e.components) if(containsIndexLookup(c)) return true;
+	return false;
+}
+bool containsCollidingDefineOrAssign(Expression e){ // TODO: get rid of this
+	if(auto ce=cast(CommaExp)e)
+		return containsCollidingDefineOrAssign(ce.e1)||containsCollidingDefineOrAssign(ce.e2);
+	Expression e1,e2;
+	if(auto de=cast(DefineExp)e){ e1=de.e1; e2=de.e2; }
+	else if(auto ae=cast(AAssignExp)e){
+		if(cast(AssignExp)ae) return false; // `=` analyzes e2 before the components are replaced
+		e1=ae.e1; e2=ae.e2;
+	}else return false;
+	return containsIndexLookup(e1)&&containsIndexLookup(e2);
+}
+
+bool hoistAliasedConstRead(Scope hsc,IndexExp idx,Scope sc){ // TODO: replace with more general solution
+	if(!getIdFromIndex(idx)) return false;
+	if(auto base=getIdFromIndex(idx)){
+		auto id=new Identifier(base.name);
+		id.loc=idx.loc;
+		auto decl=lookupMeaning(id,Lookup.probing,sc,false,null);
+		if(!decl) return false;
+		auto type=typeForDecl(decl);
+		if(!type||!type.isClassical){
+			if(!sc.dependencyTracked(decl)) return false;
+			if(!sc.canRecompute(decl)) return false;
+		}
+	}
+	Scope.AliasedConstReads* acr;
+	if(hsc.aliasedConstReads.length&&hsc.aliasedConstReads[$-1].stmt is hsc.aliasedConstReadStmt){
+		acr=&hsc.aliasedConstReads[$-1];
+		if(idx in acr.temps) return true;
+	}else{
+		Scope.AliasedConstReads nacr;
+		nacr.stmt=hsc.aliasedConstReadStmt;
+		hsc.aliasedConstReads~=nacr;
+		acr=&hsc.aliasedConstReads[$-1];
+	}
+	auto savedFreshNameCounter=freshNameCounter;
+	auto name=freshName();
+	auto context=expSemContext(sc,ConstResult.no,InType.no);
+	Expression.CopyArgs cargs={preserveSemantic: true};
+	auto rhs=dupExp(idx.copy(cargs),idx.loc,context);
+	rhs.loc=idx.loc;
+	auto tid=new Identifier(name);
+	tid.loc=idx.loc;
+	auto de=new DefineExp(tid,rhs);
+	de.loc=idx.loc;
+	auto ce=new CompoundExp([de]);
+	ce.loc=idx.loc;
+	hsc.analyzingAliasedConstReadDef=true;
+	scope(exit) hsc.analyzingAliasedConstReadDef=false;
+	sc.handler.suppress++;
+	scope(exit) sc.handler.suppress--;
+	auto fl=cast(StmFlags)hsc.aliasedConstReadFlags;
+	auto creplsCtx=sc.moveLocalComponentReplacements();
+	auto defs=statementSemanticImpl(ce,sc,fl,resetConst:false);
+	sc.restoreLocalComponentReplacements(creplsCtx);
+	if(defs.isSemError()){
+		freshNameCounter=savedFreshNameCounter;
+		return false;
+	}
+	defs.setSemCompleted();
+	if(acr.analyzedDefs) acr.analyzedDefs.s~=defs.s[0];
+	else acr.analyzedDefs=defs;
+	acr.temps[idx]=name;
+	return true;
+}
+Expression wrapAliasedConstReadDefs(Expression r,Expression stmt,Scope sc){
+	if(!r.isSemFinal()) return r;
+	if(!sc.aliasedConstReads.length) return r;
+	auto acr=&sc.aliasedConstReads[$-1];
+	if(acr.stmt!is stmt) return r;
+	if(acr.defsWrapped||!acr.analyzedDefs) return r;
+	acr.defsWrapped=true;
+	acr.analyzedDefs.s~=r;
+	propErr(r,acr.analyzedDefs);
+	return acr.analyzedDefs;
+}
+
+}
+
 static if(language==silq)
-bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,IndexExp idx,Scope sc,InType inType)in{
+bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,IndexExp idx,Scope sc,InType inType,ConstResult constResult)in{
 	assert(!!crepl.write);
 }do{
 	if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)) return false;
+	static if(language==silq)
+	if(constResult==ConstResult.yes||constResult==ConstResult.indexed)
+		if(!sc.getWithTransBody())
+			if(auto hsc=sc.getAliasedConstReadHoistingScope()){
+				if(!hsc.analyzingAliasedConstReadDef){
+					if(hoistAliasedConstRead(hsc,idx,sc)){
+						crepl.constRead=idx;
+						return false;
+					}
+				}
+			}
 	if(!crepl.write.isSemError()&&!idx.isSemError()){
 		if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
 			sc.error("lookup of index refers to consumed value",idx.loc);
@@ -6869,6 +7048,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				crepls=sc.componentReplacements(creplDecl);
 			}
 		}
+		static if(language==silq){
+			Id aliasedConstReadTemp;
+			if(sc.lookupAliasedConstReadTemp(idx,aliasedConstReadTemp)){
+				auto id=new Identifier(aliasedConstReadTemp);
+				id.loc=idx.loc;
+				return expressionSemantic(id,context);
+			}
+		}
 	}
 	static if(language==silq)
 	if(creplDecl){
@@ -6897,9 +7084,15 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						cid.constLookup=true;
 						assert(cid.type==rid.type);
 						assert(creplDecl is rid.meaning);
-						if(indexReplacementAliasError(crepl,idx,sc,inType)){
+						if(indexReplacementAliasError(crepl,idx,sc,inType,context.constResult)){
 							idx.setSemError();
 							break;
+						}
+						Id hoistedConstReadTemp;
+						if(sc.lookupAliasedConstReadTemp(idx,hoistedConstReadTemp)){
+							auto id=new Identifier(hoistedConstReadTemp);
+							id.loc=idx.loc;
+							return expressionSemantic(id,context);
 						}
 					}
 				}
@@ -6922,6 +7115,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		}
 		if(!context.constResult){
 			crepls[replaceIndexLoc].read=idx; // matched
+			if(!sc.getWithTransInverse()&&!sc.getOpAssignMovedOperand())
+				crepls[replaceIndexLoc].constRead=null;
 			setDefLhsByRef(idx);
 			assert(cid.byRef);
 		}
@@ -8593,6 +8788,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		auto crepls=fd.scope_.allComponentReplacements();
 		foreach(i,crepl;crepls){ // reset component replacements
 			static assert(is(typeof(crepl):T*,T));
+			crepl.constRead=null;
 			if(!crepl.read) continue;
 			if(auto id=getIdFromIndex(crepl.read)){
 				if(id.scope_&&id.scope_.isNestedIn(fd.fscope_))

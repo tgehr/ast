@@ -210,6 +210,7 @@ abstract class Scope{
 					IndexExp write;
 					Id name;
 					IndexExp read;
+					IndexExp constRead;
 				}
 				ComponentReplacement[] componentReplacements;
 				void nameIndex(IndexExp index,Id name){
@@ -2132,6 +2133,46 @@ abstract class Scope{
 			for(auto sc=this;sc;sc=sc.parentScope())
 				if(sc.withTransBody) return sc.withTransBody;
 			return null;
+		}
+		static if(language==silq){ // hoisting of recomputable aliased const lookups (TODO: replace with more general solution)
+			static struct AliasedConstReads{
+				Expression stmt; // the statement the lookups were hoisted for
+				MapX!(Expression,Id) temps; // lookup ↦ name of the temporary holding its value
+				CompoundExp analyzedDefs; // the analyzed `__tmp := dup(lookup)` definitions
+				bool defsWrapped;
+			}
+			AliasedConstReads[] aliasedConstReads; // stack, innermost statement last
+			final bool lookupAliasedConstReadTemp(Expression e,ref Id name){
+				for(auto sc=this;sc;sc=sc.parentScope())
+					foreach_reverse(ref acr;sc.aliasedConstReads)
+						if(e in acr.temps){
+							name=acr.temps[e];
+							return true;
+						}
+				return false;
+			}
+			bool withTransInverse=false; // analyzing the inverse transformation of a `with` (the write-back machinery)
+			bool opAssignMovedOperand=false; // analyzing the moved operand of an op assignment (accessed before the right-hand side)
+			final Scope getOpAssignMovedOperand(){
+				for(auto sc=this;sc;sc=sc.parentScope())
+					if(sc.opAssignMovedOperand) return sc;
+				return null;
+			}
+			final Scope getWithTransInverse(){
+				for(auto sc=this;sc;sc=sc.parentScope())
+					if(sc.withTransInverse) return sc;
+				return null;
+			}
+			// immediate hoisting (see hoistAliasedConstRead in semantic_.d):
+			bool aliasedConstReadHoisting=false; // armed for the current statement
+			Expression aliasedConstReadStmt; // the statement being analyzed
+			int aliasedConstReadFlags; // the StmFlags at the start of the statement
+			bool analyzingAliasedConstReadDef=false; // analyzing a temporary definition
+			final Scope getAliasedConstReadHoistingScope(){
+				for(auto sc=this;sc;sc=sc.parentScope())
+					if(sc.aliasedConstReadHoisting) return sc;
+				return null;
+			}
 		}
 	}
 	LastUses lastUses;
