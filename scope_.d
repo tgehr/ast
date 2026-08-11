@@ -2152,12 +2152,6 @@ abstract class Scope{
 				return false;
 			}
 			bool withTransInverse=false; // analyzing the inverse transformation of a `with` (the write-back machinery)
-			bool opAssignMovedOperand=false; // analyzing the moved operand of an op assignment (accessed before the right-hand side)
-			final Scope getOpAssignMovedOperand(){
-				for(auto sc=this;sc;sc=sc.parentScope())
-					if(sc.opAssignMovedOperand) return sc;
-				return null;
-			}
 			final Scope getWithTransInverse(){
 				for(auto sc=this;sc;sc=sc.parentScope())
 					if(sc.withTransInverse) return sc;

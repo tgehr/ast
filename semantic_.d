@@ -5312,10 +5312,6 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}
 		}
 		prepareLhs(be.e1);
-		// the moved operand of an op assignment is accessed before the
-		// right-hand side (see the __op_assign lowering), even though it
-		// is analyzed after it
-		static if(language==silq){ sc.opAssignMovedOperand=true; scope(exit) sc.opAssignMovedOperand=false; }
 		be.e1=expressionSemantic(be.e1,context.nestConsumed);
 		propErr(be.e1,be);
 		if(auto id=cast(Identifier)be.e1){
@@ -7116,7 +7112,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		}
 		if(!context.constResult){
 			crepls[replaceIndexLoc].read=idx; // matched
-			if(!sc.getWithTransInverse()&&!sc.getOpAssignMovedOperand())
+			if(!sc.getWithTransInverse())
 				crepls[replaceIndexLoc].constRead=null;
 			setDefLhsByRef(idx);
 			assert(cid.byRef);
