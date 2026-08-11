@@ -3680,6 +3680,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 								assert(meaning is prev);
 								auto dep=getDependency(cid,sc);
 								auto var=addVar(meaning.name.id,type,idx.loc,sc);
+								var.promotedFrom=meaning;
 								sc.addDependency(var,dep);
 								idx.replacements~=AAssignExp.Replacement(meaning,var);
 								replacements[cid.meaning]=var;

@@ -42,6 +42,7 @@ abstract class Declaration: Expression{
 	Declaration[] splitInto=[];
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
+	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
 
 	Declaration canonicalSource_=null;
