@@ -871,7 +871,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		ite.setSemError();
 	}
 	static if(language==silq) // TODO: can we avoid doing this?
-	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)){
+	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
 		Expression[] nondeterministic;
 		collectNondeterministicSubexpressions(ite.cond,nondeterministic);
 		IdMapSX!(Expression,bool) sharedNodes;

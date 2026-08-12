@@ -451,6 +451,12 @@ abstract class Scope{
 					return true;
 			return false;
 		}
+		final bool componentConstBlockConsumedDuringBorrow(ConstBlockContext context){
+			foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
+				if(peekSymtab(ccb.decl.getId,true) !is ccb.decl&&ccb.read.consumedDuringBorrow)
+					return true;
+			return false;
+		}
 		static struct TrackedTemporary{
 			Expression expr;
 			Dependency dep;
@@ -829,17 +835,23 @@ abstract class Scope{
 			symtabInsert(cd);
 		return cd;
 	}
-	final Declaration consume(Declaration decl,Identifier use,IndexExp consumedComponent=null){
+	final Identifier isConstThroughSplits(Declaration decl){
+		for(auto d=decl;d;d=d.splitFrom)
+			if(auto read=isConst(d))
+				return read;
+		return null;
+	}
+	final Declaration consume(Declaration decl,Identifier use,IndexExp consumedComponent=null,bool splitting=false){
 		if(use&&!decl.isSemError&&!use.isSemError){
-			if(auto read=isConst(decl)){
-				bool blocked=true;
-				static if(language==silq)
-					if(consumedComponent&&componentConstBlocksAllow(decl,consumedComponent,use.loc))
-						blocked=false; // consumption only affects components that are not borrowed
-				if(blocked){
-					foreach(prop;nestedDeclProp(decl)){
-						foreach(block;prop.constBlock)
-							block.consumedDuringBorrow=true;
+			if(auto read=isConstThroughSplits(decl)){
+				if(!(consumedComponent&&componentConstBlocksAllow(decl,consumedComponent,use.loc))){
+					if(!splitting){
+						for(auto d=decl;d;d=d.splitFrom){
+							foreach(prop;nestedDeclProp(d)){
+								foreach(block;prop.constBlock)
+									block.consumedDuringBorrow=true;
+							}
+						}
 					}
 					recordConstBlockedConsumption(read,use);
 				}
@@ -848,7 +860,7 @@ abstract class Scope{
 		if(rnsymtab.get(decl.getId,null) !is decl) return null;
 		if(cast(DeadDecl)decl) return null;
 		Expression type;
-		return consumeImpl(decl,decl,type,true,use); // TODO: separate splitting and consuming
+		return consumeImpl(decl,decl,type,true,use,consumedComponent,splitting); // TODO: separate splitting and consuming
 	}
 	final bool canSplit(Declaration decl)in{
 		if(!decl.isToplevelDeclaration()&&!decl.isSemError)
@@ -871,7 +883,7 @@ abstract class Scope{
 		if(decl.scope_ is this) return decl;
 		if(!canSplit(decl)) return decl;
 		Expression type;
-		auto result=consume(decl,use);
+		auto result=consume(decl,use,null,true);
 		if(!result) return decl;
 		unconsume(result);
 		return result;
@@ -966,7 +978,7 @@ abstract class Scope{
 		}
 	}
 
-	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
+	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use,IndexExp consumedComponent=null,bool splitting=false)in{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
@@ -2229,10 +2241,10 @@ class NestedScope: Scope{
 		return parent.inferenceMode;
 	}
 
-	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
+	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use,IndexExp consumedComponent=null,bool splitting=false)in{
 		assert(odecl is ndecl||!remove);
 	}do{
-		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use);
+		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use,consumedComponent,splitting);
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
@@ -2274,7 +2286,7 @@ class NestedScope: Scope{
 		}
 		if(remove){
 			assert(odecl is ndecl);
-			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true,use)){
+			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true,use,consumedComponent,splitting)){
 				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
@@ -2285,7 +2297,7 @@ class NestedScope: Scope{
 						processCurrent();
 						continue;
 					}
-					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use)){
+					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
 								if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
@@ -2315,7 +2327,7 @@ class NestedScope: Scope{
 				replaceDecl(odecl,result);
 			return result;
 		}
-		return remove?consume(result,use):result;
+		return remove?consume(result,use,consumedComponent,splitting):result;
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
@@ -2659,10 +2671,10 @@ class TypeScope: BlockScope{
 	override DatDecl getDatDecl(){ return origin?origin.getDatDecl():null; } // TODO: ok?
 	override NestedScope[] getSiblingScopes(){ return siblingScopes; }
 	override int outerDeclProps(scope int delegate(ref DeclProps) dg){ return 0; }
-	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use)in{
+	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use,IndexExp consumedComponent=null,bool splitting=false)in{
 		assert(odecl is ndecl||!remove);
 	}do{
-		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use);
+		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use,consumedComponent,splitting);
 		return null;
 	}
 	protected override bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){
