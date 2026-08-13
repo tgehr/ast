@@ -7553,6 +7553,11 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	}
 	if(vfe.len) vfe.len=vfe.len.eval();
 	vfe.type=vfe.len?vectorTy(ft.cod,vfe.len):arrayTy(ft.cod);
+	static if(language==silq)
+	if(astopt.removeLoops){
+		vfe.lowered=getLowering(vfe,context);
+		if(vfe.lowered) propErr(vfe.lowered,vfe);
+	}
 	return vfe;
 }
 

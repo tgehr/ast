@@ -2906,6 +2906,7 @@ class VectorForExp: Expression{
 	// semantic information
 	FunctionDef fd; // synthesized function mapping one element of the aggregate to one element of the result
 	Expression len; // length of the result, `null` if the aggregate is an array of unknown length
+	Expression lowered; // TODO: ideally the lowering is done after semantic analysis
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		if(auto r=fe.aggr.componentsImpl(e=>e.freeVarsImpl(dg))) return r;
