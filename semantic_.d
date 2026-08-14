@@ -3768,8 +3768,14 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	FunctionDef[] fds;
 	size_t[] nCapturedDecls;
 	MapX!(Declaration,size_t)[] captureLengths;
+	Declaration[][] consumedOuters;
+	Declaration[][] splitVars;
+	WithTransTrial[] withTransTrials;
 	for(auto s=sc;s;s=s.parentScope()){
 		chain~=s;
+		consumedOuters~=s.consumedOuter;
+		splitVars~=s.splitVars;
+		withTransTrials~=s.withTransTrial;
 		if(auto fd=s.getFunction()){
 			if(!fds.canFind(fd)){
 				fds~=fd;
@@ -3789,7 +3795,15 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	handler.suppress++;
 	scope(exit) handler.suppress--;
 	auto trans=with_.trans.copy();
-	trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true);
+	{ // mark the scope chain as belonging to the trial analysis (trial effects on scopes not belonging to the trial are rolled back)
+		auto trial=new WithTransTrial;
+		foreach(s;chain) s.withTransTrial=trial;
+		scope(exit){
+			foreach(i,s;chain) s.withTransTrial=withTransTrials[i];
+			trial.active=false;
+		}
+		trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true);
+	}
 	sc.withTransConsumption=null;
 	if(trans.blscope_) sc.merge(false,trans.blscope_);
 	auto crepls=sc.localComponentReplacements();
@@ -3801,8 +3815,18 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			if(decl in fd.captures)
 				fd.captures[decl]=fd.captures[decl][0..len];
 	}
+	foreach(i,s;chain){
+		foreach(split;s.splitVars[splitVars[i].length..$]){ // undo splits introduced by the trial analysis
+			auto splitFrom=split.splitFrom;
+			if(!splitFrom) continue;
+			splitFrom.splitInto=splitFrom.splitInto.filter!(d=>d !is split).array;
+			s.replaceDecl(split,splitFrom);
+		}
+		s.consumedOuter=consumedOuters[i];
+		s.splitVars=splitVars[i];
+	}
 	foreach_reverse(i,s;chain)
-		s.restoreStateSnapshot(states[i]);
+		s.restoreStateSnapshot(states[i],forWithTransTrial:true);
 	if(preCrepls.length){
 		SetX!Expression preWrites;
 		foreach(crepl;preCrepls)
@@ -3813,11 +3837,12 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	if(!crepls.length) return false;
 	auto creplss=groupWithTransReplacements(crepls);
 	auto r=buildIndexReplacements(creplss,sc,flags,prologues,epilogues,with_.loc);
-	foreach(crepl;crepls)
+	foreach(crepl;crepls){
 		if(crepl.write){
 			refreshWithTransReplMeanings(crepl.write,sc);
 			sc.nameIndex(crepl.write,crepl.name);
 		}
+	}
 	return r;
 }
 }

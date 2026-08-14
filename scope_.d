@@ -2048,7 +2048,7 @@ abstract class Scope{
 		return split;
 	}
 
-	void restoreStateSnapshot(ref ScopeState state)in{
+	void restoreStateSnapshot(ref ScopeState state,bool forWithTransTrial=false)in{
 		assert(state.restoreable);
 	}do{
 		updateStateSnapshot(state);
@@ -2060,14 +2060,14 @@ abstract class Scope{
 		symtab.clear();
 		foreach(_,decl;state.symtab){
 			if(auto lu=state.lastUses.get(decl,null))
-				if(lu.isConsumption())
+				if(lu.isConsumption()&&!forWithTransTrial)
 					continue;
 			symtab[decl.name.id]=updateDecl(decl);
 		}
 		rnsymtab.clear();
 		foreach(_,decl;state.rnsymtab){
 			if(auto lu=state.lastUses.get(decl,null)){
-				if(lu.isConsumption()){
+				if(lu.isConsumption()&&!forWithTransTrial){
 					if(!toRemove.canFind(lu.decl)) // TODO: make more efficient
 						toRemove~=lu.decl;
 					recordConsumption(lu.decl,lu.use);
@@ -2138,6 +2138,13 @@ abstract class Scope{
 		final Scope getWithTransConsumption(){
 			for(auto sc=this;sc;sc=sc.parentScope())
 				if(sc.withTransConsumption) return sc.withTransConsumption;
+			return null;
+		}
+		WithTransTrial withTransTrial=null; // the `with` transformation trial analysis this scope belongs to, if any (trial effects on scopes not belonging to the trial are rolled back)
+		final WithTransTrial getWithTransTrial(){ // innermost active trial on this scope's chain, if any (tags persist on scopes that outlive the trial, so skip inactive tokens)
+			for(auto sc=this;sc;sc=sc.parentScope())
+				if(sc.withTransTrial&&sc.withTransTrial.active)
+					return sc.withTransTrial;
 			return null;
 		}
 		Scope withTransBody=null;
@@ -2232,10 +2239,15 @@ private:
 	Scope[] imports; // TODO: local imports, import declarations
 }
 
+class WithTransTrial{ bool active=true; } // silq: token identifying one activation of the trial analysis of a `with` transformation (whose effects on scopes not belonging to the trial are rolled back)
+
 class NestedScope: Scope{
 	Scope parent;
 	override @property ErrorHandler handler(){ return parent.handler; }
-	this(Scope parent){ this.parent=parent; }
+	this(Scope parent){
+		this.parent=parent;
+		static if(language==silq) withTransTrial=parent.getWithTransTrial(); // scopes created while a `with` transformation trial analysis is active belong to the trial
+	}
 	override Scope parentScope(){ return parent; }
 	override @property bool inferenceMode(){
 		return parent.inferenceMode;
@@ -2297,6 +2309,10 @@ class NestedScope: Scope{
 						processCurrent();
 						continue;
 					}
+					static if(language==silq)
+					if(auto wtt=getWithTransTrial())
+						if(sc.withTransTrial !is wtt)
+							continue; // trial analysis of a `with` transformation: its effects are rolled back, so do not propagate consumption into sibling scopes that do not belong to the trial
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
 						static if(language==silq){
 							if(parent.getFunction() is sc.getFunction()){
@@ -2354,6 +2370,10 @@ class NestedScope: Scope{
 			return true;
 		}
 		foreach(sc;getSiblingScopes()){
+			static if(language==silq)
+			if(sc !is this)
+				if(auto wtt=getWithTransTrial())
+					if(sc.withTransTrial !is wtt) continue; // do not leak trial state into sibling scopes that do not belong to the trial
 			if(meaning.getId in sc.rnsymtab) // TODO: make sure captures are inserted only once, remove this
 				sc.symtabRemove(sc.rnsymtab[meaning.getId]);
 			sc.symtabInsert(meaning);
