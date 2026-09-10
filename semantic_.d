@@ -3858,6 +3858,44 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 		eplg=statementSemanticImpl(eplg,sc,flags,resetConst:false);
 		eplg.setSemCompleted();
 	}
+	static if(language==silq)
+	foreach(prlg,eplg;zip(prologues,epilogues)){
+		if(prlg.s.length!=eplg.s.length) continue;
+		IndexExp[] reads,writes;
+		foreach(k;0..prlg.s.length){
+			auto dr=cast(DefineExp)prlg.s[k], dw=cast(DefineExp)eplg.s[k];
+			if(!dr||!dw) continue;
+			auto ir=cast(IndexExp)unwrap(dr.e2), iw=cast(IndexExp)unwrap(dw.e1);
+			if(!ir||!iw) continue;
+			if(dr.isSemError()||dw.isSemError()||ir.isSemError()||iw.isSemError()) continue;
+			reads~=ir; writes~=iw;
+		}
+		if(reads.length!=writes.length) continue;
+		Declaration[string] curIdx;
+		foreach(iw;writes)
+			foreach(id;indexIdentifiers(iw))
+				if(id.meaning) curIdx[id.name]=id.meaning;
+		auto unmatched=writes.dup;
+		foreach(ir;reads){
+			bool found=false;
+			foreach(j,iw;unmatched){
+				if(!iw) continue;
+				if(guaranteedSameLocations(ir,iw,r.loc,sc,InType.no)){
+					unmatched[j]=null; found=true; break;
+				}
+			}
+			if(!found){
+				sc.error(format("index of borrowed component `%s` may change within `with` body",ir),ir.loc);
+				foreach(id;indexIdentifiers(ir)){
+					if(!id.meaning) continue;
+					if(auto p=id.name in curIdx)
+						if(*p !is id.meaning)
+							sc.note(format("`%s` is modified here",id.name),p.loc);
+				}
+				r.setSemForceError();
+			}
+		}
+	}
 	foreach_reverse(prlg,eplg;zip(prologues,epilogues)){
 		auto prev=cast(CompoundExp)current;
 		if(!prev){
@@ -4235,6 +4273,17 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 	assert(neq.isSemCompleted());
 	return neq.eval()==LiteralExp.makeBoolean(1);
 }
+Identifier[] indexIdentifiers(IndexExp idx){
+	Identifier[] r;
+	for(Expression e=idx;;){
+		auto ie=cast(IndexExp)unwrap(e);
+		if(!ie) break;
+		foreach(id;ie.a.freeIdentifiers) r~=id;
+		e=ie.e;
+	}
+	return r;
+}
+
 bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	e1=unwrap(e1), e2=unwrap(e2);
 	if(auto id1=cast(Identifier)e1)
@@ -4253,7 +4302,7 @@ bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope
 }
 
 bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
-	if(guaranteedSameLocations(e1,e2,loc,sc,inType)) return true; // TODO: more complete check
+	if(guaranteedSameLocations(e1,e2,loc,sc,inType,true)) return true; // TODO: more complete check
 	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
 	if(e1.isSemError()||e2.isSemError())
@@ -4266,13 +4315,14 @@ bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InTy
 	assert(eq.isSemCompleted());
 	return eq.eval()==LiteralExp.makeBoolean(1);
 }
-bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType,bool checkMeaning=false){
 	if(auto id1=cast(Identifier)e1){
 		if(auto id2=cast(Identifier)e2){
-			// TODO: this is likely to break
-			/+if(id1.meaning&&id2.meaning) return id1.meaning==id2.meaning;
-			if(id1.meaning) return id1.meaning.name.name==id2.name;
-			if(id2.meaning) return id1.name==id2.meaning.name.name;+/
+			if(checkMeaning){
+				if(id1.meaning&&id2.meaning) return id1.meaning==id2.meaning;
+				if(id1.meaning) return id1.meaning.name.name==id2.name;
+				if(id2.meaning) return id1.name==id2.meaning.name.name;
+			}
 			return id1.name==id2.name;
 		}
 	}
