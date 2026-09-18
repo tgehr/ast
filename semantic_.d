@@ -1778,12 +1778,34 @@ Declaration[] loopConstForgetCandidates(Scope sc,NestedScope bodyScope){
 	}
 	return result;
 }
-Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates){
+
+// anchor variables that are redefined within a loop body by giving them a last use just after the loop terminates
+Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,BlockScope forgetScope){
+	alias LastUse=imported!"ast.lastuse".LastUse;
+	Declaration[] result;
+	if(!loopScope||!forgetScope) return result;
+	foreach(_,decl;sc.rnsymtab){
+		if(cast(DeadDecl)decl||decl.isSemError()) continue;
+		if(decl.isToplevelDeclaration()) continue;
+		auto type=typeForDecl(decl);
+		if(!type||type.isClassical()) continue;
+		auto lastUse=sc.lastUses.lastUses.get(decl,null);
+		if(!lastUse||lastUse.kind!=LastUse.Kind.constPinned) continue;
+		if(!lastUse.nestedScopes.any!(nsc=>nsc is loopScope)) continue;
+		if(!lastUse.nestedScopes.any!(nsc=>nsc is forgetScope)) continue;
+		if(!sc.canSplit(decl)) continue;
+		if(!sc.dependencyTracked(decl)) continue;
+		if(sc.getDependency(decl).isTop) continue; // uncomputation would not be possible here either
+		result~=decl;
+	}
+	return result;
+}
+Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates,BlockScope loopScope=null,BlockScope forgetScope=null){
 	CompoundExp wrapper=null;
-	foreach(decl;candidates){
-		if(sc.rnsymtab.get(decl.getId,null) !is decl) continue;
-		if(decl.isSemError()) continue;
-		if(sc.lastUses.canForget(decl,true,false)) continue;
+	void anchor(Declaration decl){
+		if(sc.rnsymtab.get(decl.getId,null) !is decl) return;
+		if(decl.isSemError()) return;
+		if(sc.lastUses.canForget(decl,true,false)) return;
 		auto use=new Identifier(decl.getName);
 		use.loc=loopExp.loc;
 		use.scope_=sc;
@@ -1791,7 +1813,7 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 		use.constLookup=true;
 		use.byRef=true;
 		use.type=use.typeFromMeaning;
-		if(!use.type) continue;
+		if(!use.type) return;
 		use.setSemCompleted();
 		if(!wrapper){
 			wrapper=new CompoundExp([loopExp]);
@@ -1803,6 +1825,8 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 		Expression parent=wrapper;
 		sc.lastUses.constUse(use,parent,true,false);
 	}
+	foreach(decl;candidates) anchor(decl);
+	foreach(decl;pinnedLoopMergeForgetCandidates(sc,loopScope,forgetScope)) anchor(decl);
 	return wrapper?wrapper:loopExp;
 }
 }
@@ -2033,7 +2057,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		result=lowerLoop(fe,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets);
+			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
@@ -2095,7 +2119,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 		result=lowerLoop(we,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets);
+			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
@@ -2140,7 +2164,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 		result=lowerLoop(re,state,sc,flags);
 	static if(language==silq)
 		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets);
+			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
