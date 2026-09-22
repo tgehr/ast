@@ -2412,6 +2412,7 @@ bool insideLoopBody(Scope sc){
 // analysis pass in which a deferred lowering could still happen.)
 bool shouldLowerLoop(Scope sc){
 	if(!astopt.removeLoops) return false;
+	if(auto fd=sc.getFunction()) if(fd.keepLoops) return false;
 	return !insideLoopBody(sc);
 }
 // Run the final ("mode-(b)") loop iteration with `loopFinalPass` set, together
@@ -6281,6 +6282,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 					nce.type=funTy([true],f.type,rtype,false,false,Annotation.qfree,ft.isClassical);
 					nce.setSemCompleted();
 					auto res=new CallExp(nce,f,isSquare,isClassical);
+					res.checkReverse=false;
 					res.type=rtype;
 					res.setSemCompleted();
 					return res;
@@ -6368,6 +6370,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 			return defineLhsSemantic!isPresemantic(e,context);
 		}else return expressionSemantic(e,context);
+	}
+	static if(language==silq&&isRhs) if(!ce.checkReverse&&!ce.isSquare) if(auto sce=cast(CallExp)ce.e){
+		if(sce.isSquare&&!sce.isSemCompleted()&&cast(Identifier)sce.e){
+			sce.e=expressionSemantic(sce.e,context.nestCalled);
+			if(auto id=cast(Identifier)sce.e) if(isReverse(id)) ce.e=id;
+		}
 	}
 	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestCalled);
 	else static if(!isPresemantic){

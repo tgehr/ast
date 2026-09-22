@@ -291,6 +291,7 @@ class FunctionDef: Declaration{
 	bool tainted=false;
 	bool finalPassDone=false;
 	static if(language==silq) SetX!Id loweredConstIds; // for nested loop lowering
+	static if(language==silq) bool keepLoops=false;
 	bool deferredSpecificityCheck=false;
 	void unseal()in{
 		assert(sealed);

@@ -959,6 +959,13 @@ private bool copyAttr(Id name) {
 	}
 }
 
+private bool hasLoop(Expression e){
+	foreach(x;e.subexpressions)
+		if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x)
+			return true;
+	return false;
+}
+
 static if(language==silq)
 FunctionDef reverseFunction(FunctionDef fd)in{
 	assert(fd.scope_&&fd.ftype&&fd.ftype.captureAnnotation<=CaptureAnnotation.const_&&fd.ftype.annotation>=Annotation.mfree);
@@ -994,8 +1001,19 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		if(auto fsc=cast(FunctionScope)c)
 			resurrect(fsc.fd);
 	auto r=reverseCallRewriter(fd.ftype,fd.loc);
+	auto bfd=fd;
+	if(astopt.removeLoops&&fd.body_&&fd.origBody_&&hasLoop(fd.origBody_)){
+		auto src=new FunctionDef(null,fd.params.map!(p=>p.copy()).array,fd.isTuple,fd.rret?fd.rret.copy():null,fd.origBody_.copy());
+		src.copyIntrinsicFieldsFrom(fd);
+		src.keepLoops=true;
+		src.loc=fd.loc;
+		src.scope_=sc;
+		src=cast(FunctionDef)presemantic(src,sc);
+		if(src) src=functionDefSemantic(src,sc);
+		if(src&&(src.isSemCompleted()||src.sstate==SemState.passive)) bfd=src;
+	}
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
-	auto fbody_=fd.body_;
+	auto fbody_=bfd.body_;
 	if(!fbody_){
 		if(isPrimitive(fd)){
 			if(fd.name){
@@ -1198,7 +1216,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],fd.fscope_,unchecked,noImplicitDup,true))~[argRet];
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],bfd.fscope_,unchecked,noImplicitDup,true))~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		import util.io:stderr;
