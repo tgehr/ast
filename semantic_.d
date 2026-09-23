@@ -1232,6 +1232,15 @@ MapX!(Declaration,Declaration) collectDummyResults(Scope sc, ref FixedPointIterS
 	}
 	for(bool changed=true;changed;){
 		changed=false;
+		auto before=context.results.length;
+		foreach(candidate;candidates){
+			if(candidate !in context.results) continue;
+			if(auto cur=sc.rnsymtab.get(candidate.getId,null)){
+				auto dep=sc.getDependency(cur);
+				resolveTransitively(dep);
+			}
+		}
+		if(context.results.length!=before) changed=true;
 		SetX!Id resultIds;
 		foreach(v;context.results.byValue) resultIds.insert(v.getId);
 		foreach(ref carried;context.nestedLoopCarried){
@@ -1255,6 +1264,10 @@ void restoreDummyDeps(Scope sc, ref DummyAnalysisData data){
 private void visitStm(Expression e,scope void delegate(Expression) dg){
 	if(!e) return;
 	dg(e);
+	if(auto fd=cast(FunctionDef)e){
+		foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) visitStm(id,dg);
+		return;
+	}
 	if(auto fe=cast(ForExp)e){
 		if(auto r=fe.aggr.isRange){
 			visitStm(r.left,dg);
@@ -1269,6 +1282,14 @@ private void visitStm(Expression e,scope void delegate(Expression) dg){
 private void walkCond(Expression e,bool cond,scope void delegate(Expression,bool) dg){
 	if(!e) return;
 	dg(e,cond);
+	if(auto fd=cast(FunctionDef)e){
+		foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) walkCond(id,cond,dg);
+		return;
+	}
+	if(auto le=cast(LambdaExp)e){
+		foreach(decl;le.fd.capturedDecls) foreach(id;le.fd.captures[decl]) walkCond(id,cond,dg);
+		return;
+	}
 	if(auto ite=cast(IteExp)e){
 		walkCond(ite.cond,cond,dg);
 		walkCond(ite.then,true,dg);
@@ -1294,6 +1315,21 @@ private void walkCond(Expression e,bool cond,scope void delegate(Expression,bool
 		return;
 	}
 	foreach(c;e.components) walkCond(c,cond,dg);
+}
+private void walkShallow(Expression e,scope void delegate(Expression) dg){
+	if(!e) return;
+	dg(e);
+	if(cast(FunctionDef)e||cast(LambdaExp)e) return;
+	if(auto fe=cast(ForExp)e){
+		if(auto r=fe.aggr.isRange){
+			walkShallow(r.left,dg);
+			walkShallow(r.step,dg);
+			walkShallow(r.right,dg);
+		}else if(auto c=fe.aggr.isContainer) walkShallow(c.e,dg);
+		walkShallow(fe.bdy,dg);
+		return;
+	}
+	foreach(c;e.components) walkShallow(c,dg);
 }
 private Id varName(Identifier id){
 	return id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
@@ -1363,16 +1399,17 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			});
 		}
 		visitStm(s,(Expression x){
-			if(cast(FunctionDef)x||cast(LambdaExp)x||cast(ReturnExp)x){
+			if(cast(ReturnExp)x){
 				bad=true;
 				return;
 			}
+			if(auto fd=cast(FunctionDef)x) if(fd.name) info.defs.insert(fd.name.id);
 			if(cast(AssertExp)x) info.effects=true;
 			if(auto de=cast(DefineExp)x) addDefs(de.e1);
 			else if(auto we=cast(WithExp)x){
 				visitStm(we.trans,(Expression y){
 					if(auto id=cast(Identifier)y)
-						if(id.type&&!id.type.isClassical()&&!cast(FunctionDef)id.meaning)
+						if(id.type&&!id.type.isClassical())
 							info.defs.insert(varName(id));
 				});
 			}else if(auto ae=cast(AAssignExp)x){
@@ -1384,7 +1421,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) info.nonQfree=true;
 			}else if(auto id=cast(Identifier)x){
-				if(id in targets||cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+				if(id in targets||cast(DatDecl)id.meaning) return;
 				auto n=varName(id);
 				info.uses.insert(n);
 				if(id.type) info.types[n]=id.type;
@@ -1549,11 +1586,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	void flatten(Expression e,size_t i,size_t[] ctx,bool[] inElse){
 		if(auto ite=cast(IteExp)e){
-			if(!ite.condForget){
+			bool b=false;
+			auto info=analyzeStm(ite.cond,b);
+			bad|=b;
+			if(!ite.condForget&&!info.defs.length){
 				auto k=ites.length;
-				bool b=false;
-				auto info=analyzeStm(ite.cond,b);
-				bad|=b;
 				ites~=Ite(ite,i,info,ctx,atoms.length);
 				auto before=atoms.length;
 				foreach(x;ite.then.s) flatten(x,i,ctx~k,inElse~false);
@@ -1678,7 +1715,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
 			}else if(auto id=cast(Identifier)x){
-				if(cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+				if(cast(DatDecl)id.meaning) return;
 				if(colorOf(varName(id))!=NONE) ok=false;
 				if(!id.constLookup&&!id.implicitDup&&id.type&&!id.type.isClassical()) ok=false;
 			}
@@ -1697,7 +1734,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
 			}else if(auto id=cast(Identifier)x){
-				if(cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+				if(cast(DatDecl)id.meaning) return;
 				auto c=colorOf(varName(id));
 				if(c!=NONE&&c!=Y) ok=false;
 			}
@@ -1760,7 +1797,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				Id[] vars;
 				visitStm(it.e.cond,(Expression x){
 					if(auto id=cast(Identifier)x){
-						if(cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+						if(cast(DatDecl)id.meaning) return;
 						auto c=colorOf(varName(id));
 						if(c==NONE) return;
 						if(Y!=NONE&&c!=Y) ok=false;
@@ -1987,13 +2024,32 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			Expression cp(Expression o){
 				auto c=o.copy();
 				Expression[] on,cn;
-				walkCond(o,false,(Expression x,bool b){ on~=x; });
-				walkCond(c,false,(Expression x,bool b){ cn~=x; });
+				walkShallow(o,(Expression x){ on~=x; });
+				walkShallow(c,(Expression x){ cn~=x; });
 				if(on.length!=cn.length){
 					ok=false;
 					return c;
 				}
 				foreach(k,x;on){
+					FunctionDef ofd,cfd;
+					if(auto le=cast(LambdaExp)x){
+						ofd=le.fd;
+						cfd=(cast(LambdaExp)cn[k]).fd;
+					}else if(auto fd=cast(FunctionDef)x){
+						ofd=fd;
+						cfd=cast(FunctionDef)cn[k];
+					}
+					if(ofd) foreach(decl;ofd.capturedDecls) foreach(id;ofd.captures[decl]){
+						if(auto t=cast(const(void)*)id in renameOf){
+							import ast.substitute:functionDefFreeVarsImpl;
+							auto name=varName(id),tmp=*t;
+							functionDefFreeVarsImpl(cfd,(Identifier y){
+								if(y.id==name) y.id=tmp;
+								return 0;
+							});
+						}
+					}
+					if(ofd&&cast(LambdaExp)cn[k]) (cast(LambdaExp)cn[k]).orig=cfd.copy();
 					if(auto t=cast(const(void)*)x in elemOf){
 						auto ie=cast(IndexExp)cn[k];
 						ie.e=mkId(*t);
