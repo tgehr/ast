@@ -1953,6 +1953,10 @@ abstract class Scope{
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;
 		}
+		static if(language==silq) Dependency dependencyOf(Declaration decl){
+			if(decl !in dependencies.dependencies) return Dependency(true);
+			return dependencies.dependencies[decl].dup;
+		}
 	private:
 		static if(language==silq){
 			Dependencies dependencies;

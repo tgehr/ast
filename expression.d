@@ -2172,6 +2172,7 @@ class WithExp: Expression{
 class RepeatExp: Expression{
 	Expression num;
 	CompoundExp bdy;
+	static if(language==silq) bool noSplit=false;
 	this(Expression num, CompoundExp bdy){
 		this.num=num; this.bdy=bdy;
 	}
@@ -2417,6 +2418,7 @@ class ForExp: Expression{
 
 	override bool isTotal(){ return aggr.isTotal()&&bdy.isTotal(); }
 
+	static if(language==silq) bool noSplit=false;
 	// semantic information
 	BlockScope fescope_;
 	VarDecl loopVar;

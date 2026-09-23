@@ -1252,9 +1252,531 @@ void restoreDummyDeps(Scope sc, ref DummyAnalysisData data){
 }
 }
 
+private void visitStm(Expression e,scope void delegate(Expression) dg){
+	if(!e) return;
+	dg(e);
+	if(auto fe=cast(ForExp)e){
+		if(auto r=fe.aggr.isRange){
+			visitStm(r.left,dg);
+			visitStm(r.step,dg);
+			visitStm(r.right,dg);
+		}else if(auto c=fe.aggr.isContainer) visitStm(c.e,dg);
+		visitStm(fe.bdy,dg);
+		return;
+	}
+	foreach(c;e.components) visitStm(c,dg);
+}
+private void walkCond(Expression e,bool cond,scope void delegate(Expression,bool) dg){
+	if(!e) return;
+	dg(e,cond);
+	if(auto ite=cast(IteExp)e){
+		walkCond(ite.cond,cond,dg);
+		walkCond(ite.then,true,dg);
+		walkCond(ite.othw,true,dg);
+		return;
+	}
+	if(auto fe=cast(ForExp)e){
+		if(auto r=fe.aggr.isRange){
+			walkCond(r.left,cond,dg);
+			walkCond(r.step,cond,dg);
+			walkCond(r.right,cond,dg);
+		}else if(auto c=fe.aggr.isContainer) walkCond(c.e,cond,dg);
+		walkCond(fe.bdy,true,dg);
+		return;
+	}
+	if(cast(WhileExp)e||cast(RepeatExp)e){
+		foreach(c;e.components) walkCond(c,true,dg);
+		return;
+	}
+	if(auto le=cast(ALogicExp)e){
+		walkCond(le.e1,cond,dg);
+		walkCond(le.e2,true,dg);
+		return;
+	}
+	foreach(c;e.components) walkCond(c,cond,dg);
+}
+private Id varName(Identifier id){
+	return id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+}
+private bool sameDeps(ref Dependency a,ref Dependency b){
+	if(a.dependencies.length!=b.dependencies.length) return false;
+	foreach(x;a.dependencies) if(x !in b.dependencies) return false;
+	return true;
+}
+
+Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
+	static if(is(T==ForExp)){
+		auto range=loop.aggr.isRange;
+		if(!range||!loop.loopVar) return null;
+	}
+	if(loop.noSplit) return null;
+	enum NONE=-2,SHARED=-1;
+	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
+	if(!carried[0].length) return null;
+	Dependency[] classDeps;
+	int[] classOf;
+	foreach(p;carried[0]){
+		auto dep=state.prevStateSnapshot.dependencyOf(p[1]);
+		if(dep.isTop) return null;
+		int c=-1;
+		foreach(j,ref d;classDeps) if(sameDeps(d,dep)){ c=cast(int)j; break; }
+		if(c==-1){
+			c=cast(int)classDeps.length;
+			classDeps~=dep;
+		}
+		classOf~=c;
+	}
+	auto order=iota(cast(int)classDeps.length).array;
+	order.sort!((a,b)=>classDeps[a].dependencies.length<classDeps[b].dependencies.length,SwapStrategy.stable);
+	auto rank=new int[](order.length);
+	foreach(r,c;order) rank[c]=cast(int)r;
+	int P=cast(int)classDeps.length;
+	MapX!(Id,int) color;
+	SetX!Id isCarried;
+	MapX!(Id,Expression) carriedType;
+	foreach(i,p;carried[0]){
+		color[p[1].name.id]=rank[classOf[i]];
+		isCarried.insert(p[1].name.id);
+		carriedType[p[1].name.id]=typeForDecl(p[1]);
+	}
+	foreach(p;carried[1]){
+		color[p[1].name.id]=P;
+		isCarried.insert(p[1].name.id);
+	}
+	struct StmInfo{
+		SetX!Id defs,uses,nonConst,consumed;
+		MapX!(Id,Expression) types;
+		bool nonQfree=false,isForget=false,effects=false;
+	}
+	StmInfo analyzeStm(Expression s,out bool bad){
+		StmInfo info;
+		info.isForget=!!cast(ForgetExp)s;
+		SetX!Identifier targets;
+		void addDefs(Expression lhs){
+			visitStm(lhs,(Expression x){
+				if(auto ie=cast(IndexExp)x){
+					Expression r=ie;
+					while(cast(IndexExp)r) r=(cast(IndexExp)r).e;
+					if(auto id=cast(Identifier)r) info.defs.insert(varName(id));
+				}else if(auto id=cast(Identifier)x) if(!id.constLookup){
+					info.defs.insert(varName(id));
+					targets.insert(id);
+				}
+			});
+		}
+		visitStm(s,(Expression x){
+			if(cast(FunctionDef)x||cast(LambdaExp)x||cast(ReturnExp)x){
+				bad=true;
+				return;
+			}
+			if(cast(AssertExp)x) info.effects=true;
+			if(auto de=cast(DefineExp)x) addDefs(de.e1);
+			else if(auto we=cast(WithExp)x){
+				visitStm(we.trans,(Expression y){
+					if(auto id=cast(Identifier)y)
+						if(id.type&&!id.type.isClassical()&&!cast(FunctionDef)id.meaning)
+							info.defs.insert(varName(id));
+				});
+			}else if(auto ae=cast(AAssignExp)x){
+				Expression lhs=ae.e1;
+				while(cast(IndexExp)lhs) lhs=(cast(IndexExp)lhs).e;
+				if(auto id=cast(Identifier)lhs) info.defs.insert(varName(id));
+				else addDefs(ae.e1);
+			}else if(auto ce=cast(CallExp)x){
+				if(auto ft=cast(FunTy)ce.e.type)
+					if(!ft.isSquare&&ft.annotation<Annotation.qfree) info.nonQfree=true;
+			}else if(auto id=cast(Identifier)x){
+				if(id in targets||cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+				auto n=varName(id);
+				info.uses.insert(n);
+				if(id.type) info.types[n]=id.type;
+				if(!id.constLookup&&!id.implicitDup){
+					info.nonConst.insert(n);
+					if(id.type&&!id.type.isClassical()){
+						info.consumed.insert(n);
+						info.defs.insert(n);
+					}
+				}
+			}
+		});
+		return info;
+	}
+	Expression[] stms;
+	StmInfo[] infos;
+	bool bad=false;
+	void addStm(Expression s){
+		if(auto ce=cast(CompoundExp)s) if(!ce.blscope_){
+			foreach(x;ce.s) addStm(x);
+			return;
+		}
+		bool b=false;
+		auto info=analyzeStm(s,b);
+		bad|=b;
+		stms~=s;
+		infos~=info;
+	}
+	foreach(s;loop.bdy.s) addStm(s);
+	if(bad) return null;
+	{ // remove computations whose results are only forgotten
+		struct Ver{ Id var; int stm; }
+		Ver[] vers;
+		MapX!(Id,int) cur;
+		int[][] usedBy;
+		MapX!(Id,int)[] useVer, defVer;
+		int getCur(Id n){
+			if(n !in cur){
+				cur[n]=cast(int)vers.length;
+				vers~=Ver(n,-1);
+				usedBy~=null;
+			}
+			return cur[n];
+		}
+		foreach(i,ref info;infos){
+			MapX!(Id,int) uv,dv;
+			foreach(u;info.uses){
+				auto v=getCur(u);
+				uv[u]=v;
+				usedBy[v]~=cast(int)i;
+			}
+			foreach(d;info.defs){
+				cur[d]=cast(int)vers.length;
+				dv[d]=cast(int)vers.length;
+				vers~=Ver(d,cast(int)i);
+				usedBy~=null;
+			}
+			useVer~=uv;
+			defVer~=dv;
+		}
+		auto liveOut=new bool[](vers.length);
+		foreach(n,v;cur) if(n in isCarried) liveOut[v]=true;
+		auto dead=new bool[](infos.length);
+		foreach(i,ref info;infos) dead[i]=!info.isForget&&!info.nonQfree&&!info.effects&&info.defs.length;
+		bool defDead(int v){ return vers[v].stm>=0&&dead[vers[v].stm]; }
+		for(bool changed=true;changed;){
+			changed=false;
+			foreach(i,ref info;infos){
+				if(!dead[i]) continue;
+				bool ok=true;
+				foreach(d,v;defVer[i]){
+					if(liveOut[v]){ ok=false; break; }
+					foreach(j;usedBy[v]){
+						if(infos[j].isForget){
+							foreach(u,w;useVer[j]) if(!defDead(w)) ok=false;
+						}else if(!dead[j]) ok=false;
+					}
+				}
+				if(!ok){
+					dead[i]=false;
+					changed=true;
+				}
+			}
+		}
+		if(dead.any){
+			Expression[] nstms;
+			StmInfo[] ninfos;
+			foreach(i,s;stms){
+				if(infos[i].isForget){
+					if(useVer[i].byValue.any!(w=>defDead(w))) continue;
+				}else if(dead[i]){
+					foreach(u;infos[i].consumed){
+						auto w=useVer[i][u];
+						if(defDead(w)||vers[w].stm<0&&u !in isCarried) continue;
+						auto fid=new Identifier(u);
+						fid.loc=s.loc;
+						auto fe=new ForgetExp(fid,null);
+						fe.loc=s.loc;
+						StmInfo fi;
+						fi.isForget=true;
+						fi.defs.insert(u);
+						fi.uses.insert(u);
+						fi.nonConst.insert(u);
+						fi.consumed.insert(u);
+						if(auto t=infos[i].types.get(u,null)) fi.types[u]=t;
+						nstms~=fe;
+						ninfos~=fi;
+					}
+					continue;
+				}
+				nstms~=s;
+				ninfos~=infos[i];
+			}
+			stms=nstms;
+			infos=ninfos;
+		}
+	}
+	foreach(ref info;infos) foreach(d;info.defs) if(d !in color) color[d]=NONE;
+	int colorOf(Id n){ return color.get(n,NONE); }
+	int reads(ref StmInfo info){
+		int c=info.nonQfree?P:NONE;
+		foreach(u;info.uses) c=max(c,colorOf(u));
+		foreach(d;info.defs) c=max(c,colorOf(d));
+		return c;
+	}
+	for(bool changed=true;changed;){
+		changed=false;
+		foreach(ref info;infos){
+			auto c=reads(info);
+			foreach(d;info.defs){
+				if(d in isCarried||colorOf(d)>=c) continue;
+				color[d]=c;
+				changed=true;
+			}
+		}
+	}
+	int[] stmColor;
+	foreach(ref info;infos){
+		if(info.defs.length==0){
+			stmColor~=P;
+			continue;
+		}
+		int dc=NONE;
+		foreach(d;info.defs){
+			auto x=colorOf(d);
+			if(dc!=NONE&&x!=dc) return null;
+			dc=x;
+		}
+		if(dc==NONE){
+			stmColor~=SHARED;
+			continue;
+		}
+		if(reads(info)>dc) return null;
+		stmColor~=dc;
+	}
+	if(stmColor.filter!(c=>c>=0).array.sort.uniq.walkLength<2) return null;
+	struct Log{
+		Id var;
+		size_t stm;
+		int src;
+		Id name,tmp;
+		Expression type;
+		IndexExp access;
+		size_t node;
+		Expression bound;
+	}
+	Log[] logs;
+	bool available(Expression e){
+		bool ok=true;
+		visitStm(e,(Expression x){
+			if(auto ce=cast(CallExp)x){
+				if(auto ft=cast(FunTy)ce.e.type)
+					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
+			}else if(auto id=cast(Identifier)x){
+				if(cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+				if(colorOf(varName(id))!=NONE) ok=false;
+				if(!id.constLookup&&!id.implicitDup&&id.type&&!id.type.isClassical()) ok=false;
+			}
+		});
+		return ok;
+	}
+	foreach(i,ref info;infos){
+		auto X=stmColor[i];
+		if(X==SHARED) continue;
+		Expression[] nodes;
+		bool[] conds;
+		walkCond(stms[i],false,(Expression x,bool c){ nodes~=x; conds~=c; });
+		foreach(u;info.uses){
+			auto Y=colorOf(u);
+			if(Y<0||Y==X) continue;
+			if(Y>X||u in info.nonConst) return null;
+			SetX!Expression covered;
+			Log[] elems;
+			bool whole=false;
+			foreach(n,x;nodes){
+				if(x in covered) continue;
+				if(auto id=cast(Identifier)x){
+					if(varName(id)==u) whole=true;
+					continue;
+				}
+				auto ie=cast(IndexExp)x;
+				if(!ie) continue;
+				IndexExp[] chain;
+				Expression r=ie;
+				while(auto je=cast(IndexExp)r){
+					chain~=je;
+					r=je.e;
+				}
+				auto rid=cast(Identifier)r;
+				if(!rid||varName(rid)!=u) continue;
+				foreach(c;chain) covered.insert(c);
+				covered.insert(rid);
+				IndexExp acc=null;
+				foreach_reverse(c;chain){
+					if(!available(c.a)||!c.type) break;
+					acc=c;
+				}
+				if(!acc){
+					whole=true;
+					continue;
+				}
+				Expression bound=null;
+				if(conds[n]){
+					if(acc!is chain[$-1]||!acc.a.type||!isSubtype(acc.a.type,ℤt(true))){
+						whole=true;
+						continue;
+					}
+					if(auto ft=isFixedIntTy(acc.e.type)) bound=ft.bits;
+					else if(cast(ArrayTy)acc.e.type||cast(VectorTy)acc.e.type) bound=acc.e;
+					else{
+						whole=true;
+						continue;
+					}
+				}
+				size_t pos=n;
+				foreach(k,y;nodes) if(y is acc) pos=k;
+				elems~=Log(u,i,Y,freshName(),freshName(),acc.type,acc,pos,bound);
+			}
+			if(whole){
+				auto ty=u in isCarried?carriedType.get(u,null):info.types.get(u,null);
+				if(!ty) return null;
+				logs~=Log(u,i,Y,freshName(),freshName(),ty,null,0,null);
+			}else logs~=elems;
+		}
+	}
+	auto loc=loop.loc;
+	Identifier mkId(Id n){
+		auto r=new Identifier(n);
+		r.loc=loc;
+		return r;
+	}
+	Expression annot(Expression e,Expression t){
+		auto r=new TypeAnnotationExp(e,t,TypeAnnotationType.annotation);
+		r.loc=loc;
+		return r;
+	}
+	Expression define(Expression l,Expression r){
+		auto d=new DefineExp(l,r);
+		d.loc=loc;
+		return d;
+	}
+	Expression dupOf(Expression e){
+		auto r=new CallExp(mkId(Id.s!"dup"),e,false,false);
+		r.loc=loc;
+		return r;
+	}
+	Expression[] stmts;
+	static if(is(T==ForExp)){
+		auto lo=freshName(),hi=freshName(),st=range.step?freshName():Id.init;
+		stmts~=define(mkId(lo),annot(range.left.copy(),range.left.type));
+		if(range.step) stmts~=define(mkId(st),annot(range.step.copy(),range.step.type));
+		stmts~=define(mkId(hi),annot(range.right.copy(),range.right.type));
+	}else{
+		auto num=freshName();
+		stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
+	}
+	foreach(X;0..P+1){
+		if(!stmColor.canFind(X)) continue;
+		bool readsLogs=logs.any!(l=>stmColor[l.stm]==X);
+		Id counter;
+		if(readsLogs){
+			counter=freshName();
+			stmts~=define(mkId(counter),annot(LiteralExp.makeInteger(0),ℕt(true)));
+		}
+		foreach(l;logs) if(l.src==X){
+			auto empty=new VectorExp([]);
+			empty.loc=loc;
+			auto ety=l.access?arrayTy(l.type):l.type;
+			stmts~=define(mkId(l.name),annot(empty,arrayTy(ety)));
+		}
+		Expression[] bdy;
+		foreach(i,s;stms){
+			foreach(l;logs) if(l.src==X&&l.stm==i){
+				Expression append(Expression e){
+					auto v=new VectorExp([e]);
+					v.loc=loc;
+					auto app=new CatAssignExp(mkId(l.name),v);
+					app.loc=loc;
+					return app;
+				}
+				if(!l.access){
+					bdy~=append(dupOf(mkId(l.var)));
+					continue;
+				}
+				auto one=new VectorExp([dupOf(l.access.copy())]);
+				one.loc=loc;
+				if(!l.bound){
+					bdy~=append(one);
+					continue;
+				}
+				Expression bound=l.bound.copy();
+				if(l.bound is l.access.e){
+					auto len=new Identifier(Id.s!"length");
+					len.loc=loc;
+					bound=new FieldExp(bound,len);
+					bound.loc=loc;
+				}
+				Expression cond=new LtExp(l.access.a.copy(),bound);
+				cond.loc=loc;
+				if(!isSubtype(l.access.a.type,ℕt(true))){
+					auto zero=LiteralExp.makeInteger(0);
+					zero.loc=loc;
+					auto nonneg=new GeExp(l.access.a.copy(),zero);
+					nonneg.loc=loc;
+					cond=new AndThenExp(nonneg,cond);
+					cond.loc=loc;
+				}
+				auto none=new VectorExp([]);
+				none.loc=loc;
+				auto then=new CompoundExp([append(one)]);
+				then.loc=loc;
+				auto othw=new CompoundExp([append(annot(none,arrayTy(l.type)))]);
+				othw.loc=loc;
+				auto ite=new IteExp(cond,then,othw);
+				ite.loc=loc;
+				bdy~=ite;
+			}
+			if(stmColor[i]!=X&&stmColor[i]!=SHARED) continue;
+			auto ns=s.copy();
+			Expression[] cnodes;
+			walkCond(ns,false,(Expression x,bool c){ cnodes~=x; });
+			foreach(l;logs) if(l.stm==i&&l.access){
+				auto x=cast(IndexExp)cnodes[l.node];
+				assert(!!x);
+				x.e=mkId(l.tmp);
+				x.a=LiteralExp.makeInteger(0);
+				x.a.loc=loc;
+			}
+			foreach(l;logs) if(l.stm==i){
+				if(!l.access) visitStm(ns,(Expression x){
+					if(auto id=cast(Identifier)x) if(id.id==l.var) id.id=l.tmp;
+				});
+				auto idx=new IndexExp(mkId(l.name),mkId(counter));
+				idx.loc=loc;
+				bdy~=define(mkId(l.tmp),dupOf(idx));
+			}
+			bdy~=ns;
+		}
+		if(readsLogs){
+			auto inc=new AddAssignExp(mkId(counter),LiteralExp.makeInteger(1));
+			inc.loc=loc;
+			bdy~=inc;
+		}
+		auto nbdy=new CompoundExp(bdy);
+		nbdy.loc=loop.bdy.loc;
+		static if(is(T==ForExp)){
+			auto nrange=ForRange(range.leftExclusive,mkId(lo),range.step?mkId(st):null,range.rightExclusive,mkId(hi));
+			auto nl=new ForExp(mkId(loop.loopVar.name.id),null,ForAggregate(nrange),nbdy);
+		}else auto nl=new RepeatExp(mkId(num),nbdy);
+		nl.loc=loc;
+		nl.noSplit=true;
+		stmts~=nl;
+	}
+	auto split=new CompoundExp(stmts);
+	split.loc=loc;
+	sc.restoreStateSnapshot(state.origStateSnapshot);
+	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
+		import util.io:stderr;
+		stderr.writeln(loop);
+		stderr.writeln("-loop-splitting→");
+		stderr.writeln(split);
+	}
+	return statementSemantic(split,sc,flags);
+}
+
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
+	static if(is(T==ForExp)||is(T==RepeatExp))
+		if(auto r=splitLoop(loop,state,sc,flags)) return r;
 	enum returnOnlyMoved=false; // (experimental)
 	enum separateConstParams=true; // (necessary inside a `with` transformation)
 	SetX!Declaration accessedDecls;
