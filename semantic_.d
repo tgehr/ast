@@ -1504,7 +1504,107 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			infos=ninfos;
 		}
 	}
-	foreach(ref info;infos) foreach(d;info.defs) if(d !in color) color[d]=NONE;
+	struct Atom{
+		Expression e;
+		size_t stm;
+		size_t[] ites;
+		Expression[] parts;
+		Expression elem;
+		CompoundExp block;
+		size_t index;
+	}
+	struct Ite{
+		IteExp e;
+		size_t stm;
+		StmInfo info;
+		size_t[] ctx;
+		CompoundExp block;
+		size_t index;
+	}
+	Atom[] atoms;
+	Ite[] ites;
+	size_t[const(void)*] atomOf,iteOf;
+	bool splitTuple(DefineExp de){
+		auto lhs=cast(TupleExp)de.e1, rhs=cast(TupleExp)de.e2;
+		if(de.isSwap||!lhs||!rhs||lhs.e.length!=rhs.e.length||lhs.e.length<2) return false;
+		Id[] roots;
+		foreach(l;lhs.e){
+			Expression r=l;
+			while(cast(IndexExp)r) r=(cast(IndexExp)r).e;
+			auto id=cast(Identifier)r;
+			if(!id) return false;
+			auto n=varName(id);
+			if(roots.canFind(n)) return false;
+			roots~=n;
+		}
+		foreach(k;0..lhs.e.length){
+			bool ok=true;
+			void check(Expression e){
+				visitStm(e,(Expression x){
+					if(auto id=cast(Identifier)x){
+						auto n=varName(id);
+						foreach(j,r;roots) if(j!=k&&r==n) ok=false;
+					}
+				});
+			}
+			check(lhs.e[k]);
+			check(rhs.e[k]);
+			if(!ok) return false;
+		}
+		return true;
+	}
+	void flatten(Expression e,size_t i,size_t[] ctx,CompoundExp block,size_t index){
+		if(auto ite=cast(IteExp)e){
+			if(!ite.condForget){
+				auto k=ites.length;
+				bool b=false;
+				auto info=analyzeStm(ite.cond,b);
+				bad|=b;
+				ites~=Ite(ite,i,info,ctx,block,index);
+				iteOf[cast(const(void)*)ite]=k;
+				auto before=atoms.length;
+				foreach(j,x;ite.then.s) flatten(x,i,ctx~k,ite.then,j);
+				if(ite.othw) foreach(j,x;ite.othw.s) flatten(x,i,ctx~k,ite.othw,j);
+				if(atoms.length!=before) return;
+				ites=ites[0..k];
+				iteOf.remove(cast(const(void)*)ite);
+			}
+		}
+		if(auto ce=cast(CompoundExp)e) if(!ce.blscope_){
+			foreach(j,x;ce.s) flatten(x,i,ctx,ce,j);
+			return;
+		}
+		if(auto de=cast(DefineExp)e) if(splitTuple(de)){
+			auto lhs=cast(TupleExp)de.e1, rhs=cast(TupleExp)de.e2;
+			foreach(k;0..lhs.e.length){
+				auto w=new DefineExp(lhs.e[k],rhs.e[k]);
+				w.loc=de.loc;
+				atomOf[cast(const(void)*)rhs.e[k]]=atoms.length;
+				atoms~=Atom(w,i,ctx,[lhs.e[k],rhs.e[k]],e,block,index);
+			}
+			return;
+		}
+		atomOf[cast(const(void)*)e]=atoms.length;
+		atoms~=Atom(e,i,ctx,[e],e,block,index);
+	}
+	foreach(i,s;stms) flatten(s,i,[],null,i);
+	if(bad) return null;
+	StmInfo[] ainfos;
+	foreach(ref a;atoms){
+		bool b=false;
+		auto info=a.e is stms[a.stm]?infos[a.stm]:analyzeStm(a.e,b);
+		if(b) return null;
+		foreach(k;a.ites){
+			auto ci=&ites[k].info;
+			foreach(u;ci.uses) info.uses.insert(u);
+			foreach(u;ci.nonConst) info.nonConst.insert(u);
+			foreach(u,t;ci.types) info.types[u]=t;
+			info.nonQfree|=ci.nonQfree;
+			info.effects|=ci.effects;
+		}
+		ainfos~=info;
+	}
+	foreach(ref info;ainfos) foreach(d;info.defs) if(d !in color) color[d]=NONE;
 	int colorOf(Id n){ return color.get(n,NONE); }
 	int reads(ref StmInfo info){
 		int c=info.nonQfree?P:NONE;
@@ -1514,7 +1614,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	for(bool changed=true;changed;){
 		changed=false;
-		foreach(ref info;infos){
+		foreach(ref info;ainfos){
 			auto c=reads(info);
 			foreach(d;info.defs){
 				if(d in isCarried||colorOf(d)>=c) continue;
@@ -1523,10 +1623,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 		}
 	}
-	int[] stmColor;
-	foreach(ref info;infos){
+	int[] atomColor;
+	foreach(ref info;ainfos){
 		if(info.defs.length==0){
-			stmColor~=P;
+			atomColor~=P;
 			continue;
 		}
 		int dc=NONE;
@@ -1536,24 +1636,42 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			dc=x;
 		}
 		if(dc==NONE){
-			stmColor~=SHARED;
+			atomColor~=SHARED;
 			continue;
 		}
 		if(reads(info)>dc) return null;
-		stmColor~=dc;
+		atomColor~=dc;
 	}
-	if(stmColor.filter!(c=>c>=0).array.sort.uniq.walkLength<2) return null;
+	if(atomColor.filter!(c=>c>=0).array.sort.uniq.walkLength<2) return null;
+	bool keepAtom(size_t a,int X){ return atomColor[a]==X||atomColor[a]==SHARED; }
+	bool iteHas(size_t k,int X){
+		foreach(a,ref at;atoms) if(at.ites.canFind(k)&&atomColor[a]==X) return true;
+		return false;
+	}
 	struct Log{
 		Id var;
 		size_t stm;
-		int src;
-		Id name,tmp;
+		int src,dst;
+		Id name,tmp,ctr;
 		Expression type;
 		IndexExp access;
 		size_t node;
 		Expression bound;
+		CompoundExp block;
+		size_t index;
+		size_t[] rnodes;
+		bool primary=true;
 	}
 	Log[] logs;
+	void addLog(Log l){
+		foreach(ref o;logs) if(o.primary&&o.var==l.var&&o.stm==l.stm&&o.block is l.block&&o.index==l.index&&!!o.access==!!l.access&&(!l.access||o.node==l.node)){
+			l.name=o.name;
+			l.primary=false;
+			break;
+		}
+		if(l.block) l.ctr=freshName();
+		logs~=l;
+	}
 	bool available(Expression e){
 		bool ok=true;
 		visitStm(e,(Expression x){
@@ -1568,68 +1686,156 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		});
 		return ok;
 	}
-	foreach(i,ref info;infos){
-		auto X=stmColor[i];
-		if(X==SHARED) continue;
+	bool condOK(size_t j){
+		auto c=ites[j].e.cond;
+		return c.type&&c.type.isClassical()&&available(c);
+	}
+	foreach(i,s;stms){
 		Expression[] nodes;
 		bool[] conds;
-		walkCond(stms[i],false,(Expression x,bool c){ nodes~=x; conds~=c; });
-		foreach(u;info.uses){
-			auto Y=colorOf(u);
-			if(Y<0||Y==X) continue;
-			if(Y>X||u in info.nonConst) return null;
-			SetX!Expression covered;
-			Log[] elems;
-			bool whole=false;
-			foreach(n,x;nodes){
-				if(x in covered) continue;
-				if(auto id=cast(Identifier)x){
-					if(varName(id)==u) whole=true;
-					continue;
-				}
-				auto ie=cast(IndexExp)x;
-				if(!ie) continue;
-				IndexExp[] chain;
-				Expression r=ie;
-				while(auto je=cast(IndexExp)r){
-					chain~=je;
-					r=je.e;
-				}
-				auto rid=cast(Identifier)r;
-				if(!rid||varName(rid)!=u) continue;
-				foreach(c;chain) covered.insert(c);
-				covered.insert(rid);
-				IndexExp acc=null;
-				foreach_reverse(c;chain){
-					if(!available(c.a)||!c.type) break;
-					acc=c;
-				}
-				if(!acc){
-					whole=true;
-					continue;
-				}
-				Expression bound=null;
-				if(conds[n]){
-					if(acc!is chain[$-1]||!acc.a.type||!isSubtype(acc.a.type,ℤt(true))){
-						whole=true;
-						continue;
-					}
-					if(auto ft=isFixedIntTy(acc.e.type)) bound=ft.bits;
-					else if(cast(ArrayTy)acc.e.type||cast(VectorTy)acc.e.type) bound=acc.e;
-					else{
-						whole=true;
-						continue;
-					}
-				}
-				size_t pos=n;
-				foreach(k,y;nodes) if(y is acc) pos=k;
-				elems~=Log(u,i,Y,freshName(),freshName(),acc.type,acc,pos,bound);
+		walkCond(s,false,(Expression x,bool c){ nodes~=x; conds~=c; });
+		size_t[const(void)*] pos;
+		foreach(n,x;nodes) pos[cast(const(void)*)x]=n;
+		auto owner=new int[](nodes.length), condOf=new int[](nodes.length);
+		owner[]=-1;
+		condOf[]=-1;
+		MapX!(Id,size_t[]) defPos;
+		foreach(ai,ref a;atoms) if(a.stm==i){
+			foreach(part;a.parts)
+				walkCond(part,false,(Expression x,bool c){
+					if(auto p=cast(const(void)*)x in pos) owner[*p]=cast(int)ai;
+				});
+			auto start=pos[cast(const(void)*)a.parts[0]];
+			foreach(d;ainfos[ai].defs) defPos[d]=defPos.get(d,[])~start;
+		}
+		foreach(k,ref it;ites) if(it.stm==i)
+			walkCond(it.e.cond,false,(Expression x,bool c){
+				if(auto p=cast(const(void)*)x in pos) condOf[*p]=cast(int)k;
+			});
+		int[] xs=atoms.enumerate.filter!(a=>a.value.stm==i).map!(a=>atomColor[a.index]).filter!(c=>c>=0).array.sort.uniq.array;
+		foreach(X;xs){
+			bool inScope(size_t n){
+				if(owner[n]>=0) return atomColor[owner[n]]==X;
+				if(condOf[n]>=0) return iteHas(condOf[n],X);
+				return false;
 			}
-			if(whole){
-				auto ty=u in isCarried?carriedType.get(u,null):info.types.get(u,null);
-				if(!ty) return null;
-				logs~=Log(u,i,Y,freshName(),freshName(),ty,null,0,null);
-			}else logs~=elems;
+			SetX!Id uses,nonConst;
+			MapX!(Id,Expression) types;
+			foreach(ai,ref a;atoms) if(a.stm==i&&atomColor[ai]==X){
+				foreach(u;ainfos[ai].uses) uses.insert(u);
+				foreach(u;ainfos[ai].nonConst) nonConst.insert(u);
+				foreach(u,t;ainfos[ai].types) types[u]=t;
+			}
+			foreach(u;uses){
+				auto Y=colorOf(u);
+				if(Y<0||Y==X) continue;
+				if(Y>X||u in nonConst) return null;
+				struct Group{
+					CompoundExp block;
+					size_t index;
+					size_t[] reads;
+				}
+				Group[] groups;
+				bool anchor(size_t n){
+					size_t[] chain;
+					CompoundExp blk;
+					size_t idx;
+					Expression el;
+					if(owner[n]>=0){
+						auto at=&atoms[owner[n]];
+						chain=at.ites;
+						blk=at.block;
+						idx=at.index;
+						el=at.elem;
+					}else{
+						auto it=&ites[condOf[n]];
+						chain=it.ctx;
+						blk=it.block;
+						idx=it.index;
+						el=it.e;
+					}
+					foreach(j;chain) if(!condOK(j)){
+						blk=ites[j].block;
+						idx=ites[j].index;
+						el=ites[j].e;
+						break;
+					}
+					auto apos=pos[cast(const(void)*)el];
+					foreach(d;defPos.get(u,[])) if(apos<=d&&d<n) return false;
+					foreach(ref g;groups) if(g.block is blk&&g.index==idx){
+						g.reads~=n;
+						return true;
+					}
+					groups~=Group(blk,idx,[n]);
+					return true;
+				}
+				SetX!Expression covered;
+				foreach(n,x;nodes){
+					if(x in covered||!inScope(n)) continue;
+					if(auto id=cast(Identifier)x){
+						if(varName(id)==u&&!anchor(n)) return null;
+						continue;
+					}
+					auto ie=cast(IndexExp)x;
+					if(!ie) continue;
+					Expression r=ie;
+					while(auto je=cast(IndexExp)r){
+						covered.insert(je);
+						r=je.e;
+					}
+					auto rid=cast(Identifier)r;
+					if(!rid||varName(rid)!=u) continue;
+					covered.insert(rid);
+					if(!anchor(n)) return null;
+				}
+				foreach(ref g;groups){
+					Log[] elems;
+					size_t[] rnodes;
+					bool whole=false;
+					foreach(n;g.reads){
+						if(auto id=cast(Identifier)nodes[n]){
+							rnodes~=n;
+							whole=true;
+							continue;
+						}
+						IndexExp[] chain;
+						Expression r=nodes[n];
+						while(auto je=cast(IndexExp)r){
+							chain~=je;
+							r=je.e;
+						}
+						rnodes~=pos[cast(const(void)*)r];
+						IndexExp acc=null;
+						foreach_reverse(c;chain){
+							if(!available(c.a)||!c.type) break;
+							acc=c;
+						}
+						if(!acc){
+							whole=true;
+							continue;
+						}
+						Expression bound=null;
+						if(conds[n]){
+							if(acc!is chain[$-1]||!acc.a.type||!isSubtype(acc.a.type,ℤt(true))){
+								whole=true;
+								continue;
+							}
+							if(auto ft=isFixedIntTy(acc.e.type)) bound=ft.bits;
+							else if(cast(ArrayTy)acc.e.type||cast(VectorTy)acc.e.type) bound=acc.e;
+							else{
+								whole=true;
+								continue;
+							}
+						}
+						elems~=Log(u,i,Y,X,freshName(),freshName(),Id.init,acc.type,acc,pos[cast(const(void)*)acc],bound,g.block,g.index);
+					}
+					if(whole){
+						auto ty=u in isCarried?carriedType.get(u,null):types.get(u,null);
+						if(!ty) return null;
+						addLog(Log(u,i,Y,X,freshName(),freshName(),Id.init,ty,null,0,null,g.block,g.index,rnodes));
+					}else foreach(l;elems) addLog(l);
+				}
+			}
 		}
 	}
 	auto loc=loop.loc;
@@ -1664,86 +1870,145 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
 	}
 	foreach(X;0..P+1){
-		if(!stmColor.canFind(X)) continue;
-		bool readsLogs=logs.any!(l=>stmColor[l.stm]==X);
+		if(!atomColor.canFind(X)) continue;
+		bool readsLogs=logs.any!(l=>l.dst==X&&!l.block);
 		Id counter;
 		if(readsLogs){
 			counter=freshName();
 			stmts~=define(mkId(counter),annot(LiteralExp.makeInteger(0),ℕt(true)));
 		}
-		foreach(l;logs) if(l.src==X){
+		foreach(l;logs) if(l.dst==X&&l.block) stmts~=define(mkId(l.ctr),annot(LiteralExp.makeInteger(0),ℕt(true)));
+		foreach(l;logs) if(l.src==X&&l.primary){
 			auto empty=new VectorExp([]);
 			empty.loc=loc;
 			auto ety=l.access?arrayTy(l.type):l.type;
 			stmts~=define(mkId(l.name),annot(empty,arrayTy(ety)));
 		}
+		Expression[] insertions(size_t i,CompoundExp blk,size_t idx){
+			Expression[] r;
+			foreach(l;logs) if(l.stm==i&&l.block is blk&&l.index==idx){
+				if(l.src==X&&l.primary){
+					Expression append(Expression e){
+						auto v=new VectorExp([e]);
+						v.loc=loc;
+						auto app=new CatAssignExp(mkId(l.name),v);
+						app.loc=loc;
+						return app;
+					}
+					if(!l.access) r~=append(dupOf(mkId(l.var)));
+					else{
+						auto one=new VectorExp([dupOf(l.access.copy())]);
+						one.loc=loc;
+						if(!l.bound) r~=append(one);
+						else{
+							Expression bound=l.bound.copy();
+							if(l.bound is l.access.e){
+								auto len=new Identifier(Id.s!"length");
+								len.loc=loc;
+								bound=new FieldExp(bound,len);
+								bound.loc=loc;
+							}
+							Expression cond=new LtExp(l.access.a.copy(),bound);
+							cond.loc=loc;
+							if(!isSubtype(l.access.a.type,ℕt(true))){
+								auto zero=LiteralExp.makeInteger(0);
+								zero.loc=loc;
+								auto nonneg=new GeExp(l.access.a.copy(),zero);
+								nonneg.loc=loc;
+								cond=new AndThenExp(nonneg,cond);
+								cond.loc=loc;
+							}
+							auto none=new VectorExp([]);
+							none.loc=loc;
+							auto then=new CompoundExp([append(one)]);
+							then.loc=loc;
+							auto othw=new CompoundExp([append(annot(none,arrayTy(l.type)))]);
+							othw.loc=loc;
+							auto ite=new IteExp(cond,then,othw);
+							ite.loc=loc;
+							r~=ite;
+						}
+					}
+				}
+				if(l.dst==X){
+					auto idx2=new IndexExp(mkId(l.name),mkId(l.block?l.ctr:counter));
+					idx2.loc=loc;
+					r~=define(mkId(l.tmp),dupOf(idx2));
+					if(l.block){
+						auto inc=new AddAssignExp(mkId(l.ctr),LiteralExp.makeInteger(1));
+						inc.loc=loc;
+						r~=inc;
+					}
+				}
+			}
+			return r;
+		}
 		Expression[] bdy;
 		foreach(i,s;stms){
-			foreach(l;logs) if(l.src==X&&l.stm==i){
-				Expression append(Expression e){
-					auto v=new VectorExp([e]);
-					v.loc=loc;
-					auto app=new CatAssignExp(mkId(l.name),v);
-					app.loc=loc;
-					return app;
-				}
-				if(!l.access){
-					bdy~=append(dupOf(mkId(l.var)));
-					continue;
-				}
-				auto one=new VectorExp([dupOf(l.access.copy())]);
-				one.loc=loc;
-				if(!l.bound){
-					bdy~=append(one);
-					continue;
-				}
-				Expression bound=l.bound.copy();
-				if(l.bound is l.access.e){
-					auto len=new Identifier(Id.s!"length");
-					len.loc=loc;
-					bound=new FieldExp(bound,len);
-					bound.loc=loc;
-				}
-				Expression cond=new LtExp(l.access.a.copy(),bound);
-				cond.loc=loc;
-				if(!isSubtype(l.access.a.type,ℕt(true))){
-					auto zero=LiteralExp.makeInteger(0);
-					zero.loc=loc;
-					auto nonneg=new GeExp(l.access.a.copy(),zero);
-					nonneg.loc=loc;
-					cond=new AndThenExp(nonneg,cond);
-					cond.loc=loc;
-				}
-				auto none=new VectorExp([]);
-				none.loc=loc;
-				auto then=new CompoundExp([append(one)]);
-				then.loc=loc;
-				auto othw=new CompoundExp([append(annot(none,arrayTy(l.type)))]);
-				othw.loc=loc;
-				auto ite=new IteExp(cond,then,othw);
-				ite.loc=loc;
-				bdy~=ite;
-			}
-			if(stmColor[i]!=X&&stmColor[i]!=SHARED) continue;
+			bdy~=insertions(i,null,i);
+			bool nested=logs.any!(l=>l.stm==i&&l.block&&(l.dst==X||l.src==X&&l.primary));
+			if(!nested&&!atoms.enumerate.any!(a=>a.value.stm==i&&keepAtom(a.index,X))) continue;
 			auto ns=s.copy();
-			Expression[] cnodes;
+			Expression[] onodes,cnodes;
+			walkCond(s,false,(Expression x,bool c){ onodes~=x; });
 			walkCond(ns,false,(Expression x,bool c){ cnodes~=x; });
-			foreach(l;logs) if(l.stm==i&&l.access){
-				auto x=cast(IndexExp)cnodes[l.node];
-				assert(!!x);
-				x.e=mkId(l.tmp);
-				x.a=LiteralExp.makeInteger(0);
-				x.a.loc=loc;
+			size_t[const(void)*] opos;
+			foreach(n,x;onodes) opos[cast(const(void)*)x]=n;
+			foreach(l;logs) if(l.stm==i&&l.dst==X){
+				if(l.access){
+					auto x=cast(IndexExp)cnodes[l.node];
+					assert(!!x);
+					x.e=mkId(l.tmp);
+					x.a=LiteralExp.makeInteger(0);
+					x.a.loc=loc;
+				}else foreach(n;l.rnodes){
+					auto id=cast(Identifier)cnodes[n];
+					assert(!!id);
+					id.id=l.tmp;
+				}
 			}
-			foreach(l;logs) if(l.stm==i){
-				if(!l.access) visitStm(ns,(Expression x){
-					if(auto id=cast(Identifier)x) if(id.id==l.var) id.id=l.tmp;
-				});
-				auto idx=new IndexExp(mkId(l.name),mkId(counter));
-				idx.loc=loc;
-				bdy~=define(mkId(l.tmp),dupOf(idx));
+			bool prune(Expression o){
+				auto c=cnodes[opos[cast(const(void)*)o]];
+				Expression[] block(CompoundExp ob,CompoundExp cb){
+					Expression[] r;
+					foreach(k,x;ob.s){
+						r~=insertions(i,ob,k);
+						if(prune(x)) r~=cb.s[k];
+					}
+					return r;
+				}
+				if(auto ite=cast(IteExp)o) if(cast(const(void)*)ite in iteOf){
+					auto cite=cast(IteExp)c;
+					cite.then.s=block(ite.then,cite.then);
+					if(ite.othw) cite.othw.s=block(ite.othw,cite.othw);
+					return cite.then.s.length||cite.othw&&cite.othw.s.length;
+				}
+				if(auto ce=cast(CompoundExp)o) if(!ce.blscope_){
+					auto cce=cast(CompoundExp)c;
+					cce.s=block(ce,cce);
+					return cce.s.length!=0;
+				}
+				if(auto de=cast(DefineExp)o) if(auto rhs=cast(TupleExp)de.e2) if(rhs.e.length&&cast(const(void)*)rhs.e[0] in atomOf){
+					auto cde=cast(DefineExp)c;
+					auto clhs=cast(TupleExp)cde.e1, crhs=cast(TupleExp)cde.e2;
+					Expression[] l,r;
+					foreach(k,x;rhs.e) if(keepAtom(atomOf[cast(const(void)*)x],X)){
+						l~=clhs.e[k];
+						r~=crhs.e[k];
+					}
+					if(!l.length) return false;
+					if(l.length==1){
+						cde.e1=l[0];
+						cde.e2=r[0];
+					}else{
+						clhs.e=l;
+						crhs.e=r;
+					}
+					return true;
+				}
+				return keepAtom(atomOf[cast(const(void)*)o],X);
 			}
-			bdy~=ns;
+			if(prune(s)) bdy~=ns;
 		}
 		if(readsLogs){
 			auto inc=new AddAssignExp(mkId(counter),LiteralExp.makeInteger(1));
