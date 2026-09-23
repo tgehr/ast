@@ -1059,7 +1059,9 @@ class Checker {
 			assert(callTy.captureAnnotation == ast_ty.CaptureAnnotation.once, format("ERROR: call target not a `once` function on %s: << %s >>", targetExpr.loc, targetExpr));
 			auto newTy = ast_sem.typeForDecl(callExpr.newFunctionVar), expectedTy = callTy.setCaptureAnnotation(ast_ty.CaptureAnnotation.spent);
 			assert(newTy == expectedTy, format("ERROR: unexpected type change between `once` to `spent` function: << %s >> << %s >>", newTy, expectedTy));
-			defineVar(callExpr.newFunctionVar, "`spent` function definition", callExpr);
+			auto owner = this;
+			while(!owner.vars.getPtr(callExpr.newFunctionVar.getId) && owner.scopeFree) owner = owner.parent;
+			owner.defineVar(callExpr.newFunctionVar, "`spent` function definition", callExpr);
 		}
 
 		bool isTuple;
