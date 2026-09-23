@@ -1378,7 +1378,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(ty.isClassical()) classical.insert(p[1].name.id);
 	}
 	struct StmInfo{
-		SetX!Id defs,uses,nonConst,consumed;
+		SetX!Id defs,uses,nonConst,consumed,strong;
 		MapX!(Id,Expression) types;
 		bool nonQfree=false,isForget=false,effects=false;
 	}
@@ -1386,14 +1386,18 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		StmInfo info;
 		info.isForget=!!cast(ForgetExp)s;
 		SetX!Identifier targets;
+		void strongDef(Id n){
+			info.defs.insert(n);
+			info.strong.insert(n);
+		}
 		void addDefs(Expression lhs){
 			visitStm(lhs,(Expression x){
 				if(auto ie=cast(IndexExp)x){
 					Expression r=ie;
 					while(cast(IndexExp)r) r=(cast(IndexExp)r).e;
-					if(auto id=cast(Identifier)r) info.defs.insert(varName(id));
+					if(auto id=cast(Identifier)r) strongDef(varName(id));
 				}else if(auto id=cast(Identifier)x) if(!id.constLookup){
-					info.defs.insert(varName(id));
+					strongDef(varName(id));
 					targets.insert(id);
 				}
 			});
@@ -1403,19 +1407,19 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				bad=true;
 				return;
 			}
-			if(auto fd=cast(FunctionDef)x) if(fd.name) info.defs.insert(fd.name.id);
+			if(auto fd=cast(FunctionDef)x) if(fd.name) strongDef(fd.name.id);
 			if(cast(AssertExp)x) info.effects=true;
 			if(auto de=cast(DefineExp)x) addDefs(de.e1);
 			else if(auto we=cast(WithExp)x){
 				visitStm(we.trans,(Expression y){
 					if(auto id=cast(Identifier)y)
 						if(id.type&&!id.type.isClassical())
-							info.defs.insert(varName(id));
+							strongDef(varName(id));
 				});
 			}else if(auto ae=cast(AAssignExp)x){
 				Expression lhs=ae.e1;
 				while(cast(IndexExp)lhs) lhs=(cast(IndexExp)lhs).e;
-				if(auto id=cast(Identifier)lhs) info.defs.insert(varName(id));
+				if(auto id=cast(Identifier)lhs) strongDef(varName(id));
 				else addDefs(ae.e1);
 			}else if(auto ce=cast(CallExp)x){
 				if(auto ft=cast(FunTy)ce.e.type)
@@ -1547,11 +1551,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		Expression[] parts;
 	}
 	struct Ite{
-		IteExp e;
+		Expression e;
 		size_t stm;
 		StmInfo info;
 		size_t[] ctx;
 		size_t first;
+		bool isLoop;
+		Expression[] heads;
 	}
 	Atom[] atoms;
 	Ite[] ites;
@@ -1591,10 +1597,46 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			bad|=b;
 			if(!ite.condForget&&!info.defs.length){
 				auto k=ites.length;
-				ites~=Ite(ite,i,info,ctx,atoms.length);
+				ites~=Ite(ite,i,info,ctx,atoms.length,false,[ite.cond]);
 				auto before=atoms.length;
 				foreach(x;ite.then.s) flatten(x,i,ctx~k,inElse~false);
 				if(ite.othw) foreach(x;ite.othw.s) flatten(x,i,ctx~k,inElse~true);
+				if(atoms.length!=before) return;
+				ites=ites[0..k];
+			}
+		}
+		Expression[] heads;
+		CompoundExp lbdy;
+		if(auto fe=cast(ForExp)e){
+			if(auto r=fe.aggr.isRange) if(fe.loopVar){
+				heads=[r.left]~(r.step?[r.step]:[])~[r.right];
+				lbdy=fe.bdy;
+			}
+		}else if(auto re=cast(RepeatExp)e){
+			heads=[re.num];
+			lbdy=re.bdy;
+		}else if(auto we=cast(WhileExp)e){
+			heads=[we.cond];
+			lbdy=we.bdy;
+		}
+		if(lbdy){
+			StmInfo info;
+			foreach(h;heads){
+				bool b=false;
+				auto hi=analyzeStm(h,b);
+				bad|=b;
+				foreach(u;hi.uses) info.uses.insert(u);
+				foreach(u;hi.defs) info.defs.insert(u);
+				foreach(u;hi.nonConst) info.nonConst.insert(u);
+				foreach(u,t;hi.types) info.types[u]=t;
+				info.nonQfree|=hi.nonQfree;
+				info.effects|=hi.effects;
+			}
+			if(!info.defs.length){
+				auto k=ites.length;
+				ites~=Ite(e,i,info,ctx,atoms.length,true,heads);
+				auto before=atoms.length;
+				foreach(x;lbdy.s) flatten(x,i,ctx~k,inElse~false);
 				if(atoms.length!=before) return;
 				ites=ites[0..k];
 			}
@@ -1663,11 +1705,17 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				continue;
 			}
 			int dc=NONE;
+			bool skipped=false;
 			foreach(d;info.defs){
+				if(d in info.consumed&&d !in info.strong&&d in isCarried){
+					skipped=true;
+					continue;
+				}
 				auto x=colorOf(d);
 				if(dc!=NONE&&x!=dc) return false;
 				dc=x;
 			}
+			if(dc==NONE&&skipped) dc=reads(info);
 			if(dc==NONE){
 				atomColor~=SHARED;
 				continue;
@@ -1677,7 +1725,24 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		return true;
 	}
-	if(!colorAtoms(false)&&!colorAtoms(true)) return null;
+	bool guardOK(){
+		static if(is(T==WhileExp)){
+			if(!loop.cond.type||!loop.cond.type.isClassical()) return false;
+			bool ok=true;
+			visitStm(loop.cond,(Expression x){
+				if(auto ce=cast(CallExp)x){
+					if(auto ft=cast(FunTy)ce.e.type)
+						if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
+				}else if(auto id=cast(Identifier)x){
+					if(cast(DatDecl)id.meaning) return;
+					auto c=colorOf(varName(id));
+					if(c!=NONE&&c!=0) ok=false;
+				}
+			});
+			return ok;
+		}else return true;
+	}
+	if(!(colorAtoms(false)&&guardOK())&&!(colorAtoms(true)&&guardOK())) return null;
 	if(atomColor.filter!(c=>c>=0).array.sort.uniq.walkLength<2) return null;
 	bool keepAtom(size_t a,int X){ return atomColor[a]==X||atomColor[a]==SHARED; }
 	bool iteHas(size_t k,int X){
@@ -1697,6 +1762,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		size_t[] rnodes;
 		bool primary=true;
 		size_t ite=size_t.max;
+		bool consume;
+		size_t rLevel=size_t.max;
+		Id slot;
 	}
 	Log[] logs;
 	void addLog(Log l){
@@ -1705,7 +1773,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			l.primary=false;
 			break;
 		}
-		if(l.level) l.ctr=freshName();
+		if(l.rLevel==size_t.max) l.rLevel=l.level;
+		if(l.rLevel) l.ctr=freshName();
 		logs~=l;
 	}
 	bool available(Expression e){
@@ -1723,13 +1792,14 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		return ok;
 	}
 	bool isClassicalIte(size_t j){
-		auto c=ites[j].e.cond;
+		if(ites[j].isLoop) return true;
+		auto c=ites[j].heads[0];
 		return c.type&&c.type.isClassical();
 	}
 	bool condOK(size_t j,int Y){
 		if(!isClassicalIte(j)) return false;
 		bool ok=true;
-		visitStm(ites[j].e.cond,(Expression x){
+		foreach(h;ites[j].heads) visitStm(h,(Expression x){
 			if(auto ce=cast(CallExp)x){
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
@@ -1740,6 +1810,36 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 		});
 		return ok;
+	}
+	bool evalBy(size_t j,int Y){
+		bool ok=true;
+		foreach(h;ites[j].heads) visitStm(h,(Expression x){
+			if(auto ce=cast(CallExp)x){
+				if(auto ft=cast(FunTy)ce.e.type)
+					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
+			}else if(auto id=cast(Identifier)x){
+				if(cast(DatDecl)id.meaning) return;
+				auto c=colorOf(varName(id));
+				if(c!=NONE&&c!=Y) ok=false;
+			}
+		});
+		return ok;
+	}
+	int bitSource(size_t j,int Y){
+		if(ites[j].isLoop||!isClassicalIte(j)) return NONE;
+		int Z=NONE;
+		bool ok=true;
+		visitStm(ites[j].heads[0],(Expression x){
+			if(auto id=cast(Identifier)x){
+				if(cast(DatDecl)id.meaning) return;
+				auto c=colorOf(varName(id));
+				if(c==NONE) return;
+				if(Z!=NONE&&c!=Z) ok=false;
+				Z=c;
+			}
+		});
+		if(!ok||Z==NONE||Z>=Y||!condOK(j,Z)) return NONE;
+		return Z;
 	}
 	foreach(i,s;stms){
 		Expression[] nodes;
@@ -1760,10 +1860,17 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach(d;ainfos[ai].defs) defPos[d]=defPos.get(d,[])~start;
 		}
 		foreach(k,ref it;ites) if(it.stm==i)
-			walkCond(it.e.cond,false,(Expression x,bool c){
-				if(auto p=cast(const(void)*)x in pos) condOf[*p]=cast(int)k;
-			});
-		bool place(size_t n,int Y,scope bool delegate(size_t) inside,out size_t level,out size_t wAt,out size_t rAt){
+			foreach(h;it.heads)
+				walkCond(h,false,(Expression x,bool c){
+					if(auto p=cast(const(void)*)x in pos) condOf[*p]=cast(int)k;
+				});
+		size_t endOf(size_t j){
+			size_t cnt=0;
+			walkCond(ites[j].e,false,(Expression x,bool c){ cnt++; });
+			return pos[cast(const(void)*)ites[j].e]+cnt;
+		}
+		size_t[2][] needBits;
+		bool place(size_t n,int Y,scope bool delegate(size_t,size_t) inside,out size_t level,out size_t wAt,out size_t rAt,out size_t rLevel,out bool slot){
 			size_t[] chain;
 			size_t at;
 			if(owner[n]>=0){
@@ -1773,29 +1880,51 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				chain=ites[condOf[n]].ctx;
 				at=ites[condOf[n]].first;
 			}
-			level=chain.length;
+			level=rLevel=chain.length;
 			wAt=rAt=at;
+			slot=false;
+			size_t[2][] bits;
 			foreach(dd,j;chain){
 				bool q=!isClassicalIte(j);
 				if(!q&&condOK(j,Y)) continue;
-				level=dd;
-				bool ins=inside(pos[cast(const(void)*)ites[j].e]);
-				if(!q&&ins) return false;
-				if(!ins) wAt=ites[j].first;
+				if(!q&&bitSource(j,Y)!=NONE){
+					bits~=[j,cast(size_t)Y];
+					continue;
+				}
+				bool loopBelow=chain[dd..$].any!(k=>ites[k].isLoop);
+				bool ins=inside(pos[cast(const(void)*)ites[j].e],loopBelow?endOf(j):n);
+				if(ins&&(!q||loopBelow)) return false;
+				rLevel=dd;
 				rAt=ites[j].first;
+				if(!ins){
+					level=dd;
+					wAt=ites[j].first;
+					break;
+				}
+				slot=true;
+				foreach(d2;dd..chain.length){
+					auto k=chain[d2];
+					if(evalBy(k,Y)||isClassicalIte(k)&&bitSource(k,Y)!=NONE) continue;
+					if(inside(pos[cast(const(void)*)ites[k].e],n)) return false;
+					level=d2;
+					wAt=ites[k].first;
+					break;
+				}
+				foreach(d2;dd..level) if(isClassicalIte(chain[d2])&&!condOK(chain[d2],Y)) bits~=[chain[d2],cast(size_t)Y];
 				break;
 			}
+			needBits~=bits;
 			return true;
 		}
 		int[] xs=atoms.enumerate.filter!(a=>a.value.stm==i).map!(a=>atomColor[a.index]).filter!(c=>c>=0).array.sort.uniq.array;
 		foreach(X;xs){
 			SetX!Expression condCovered;
 			foreach(k,ref it;ites){
-				if(it.stm!=i||!iteHas(k,X)||!isClassicalIte(k)) continue;
+				if(it.stm!=i||it.isLoop||!iteHas(k,X)||!isClassicalIte(k)) continue;
 				int Y=NONE;
 				bool ok=true;
 				Id[] vars;
-				visitStm(it.e.cond,(Expression x){
+				visitStm(it.heads[0],(Expression x){
 					if(auto id=cast(Identifier)x){
 						if(cast(DatDecl)id.meaning) return;
 						auto c=colorOf(varName(id));
@@ -1806,43 +1935,55 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					}
 				});
 				if(!ok||Y==NONE||Y>=X||!condOK(k,Y)) continue;
-				auto n=pos[cast(const(void)*)it.e.cond];
-				size_t level,wAt,rAt;
-				if(!place(n,Y,(size_t start)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<n)),level,wAt,rAt)) continue;
-				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,it.e.cond.type,null,n,null,wAt,rAt,level);
+				auto n=pos[cast(const(void)*)it.heads[0]];
+				size_t level,wAt,rAt,rLevel;
+				bool slot;
+				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<end)),level,wAt,rAt,rLevel,slot)) continue;
+				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,it.heads[0].type,null,n,null,wAt,rAt,level);
 				l.ite=k;
+				l.rLevel=rLevel;
+				if(slot) l.slot=freshName();
 				addLog(l);
-				visitStm(it.e.cond,(Expression x){ condCovered.insert(x); });
+				visitStm(it.heads[0],(Expression x){ condCovered.insert(x); });
 			}
 			bool inScope(size_t n){
 				if(owner[n]>=0) return atomColor[owner[n]]==X;
 				if(condOf[n]>=0) return iteHas(condOf[n],X);
 				return false;
 			}
-			SetX!Id uses,nonConst;
+			SetX!Id uses,nonConst,consumed;
 			MapX!(Id,Expression) types;
 			foreach(ai,ref a;atoms) if(a.stm==i&&atomColor[ai]==X){
 				foreach(u;ainfos[ai].uses) uses.insert(u);
 				foreach(u;ainfos[ai].nonConst) nonConst.insert(u);
+				foreach(u;ainfos[ai].consumed) consumed.insert(u);
 				foreach(u,t;ainfos[ai].types) types[u]=t;
 			}
 			foreach(u;uses){
 				auto Y=colorOf(u);
 				if(Y<0||Y==X) continue;
-				if(Y>X||u in nonConst) return null;
+				if(Y>X) return null;
+				bool consume=!!(u in consumed);
+				if(consume&&u !in isCarried) return null;
+				foreach(n,x;nodes) if(condOf[n]>=0&&cast(WhileExp)ites[condOf[n]].e&&inScope(n))
+					if(auto id=cast(Identifier)x) if(varName(id)==u) return null;
 				struct Group{
-					size_t wAt,rAt,level;
+					size_t wAt,rAt,level,rLevel;
+					bool slot;
 					size_t[] reads;
 				}
 				Group[] groups;
 				bool anchor(size_t n){
-					size_t level,wAt,rAt;
-					if(!place(n,Y,(size_t start)=>defPos.get(u,[]).any!(d=>start<=d&&d<n),level,wAt,rAt)) return false;
-					foreach(ref g;groups) if(g.wAt==wAt&&g.level==level){
+					size_t level,wAt,rAt,rLevel;
+					bool slot;
+					if(!place(n,Y,(size_t start,size_t end)=>defPos.get(u,[]).any!(d=>start<=d&&d<end),level,wAt,rAt,rLevel,slot)) return false;
+					if(consume&&(slot||owner[n]<0||level!=atoms[owner[n]].ites.length||wAt!=owner[n])) return false;
+					if(slot&&u !in isCarried) return false;
+					foreach(ref g;groups) if(g.wAt==wAt&&g.level==level&&g.rLevel==rLevel){
 						g.reads~=n;
 						return true;
 					}
-					groups~=Group(wAt,rAt,level,[n]);
+					groups~=Group(wAt,rAt,level,rLevel,slot,[n]);
 					return true;
 				}
 				SetX!Expression covered;
@@ -1881,6 +2022,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							r=je.e;
 						}
 						rnodes~=pos[cast(const(void)*)r];
+						if(consume){
+							whole=true;
+							continue;
+						}
 						IndexExp acc=null;
 						foreach_reverse(c;chain){
 							if(!available(c.a)||!c.type) break;
@@ -1891,6 +2036,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							continue;
 						}
 						Expression bound=null;
+						if(conds[n]&&g.slot){
+							whole=true;
+							continue;
+						}
 						if(conds[n]){
 							if(acc!is chain[$-1]||!acc.a.type||!isSubtype(acc.a.type,ℤt(true))){
 								whole=true;
@@ -1903,15 +2052,42 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 								continue;
 							}
 						}
-						elems~=Log(u,i,Y,X,freshName(),freshName(),Id.init,acc.type,acc,pos[cast(const(void)*)acc],bound,g.wAt,g.rAt,g.level);
+						auto el=Log(u,i,Y,X,freshName(),freshName(),Id.init,acc.type,acc,pos[cast(const(void)*)acc],bound,g.wAt,g.rAt,g.level);
+						el.rLevel=g.rLevel;
+						if(g.slot) el.slot=freshName();
+						elems~=el;
 					}
-					if(whole){
+					if(whole||consume){
 						auto ty=u in isCarried?carriedType.get(u,null):types.get(u,null);
 						if(!ty) return null;
-						addLog(Log(u,i,Y,X,freshName(),freshName(),Id.init,ty,null,0,null,g.wAt,g.rAt,g.level,rnodes));
+						auto l=Log(u,i,Y,X,freshName(),freshName(),Id.init,ty,null,0,null,g.wAt,g.rAt,g.level,rnodes);
+						l.consume=consume;
+						l.rLevel=g.rLevel;
+						if(g.slot) l.slot=freshName();
+						addLog(l);
 					}else foreach(l;elems) addLog(l);
 				}
 			}
+		}
+		for(size_t b=0;b<needBits.length;b++){
+			auto j=needBits[b][0];
+			int Y=cast(int)needBits[b][1];
+			if(logs.any!(l=>l.stm==i&&l.ite==j&&l.dst==Y)) continue;
+			auto Z=bitSource(j,Y);
+			if(Z==NONE) return null;
+			Id[] vars;
+			visitStm(ites[j].heads[0],(Expression x){
+				if(auto id=cast(Identifier)x) if(colorOf(varName(id))!=NONE) vars~=varName(id);
+			});
+			auto n=pos[cast(const(void)*)ites[j].heads[0]];
+			size_t level,wAt,rAt,rLevel;
+			bool slot;
+			if(!place(n,Z,(size_t start,size_t end)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<end)),level,wAt,rAt,rLevel,slot)) return null;
+			auto l=Log(Id.init,i,Z,Y,freshName(),freshName(),Id.init,ites[j].heads[0].type,null,n,null,wAt,rAt,level);
+			l.ite=j;
+			l.rLevel=rLevel;
+			if(slot) l.slot=freshName();
+			addLog(l);
 		}
 	}
 	auto loc=loop.loc;
@@ -1941,38 +2117,47 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stmts~=define(mkId(lo),annot(range.left.copy(),range.left.type));
 		if(range.step) stmts~=define(mkId(st),annot(range.step.copy(),range.step.type));
 		stmts~=define(mkId(hi),annot(range.right.copy(),range.right.type));
-	}else{
+	}else static if(is(T==RepeatExp)){
 		auto num=freshName();
 		stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
+	}else{
+		auto num=freshName();
+		stmts~=define(mkId(num),annot(LiteralExp.makeInteger(0),ℕt(true)));
 	}
 	foreach(X;0..P+1){
 		if(!atomColor.canFind(X)) continue;
-		bool readsLogs=logs.any!(l=>l.dst==X&&!l.level);
+		bool readsLogs=logs.any!(l=>l.dst==X&&!l.rLevel);
 		Id counter;
 		if(readsLogs){
 			counter=freshName();
 			stmts~=define(mkId(counter),annot(LiteralExp.makeInteger(0),ℕt(true)));
 		}
-		foreach(l;logs) if(l.dst==X&&l.level) stmts~=define(mkId(l.ctr),annot(LiteralExp.makeInteger(0),ℕt(true)));
+		foreach(l;logs) if(l.dst==X&&l.rLevel) stmts~=define(mkId(l.ctr),annot(LiteralExp.makeInteger(0),ℕt(true)));
 		foreach(l;logs) if(l.src==X&&l.primary){
 			auto empty=new VectorExp([]);
 			empty.loc=loc;
 			auto ety=l.access?arrayTy(l.type):l.type;
 			stmts~=define(mkId(l.name),annot(empty,arrayTy(ety)));
 		}
-		Expression[] appendLog(Log l){
-			Expression append(Expression e){
-				auto v=new VectorExp([e]);
-				v.loc=loc;
-				auto app=new CatAssignExp(mkId(l.name),v);
-				app.loc=loc;
-				return app;
-			}
-			if(l.ite!=size_t.max) return [append(dupOf(ites[l.ite].e.cond.copy()))];
-			if(!l.access) return [append(dupOf(mkId(l.var)))];
+		Expression logEntry(Log l){
+			if(l.ite!=size_t.max) return dupOf(ites[l.ite].heads[0].copy());
+			if(!l.access) return dupOf(mkId(l.var));
 			auto one=new VectorExp([dupOf(l.access.copy())]);
 			one.loc=loc;
-			if(!l.bound) return [append(one)];
+			return one;
+		}
+		Expression appendOf(Log l,Expression e){
+			auto v=new VectorExp([e]);
+			v.loc=loc;
+			auto app=new CatAssignExp(mkId(l.name),v);
+			app.loc=loc;
+			return app;
+		}
+		Expression[] appendLog(Log l){
+			Expression append(Expression e){ return appendOf(l,e); }
+			if(l.slot!=Id.init) return [define(mkId(l.slot),logEntry(l))];
+			if(!l.access||!l.bound) return [append(logEntry(l))];
+			auto one=logEntry(l);
 			Expression bound=l.bound.copy();
 			if(l.bound is l.access.e){
 				auto len=new Identifier(Id.s!"length");
@@ -2001,15 +2186,29 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			return [ite];
 		}
 		Expression[] readLog(Log l){
-			auto idx=new IndexExp(mkId(l.name),mkId(l.level?l.ctr:counter));
+			auto idx=new IndexExp(mkId(l.name),mkId(l.rLevel?l.ctr:counter));
 			idx.loc=loc;
 			Expression[] r=[define(mkId(l.tmp),dupOf(idx))];
-			if(l.level){
+			if(l.rLevel){
 				auto inc=new AddAssignExp(mkId(l.ctr),LiteralExp.makeInteger(1));
 				inc.loc=loc;
 				r~=inc;
 			}
 			return r;
+		}
+		bool hasIn(size_t k){
+			foreach(a,ref at;atoms) if(atomColor[a]==X&&at.ites.canFind(k)) return true;
+			foreach(l;logs){
+				if(l.src==X&&l.primary&&atoms[l.wAt].ites[0..l.level].canFind(k)) return true;
+				if(l.dst==X&&atoms[l.rAt].ites[0..l.rLevel].canFind(k)) return true;
+			}
+			return false;
+		}
+		bool keepIn(size_t a,int X){
+			if(!keepAtom(a,X)) return false;
+			if(atomColor[a]!=SHARED) return true;
+			foreach_reverse(k;atoms[a].ites) if(ites[k].isLoop) return hasIn(k);
+			return true;
 		}
 		Expression[] bdy;
 		foreach(i,s;stms){
@@ -2027,7 +2226,14 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				walkShallow(o,(Expression x){ on~=x; });
 				walkShallow(c,(Expression x){ cn~=x; });
 				if(on.length!=cn.length){
-					ok=false;
+					bool needed=false;
+					foreach(x;on){
+						if(cast(const(void)*)x in elemOf||cast(const(void)*)x in renameOf) needed=true;
+						FunctionDef fd=cast(FunctionDef)x;
+						if(auto le=cast(LambdaExp)x) fd=le.fd;
+						if(fd) foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) if(cast(const(void)*)id in renameOf) needed=true;
+					}
+					if(needed) ok=false;
 					return c;
 				}
 				foreach(k,x;on){
@@ -2063,16 +2269,32 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			struct Frame{
 				size_t ite;
 				bool inElse;
-				IteExp copy;
+				Expression copy;
+				CompoundExp block;
 				SetX!Id locals;
+				Expression[] thenPre,elsePre,after;
 			}
 			Frame[] open;
 			Expression[] top;
 			SetX!Id topLocals,outOfScope;
 			void emit(Expression e){
 				if(!open.length) top~=e;
-				else if(open[$-1].inElse) open[$-1].copy.othw.s~=e;
-				else open[$-1].copy.then.s~=e;
+				else open[$-1].block.s~=e;
+			}
+			void popFrame(){
+				auto f=open[$-1];
+				open=open[0..$-1];
+				if(auto cite=cast(IteExp)f.copy){
+					if(f.thenPre.length) cite.then.s=f.thenPre~cite.then.s;
+					if(f.elsePre.length){
+						if(!cite.othw){
+							cite.othw=new CompoundExp([]);
+							cite.othw.loc=loc;
+						}
+						cite.othw.s=f.elsePre~cite.othw.s;
+					}
+				}
+				foreach(e;f.after) emit(e);
 			}
 			void alignTo(size_t[] chain,bool[] inElse,size_t at){
 				size_t d=0;
@@ -2081,21 +2303,42 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto full=atoms[at].ites;
 				while(open.length>(toElse?d+1:d)){
 					auto dd=open.length-1;
-					if(dd<full.length&&full[dd]==open[dd].ite&&atoms[at].inElse[dd]==open[dd].inElse)
+					if(dd<full.length&&full[dd]==open[dd].ite&&atoms[at].inElse[dd]==open[dd].inElse){
+						if(ites[open[dd].ite].isLoop) ok=false;
 						foreach(n;open[dd].locals) outOfScope.insert(n);
-					open=open[0..$-1];
+					}
+					popFrame();
 				}
 				if(toElse){
+					auto cite=cast(IteExp)open[d].copy;
 					open[d].inElse=true;
 					open[d].locals=typeof(open[d].locals).init;
-					if(!open[d].copy.othw){
-						open[d].copy.othw=new CompoundExp([]);
-						open[d].copy.othw.loc=loc;
+					if(!cite.othw){
+						cite.othw=new CompoundExp([]);
+						cite.othw.loc=loc;
 					}
+					open[d].block=cite.othw;
 					d++;
 				}
 				for(;d<chain.length;d++){
-					auto ite=ites[chain[d]].e;
+					if(ites[chain[d]].isLoop){
+						auto lb=new CompoundExp([]);
+						lb.loc=ites[chain[d]].e.loc;
+						Expression lcopy;
+						if(auto fe=cast(ForExp)ites[chain[d]].e){
+							auto r=fe.aggr.isRange;
+							auto nr=ForRange(r.leftExclusive,cp(r.left),r.step?cp(r.step):null,r.rightExclusive,cp(r.right));
+							auto var=new Identifier(fe.loopVar.name.id);
+							var.loc=fe.var.loc;
+							lcopy=new ForExp(var,null,ForAggregate(nr),lb);
+						}else if(auto we=cast(WhileExp)ites[chain[d]].e) lcopy=new WhileExp(cp(we.cond),lb);
+						else lcopy=new RepeatExp(cp((cast(RepeatExp)ites[chain[d]].e).num),lb);
+						lcopy.loc=ites[chain[d]].e.loc;
+						emit(lcopy);
+						open~=Frame(chain[d],false,lcopy,lb);
+						continue;
+					}
+					auto ite=cast(IteExp)ites[chain[d]].e;
 					auto then=new CompoundExp([]);
 					then.loc=ite.then.loc;
 					CompoundExp othw=null;
@@ -2108,20 +2351,37 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					auto cite=new IteExp(cond?cond:cp(ite.cond),then,othw);
 					cite.loc=ite.loc;
 					emit(cite);
-					open~=Frame(chain[d],inElse[d],cite);
+					open~=Frame(chain[d],inElse[d],cite,inElse[d]?othw:then);
 				}
 			}
 			foreach(a;0..atoms.length){
 				if(atoms[a].stm!=i) continue;
 				foreach(l;logs) if(l.stm==i){
-					Expression[] ins;
-					if(l.src==X&&l.primary&&l.wAt==a) ins~=appendLog(l);
-					if(l.dst==X&&l.rAt==a) ins~=readLog(l);
-					if(!ins.length) continue;
-					alignTo(atoms[a].ites[0..l.level],atoms[a].inElse[0..l.level],a);
-					foreach(e;ins) emit(e);
+					if(l.dst==X&&l.rAt==a){
+						alignTo(atoms[a].ites[0..l.rLevel],atoms[a].inElse[0..l.rLevel],a);
+						foreach(e;readLog(l)) emit(e);
+					}
+					if(l.src==X&&l.primary&&l.wAt==a){
+						alignTo(atoms[a].ites[0..l.level],atoms[a].inElse[0..l.level],a);
+						foreach(e;appendLog(l)) emit(e);
+						if(l.slot!=Id.init){
+							foreach(d;l.rLevel..l.level){
+								auto sdef=define(mkId(l.slot),logEntry(l));
+								if(open[d].inElse) open[d].thenPre~=sdef;
+								else open[d].elsePre~=sdef;
+							}
+							open[l.rLevel].after~=appendOf(l,mkId(l.slot));
+						}
+					}
 				}
-				if(!keepAtom(a,X)) continue;
+				foreach(l;logs) if(l.stm==i&&l.src==X&&l.consume&&l.wAt==a){
+					alignTo(atoms[a].ites[0..l.level],atoms[a].inElse[0..l.level],a);
+					auto fid=mkId(l.var);
+					auto fe=new ForgetExp(fid,null);
+					fe.loc=loc;
+					emit(fe);
+				}
+				if(!keepIn(a,X)) continue;
 				alignTo(atoms[a].ites,atoms[a].inElse,a);
 				foreach(u;ainfos[a].uses) if(u in outOfScope) return null;
 				foreach(dname;ainfos[a].defs){
@@ -2132,6 +2392,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				}
 				emit(cp(atoms[a].e));
 			}
+			while(open.length) popFrame();
 			if(!ok) return null;
 			bdy~=top;
 		}
@@ -2140,14 +2401,30 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			inc.loc=loc;
 			bdy~=inc;
 		}
+		static if(is(T==WhileExp)) if(X==0){
+			auto inc=new AddAssignExp(mkId(num),LiteralExp.makeInteger(1));
+			inc.loc=loc;
+			bdy~=inc;
+		}
 		auto nbdy=new CompoundExp(bdy);
 		nbdy.loc=loop.bdy.loc;
 		static if(is(T==ForExp)){
 			auto nrange=ForRange(range.leftExclusive,mkId(lo),range.step?mkId(st):null,range.rightExclusive,mkId(hi));
 			auto nl=new ForExp(mkId(loop.loopVar.name.id),null,ForAggregate(nrange),nbdy);
+		}else static if(is(T==WhileExp)){
+			Expression nl;
+			if(X==0){
+				auto nw=new WhileExp(loop.cond.copy(),nbdy);
+				nw.noSplit=true;
+				nl=nw;
+			}else{
+				auto nr=new RepeatExp(mkId(num),nbdy);
+				nr.noSplit=true;
+				nl=nr;
+			}
 		}else auto nl=new RepeatExp(mkId(num),nbdy);
 		nl.loc=loc;
-		nl.noSplit=true;
+		static if(!is(T==WhileExp)) nl.noSplit=true;
 		stmts~=nl;
 	}
 	auto split=new CompoundExp(stmts);
@@ -2165,8 +2442,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
-	static if(is(T==ForExp)||is(T==RepeatExp))
-		if(auto r=splitLoop(loop,state,sc,flags)) return r;
+	if(auto r=splitLoop(loop,state,sc,flags)) return r;
 	enum returnOnlyMoved=false; // (experimental)
 	enum separateConstParams=true; // (necessary inside a `with` transformation)
 	SetX!Declaration accessedDecls;

@@ -2433,6 +2433,7 @@ class ForExp: Expression{
 class WhileExp: Expression{
 	Expression cond;
 	CompoundExp bdy;
+	static if(language==silq) bool noSplit=false;
 	this(Expression cond,CompoundExp bdy){
 		this.cond=cond;
 		this.bdy=bdy;
