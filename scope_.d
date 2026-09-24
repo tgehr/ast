@@ -141,11 +141,8 @@ enum Lookup{
 
 abstract class Scope{
 	abstract @property ErrorHandler handler();
-	// loop lowering: statements following a loop that end in a `return`, which the lowering may absorb
-	Expression[] pendingContinuation;
-	Expression pendingContinuationFor; // the loop statement the continuation is offered to
-	bool continuationUsed;
-	Expression continuationAbsorbedFor; // loop statement whose desugaring absorbed the continuation
+	import ast.looplowering:LoopContinuation;
+	LoopContinuation loopContinuation; // loop lowering: code after a loop that the lowering may absorb
 	bool allowsLinear(){
 		return true;
 	}
