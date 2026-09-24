@@ -769,6 +769,12 @@ struct LastUses{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
 		static if(language==silq){
 			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
+			if(lastUse.dep.isTop){
+				// TODO: make sure classical variables have dependency ∅ instead?
+				import ast.semantic_:typeForDecl;
+				auto type=typeForDecl(lastUse.decl);
+				if(type&&type.isClassical) lastUse.dep=Dependency(false);
+			}
 			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
 			if(lastUse.kind==LastUse.Kind.synthesizedForget)
 				lastUse.scope_.noteDependencyResolved(lastUse.dep);
