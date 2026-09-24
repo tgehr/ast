@@ -1032,7 +1032,7 @@ class Checker {
 					expectConst(argExpr, "__show argument");
 					visExpr(argExpr);
 					return;
-				case ast_sem.BuiltIn.qabort:
+				case ast_sem.BuiltIn.qabort,ast_sem.BuiltIn.dummy:
 					assert(ast_ty.isQuantum(callExpr.type));
 					return;
 				default:

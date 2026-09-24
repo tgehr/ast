@@ -565,6 +565,7 @@ enum BuiltIn{
 	show,
 	query,
 	qabort,
+	dummy,
 }
 
 static if(language==psi)
@@ -593,6 +594,8 @@ BuiltIn isBuiltIn(Identifier id){
 				return BuiltIn.query;
 			case "__qabort":
 				return BuiltIn.qabort;
+			case "__dummy":
+				return BuiltIn.dummy;
 		}else static if(language==psi){
 			case "Marginal":
 				return BuiltIn.Marginal;
@@ -691,6 +694,9 @@ Expression builtIn(Identifier id,Scope sc){
 				t=unit;
 				break; // those are actually magic polymorphic functions
 			case "__qabort": // __qabort(a:qtype): a
+				t=unit;
+				break;
+			case "__dummy": // __dummy(a:qtype): a
 				t=unit;
 				break;
 		}
@@ -1973,6 +1979,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		Id slot;
 		size_t count=size_t.max;
 		Id cntVar;
+		bool viaDummy;
 	}
 	Log[] logs;
 	void addLog(Log l){
@@ -2112,6 +2119,15 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			level=rLevel=chain.length;
 			wAt=rAt=at;
 			slot=false;
+			size_t regionStart(size_t dd){
+				size_t b=at;
+				bool same(size_t x){
+					auto c=atoms[x].ites;
+					return atoms[x].stm==i&&c.length>dd&&c[0..dd+1]==chain[0..dd+1];
+				}
+				while(b>0&&same(b-1)) b--;
+				return b;
+			}
 			size_t[2][] bits;
 			foreach(dd,j;chain){
 				bool q=!isClassicalIte(j);
@@ -2124,10 +2140,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				bool ins=inside(pos[cast(const(void)*)ites[j].e],loopBelow?endOf(j):n);
 				if(ins&&(!q||loopBelow)) return false;
 				rLevel=dd;
-				rAt=ites[j].first;
+				rAt=regionStart(dd);
 				if(!ins){
 					level=dd;
-					wAt=ites[j].first;
+					wAt=rAt;
 					break;
 				}
 				slot=true;
@@ -2136,7 +2152,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(evalBy(k,Y)||isClassicalIte(k)&&bitSource(k,Y)!=NONE) continue;
 					if(inside(pos[cast(const(void)*)ites[k].e],n)) return false;
 					level=d2;
-					wAt=ites[k].first;
+					wAt=regionStart(d2);
 					break;
 				}
 				foreach(d2;dd..level) if(isClassicalIte(chain[d2])&&!condOK(chain[d2],Y)) bits~=[chain[d2],cast(size_t)Y];
@@ -2228,6 +2244,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					size_t wAt,rAt,level,rLevel;
 					bool slot;
 					size_t[] reads;
+					bool viaDummy;
 				}
 				Group[] groups;
 				bool anchor(size_t n){
@@ -2235,19 +2252,25 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					bool slot;
 					if(!place(n,Y,(size_t start,size_t end)=>defPos.get(u,[]).any!(d=>start<=d&&d<end),level,wAt,rAt,rLevel,slot)) return false;
 					if(consume&&(slot||owner[n]<0||level!=atoms[owner[n]].ites.length||wAt!=owner[n])) return false;
+					bool viaDummy=false;
 					if(slot&&u !in isCarried){
 						auto chain=owner[n]>=0?atoms[owner[n]].ites:ites[condOf[n]].ctx;
 						auto qk=chain[rLevel];
 						auto rd=owner[n]>=0?owner[n]:ites[condOf[n]].first;
 						bool avail=!!(u in definedBefore);
 						foreach(bj,ref b;atoms) if(bj<rd&&b.stm==i&&u in ainfos[bj].defs&&!b.ites.canFind(qk)) avail=true;
-						if(!avail) return false;
+						if(!avail){
+							auto ty=types.get(u,null);
+							if(!ty||!isQuantum(ty)) return false;
+							viaDummy=true;
+						}
 					}
 					foreach(ref g;groups) if(g.wAt==wAt&&g.level==level&&g.rLevel==rLevel){
 						g.reads~=n;
+						g.viaDummy|=viaDummy;
 						return true;
 					}
-					groups~=Group(wAt,rAt,level,rLevel,slot,[n]);
+					groups~=Group(wAt,rAt,level,rLevel,slot,[n],viaDummy);
 					return true;
 				}
 				SetX!Expression covered;
@@ -2300,7 +2323,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							continue;
 						}
 						Expression bound=null;
-						if(conds[n]&&g.slot){
+						if(conds[n]&&g.slot||g.viaDummy){
 							whole=true;
 							continue;
 						}
@@ -2328,6 +2351,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						l.consume=consume;
 						l.rLevel=g.rLevel;
 						if(g.slot) l.slot=freshName();
+						l.viaDummy=g.viaDummy;
 						addLog(l);
 					}else foreach(l;elems) addLog(l);
 				}
@@ -2369,6 +2393,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto d=new DefineExp(l,r);
 		d.loc=loc;
 		return d;
+	}
+	Expression dummyOf(Expression ty){
+		auto r=new CallExp(mkId(Id.s!"__dummy"),ty,false,false);
+		r.loc=loc;
+		return r;
 	}
 	Expression dupOf(Expression e){
 		auto r=new CallExp(mkId(Id.s!"dup"),e,false,false);
@@ -2557,6 +2586,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			SetX!Id[size_t] closedLocals;
 			bool[size_t] closedLoops;
+			struct Closed{
+				IteExp copy;
+				bool inElse;
+				size_t ite;
+			}
+			Closed[Id] closedIn,extended;
 			void popFrame(){
 				auto f=open[$-1];
 				open=open[0..$-1];
@@ -2566,6 +2601,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					auto cl=closedLocals.get(f.ite,SetX!Id.init);
 					foreach(n;f.locals) cl.insert(n);
 					closedLocals[f.ite]=cl;
+					if(quantumIte(f.ite)) foreach(n;f.locals) closedIn[n]=Closed(cast(IteExp)f.copy,f.inElse,f.ite);
 				}
 				if(auto cite=cast(IteExp)f.copy){
 					if(f.thenPre.length) cite.then.s=f.thenPre~cite.then.s;
@@ -2687,7 +2723,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						foreach(e;appendLog(l)) emit(e);
 						if(l.slot!=Id.init){
 							foreach(d;l.rLevel..l.level){
-								auto sdef=define(mkId(l.slot),logEntry(l));
+								auto sdef=define(mkId(l.slot),l.viaDummy?dummyOf(l.type):logEntry(l));
 								if(open[d].inElse) open[d].thenPre~=sdef;
 								else open[d].elsePre~=sdef;
 							}
@@ -2704,7 +2740,31 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				}
 				if(a in isPseudo||!keepIn(a,X)) continue;
 				alignTo(atoms[a].ites,atoms[a].inElse,a);
-				foreach(u;ainfos[a].uses) if(u in outOfScope) return null;
+				foreach(u;ainfos[a].uses) if(u in outOfScope){
+					auto ty=ainfos[a].types.get(u,null);
+					auto ci=u in closedIn;
+					if(!ci||!ty||!isQuantum(ty)) return null;
+					auto cite=ci.copy;
+					if(!ci.inElse&&!cite.othw){
+						cite.othw=new CompoundExp([]);
+						cite.othw.loc=loc;
+					}
+					(ci.inElse?cite.then:cite.othw).s~=define(mkId(u),dummyOf(ty));
+					outOfScope.remove(u);
+					extended[u]=*ci;
+					if(auto cl=ci.ite in closedLocals) cl.remove(u);
+					closedIn.remove(u);
+				}
+				foreach(u;ainfos[a].consumed) if(auto ci=u in extended){
+					auto ty=ainfos[a].types.get(u,null);
+					foreach(ref f;open) if(f.ite==ci.ite&&f.inElse==ci.inElse){
+						auto fe=new ForgetExp(mkId(u),dummyOf(ty));
+						fe.loc=loc;
+						if(f.inElse) f.thenPre~=fe;
+						else f.elsePre~=fe;
+					}
+					extended.remove(u);
+				}
 				foreach(dname;ainfos[a].defs){
 					outOfScope.remove(dname);
 					if(dname in isCarried||dname in topLocals||open.any!(f=>dname in f.locals)) continue;
@@ -7314,7 +7374,7 @@ Expression prepareForSubstitutionIntoType(Expression parent,FunTy ft,Expression 
 	return exp;
 }
 
-Expression qabortSemantic(bool isPresemantic,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
+Expression qabortSemantic(bool isPresemantic,T,string name="__qabort")(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
 	auto sc=context.sc;
 	static if(is(T==ExpSemContext)){
 		ce.arg=expressionSemantic(ce.arg,context);
@@ -7326,7 +7386,7 @@ Expression qabortSemantic(bool isPresemantic,T)(CallExp ce,T context)if(is(T==Ex
 		auto ty=typeSemantic(ce.arg,context.sc);
 		if(ty){
 			if(!isQuantum(ty)){
-				sc.error("argument to `__qabort` must be a `qtype`",ce.arg.loc);
+				sc.error("argument to `"~name~"` must be a `qtype`",ce.arg.loc);
 				sc.note(format("type of argument is `%s`",ty.type),ce.arg.loc);
 				ce.setSemError();
 			}
@@ -7820,6 +7880,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						return handleQuery(ce,context);
 					case "__qabort":
 						return qabortSemantic!isPresemantic(ce,context);
+					case "__dummy":
+						return qabortSemantic!(isPresemantic,T,"__dummy")(ce,context);
 				}else static if(language==psi){
 					case "Marginal":
 						ce.arg=expressionSemantic(ce.arg,context.nestConst);
@@ -7857,6 +7919,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}else if(isBuiltInCall(ce)==BuiltIn.qabort){
 		static if(!isRhs){
 			return qabortSemantic!isPresemantic(ce,context);
+		}else assert(0);
+	}else if(isBuiltInCall(ce)==BuiltIn.dummy){
+		static if(!isRhs){
+			return qabortSemantic!(isPresemantic,T,"__dummy")(ce,context);
 		}else assert(0);
 	}else{
 		sc.error(format("cannot call expression of type `%s`",fun.type),ce.loc);
