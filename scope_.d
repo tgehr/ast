@@ -145,6 +145,7 @@ abstract class Scope{
 	Expression[] pendingContinuation;
 	Expression pendingContinuationFor; // the loop statement the continuation is offered to
 	bool continuationUsed;
+	Expression continuationAbsorbedFor; // loop statement whose desugaring absorbed the continuation
 	bool allowsLinear(){
 		return true;
 	}

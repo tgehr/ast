@@ -3107,18 +3107,20 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		}
 		collectAccesses(loop.bdy);
 	}
-	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls);
-	auto constParams=loopParams_[0], movedParams=loopParams_[1];
-	// continuation-passing lowering for quantum-controlled early returns:
-	// the statements after the loop become the base case of the recursion
+	// continuation-passing lowering for loops with early returns:
+	// the statements after the loop (which end in a `return`) become the base case of the recursion
 	Expression[] continuation=null;
 	static if(language==silq){
 		static if(is(T==WhileExp)) bool contInfinite=isTrue(loop.cond);
 		else enum contInfinite=false;
-		if(sc.pendingContinuation.length&&sc.pendingContinuationFor is loop&&flags&StmFlags.quantumReturn&&!contInfinite){
+		if(sc.pendingContinuation.length&&sc.pendingContinuationFor is loop&&!contInfinite&&containsReturn(loop.bdy)){
 			continuation=sc.pendingContinuation;
 		}
 	}
+	// with a continuation, lifted loop-carried variables are threaded through the recursion as `const`
+	// parameters, so that they are still lifted in the code after the loop and in join points in the body
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls);
+	auto constParams=loopParams_[0], movedParams=loopParams_[1];
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
 	}else static if(is(T==ForExp)){
@@ -3401,6 +3403,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			auto thene=new ReturnExp(ce);
 			thene.loc=ce.loc;
 			nbdy.s~=thene;
+			static if(language==silq) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
 		}else{
 			auto thene=new DefineExp(retName,ce);
 			thene.loc=ce.loc;
@@ -3868,10 +3871,21 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		prologue=[];
 	}
 	if(init.length||uninit.length){
-		auto s=init~fe~uninit;
+		Expression[] cont;
+		static if(language==silq){
+			// a continuation offered to the container loop follows the desugared range loop
+			if(sc.pendingContinuation.length&&sc.pendingContinuationFor is fe){
+				cont=sc.pendingContinuation;
+				sc.pendingContinuation=null;
+				sc.pendingContinuationFor=null;
+			}
+		}
+		auto s=init~fe~uninit~cont;
 		auto ce=new CompoundExp(s);
 		ce.loc=fe.loc;
-		return statementSemanticImpl(ce,sc,flags,resetConst);
+		auto r=statementSemanticImpl(ce,sc,flags,resetConst);
+		static if(language==silq) if(cont.length) sc.continuationAbsorbedFor=fe;
+		return r;
 	}
 	// Setup the loop variable and scope for one ForExp iteration.
 	void setupForIter(BlockScope fesc){
@@ -4113,6 +4127,161 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,ref StmFlags f
 	return compoundExpSemantic(ce,sc,flags,restriction_);
 }
 
+static if(language==silq){
+// Early-return elimination (ERP).
+// A function with loops that contain `return` statements is first analyzed with its loops kept (stage 1),
+// recording the variables in scope after each statement that contains such a loop and is followed by more code.
+// Then the code following such statements is moved into local join-point functions, called at the end of each
+// branch (with parameters derived from the recorded information), and the function is analyzed again, lowering
+// its loops (stage 2). Every loop with an early return is then followed by code that ends in a `return`, which the
+// loop lowering uses as the base case of the recursion (see `lowerLoop`).
+struct ERPVar{
+	Id name;
+	Expression type;
+	bool lifted,isConst;
+}
+ERPVar[][size_t] erpJoins; // by location of the statement
+size_t erpKey(Location loc){ return cast(size_t)loc.rep.ptr^(cast(size_t)loc.rep.length<<48); }
+bool containsReturn(Expression e){
+	bool r=false;
+	visitStm(e,(Expression x){ if(cast(ReturnExp)x) r=true; });
+	return r;
+}
+bool hasLoopWithReturn(Expression e){
+	bool r=false;
+	visitStm(e,(Expression x){
+		if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x) if(containsReturn(x)) r=true;
+	});
+	return r;
+}
+bool erpRecording(Scope sc){
+	for(auto fd=sc.getFunction();fd;fd=fd.scope_?fd.scope_.getFunction():null)
+		if(fd.erpStage==1) return true;
+	return false;
+}
+void erpRecordJoin(Expression stm,Scope sc){
+	ERPVar[] vars;
+	SetX!Id seen;
+	auto fun=sc.getFunction();
+	for(Scope c=sc;c;c=c.parentScope()){
+		foreach(_,d;c.rnsymtab){
+			auto vd=cast(VarDecl)d;
+			if(!vd||vd.isSemError()||cast(DeadDecl)d||!vd.name) continue;
+			if(vd.name.id in seen) continue;
+			seen.insert(vd.name.id);
+			if(!vd.scope_||vd.scope_.getFunction() !is fun) continue;
+			auto type=typeForDecl(vd);
+			if(!type) continue;
+			vars~=ERPVar(vd.name.id,type,!type.isClassical()&&sc.canForget(vd),vd.isConst);
+		}
+		if(cast(FunctionScope)c) break;
+	}
+	erpJoins[erpKey(stm.loc)]=vars;
+}
+// Moves the code after statements that contain loops with early returns into join points.
+// Returns `null` if some needed information is missing.
+Expression[] erpTransform(Expression[] stms){
+	bool ok;
+	auto r=erpTransformImpl(stms,[],ok);
+	return ok?(r?r:[]):null;
+}
+// `tail`: statements to execute at the end of `stms` (a call to an enclosing join point)
+Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
+	Expression.CopyArgs cargs;
+	Expression[] r;
+	foreach(i,s;stms){
+		bool nested=(cast(IteExp)s||cast(CompoundExp)s)&&hasLoopWithReturn(s);
+		if(!nested){
+			r~=s;
+			continue;
+		}
+		auto rest=stms[i+1..$];
+		Expression[] ntail=tail;
+		Expression kdef=null;
+		if(rest.length){
+			auto vars=erpKey(s.loc) in erpJoins;
+			if(!vars) return null;
+			bool rok;
+			auto ntrest=erpTransformImpl(rest,tail,rok);
+			if(!rok) return null;
+			kdef=erpJoinPoint(s,ntrest,*vars,ntail);
+			if(!kdef) return null;
+		}
+		bool transformBlock(CompoundExp b){
+			bool bok;
+			auto nb=erpTransformImpl(b.s,ntail,bok);
+			if(!bok) return false;
+			b.s=nb;
+			return true;
+		}
+		if(auto ite=cast(IteExp)s){
+			if(!transformBlock(ite.then)) return null;
+			if(!ite.othw&&ntail.length){
+				ite.othw=new CompoundExp([]);
+				ite.othw.loc=ite.loc;
+			}
+			if(ite.othw&&!transformBlock(ite.othw)) return null;
+		}else if(auto cmp=cast(CompoundExp)s){
+			if(!transformBlock(cmp)) return null;
+		}
+		if(kdef) r~=kdef;
+		r~=s;
+		ok=true;
+		return r; // `s` absorbed the rest and the tail
+	}
+	if(tail.length&&!(r.length&&endsWithReturn(r[$-1])))
+		r~=tail.map!(t=>t.copy(cargs)).array;
+	ok=true;
+	return r;
+}
+// builds `def k(params){ rest }` and the call `return k(args)` (in `tail`)
+Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Expression[] tail){
+	import ast.substitute:statementFreeVarsImpl;
+	Expression.CopyArgs cargs;
+	SetX!Id used;
+	foreach(st;rest) statementFreeVarsImpl(st,(Identifier y){ used.insert(y.id); return 0; });
+	Parameter[] params;
+	Expression[] args,prologue;
+	foreach(v;vars){
+		if(v.name !in used||v.isConst) continue;
+		auto pname=new Identifier(v.name);
+		pname.loc=s.loc;
+		if(v.lifted){
+			auto tmp=new Identifier(freshName());
+			tmp.loc=s.loc;
+			auto param=new Parameter(true,tmp,v.type.copy(cargs));
+			param.loc=s.loc;
+			params~=param;
+			auto dupe=new CallExp(new Identifier(Id.s!"dup"),tmp.copy(),false,false);
+			dupe.loc=s.loc;
+			auto def=new DefineExp(pname,dupe);
+			def.loc=s.loc;
+			prologue~=def;
+		}else{
+			auto param=new Parameter(false,pname,v.type.copy(cargs));
+			param.loc=s.loc;
+			params~=param;
+		}
+		auto arg=new Identifier(v.name);
+		arg.loc=s.loc;
+		args~=arg;
+	}
+	auto kname=new Identifier(freshName());
+	kname.loc=s.loc;
+	auto body_=new CompoundExp(prologue~rest);
+	body_.loc=rest[0].loc;
+	auto fd=new FunctionDef(kname,params,true,null,body_);
+	fd.annotation=pure_;
+	fd.inferAnnotation=true;
+	fd.loc=s.loc;
+	auto call=new CallExp(kname.copy(),new TupleExp(args),false,false);
+	call.loc=s.loc;
+	auto ret=new ReturnExp(call);
+	ret.loc=s.loc;
+	tail=[ret];
+	return fd;
+}
+}
 // syntactic check whether a statement always ends in a `return`
 private bool endsWithReturn(Expression e){
 	if(cast(ReturnExp)e) return true;
@@ -4139,9 +4308,8 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
 		static if(language==silq){
 			bool offerContinuation=false;
-			auto rangeFor=cast(ForExp)e;
-			if(rangeFor&&!rangeFor.aggr.isRange) rangeFor=null; // TODO: container loops (desugared into a range loop plus cleanup code)
-			if(astopt.removeLoops&&(rangeFor||cast(WhileExp)e||cast(RepeatExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
+			auto offeredTo=e;
+			if(astopt.removeLoops&&(cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
 				visitStm(e,(Expression x){ if(cast(ReturnExp)x) offerContinuation=true; });
 			}
 			if(offerContinuation){
@@ -4150,12 +4318,20 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 				bsc.continuationUsed=false;
 			}
 		}
+		static if(language==silq) auto erpStm=e;
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		propErr(e,ce);
+		static if(language==silq)
+			if(i+1<ce.s.length&&(cast(IteExp)erpStm||cast(CompoundExp)erpStm)&&hasLoopWithReturn(erpStm)&&erpRecording(bsc))
+				erpRecordJoin(erpStm,bsc);
 		static if(language==silq){
 			if(offerContinuation){
 				bsc.pendingContinuation=null;
 				bsc.pendingContinuationFor=null;
+				if(bsc.continuationAbsorbedFor is offeredTo){
+					bsc.continuationAbsorbedFor=null;
+					bsc.continuationUsed=true;
+				}
 				if(bsc.continuationUsed){
 					bsc.continuationUsed=false;
 					ce.s=ce.s[0..i+1];
@@ -10742,8 +10918,13 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	assert(fsc.allowsLinear());
 	StmFlags bdyFlags;
 	static if(language==silq){
+		// early-return elimination, stage 1: analyze with loops kept (see `erpTransform`)
+		if(astopt.removeLoops&&fd.erpStage==0&&!fd.keepLoops&&fd.body_&&!fd.body_.isSemStarted()&&hasLoopWithReturn(fd.body_)){
+			fd.erpStage=1;
+			fd.keepLoops=true;
+		}
 		// make the implicit return at the end explicit, so that loops with early returns can absorb it as a continuation
-		if(astopt.removeLoops&&fd.body_&&!fd.body_.isSemStarted()&&fd.body_.s.length&&!endsWithReturn(fd.body_)){
+		if(astopt.removeLoops&&fd.erpStage!=1&&fd.body_&&!fd.body_.isSemStarted()&&fd.body_.s.length&&!endsWithReturn(fd.body_)){
 			bool loopWithReturn=false,onlyUnit=true;
 			visitStm(fd.body_,(Expression x){
 				if(auto ret=cast(ReturnExp)x){
@@ -10923,6 +11104,24 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			}
 		}
 	}
+	static if(language==silq){
+		// early-return elimination, stage 2: rewrite and analyze again, lowering loops
+		bool erpSwitch(){
+			fd.keepLoops=false;
+			fd.erpStage=2;
+			if(fd.isSemError()||!fd.origBody_) return false;
+			auto nb=fd.origBody_.copy();
+			if(auto ns=erpTransform(nb.s)){
+				nb.s=ns;
+				fd.origBody_=nb;
+			}
+			fd.inferringReturnType=true;
+			resetFunction(fd,fd);
+			return true;
+		}
+		if(fd.erpStage==1&&fd.ftypeFinal&&!fd.isSemFinal()&&!fd.tainted)
+			if(erpSwitch()) return functionDefSemantic(fd,sc);
+	}
 	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal() && !fd.tainted){
 		fd.finalPassDone=true;
 		fd.inferringReturnType=true;
@@ -10950,6 +11149,9 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 		return functionDefSemantic(fd,sc);
 	}
+	static if(language==silq)
+		if(fd.erpStage==1&&!fd.tainted)
+			if(erpSwitch()) return functionDefSemantic(fd,sc);
 	finalize(fd);
 	static if(language==silq){
 		if(fd.sstate==SemState.passive){
@@ -10961,6 +11163,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				resetFunction(fd,fd);
 				return functionDefSemantic(fd,fd.scope_);
 			}
+
 		}
 	}
 	return fd;

@@ -292,6 +292,7 @@ class FunctionDef: Declaration{
 	bool finalPassDone=false;
 	static if(language==silq) SetX!Id loweredConstIds; // for nested loop lowering
 	static if(language==silq) bool keepLoops=false;
+	static if(language==silq) int erpStage=0; // early-return elimination: 1: analyzing with loops kept, 2: rewritten
 	bool deferredSpecificityCheck=false;
 	void unseal()in{
 		assert(sealed);
