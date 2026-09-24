@@ -1694,6 +1694,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	void extractFrom(Expression root,size_t i,size_t[] ctx,bool[] inElse){
 		bool rb=false;
 		auto rootInfo=analyzeStm(root,rb);
+		// within a single simple statement, subexpressions are evaluated before any variable is updated
+		bool simple=true;
+		walkShallow(root,(Expression x){
+			if(cast(CompoundExp)x||cast(IteExp)x||cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x||cast(WithExp)x) simple=false;
+		});
 		SetX!Expression covered;
 		walkShallow(root,(Expression x){
 			if(x in covered) return;
@@ -1705,7 +1710,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			walkShallow(ce,(Expression y){
 				covered.insert(y);
 				if(auto id=cast(Identifier)y) if(id.type&&!id.type.isClassical()&&!cast(FunctionDef)id.meaning){
-					if((id.constLookup||id.implicitDup)&&varName(id) in rootInfo.defs) ok=false;
+					if(!simple&&(id.constLookup||id.implicitDup)&&varName(id) in rootInfo.defs) ok=false;
 				}
 				if(cast(LambdaExp)y||cast(FunctionDef)y) ok=false;
 			});
@@ -1977,6 +1982,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(d;info.defs) if(isClassicalName(d,info)) qdefs=false;
 		void add(Id u){
 			auto x=colorOf(u);
+			if(info.nonQfree&&x>P) return; // computed within F
 			if(x==LSH||x==P&&qdefs&&isClassicalName(u,info)){
 				lateRead=true;
 				return;
@@ -7314,7 +7320,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			if(!id){
 				sc.error(format("cannot update-assign to quantum expression %s",be.e1),be.e1.loc);
 				be.setSemError();
-			}else if(!cast(CatAssignExp)be&&(!isInvertibleOpAssignExp(be)||be.e2.hasFreeIdentifier(id.id))&&id.meaning&&!sc.canForget(id.meaning)){
+			}else if(!cast(CatAssignExp)be&&(!isInvertibleOpAssignExp(be)||hasQuantumFreeIdentifier(be.e2,id.id))&&id.meaning&&!sc.canForget(id.meaning)){
 				sc.error("quantum update must be invertible",be.loc);
 				be.setSemError();
 			}
@@ -10487,6 +10493,17 @@ Expression expressionSemanticImplDefault(Expression expr,ExpSemContext context){
 void nonLiftedError(Expression expr,Scope sc){
 	sc.error("quantum control expression must be `lifted`",expr.loc);
 	expr.setSemForceError();
+}
+
+// whether `e` may depend on the quantum value of the variable `id`
+// (occurrences inside classical subexpressions are ignored, as their values are fixed)
+bool hasQuantumFreeIdentifier(Expression e,Id id){
+	if(!e) return false;
+	if(e.type&&e.type.isClassical()) return false;
+	if(auto i=cast(Identifier)e) return i.id==id;
+	if(cast(LambdaExp)e||cast(FunctionDef)e) return e.hasFreeIdentifier(id);
+	foreach(c;e.components) if(hasQuantumFreeIdentifier(c,id)) return true;
+	return false;
 }
 
 bool checkLifted(alias error=nonLiftedError)(Expression expr,ExpSemContext context){
