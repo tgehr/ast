@@ -3115,7 +3115,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	static if(language==silq){
 		static if(is(T==WhileExp)) bool contInfinite=isTrue(loop.cond);
 		else enum contInfinite=false;
-		if(sc.pendingContinuation.length&&flags&StmFlags.quantumReturn&&!contInfinite){
+		if(sc.pendingContinuation.length&&sc.pendingContinuationFor is loop&&flags&StmFlags.quantumReturn&&!contInfinite){
 			continuation=sc.pendingContinuation;
 		}
 	}
@@ -4138,33 +4138,15 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 	foreach(i,ref e;ce.s){
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
 		static if(language==silq){
-			bool offerContinuation=false,distributed=false;
-			if(astopt.removeLoops&&(cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
+			bool offerContinuation=false;
+			auto rangeFor=cast(ForExp)e;
+			if(rangeFor&&!rangeFor.aggr.isRange) rangeFor=null; // TODO: container loops (desugared into a range loop plus cleanup code)
+			if(astopt.removeLoops&&(rangeFor||cast(WhileExp)e||cast(RepeatExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
 				visitStm(e,(Expression x){ if(cast(ReturnExp)x) offerContinuation=true; });
-			}
-			if(astopt.removeLoops&&(cast(IteExp)e||cast(CompoundExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
-				// move the rest of the block into the branches, so that loops with early returns inside see a continuation
-				bool loopWithReturn=false;
-				visitStm(e,(Expression x){
-					if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x)
-						visitStm(x,(Expression y){ if(cast(ReturnExp)y) loopWithReturn=true; });
-				});
-				if(loopWithReturn){
-					Expression.CopyArgs cargs;
-					auto rest=ce.s[i+1..$];
-					if(auto ite=cast(IteExp)e){
-						ite.then.s~=rest.map!(st=>st.copy(cargs)).array;
-						if(!ite.othw){
-							ite.othw=new CompoundExp([]);
-							ite.othw.loc=ite.loc;
-						}
-						ite.othw.s~=rest.map!(st=>st.copy(cargs)).array;
-					}else if(auto cmp=cast(CompoundExp)e) cmp.s~=rest.map!(st=>st.copy(cargs)).array;
-					distributed=true;
-				}
 			}
 			if(offerContinuation){
 				bsc.pendingContinuation=ce.s[i+1..$];
+				bsc.pendingContinuationFor=e;
 				bsc.continuationUsed=false;
 			}
 		}
@@ -4173,15 +4155,12 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		static if(language==silq){
 			if(offerContinuation){
 				bsc.pendingContinuation=null;
+				bsc.pendingContinuationFor=null;
 				if(bsc.continuationUsed){
 					bsc.continuationUsed=false;
 					ce.s=ce.s[0..i+1];
 					break;
 				}
-			}
-			if(distributed){
-				ce.s=ce.s[0..i+1];
-				break;
 			}
 		}
 		if(restriction_<Annotation.mfree && flags&StmFlags.quantumReturn && i+1<ce.s.length){
