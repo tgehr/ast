@@ -127,6 +127,7 @@ struct DummyWitnessContext{
 	MapX!(Declaration,Declaration) results; // candidates witnessed so far
 	MapSX!(Declaration,Dependency) consumedDeps; // dependency each decl had when it was consumed while this context was active
 	SetX!Id[] nestedLoopCarried; // the loop-carried candidates of each nested quantum loop analyzed while this context was active
+	Dependency[] reconstructed; // dependencies of quantum guards whose inputs change while borrowed
 }
 }
 
@@ -1289,6 +1290,29 @@ abstract class Scope{
 			foreach(ref context;dummyWitnessContexts)
 				if(decl !in context.consumedDeps)
 					context.consumedDeps[decl]=dep.dup;
+		}
+		final Dependency expandDependency(Dependency dep){
+			if(dep.isTop) return dep;
+			SetX!Declaration seen;
+			Declaration[] worklist;
+			foreach(x;dep.dependencies) worklist~=x;
+			while(worklist.length){
+				auto decl=worklist[$-1];
+				worklist=worklist[0..$-1];
+				if(decl in seen) continue;
+				seen.insert(decl);
+				if(!dependencyTracked(decl)) continue;
+				auto d=dependencies.dependencies[decl];
+				if(!d.isTop) foreach(x;d.dependencies) worklist~=x;
+			}
+			auto all=Dependency(false);
+			foreach(x;seen) all.dependencies.insert(x);
+			return all;
+		}
+		final void noteReconstructed(Dependency dep){
+			if(dep.isTop||!dummyWitnessActive) return;
+			foreach(ref context;dummyWitnessContexts)
+				context.reconstructed~=dep.dup;
 		}
 		final void noteNestedLoopCarried(SetX!Id ids){
 			if(!dummyWitnessActive||!ids.length) return;
