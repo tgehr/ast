@@ -3109,6 +3109,16 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	}
 	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
+	// continuation-passing lowering for quantum-controlled early returns:
+	// the statements after the loop become the base case of the recursion
+	Expression[] continuation=null;
+	static if(language==silq){
+		static if(is(T==WhileExp)) bool contInfinite=isTrue(loop.cond);
+		else enum contInfinite=false;
+		if(sc.pendingContinuation.length&&flags&StmFlags.quantumReturn&&!contInfinite){
+			continuation=sc.pendingContinuation;
+		}
+	}
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
 	}else static if(is(T==ForExp)){
@@ -3387,9 +3397,15 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	}
 
 	if(!isCertainReturn){
-		auto thene=new DefineExp(retName,ce);
-		thene.loc=ce.loc;
-		nbdy.s~=thene;
+		if(continuation){
+			auto thene=new ReturnExp(ce);
+			thene.loc=ce.loc;
+			nbdy.s~=thene;
+		}else{
+			auto thene=new DefineExp(retName,ce);
+			thene.loc=ce.loc;
+			nbdy.s~=thene;
+		}
 	}
 	bool hasEarlyReturns=false;
 	Expression inj(Expression e,bool isRet){ // TODO: use sum type
@@ -3457,7 +3473,13 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			adjustEarlyReturns(we.bdy);
 	}
 	Expression bdy;
-	if(!isInfinite){
+	if(continuation){
+		auto othw=new CompoundExp(continuation.map!(st=>st.copy(cargsDefault)).array);
+		othw.loc=loop.loc;
+		auto ite=new IteExp(ncond,nbdy,othw);
+		ite.loc=loop.loc;
+		bdy=ite;
+	}else if(!isInfinite){
 		adjustEarlyReturns(nbdy);
 		//auto othwe=new ReturnExp(returnTpl) // avoid non-toplevel return
 		Expression retexp=returnTpl;
@@ -3473,7 +3495,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
 	Expression ret=null;
-	if(!isInfinite||!isCertainReturn){
+	if(!continuation&&(!isInfinite||!isCertainReturn)){
 		ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
 		ret.loc=loop.loc;
 	}
@@ -3522,7 +3544,12 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			}
 		}
 	}
-	if(hasEarlyReturns){
+	if(continuation){
+		auto fret=new ReturnExp(ce2);
+		fret.loc=loop.loc;
+		stmts~=fret;
+		sc.continuationUsed=true;
+	}else if(hasEarlyReturns){
 		auto retId2=new Identifier(freshName());
 		retId2.loc=ce2.loc;
 		auto fret=new ReturnExp(retId2.copy());
@@ -4086,6 +4113,19 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,ref StmFlags f
 	return compoundExpSemantic(ce,sc,flags,restriction_);
 }
 
+// syntactic check whether a statement always ends in a `return`
+private bool endsWithReturn(Expression e){
+	if(cast(ReturnExp)e) return true;
+	if(auto ae=cast(AssertExp)e){
+		if(ae.e.type) return isFalse(ae.e);
+		if(auto id=cast(Identifier)ae.e) return id.id==Id.s!"false"; // not yet analyzed
+		if(auto le=cast(LiteralExp)ae.e) return le.lit.type==Tok!"0"&&le.lit.str=="0";
+		return false;
+	}
+	if(auto ce=cast(CompoundExp)e) return ce.s.length&&endsWithReturn(ce.s[$-1]);
+	if(auto ite=cast(IteExp)e) return ite.othw&&endsWithReturn(ite.then)&&endsWithReturn(ite.othw);
+	return false;
+}
 CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, Annotation restriction_=Annotation.none, bool blscope=true, bool resetConst=true){
 	static if(language==silq){
 		if(flags&StmFlags.quantumReturn) restriction_=max(Annotation.mfree,restriction_);
@@ -4097,8 +4137,53 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 	}
 	foreach(i,ref e;ce.s){
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
+		static if(language==silq){
+			bool offerContinuation=false,distributed=false;
+			if(astopt.removeLoops&&(cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
+				visitStm(e,(Expression x){ if(cast(ReturnExp)x) offerContinuation=true; });
+			}
+			if(astopt.removeLoops&&(cast(IteExp)e||cast(CompoundExp)e)&&i+1<ce.s.length&&endsWithReturn(ce.s[$-1])){
+				// move the rest of the block into the branches, so that loops with early returns inside see a continuation
+				bool loopWithReturn=false;
+				visitStm(e,(Expression x){
+					if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x)
+						visitStm(x,(Expression y){ if(cast(ReturnExp)y) loopWithReturn=true; });
+				});
+				if(loopWithReturn){
+					Expression.CopyArgs cargs;
+					auto rest=ce.s[i+1..$];
+					if(auto ite=cast(IteExp)e){
+						ite.then.s~=rest.map!(st=>st.copy(cargs)).array;
+						if(!ite.othw){
+							ite.othw=new CompoundExp([]);
+							ite.othw.loc=ite.loc;
+						}
+						ite.othw.s~=rest.map!(st=>st.copy(cargs)).array;
+					}else if(auto cmp=cast(CompoundExp)e) cmp.s~=rest.map!(st=>st.copy(cargs)).array;
+					distributed=true;
+				}
+			}
+			if(offerContinuation){
+				bsc.pendingContinuation=ce.s[i+1..$];
+				bsc.continuationUsed=false;
+			}
+		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		propErr(e,ce);
+		static if(language==silq){
+			if(offerContinuation){
+				bsc.pendingContinuation=null;
+				if(bsc.continuationUsed){
+					bsc.continuationUsed=false;
+					ce.s=ce.s[0..i+1];
+					break;
+				}
+			}
+			if(distributed){
+				ce.s=ce.s[0..i+1];
+				break;
+			}
+		}
 		if(restriction_<Annotation.mfree && flags&StmFlags.quantumReturn && i+1<ce.s.length){
 			auto nce=new CompoundExp(ce.s[i+1..$]);
 			nce.loc=ce.s[i+1].loc.to(ce.s[$-1].loc);
@@ -10677,6 +10762,27 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	assert(!!fsc,text(fd));
 	assert(fsc.allowsLinear());
 	StmFlags bdyFlags;
+	static if(language==silq){
+		// make the implicit return at the end explicit, so that loops with early returns can absorb it as a continuation
+		if(astopt.removeLoops&&fd.body_&&!fd.body_.isSemStarted()&&fd.body_.s.length&&!endsWithReturn(fd.body_)){
+			bool loopWithReturn=false,onlyUnit=true;
+			visitStm(fd.body_,(Expression x){
+				if(auto ret=cast(ReturnExp)x){
+					auto tpl=cast(TupleExp)ret.e;
+					if(ret.e&&!(tpl&&!tpl.e.length)) onlyUnit=false;
+				}
+				if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x)
+					visitStm(x,(Expression y){ if(cast(ReturnExp)y) loopWithReturn=true; });
+			});
+			if(loopWithReturn&&onlyUnit){
+				auto unitv=new TupleExp([]);
+				unitv.loc=fd.body_.loc;
+				auto ret=new ReturnExp(unitv);
+				ret.loc=fd.body_.loc;
+				fd.body_.s~=ret;
+			}
+		}
+	}
 	auto bdy=fd.body_?compoundExpSemantic(fd.body_,fsc,bdyFlags):null;
 	fd.body_=bdy;
 	fd.type=unit;

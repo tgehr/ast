@@ -141,6 +141,9 @@ enum Lookup{
 
 abstract class Scope{
 	abstract @property ErrorHandler handler();
+	// loop lowering: statements following a loop that end in a `return`, which the lowering may absorb
+	Expression[] pendingContinuation;
+	bool continuationUsed;
 	bool allowsLinear(){
 		return true;
 	}
