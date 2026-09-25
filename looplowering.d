@@ -2486,9 +2486,18 @@ void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
 	if((cast(ForExp)original||cast(WhileExp)original||cast(RepeatExp)original)&&containsReturn(original)){
 		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
 		if(stms[i].type==bottom) erpDivergingLoops[erpKey(original.loc)]=true; // (loop never exits normally)
+		if(auto we=cast(WhileExp)stms[i]){ // (see `erpLoopExplicit`)
+			bool consumes=false;
+			visitStm(we.cond,(Expression x){
+				if(auto id=cast(Identifier)x)
+					if(cast(VarDecl)id.meaning&&!id.constLookup&&!id.implicitDup) consumes=true;
+			});
+			if(consumes) erpConsumingGuards[erpKey(original.loc)]=true;
+		}
 	}
 }
 bool[size_t] erpDivergingLoops;
+bool[size_t] erpConsumingGuards; // `while` conditions that consume variables
 // information about `return` statements, recorded in stage 1
 struct ERPReturn{
 	bool quantum; // under quantum control
@@ -2580,6 +2589,15 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	});
 	auto after=erpKey(loop.loc) in erpJoins;
 	if(!ok||!after) return null;
+	// A `while` condition is evaluated as `¬done && cond`, so that it is not evaluated after the return. If the condition
+	// consumes variables, it would then consume them only on some paths: use `cond && ¬done` if the condition cannot fail,
+	// and do not rewrite the loop otherwise.
+	visitStm(loop,(Expression x){
+		if(auto we=cast(WhileExp)x)
+			if(erpKey(we.loc) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
+	});
+	if(auto we=cast(WhileExp)loop) if(erpKey(we.loc) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
+	if(!ok) return null;
 	// Consumed variables that are lifted after the loop keep their values (the analysis `dup`s them, as they are still
 	// used); the others get placeholders. Returns consuming loop-local quantum variables are not supported (TODO).
 	bool needsPlaceholder(Id n){
@@ -2667,7 +2685,8 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		if(auto fe=cast(ForExp)s){ fe.bdy=loopBody(fe.bdy); return [fe]; }
 		if(auto re=cast(RepeatExp)s){ re.bdy=loopBody(re.bdy); return [re]; }
 		if(auto we=cast(WhileExp)s){
-			we.cond=at(new AndThenExp(notDone(),we.cond));
+			if(erpKey(we.loc) in erpConsumingGuards) we.cond=at(new AndThenExp(we.cond,notDone()));
+			else we.cond=at(new AndThenExp(notDone(),we.cond));
 			we.bdy=guardBlock(we.bdy);
 			return [we];
 		}

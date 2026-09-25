@@ -158,12 +158,16 @@ final class LastUse{
 		return splitFrom=plu;
 	}
 
+	static Declaration versionIn(Declaration decl,NestedScope nsc){
+		foreach(d;decl.mergedFrom) if(d.scope_ is nsc) return d;
+		foreach(d;decl.splitInto) if(d.scope_ is nsc) return d;
+		return decl;
+	}
 	static bool isNontrivialMerge(Declaration decl,scope NestedScope[] nestedScopes){
 		return iota(nestedScopes.length).any!((i){
 			auto nsc=nestedScopes[i];
 			auto cdecl=decl;
-			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
-				cdecl=decl.mergedFrom[i];
+			foreach(d;decl.mergedFrom) if(d.scope_ is nsc) cdecl=d;
 			if(decl !is cdecl) return true;
 			auto nlu=nsc.lastUses.lastUses.get(cdecl,null);
 			if(!nlu) return false;
@@ -172,15 +176,13 @@ final class LastUse{
 			return false;
 		});
 	}
-	static Forgettability getMergeForgettability(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere){
+	static Forgettability getMergeForgettability(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed=false){
 		//imported!"util.io".writeln("CAN FORGET MERGE: ",decl," ",cast(void*)decl.scope_," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
-			auto cdecl=decl;
-			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nsc)
-				cdecl=decl.mergedFrom[i];
+			auto cdecl=versionIn(decl,nestedScopes[i]);
 			//imported!"util.io".writeln("CHECKING: ",decl," ",nsc.lastUses.getForgettability(cdecl,forceHere,false)," ",nsc.lastUses.getForgettability(decl,forceHere,false)," ",nsc.lastUses.lastUses.get(cdecl,null)," ",cdecl is decl);
-			return nsc.lastUses.getForgettability(cdecl,forceHere,false);
+			return nsc.lastUses.getForgettability(cdecl,forceHere,forceConsumed);
 		}).fold!((a,b){
 			auto r=min(a,b);
 			if(r==Forgettability.none) return r;
@@ -189,14 +191,12 @@ final class LastUse{
 		})(Forgettability.forgettable);
 	}
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
-		return getMergeForgettability(decl,nestedScopes,forceHere)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
+		return getMergeForgettability(decl,nestedScopes,forceHere,forceConsumed)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes){
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
-			auto cdecl=decl;
-			if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nsc)
-				cdecl=decl.mergedFrom[i];
+			auto cdecl=versionIn(decl,nestedScopes[i]);
 			return nsc.lastUses.canCancelImplicitDup(cdecl);
 		}).any;
 	}
@@ -235,6 +235,18 @@ final class LastUse{
 		if(splitFrom) splitFrom.pin();
 	}
 
+	private void removeFromUnusedSiblings(){
+		auto nsc=cast(NestedScope)scope_;
+		if(!nsc) return;
+		foreach(sib;nsc.getSiblingScopes()){
+			if(sib is nsc) continue;
+			if(sib.rnsymtab.get(decl.getId,null) !is decl) continue;
+			auto slu=sib.lastUses.lastUses.get(decl,null);
+			if(!slu||slu.kind!=Kind.lazySplit||slu.forwardTo) continue;
+			sib.symtabRemove(decl);
+			slu.markConsumed(null,false);
+		}
+	}
 	private void markConsumed(Identifier theUse,bool isForget){
 		if(!use) use=theUse;
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
@@ -446,7 +458,7 @@ final class LastUse{
 				//imported!"util.io".writeln("RESULT: ",r);
 				return r;
 			case lazyMerge:
-				auto r=getMergeForgettability(decl,nestedScopes,true);
+				auto r=getMergeForgettability(decl,nestedScopes,true,forceConsumed);
 				static if(language==silq){
 					if(!forceConsumed){
 						foreach(nsc;nestedScopes){
@@ -558,6 +570,7 @@ final class LastUse{
 							scope_.pushDependencies(decl,false);
 						}
 						markConsumed(use,false);
+						if(forceConsumed) removeFromUnusedSiblings();
 						return;
 					}
 				}
@@ -570,11 +583,7 @@ final class LastUse{
 			case lazyMerge:
 				consume(false);
 				foreach(i,nsc;nestedScopes){
-					auto cdecl=decl;
-					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
-						cdecl=decl.mergedFrom[i];
-					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
-						cdecl=decl.splitInto[i];
+					auto cdecl=versionIn(decl,nestedScopes[i]);
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
 					assert(nsc.lastUses.canForget(cdecl,false,false));
 					auto declBefore=decl;
@@ -654,11 +663,7 @@ final class LastUse{
 				bool ok=true;
 				ok&=consume(false);
 				foreach(i,nsc;nestedScopes){
-					auto cdecl=decl;
-					if(decl.mergedFrom.length==nestedScopes.length&&decl.mergedFrom[i].scope_ is nestedScopes[i])
-						cdecl=decl.mergedFrom[i];
-					else if(decl.splitInto.length==nestedScopes.length&&decl.splitInto[i].scope_ is nestedScopes[i])
-						cdecl=decl.splitInto[i];
+					auto cdecl=versionIn(decl,nestedScopes[i]);
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
 					if(!use){
 						if(auto lu=nsc.lastUses.get(cdecl,true))
@@ -866,6 +871,12 @@ struct LastUses{
 		auto splitFrom=lu.getSplitFrom();
 		//assert(splitFrom.kind==LastUse.Kind.lazySplitSink,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
 		add(lu);
+		if(splitFrom){
+			auto p=splitFrom;
+			while(p.forwardTo) p=p.forwardTo;
+			if(p.prevImplicitDup) lu.prevImplicitDup=p.prevImplicitDup;
+			else if(p.kind.among(LastUse.Kind.implicitDup,LastUse.Kind.constPinned)&&p.use&&p.use.implicitDup) lu.prevImplicitDup=p;
+		}
 		//imported!"util.io".writeln("SPLITTED: ",lu.getSplitFrom()," ",lu);
 	}
 	void lazyMerge(Declaration decl,Scope sc,NestedScope[] nestedScopes)in{
