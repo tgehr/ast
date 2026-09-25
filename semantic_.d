@@ -500,26 +500,36 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 			if(auto fd=cast(FunctionDef)expr){
 				fd.tainted=false;
 				fd.ftypeFinal=true;
+				bool reanalyze=false;
 				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
 					fd.finalPassDone=true;
-					fd.inferringReturnType=true;
 					fd.deferredSpecificityCheck=false;
-					fd.sstate=SemState.initial;
-					if(fd.origBody_) fd.body_=fd.origBody_.copy();
-					if(fd.origRret) fd.rret=fd.origRret.copy();
-					auto newfscope_=new FunctionScope(fd.scope_,fd);
-					fd.fscope_=newfscope_;
-					foreach(p;fd.params){
-						p.splitInto=[];
-						p.scope_=null;
-						newfscope_.insert(p);
-					}
-					if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
-					expr=functionDefSemantic(fd,fd.scope_);
+					reanalyze=true;
+				}
+				// early-return elimination, stage 2 (for functions that were still being inferred at the end of stage 1)
+				static if(language==silq) if(fd.erpStage==1&&fd.scope_&&erpRewrite(fd)) reanalyze=true;
+				if(reanalyze){
+					expr=reanalyzePassiveFunction(fd);
 					continue;
 				}
 			}
 			expr.setSemCompleted();
+		}
+	}
+	static if(language==silq){
+		// early-return elimination, stage 2 for functions that remained in stage 1 (e.g., generic instances)
+		for(;;){
+			auto pending=erpStage1Functions;
+			erpStage1Functions=[];
+			bool any=false;
+			foreach(fd;pending){
+				if(fd.erpStage!=1||fd.isSemError()||!fd.scope_) continue;
+				if(!erpRewrite(fd)) continue;
+				any=true;
+				auto nfd=reanalyzePassiveFunction(fd);
+				if(nfd.sstate==SemState.passive) nfd.setSemCompleted();
+			}
+			if(!any) break;
 		}
 	}
 	if(!sc.allowsLinear()){
@@ -528,6 +538,24 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		}
 	}
 	return exprs;
+}
+// analyze a function that is passive or completed again, from its original body
+FunctionDef reanalyzePassiveFunction(FunctionDef fd){
+	fd.inferringReturnType=true;
+	fd.ftypeFinal=true;
+	fd.tainted=false;
+	fd.sstate=SemState.initial;
+	if(fd.origBody_) fd.body_=fd.origBody_.copy();
+	if(fd.origRret) fd.rret=fd.origRret.copy();
+	auto newfscope_=new FunctionScope(fd.scope_,fd);
+	fd.fscope_=newfscope_;
+	foreach(p;fd.params){
+		p.splitInto=[];
+		p.scope_=null;
+		newfscope_.insert(p);
+	}
+	if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
+	return functionDefSemantic(fd,fd.scope_);
 }
 
 Expression toplevelSemanticImpl(FunctionDef fd,Scope sc){
@@ -8566,6 +8594,16 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.numUpdatesPending==0) return; // already finalized
 		if(--fd.numUpdatesPending==0){
 			if(fd.sstate!=SemState.started){ // semantic analysis is still active
+				static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
+					// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
+					fd.tainted=false;
+					if(erpRewrite(fd)){
+						fd.inferringReturnType=true;
+						resetFunction(fd,fd);
+						functionDefSemantic(fd,fd.scope_);
+						return;
+					}
+				}
 				fd.ftypeFinal=true;
 				fd.inferringReturnType=false;
 				fd.inferAnnotation=false;
@@ -8625,7 +8663,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				resetFunction(fd,fd);
 				return functionDefSemantic(fd,fd.scope_);
 			}
-
+			if(fd.erpStage==1&&!fd.tainted&&fd.scope_)
+				if(erpSwitch()) return functionDefSemantic(fd,fd.scope_);
 		}
 	}
 	return fd;

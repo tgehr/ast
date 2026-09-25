@@ -1944,7 +1944,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -1956,6 +1956,9 @@ abstract class Scope{
 				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
 				if(!type) continue;
+				// variables whose names do not occur in the loop cannot change in it (they may still be split into the
+				// loop scope, e.g. by an early `return` that has to forget them); they are not loop parameters
+				if(namesInLoop&&id !in *namesInLoop&&(!decl.name||decl.name.id !in *namesInLoop)) continue;
 				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
 				if(!mayChange){
 					if(type.isClassical) continue;
