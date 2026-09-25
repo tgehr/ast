@@ -8847,6 +8847,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		if(auto name=getName(returns[0]))
 			foreach(ref n;fd.retNames) n=name;
 	}
+	static if(language==silq) erpRecordReturn(ret,sc);
 	return ret;
 }
 

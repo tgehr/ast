@@ -2480,8 +2480,32 @@ void erpBeforeBody(FunctionDef fd){
 }
 // record join-point information after statement `stms[i]` (originally `original`) has been analyzed
 void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
-	if(i+1<stms.length&&(cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original)&&erpRecording(sc))
+	if(!erpRecording(sc)) return;
+	if(i+1<stms.length&&(cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
 		erpRecordJoin(original,sc);
+	if((cast(ForExp)original||cast(WhileExp)original||cast(RepeatExp)original)&&containsReturn(original)){
+		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
+		if(stms[i].type==bottom) erpDivergingLoops[erpKey(original.loc)]=true; // (loop never exits normally)
+	}
+}
+bool[size_t] erpDivergingLoops;
+// information about `return` statements, recorded in stage 1
+struct ERPReturn{
+	bool quantum; // under quantum control
+	Q!(Id,Expression)[] consumed; // quantum variables consumed by the returned expression
+}
+ERPReturn[size_t] erpReturns;
+void erpRecordReturn(ReturnExp ret,Scope sc){
+	if(!erpRecording(sc)) return;
+	ERPReturn r;
+	auto none=Dependency(); // (variable: comparison takes a `ref`)
+	r.quantum=sc.controlDependency!=none;
+	if(ret.e) visitStm(ret.e,(Expression x){
+		if(auto id=cast(Identifier)x)
+			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup)
+				r.consumed~=q(id.id,id.type);
+	});
+	erpReturns[erpKey(ret.loc)]=r;
 }
 // Stage 2: rewrites `fd.origBody_` (to be analyzed again with loops lowered). Returns false if the function has errors.
 bool erpRewrite(FunctionDef fd){
@@ -2506,9 +2530,161 @@ bool erpRewrite(FunctionDef fd){
 			nb.s~=ret;
 		}
 	}
+	nb.s=erpExplicitExits(nb.s,fd);
 	if(auto ns=erpTransform(nb.s)) nb.s=ns;
 	fd.origBody_=nb;
 	return true;
+}
+// Loops whose early returns are all under classical control are rewritten such that the loop itself does not return:
+//   `for …{ S1; if c { return e; } S2 }` becomes
+//   `done:=false; res:=⊥; for …{ if !done { S1; if c { res:=e; done=true; } if !done { S2 } } } if done { return res; } forget(res=⊥);`
+// (`while` conditions are guarded as well). The resulting loop can be split like any other: the loops computing lifted state
+// then stop exactly where the original loop returns.
+Expression[] erpExplicitExits(Expression[] stms,FunctionDef fd){
+	Expression[] r;
+	foreach(s;stms){
+		if((cast(ForExp)s||cast(WhileExp)s||cast(RepeatExp)s)&&containsReturn(s)){
+			if(auto ns=erpLoopExplicit(s,fd)){
+				r~=ns;
+				continue;
+			}
+		}else if(auto ite=cast(IteExp)s){
+			if(hasLoopWithReturn(ite)){
+				ite.then.s=erpExplicitExits(ite.then.s,fd);
+				if(ite.othw) ite.othw.s=erpExplicitExits(ite.othw.s,fd);
+			}
+		}else if(auto ce=cast(CompoundExp)s){
+			if(hasLoopWithReturn(ce)) ce.s=erpExplicitExits(ce.s,fd);
+		}
+		r~=s;
+	}
+	return r;
+}
+Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
+	auto R=fd.ret;
+	if(!R) return null;
+	enum Kind{ unit, quantum, classical }
+	Kind kind;
+	if(R==unit) kind=Kind.unit;
+	else if(isQuantum(R)) kind=Kind.quantum;
+	else if(R.isClassical()) kind=Kind.classical;
+	else return null; // TODO: mixed classical/quantum return types
+	// all returns must be under classical control, consuming only variables with placeholder values
+	bool ok=true;
+	visitStm(loop,(Expression x){
+		if(auto ret=cast(ReturnExp)x){
+			auto info=erpKey(ret.loc) in erpReturns;
+			if(!info||info.quantum) ok=false;
+			else foreach(c;info.consumed) if(!isQuantum(c[1])) ok=false;
+		}
+	});
+	auto after=erpKey(loop.loc) in erpJoins;
+	if(!ok||!after) return null;
+	// Consumed variables that are lifted after the loop keep their values (the analysis `dup`s them, as they are still
+	// used); the others get placeholders. Returns consuming loop-local quantum variables are not supported (TODO).
+	bool needsPlaceholder(Id n){
+		foreach(v;*after) if(v.name==n) return !v.lifted;
+		ok=false;
+		return false;
+	}
+	visitStm(loop,(Expression x){
+		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret.loc)].consumed) needsPlaceholder(c[0]);
+	});
+	if(!ok) return null;
+	auto loc=loop.loc;
+	Expression.CopyArgs cargs;
+	Identifier mk(Id n){ auto r=new Identifier(n); r.loc=loc; return r; }
+	T at(T)(T e){ e.loc=loc; return e; }
+	Expression dummy(Expression ty){ return at(new CallExp(mk(Id.s!"__dummy"),ty.copy(cargs),false,false)); }
+	auto done=freshName(),res=freshName();
+	Expression notDone(){ return at(new UNotExp(mk(done))); }
+	Expression[] pre=[at(new DefineExp(mk(done),at(LiteralExp.makeBoolean(false))))];
+	final switch(kind){
+		case Kind.unit: break;
+		case Kind.quantum: pre~=at(new DefineExp(mk(res),dummy(R))); break;
+		case Kind.classical:
+			pre~=at(new DefineExp(mk(res),at(new TypeAnnotationExp(at(new VectorExp([])),arrayTy(R),TypeAnnotationType.annotation))));
+			break;
+	}
+	Q!(Id,Expression)[] consumedOuter;
+	SetX!Id seen;
+	visitStm(loop,(Expression x){
+		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret.loc)].consumed)
+			if(c[0] !in seen&&needsPlaceholder(c[0])){
+				seen.insert(c[0]);
+				consumedOuter~=c;
+			}
+	});
+	Expression[] exitWith(ReturnExp ret){
+		Expression[] r;
+		final switch(kind){
+			case Kind.unit: break;
+			case Kind.quantum:
+				r~=at(new ForgetExp(mk(res),dummy(R)));
+				r~=at(new DefineExp(mk(res),ret.e));
+				break;
+			case Kind.classical:
+				r~=at(new AssignExp(mk(res),at(new VectorExp([ret.e]))));
+				break;
+		}
+		r~=at(new AssignExp(mk(done),at(LiteralExp.makeBoolean(true))));
+		foreach(c;erpReturns[erpKey(ret.loc)].consumed) if(needsPlaceholder(c[0])) r~=at(new DefineExp(mk(c[0]),dummy(c[1])));
+		return r;
+	}
+	Expression[] guard()(Expression[] stms){
+		Expression[] r;
+		foreach(i,s;stms){
+			if(!containsReturn(s)){
+				r~=s;
+				continue;
+			}
+			r~=explicitStm(s);
+			auto rest=guard(stms[i+1..$]);
+			if(rest.length) r~=at(new IteExp(notDone(),at(new CompoundExp(rest)),null));
+			break;
+		}
+		return r;
+	}
+	CompoundExp guardBlock()(CompoundExp b){
+		auto nb=at(new CompoundExp(guard(b.s)));
+		nb.loc=b.loc;
+		return nb;
+	}
+	Expression[] explicitStm()(Expression s){
+		if(auto ret=cast(ReturnExp)s) return exitWith(ret);
+		if(auto ite=cast(IteExp)s){
+			ite.then=guardBlock(ite.then);
+			if(ite.othw) ite.othw=guardBlock(ite.othw);
+			return [ite];
+		}
+		if(auto ce=cast(CompoundExp)s) return [guardBlock(ce)];
+		// loops: skip iterations once done
+		CompoundExp loopBody(CompoundExp b){
+			auto nb=at(new CompoundExp([at(new IteExp(notDone(),guardBlock(b),null))]));
+			nb.loc=b.loc;
+			return nb;
+		}
+		if(auto fe=cast(ForExp)s){ fe.bdy=loopBody(fe.bdy); return [fe]; }
+		if(auto re=cast(RepeatExp)s){ re.bdy=loopBody(re.bdy); return [re]; }
+		if(auto we=cast(WhileExp)s){
+			we.cond=at(new AndThenExp(notDone(),we.cond));
+			we.bdy=guardBlock(we.bdy);
+			return [we];
+		}
+		return [s]; // (e.g., `with`: not reached, as returns are not allowed there)
+	}
+	auto nloop=explicitStm(loop);
+	Expression[] exitBlock;
+	foreach(c;consumedOuter) exitBlock~=at(new ForgetExp(mk(c[0]),dummy(c[1])));
+	final switch(kind){
+		case Kind.unit: exitBlock~=at(new ReturnExp(at(new TupleExp([])))); break;
+		case Kind.quantum: exitBlock~=at(new ReturnExp(mk(res))); break;
+		case Kind.classical: exitBlock~=at(new ReturnExp(at(new IndexExp(mk(res),LiteralExp.makeInteger(0))))); break;
+	}
+	Expression[] post=[at(new IteExp(mk(done),at(new CompoundExp(exitBlock)),null))];
+	if(kind==Kind.quantum) post~=at(new ForgetExp(mk(res),dummy(R)));
+	if(erpKey(loop.loc) in erpDivergingLoops) post~=at(new AssertExp(at(LiteralExp.makeBoolean(false)))); // (unreachable)
+	return pre~nloop~post;
 }
 // Moves the code after statements that contain loops with early returns into join points.
 // Returns `null` if some needed information is missing.
