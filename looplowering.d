@@ -197,6 +197,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				return false;
 			}
 			if(cast(ReturnExp)x){
+				// Loops with early returns are not split: a separate loop computing lifted state would also run the
+				// iterations after the return, which may fail or diverge where the original program does not.
 				bad=true;
 				return false;
 			}
