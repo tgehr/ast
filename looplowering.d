@@ -15,6 +15,34 @@ import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,util;
 import ast.semantic_;
 
+// Conservative check that evaluating `e` cannot fail (e.g., an `assert` or out-of-bounds access) or diverge.
+// Only such code may be removed, or executed where the original program would not execute it.
+bool cannotFail(Expression e){
+	bool ok=true;
+	visitStm(e,(Expression x){
+		if(!ok) return;
+		if(auto ce=cast(CallExp)x){
+			if(ce.isSquare) return;
+			Expression f=ce.e;
+			while(auto sq=cast(CallExp)f){
+				if(!sq.isSquare) break;
+				f=sq.e;
+			}
+			auto id=cast(Identifier)f;
+			auto fd=id?cast(FunctionDef)id.meaning:null;
+			if(!fd){ ok=false; return; }
+			if(auto prim=isPrimitive(fd)){
+				if(!util.among(prim,"dup","M","H","X","Y","Z","P","rX","rY","rZ")) ok=false;
+			}else if(!(fd.boolAttribute(Id.s!"artificial")&&util.among(fd.getName,"dup","measure","rotZ"))) ok=false;
+		}else if(cast(IndexExp)x||cast(SliceExp)x||cast(DivExp)x||cast(IDivExp)x||cast(ModExp)x||cast(PowExp)x
+			||cast(AssertExp)x||cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x||cast(ReturnExp)x){
+			ok=false;
+		}else if(auto tae=cast(TypeAnnotationExp)x){
+			if(tae.annotationType==TypeAnnotationType.coercion) ok=false;
+		}
+	});
+	return ok;
+}
 void visitStm(Expression e,scope void delegate(Expression) dg){
 	if(!e) return;
 	dg(e);
@@ -295,7 +323,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto liveOut=new bool[](vers.length);
 		foreach(n,v;cur) if(liveAtEnd(n)) liveOut[v]=true;
 		auto dead=new bool[](infos.length);
-		foreach(i,ref info;infos) dead[i]=!info.isForget&&!info.nonQfree&&!info.effects&&info.defs.length;
+		foreach(i,ref info;infos) dead[i]=!info.isForget&&!info.nonQfree&&!info.effects&&info.defs.length&&cannotFail(stms[i]);
 		bool defDead(int v){ return vers[v].stm>=0&&dead[vers[v].stm]; }
 		for(bool changed=true;changed;){
 			changed=false;
@@ -636,6 +664,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(ai;defs){
 			auto inf=&ainfos[ai];
 			if(inf.nonQfree||inf.effects||ai in isPseudo) return false;
+			if(!cannotFail(atoms[ai].e)) return false; // (executed also where the original skips the branch)
 			foreach(d;inf.defs) if(d!=t) return false;
 			foreach(u;inf.uses){
 				if(u==t||u in isCarried) continue;
@@ -692,7 +721,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					clsE~=a.inElse[x];
 				}
 			}
-			bool ok=!cls.any!(m=>ites[m].isWith);
+			// moved controls are evaluated also where the original skips the quantum branch
+			bool ok=!cls.any!(m=>ites[m].isWith||cast(WhileExp)ites[m].e||!ites[m].heads.all!cannotFail);
 			foreach(m;cls) foreach(u;ites[m].info.uses){
 				if(u in isCarried) continue;
 				foreach(bj,ref b;atoms){
