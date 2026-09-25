@@ -415,7 +415,12 @@ class Checker {
 		return retItrans;
 	}
 
+	void expectNoLoop(ast_exp.Expression e) {
+		assert(!imported!"astopt".removeLoops, format("loop at %s:%s still in AST after loop lowering", e.loc.source ? e.loc.source.name : "?", e.loc.line));
+	}
+
 	StmtResult implStmt(ast_exp.WhileExp e) {
+		expectNoLoop(e);
 		expectConst(e.cond, "while condition");
 		auto retBdy = visLoop(e.bdy, null, e.cond);
 		if(ast_exp.isTrue(e.cond)) return StmtResult.Diverges;
@@ -424,6 +429,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.RepeatExp e) {
+		expectNoLoop(e);
 		expectConst(e.num, "repeat count");
 		visExpr(e.num);
 		auto retBdy = visLoop(e.bdy, null);
@@ -432,6 +438,7 @@ class Checker {
 	}
 
 	StmtResult implStmt(ast_exp.ForExp e) {
+		expectNoLoop(e);
 		assert(!e.pattern, "for loop pattern still in AST");
 		if(auto range=e.aggr.range) {
 			expectConst(range.left, "for-left");
