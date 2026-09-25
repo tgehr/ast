@@ -1846,11 +1846,14 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	// continuation-passing lowering for loops with early returns:
 	// the statements after the loop (which end in a `return`) become the base case of the recursion
 	Expression[] continuation=null;
+	bool dropUnreachable=false; // code after an infinite loop
 	static if(language==silq){
 		static if(is(T==WhileExp)) bool contInfinite=isTrue(loop.cond);
 		else enum contInfinite=false;
 		if(!contInfinite&&containsReturn(loop.bdy))
 			continuation=sc.loopContinuation.take(loop);
+		else if(contInfinite)
+			dropUnreachable=sc.loopContinuation.take(loop).length!=0;
 	}
 	// with a continuation, lifted loop-carried variables are threaded through the recursion as `const`
 	// parameters, so that they are still lifted in the code after the loop and in join points in the body
@@ -2286,7 +2289,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		auto fret=new ReturnExp(ce2);
 		fret.loc=loop.loc;
 		stmts~=fret;
-		sc.loopContinuation.used=true;
 	}else if(hasEarlyReturns){
 		auto retId2=new Identifier(freshName());
 		retId2.loc=ce2.loc;
@@ -2318,6 +2320,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	sc.restoreStateSnapshot(state.origStateSnapshot);
 	//imported!"util.io".writeln("BEFORE SEMANTIC: ",lowered);
 	auto result=statementSemantic(lowered,sc,flags);
+	if(continuation||dropUnreachable) sc.loopContinuation.used=true; // (after analyzing `lowered`)
 	if(result.isSemError()){
 		sc.note("loop not yet supported by loop lowering pass",result.loc);
 	}
@@ -2367,7 +2370,9 @@ struct LoopContinuation{
 	bool offer(Expression[] block,size_t i){
 		auto e=block[i];
 		if(!astopt.removeLoops||!(cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e)) return false;
-		if(i+1>=block.length||!endsWithReturn(block[$-1])||!containsReturn(e)) return false;
+		if(i+1>=block.length) return false;
+		// the code after an infinite loop is unreachable; it is dropped by the lowering
+		if(!isInfiniteLoop(e)&&(!endsWithReturn(block[$-1])||!containsReturn(e))) return false;
 		stms=block[i+1..$];
 		target=e;
 		used=false;
@@ -2388,6 +2393,14 @@ struct LoopContinuation{
 		this=LoopContinuation.init;
 		return r;
 	}
+}
+// `while true` (syntactically, as the loop may not be analyzed yet)
+bool isInfiniteLoop(Expression e){
+	auto we=cast(WhileExp)e;
+	if(!we) return false;
+	if(we.cond.type) return isTrue(we.cond);
+	if(auto id=cast(Identifier)we.cond) return id.id==Id.s!"true";
+	return false;
 }
 bool erpRecording(Scope sc){
 	for(auto fd=sc.getFunction();fd;fd=fd.scope_?fd.scope_.getFunction():null)
