@@ -39,6 +39,9 @@ bool cannotFail(Expression e){
 			ok=false;
 		}else if(auto tae=cast(TypeAnnotationExp)x){
 			if(tae.annotationType==TypeAnnotationType.coercion) ok=false;
+		}else if(auto fe=cast(ForgetExp)x){
+			// an explicit value may be correct only on some basis states (e.g., where a guarding condition holds)
+			if(fe.val) ok=false;
 		}
 	});
 	return ok;
@@ -197,6 +200,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	Id[const(void)*] extracted;
 	bool[const(void)*] reanalyze,isExtractAtom;
+	bool hasQuantumReturn=false;
 	StmInfo analyzeStm(Expression s,out bool bad){
 		StmInfo info;
 		info.isForget=!!cast(ForgetExp)s;
@@ -224,11 +228,18 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(x.type) info.types[*f]=x.type;
 				return false;
 			}
-			if(cast(ReturnExp)x){
-				// Loops with early returns are not split: a separate loop computing lifted state would also run the
-				// iterations after the return, which may fail or diverge where the original program does not.
-				bad=true;
-				return false;
+			if(auto ret=cast(ReturnExp)x){
+				// Loops with classically controlled early returns are not split: a separate loop computing lifted state
+				// would also run the iterations after the return, which may fail or diverge where the original program does
+				// not. (Such loops are rewritten without early returns first, see `erpExplicitExits`.) The code after
+				// quantum-controlled returns is reachable in the original program anyway.
+				auto ri=erpKey(ret.loc) in erpReturns;
+				if(!ri||!ri.quantum){
+					bad=true;
+					return false;
+				}
+				info.effects=true; // (stays in the main loop)
+				hasQuantumReturn=true;
 			}
 			if(auto fd=cast(FunctionDef)x) if(fd.name) strongDef(fd.name.id);
 			if(cast(AssertExp)x) info.effects=true;
@@ -721,8 +732,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					clsE~=a.inElse[x];
 				}
 			}
-			// moved controls are evaluated also where the original skips the quantum branch
-			bool ok=!cls.any!(m=>ites[m].isWith||cast(WhileExp)ites[m].e||!ites[m].heads.all!cannotFail);
+			// (the moved classical controls are reachable in the original even where the quantum branch has amplitude zero)
+			bool ok=!cls.any!(m=>ites[m].isWith);
 			foreach(m;cls) foreach(u;ites[m].info.uses){
 				if(u in isCarried) continue;
 				foreach(bj,ref b;atoms){
@@ -866,6 +877,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		setupRanks();
 	}
 	if((atomColor.filter!(c=>c>=0).array~(atomColor.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2) return null;
+	if(hasQuantumReturn){
+		// The split-off loops also run for basis states that have returned already: their computations must not fail
+		// on such quantum data (e.g., a division by zero that the return guards against).
+		foreach(a,c;atomColor) if(c!=P&&!cannotFail(atoms[a].e)) return null;
+		foreach(ref it;ites) if(!it.heads.all!cannotFail) return null;
+	}
 	{
 		bool changed=false;
 		foreach(q,ref qt;ites){
@@ -1844,6 +1861,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		fe.loc=loc;
 		stmts~=fe;
 	}
+	// the code after a loop with quantum-controlled returns follows the main loop, which is lowered with it as its continuation
+	auto cont=hasQuantumReturn?sc.loopContinuation.take(loop):null;
+	stmts~=cont;
 	auto split=new CompoundExp(stmts);
 	split.loc=loc;
 	sc.restoreStateSnapshot(state.origStateSnapshot);
@@ -1853,7 +1873,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stderr.writeln("-loop-splitting→");
 		stderr.writeln(split);
 	}
-	return statementSemantic(split,sc,flags);
+	auto r=statementSemantic(split,sc,flags);
+	if(cont.length) sc.loopContinuation.used=true; // (after analyzing `split`, which may offer continuations itself)
+	return r;
 }
 
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
