@@ -19,6 +19,11 @@ import ast.semantic_;
 // Only such code may be removed, or executed where the original program would not execute it.
 bool cannotFail(Expression e){
 	bool ok=true;
+	// calls in definition targets are reversed: e.g., `dup(a):=z` checks that `z` equals `a`, which may fail
+	SetX!CallExp targetCalls;
+	visitStm(e,(Expression x){
+		if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto ce=cast(CallExp)y) targetCalls.insert(ce); });
+	});
 	visitStm(e,(Expression x){
 		if(!ok) return;
 		if(auto ce=cast(CallExp)x){
@@ -31,6 +36,11 @@ bool cannotFail(Expression e){
 			auto id=cast(Identifier)f;
 			auto fd=id?cast(FunctionDef)id.meaning:null;
 			if(!fd){ ok=false; return; }
+			if(ce in targetCalls){ // only reversed unitary primitives cannot fail
+				auto prim=isPrimitive(fd);
+				if(!prim||!util.among(prim,"H","X","Y","Z","rX","rY","rZ")) ok=false;
+				return;
+			}
 			if(auto prim=isPrimitive(fd)){
 				if(!util.among(prim,"dup","M","H","X","Y","Z","P","rX","rY","rZ")) ok=false;
 			}else if(!(fd.boolAttribute(Id.s!"artificial")&&util.among(fd.getName,"dup","measure","rotZ"))) ok=false;
