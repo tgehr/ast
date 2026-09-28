@@ -8685,6 +8685,12 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		}
 		return functionDefSemantic(fd,sc);
 	}
+	static if(language==silq) if(fd.captureReanalysis&&!fd.isSemFinal()){
+		// some classical captures have to be consumed (see `Scope.checkCaptureRedefinition`)
+		fd.captureReanalysis=false;
+		resetFunction(fd,fd);
+		return functionDefSemantic(fd,sc);
+	}
 	static if(language==silq)
 		if(fd.erpStage==1&&!fd.tainted)
 			if(erpSwitch()) return functionDefSemantic(fd,sc);

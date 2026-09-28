@@ -157,6 +157,34 @@ abstract class Scope{
 		return !decl||cast(DeadDecl)decl;
 	}
 
+	static if(language==silq) final bool checkCaptureRedefinition(Declaration decl){
+		auto fd=getFunction();
+		if(!fd||!decl.name||!fd.fscope_||cast(Parameter)decl) return true;
+		if(Id.s!"silq-loop" in fd.attributes||Id.s!"silq-join" in fd.attributes) return true;
+		bool inBody(Identifier id){
+			return fd.body_&&fd.body_.blscope_&&id.scope_&&id.scope_.isNestedIn(fd.body_.blscope_);
+		}
+		foreach(capture,allIds;fd.captures){
+			if(!capture.name||capture.name.id!=decl.name.id) continue;
+			auto ids=allIds.filter!inBody.array;
+			if(!ids.length) continue;
+			if(fd.isConsumedCapture(capture)) continue;
+			import ast.semantic_:typeForDecl;
+			auto type=typeForDecl(capture);
+			if(type&&type.isClassical()&&ids.any!(id=>!id.constLookup)){
+				fd.consumingCaptures.insert(decl.name.id);
+				fd.captureReanalysis=true;
+				return true;
+			}
+			if(!decl.isSemError()){
+				error(format("redefinition of captured variable \"%s\"",decl.name),decl.name.loc);
+				note("captured here",ids[0].loc);
+				decl.setSemError();
+			}
+			return false;
+		}
+		return true;
+	}
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
 		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
 			lastUses.forget(oldDecl,true);
@@ -180,7 +208,7 @@ abstract class Scope{
 			if(!tryPrepareRedefine(decl,d))
 				return false;
 			//assert(!symtabLookup(decl.name,false,null));
-		}
+		}else static if(language==silq) if(!checkCaptureRedefinition(decl)) return false;
 		rename(decl);
 		symtabInsert(decl);
 		decl.scope_=this;
@@ -2579,6 +2607,7 @@ class CapturingScope(T): NestedScope{
 		auto meaningBefore=meaning,pmeaning=meaning;
 		if(!id.lazyCapture){
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
+			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures) consumed=true;
 			if(!id.isSemError){
 				if(consumed) meaning=parent.split(meaning,id);
 				decl.addCapture(meaning,id);

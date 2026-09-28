@@ -233,6 +233,10 @@ class FunctionDef: Declaration{
 	Declaration[] capturedDecls;
 	bool captureAnnotationReady=false;
 	bool sealed=false;
+	static if(language==silq){
+		SetX!Id consumingCaptures; // consumed classical captures
+		bool captureReanalysis=false;
+	}
 	void addCapture(Declaration meaning,Identifier id)in{
 		assert(!!meaning&&(!meaning.isLinear||context&&context.vtype==contextTy(false)));
 	}do{
@@ -243,6 +247,7 @@ class FunctionDef: Declaration{
 		assert(capture in captures);
 		assert(!!fscope_);
 	}do{
+		static if(language==silq) if(capture.name&&capture.name.id in consumingCaptures) return true;
 		auto id=captures[capture][0];
 		if(!id.meaning||!id.meaning.scope_) return false;
 		return id.meaning.scope_.isNestedIn(fscope_);
