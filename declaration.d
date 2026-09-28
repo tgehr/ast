@@ -605,6 +605,7 @@ class DeadMerge: DeadDecl{
 		super(name);
 	}
 	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		if(mergedFrom.length<numBranches&&mergedFrom.any!(d=>d.isSemError())) return true;
 		bool handled=false;
 		foreach(d;mergedFrom)
 			if(auto dd=cast(DeadDecl)d)
