@@ -421,7 +421,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	if(defer&&!cast(ForgetExp)olhs){
 		return res=new DefineExp(olhs,orhs);
 	}
-	if(validDefLhs!flags(olhs,sc,unchecked,noImplicitDup)){
+	bool classicalReverse=false;
+	static if(language==silq&&!(flags&LowerDefineFlags.reverseMode)) classicalReverse=isClassicalReverseCall(olhs,orhs);
+	if(!classicalReverse&&validDefLhs!flags(olhs,sc,unchecked,noImplicitDup)){
 		if(auto tpl=cast(TupleExp)olhs) if(!tpl.e.length&&(cast(CallExp)orhs||cast(ForgetExp)orhs)) return rhs;
 		if(auto ce=cast(CallExp)lhs) ce.checkReverse&=!unchecked;
 		return res=new DefineExp(lhs,rhs);
@@ -943,8 +945,31 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 
 Expression lowerDefine(LowerDefineFlags flags)(DefineExp e,Scope sc,bool unchecked,bool noImplicitDup){
 	if(e.isSemError()) return e;
-	if(validDefLhs!flags(e.e1,sc,unchecked,noImplicitDup)) return null;
+	if(validDefLhs!flags(e.e1,sc,unchecked,noImplicitDup)){
+		static if(language==silq&&!(flags&LowerDefineFlags.reverseMode)){
+			if(!isClassicalReverseCall(e.e1,e.e2)) return null;
+		}else return null;
+	}
 	return lowerDefine!flags(e.e1,e.e2,e.loc,sc,unchecked,noImplicitDup);
+}
+
+static if(language==silq)
+bool isClassicalReverseCall(Expression lhs,Expression rhs){
+	auto ce=cast(CallExp)lhs;
+	if(!ce||ce.isSquare||!rhs||!rhs.type||!rhs.type.isClassical()) return false;
+	if(!ce.e.type) return false;
+	if(!ce.checkReverse) return false;
+	if(auto tpl=cast(TupleExp)ce.arg) if(!tpl.length) return false;
+	auto ft=cast(FunTy)ce.e.type;
+	if(!ft||ft.isSquare||ft.annotation<Annotation.qfree||!ce.e.type.isClassical()) return false;
+	if(!ft.isConstForReverse.any) return true;
+	if(ft.isConstForReverse.all) return false;
+	auto tpl=cast(TupleExp)ce.arg;
+	if(!tpl||tpl.length!=ft.nargs) return false;
+	foreach(i,arg;tpl.e)
+		if(ft.isConstForReverse[i]&&!(arg.type&&arg.type.isClassical()))
+			return false;
+	return true;
 }
 
 static if(language==silq)
