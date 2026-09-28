@@ -243,7 +243,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				// would also run the iterations after the return, which may fail or diverge where the original program does
 				// not. (Such loops are rewritten without early returns first, see `erpExplicitExits`.) The code after
 				// quantum-controlled returns is reachable in the original program anyway.
-				auto ri=erpKey(ret.loc) in erpReturns;
+				auto ri=erpKey(ret) in erpReturns;
 				if(!ri||!ri.quantum){
 					bad=true;
 					return false;
@@ -2419,7 +2419,21 @@ struct ERPVar{
 	bool lifted,isConst;
 }
 ERPVar[][size_t] erpJoins; // by location of the statement
-size_t erpKey(Location loc){ return cast(size_t)loc.rep.ptr^(cast(size_t)loc.rep.length<<48); }
+// statements are identified across copies by `Expression.erpId` (0: not identified, e.g. generated code)
+size_t erpKey(Expression e){ return e.erpId; }
+size_t erpNextId=1;
+// `a` and `b` are copies of each other: corresponding nodes get the same identifiers
+void erpAssignIds(Expression a,Expression b){
+	Expression[] xs,ys;
+	visitStm(a,(Expression x){ xs~=x; });
+	visitStm(b,(Expression y){ ys~=y; });
+	assert(xs.length==ys.length);
+	foreach(i;0..xs.length){
+		auto id=erpNextId++;
+		xs[i].erpId=id;
+		ys[i].erpId=id;
+	}
+}
 bool containsReturn(Expression e){
 	bool r=false;
 	visitStm(e,(Expression x){ if(cast(ReturnExp)x) r=true; });
@@ -2496,7 +2510,7 @@ void erpRecordJoin(Expression stm,Scope sc){
 		}
 		if(cast(FunctionScope)c) break;
 	}
-	erpJoins[erpKey(stm.loc)]=vars;
+	if(erpKey(stm)) erpJoins[erpKey(stm)]=vars;
 }
 // functions that entered stage 1 (see `erpFinish`)
 FunctionDef[] erpStage1Functions;
@@ -2508,6 +2522,7 @@ void erpBeforeBody(FunctionDef fd){
 		fd.erpStage=1;
 		fd.keepLoops=true;
 		erpStage1Functions~=fd;
+		if(fd.origBody_) erpAssignIds(fd.body_,fd.origBody_);
 	}
 }
 // record join-point information after statement `stms[i]` (originally `original`) has been analyzed
@@ -2517,14 +2532,14 @@ void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
 		erpRecordJoin(original,sc);
 	if((cast(ForExp)original||cast(WhileExp)original||cast(RepeatExp)original)&&containsReturn(original)){
 		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
-		if(stms[i].type==bottom) erpDivergingLoops[erpKey(original.loc)]=true; // (loop never exits normally)
+		if(stms[i].type==bottom&&erpKey(original)) erpDivergingLoops[erpKey(original)]=true; // (loop never exits normally)
 		if(auto we=cast(WhileExp)stms[i]){ // (see `erpLoopExplicit`)
 			bool consumes=false;
 			visitStm(we.cond,(Expression x){
 				if(auto id=cast(Identifier)x)
 					if(cast(VarDecl)id.meaning&&!id.constLookup&&!id.implicitDup) consumes=true;
 			});
-			if(consumes) erpConsumingGuards[erpKey(original.loc)]=true;
+			if(consumes&&erpKey(original)) erpConsumingGuards[erpKey(original)]=true;
 		}
 	}
 }
@@ -2546,7 +2561,7 @@ void erpRecordReturn(ReturnExp ret,Scope sc){
 			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup)
 				r.consumed~=q(id.id,id.type);
 	});
-	erpReturns[erpKey(ret.loc)]=r;
+	if(erpKey(ret)) erpReturns[erpKey(ret)]=r;
 }
 // Stage 2: rewrites `fd.origBody_` (to be analyzed again with loops lowered). Returns false if the function has errors.
 bool erpRewrite(FunctionDef fd){
@@ -2614,21 +2629,21 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	bool ok=true;
 	visitStm(loop,(Expression x){
 		if(auto ret=cast(ReturnExp)x){
-			auto info=erpKey(ret.loc) in erpReturns;
+			auto info=erpKey(ret) in erpReturns;
 			if(!info||info.quantum) ok=false;
 			else foreach(c;info.consumed) if(!isQuantum(c[1])) ok=false;
 		}
 	});
-	auto after=erpKey(loop.loc) in erpJoins;
+	auto after=erpKey(loop) in erpJoins;
 	if(!ok||!after) return null;
 	// A `while` condition is evaluated as `¬done && cond`, so that it is not evaluated after the return. If the condition
 	// consumes variables, it would then consume them only on some paths: use `cond && ¬done` if the condition cannot fail,
 	// and do not rewrite the loop otherwise.
 	visitStm(loop,(Expression x){
 		if(auto we=cast(WhileExp)x)
-			if(erpKey(we.loc) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
+			if(erpKey(we) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
 	});
-	if(auto we=cast(WhileExp)loop) if(erpKey(we.loc) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
+	if(auto we=cast(WhileExp)loop) if(erpKey(we) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
 	if(!ok) return null;
 	// Consumed variables that are lifted after the loop keep their values (the analysis `dup`s them, as they are still
 	// used); the others get placeholders. Returns consuming loop-local quantum variables are not supported (TODO).
@@ -2638,7 +2653,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		return false;
 	}
 	visitStm(loop,(Expression x){
-		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret.loc)].consumed) needsPlaceholder(c[0]);
+		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret)].consumed) needsPlaceholder(c[0]);
 	});
 	if(!ok) return null;
 	auto loc=loop.loc;
@@ -2659,7 +2674,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	Q!(Id,Expression)[] consumedOuter;
 	SetX!Id seen;
 	visitStm(loop,(Expression x){
-		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret.loc)].consumed)
+		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret)].consumed)
 			if(c[0] !in seen&&needsPlaceholder(c[0])){
 				seen.insert(c[0]);
 				consumedOuter~=c;
@@ -2678,7 +2693,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 				break;
 		}
 		r~=at(new AssignExp(mk(done),at(LiteralExp.makeBoolean(true))));
-		foreach(c;erpReturns[erpKey(ret.loc)].consumed) if(needsPlaceholder(c[0])) r~=at(new DefineExp(mk(c[0]),dummy(c[1])));
+		foreach(c;erpReturns[erpKey(ret)].consumed) if(needsPlaceholder(c[0])) r~=at(new DefineExp(mk(c[0]),dummy(c[1])));
 		return r;
 	}
 	Expression[] guard()(Expression[] stms){
@@ -2717,7 +2732,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		if(auto fe=cast(ForExp)s){ fe.bdy=loopBody(fe.bdy); return [fe]; }
 		if(auto re=cast(RepeatExp)s){ re.bdy=loopBody(re.bdy); return [re]; }
 		if(auto we=cast(WhileExp)s){
-			if(erpKey(we.loc) in erpConsumingGuards) we.cond=at(new AndThenExp(we.cond,notDone()));
+			if(erpKey(we) in erpConsumingGuards) we.cond=at(new AndThenExp(we.cond,notDone()));
 			else we.cond=at(new AndThenExp(notDone(),we.cond));
 			we.bdy=guardBlock(we.bdy);
 			return [we];
@@ -2734,7 +2749,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	}
 	Expression[] post=[at(new IteExp(mk(done),at(new CompoundExp(exitBlock)),null))];
 	if(kind==Kind.quantum) post~=at(new ForgetExp(mk(res),dummy(R)));
-	if(erpKey(loop.loc) in erpDivergingLoops) post~=at(new AssertExp(at(LiteralExp.makeBoolean(false)))); // (unreachable)
+	if(erpKey(loop) in erpDivergingLoops) post~=at(new AssertExp(at(LiteralExp.makeBoolean(false)))); // (unreachable)
 	return pre~nloop~post;
 }
 // Moves the code after statements that contain loops with early returns into join points.
@@ -2762,7 +2777,7 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 		Expression[] ntail=tail;
 		Expression kdef=null;
 		if(rest.length){
-			auto vars=erpKey(s.loc) in erpJoins;
+			auto vars=erpKey(s) in erpJoins;
 			if(!vars) return null;
 			bool rok;
 			auto ntrest=erpTransformImpl(rest,tail,rok);

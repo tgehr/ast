@@ -96,6 +96,7 @@ abstract class Expression: Node{
 		Expression delegate(Expression, ref CopyArgs) mapExp;
 		void delegate(Expression,Expression) postCopy;
 	}
+	static if(language==silq) size_t erpId=0;
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
 		if(args.mapExp) if(auto r=cast(T)args.mapExp(this,args)) return r;
@@ -117,6 +118,7 @@ abstract class Expression: Node{
 		r.brackets=brackets;
 		r.byRef=byRef;
 		r.implicitDup=implicitDup;
+		static if(language==silq) r.erpId=erpId;
 		if(args.postCopy) args.postCopy(this,r);
 		return r;
 	}
