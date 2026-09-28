@@ -495,14 +495,18 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		if(!valid1){
 			auto tmpe1=new Identifier(freshName);
 			tmpe1.loc=ce.e1.loc;
-			stmts~=lowerDefine!flags(ne1,tmpe1,loc,sc,unchecked,noImplicitDup);
+			auto use1=tmpe1.copy();
+			use1.moved=true;
+			stmts~=lowerDefine!flags(ne1,use1,loc,sc,unchecked,noImplicitDup);
 			ne1=tmpe1.copy();
 			ne1.loc=ce.e1.loc;
 		}
 		if(!valid2){
 			auto tmpe2=new Identifier(freshName);
 			tmpe2.loc=ce.e2.loc;
-			stmts~=lowerDefine!flags(ne2,tmpe2,loc,sc,unchecked,noImplicitDup);
+			auto use2=tmpe2.copy();
+			use2.moved=true;
+			stmts~=lowerDefine!flags(ne2,use2,loc,sc,unchecked,noImplicitDup);
 			ne2=tmpe2.copy();
 			ne2.loc=ce.e2.loc;
 		}
@@ -842,14 +846,18 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			xTpl.loc=xId.loc;
 			auto peelLhs=new CatExp(xTpl,restId.copy());
 			peelLhs.loc=xId.loc;
-			auto peel=new DefineExp(peelLhs,restId.copy());
+			auto restUse=restId.copy();
+			restUse.moved=true;
+			auto peel=new DefineExp(peelLhs,restUse);
 			peel.loc=xId.loc;
 			auto bodyLhs=vfe.fe.bdy.s[0].copy();
 			SetX!Id loopVarNames;
 			if(vfe.fe.var) loopVarNames[vfe.fe.var.id]=[];
 			if(vfe.fe.pattern) vfe.fe.pattern.freeVarsImpl((id){ loopVarNames[id.id]=[]; return 0; });
 			bodyLhs=dupVariableUses(bodyLhs,loopVarNames,sc);
-			auto bodyDef=new DefineExp(bodyLhs,xId.copy());
+			auto xUse=xId.copy();
+			xUse.moved=true;
+			auto bodyDef=new DefineExp(bodyLhs,xUse);
 			bodyDef.loc=bodyLhs.loc;
 			auto lbdy=new CompoundExp([cast(Expression)peel,bodyDef]);
 			lbdy.loc=vfe.fe.bdy.loc;
@@ -860,7 +868,9 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nfe.loc=vfe.fe.loc;
 			auto unit=new TupleExp([]);
 			unit.loc=loc;
-			auto fin=new DefineExp(unit,restId.copy());
+			auto restFin=restId.copy();
+			restFin.moved=true;
+			auto fin=new DefineExp(unit,restFin);
 			fin.loc=loc;
 			return res=new CompoundExp([restDef,cast(Expression)nfe,fin]);
 		}else if(auto cnt=vfe.fe.aggr.isContainer()){
@@ -869,6 +879,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			auto bodyLhs=vfe.fe.bdy.s[0].copy();
 			auto yuse=yid.copy();
 			yuse.loc=orhs.loc;
+			yuse.moved=true;
 			auto inner=new DefineExp(bodyLhs,yuse);
 			inner.loc=vfe.fe.bdy.s[0].loc;
 			Expression result;

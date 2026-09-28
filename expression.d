@@ -882,6 +882,7 @@ bool isEqual(Expression a,Expression b,EqualityContext* ctx){
 
 class Identifier: Expression{
 	Id id;
+	static if(language==silq) bool moved=false;
 	@property string name(){return id.str;}
 	@property auto ptr(){return id.ptr;}
 	@property auto length(){return id.length;}
@@ -932,10 +933,11 @@ class Identifier: Expression{
 				r.id=args.rename.nid;
 			}
 		}
+		static if(language==silq) r.moved=moved;
 		return r;
 	}
 	override string toString(){
-		static if(language==silq) return _brk((classical?"!":"")~name);
+		static if(language==silq) return _brk((moved?"move(":"")~(classical?"!":"")~name~(moved?")":""));
 		else return _brk(name);
 	}
 	override @property string kind(){return "identifier";}

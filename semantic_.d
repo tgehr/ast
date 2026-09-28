@@ -595,6 +595,7 @@ enum BuiltIn{
 	query,
 	qabort,
 	dummy,
+	move,
 }
 
 static if(language==psi)
@@ -625,6 +626,8 @@ BuiltIn isBuiltIn(Identifier id){
 				return BuiltIn.qabort;
 			case "__dummy":
 				return BuiltIn.dummy;
+			case "move":
+				return BuiltIn.move;
 		}else static if(language==psi){
 			case "Marginal":
 				return BuiltIn.Marginal;
@@ -726,6 +729,9 @@ Expression builtIn(Identifier id,Scope sc){
 				t=unit;
 				break;
 			case "__dummy": // __dummy(a:qtype): a
+				t=unit;
+				break;
+			case "move": // move(x:a): a, consuming `x` (it is never implicitly `dup`ed)
 				t=unit;
 				break;
 		}
@@ -1558,14 +1564,18 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		tpl.loc=sourceVar.loc;
 		auto upl=new CatExp(tpl,cntId.copy());
 		upl.loc=sourceVar.loc;
-		auto upd=new DefineExp(upl,cntId.copy());
+		auto cntUse=cntId.copy();
+		cntUse.moved=true;
+		auto upd=new DefineExp(upl,cntUse);
 		upd.loc=sourceVar.loc;
 		prologue~=upd;
 		fe.var=new Identifier(freshName());
 		fe.var.loc=sourceVar.loc;
 		auto uil=new TupleExp([]);
 		uil.loc=cnt.loc;
-		auto uid=new DefineExp(uil,cntId.copy()); // TODO: force move
+		auto cntFin=cntId.copy();
+		cntFin.moved=true;
+		auto uid=new DefineExp(uil,cntFin);
 		uid.loc=cnt.loc;
 		uninit~=uid;
 		auto left=LiteralExp.makeInteger(0);
@@ -1574,7 +1584,8 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		fe.aggr=ForAggregate(ForRange(false,left,null,true,right));
 	}
 	if(fe.pattern){
-		auto varId=sourceVar.copy(); // TODO: force a move
+		auto varId=sourceVar.copy();
+		varId.moved=true;
 		auto pde=new DefineExp(fe.pattern,varId);
 		pde.loc=fe.pattern.loc;
 		prologue~=pde;
@@ -3676,6 +3687,10 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 				}
 			}
 		}else{
+			foreach(crepl;sc.localComponentReplacements()){
+				if(!crepl.name) continue;
+				if(auto d=sc.rnsymtab.get(crepl.name,null)) sc.symtabRemove(d);
+			}
 			sc.resetLocalComponentReplacements();
 			epilogues=[]; // (avoids error messages)
 			// TODO: clean up other temporaries
@@ -5454,8 +5469,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			if(auto id=cast(Identifier)sce.e) if(isReverse(id)) ce.e=id;
 		}
 	}
-	static if(isRhs) ce.e=expressionSemantic(ce.e,context.nestCalled);
-	else static if(!isPresemantic){
+	static if(isRhs){
+		ce.e=expressionSemantic(ce.e,context.nestCalled);
+		static if(language==silq) if(isBuiltInCall(ce)==BuiltIn.move) return moveSemantic(ce,context);
+	}else static if(!isPresemantic){
 		ce.e=expressionSemantic(ce.e,context.expSem.nestCalled);
 	}else{
 		auto state=context.sc.getStateSnapshot(true);
@@ -6277,6 +6294,22 @@ Expression expressionSemanticImpl(CallExp ce,ExpSemContext context){
 	return callSemantic(ce,context);
 }
 
+static if(language==silq){
+Expression moveSemantic(CallExp ce,ExpSemContext context){
+	auto sc=context.sc;
+	auto id=cast(Identifier)unwrap(ce.arg);
+	if(!id||ce.isSquare){
+		sc.error("argument of `move` must be a variable",ce.arg.loc);
+		ce.setSemError();
+		return ce;
+	}
+	id.moved=true;
+	auto r=expressionSemantic(id,context);
+	if(r.isSemError()) ce.setSemError();
+	return r;
+}
+}
+
 static if(language==psi)
 Expression expressionSemanticImpl(PlaceholderExp pl,ExpSemContext context){
 	pl.type = ℝ;
@@ -6443,6 +6476,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}do{
 		//id.implicitDup=!context.constResult&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||!id.meaning.isLinear)); // TODO: last-use analysis
 		id.implicitDup=!id.constLookup&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||sc.canForget(id.meaning,true))); // TODO: last-use analysis
+		static if(language==silq) if(id.moved) id.implicitDup=false;
 	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
@@ -7186,7 +7220,9 @@ FunctionDef vectorForFunction(VectorForExp vfe,Expression elemTy,ExpSemContext c
 		pname=new Identifier(freshName());
 		pname.loc=vfe.fe.pattern?vfe.fe.pattern.loc:vfe.loc;
 		assert(!!vfe.fe.pattern);
-		auto pde=new DefineExp(vfe.fe.pattern.copy(),pname.copy());
+		auto pnameUse=pname.copy();
+		pnameUse.moved=true;
+		auto pde=new DefineExp(vfe.fe.pattern.copy(),pnameUse);
 		pde.loc=vfe.fe.pattern.loc;
 		stmts~=pde;
 	}
