@@ -887,7 +887,23 @@ struct LastUses{
 	void lazyMerge(Declaration decl,Scope sc,NestedScope[] nestedScopes)in{
 		assert(sc&&nestedScopes.length);
 	}do{
-		add(new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null,nestedScopes));
+		auto lu=new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null,nestedScopes);
+		add(lu);
+		if(!lu.prevImplicitDup){
+			foreach(nsc;nestedScopes){
+				auto nlu=nsc.lastUses.lastUses.get(LastUse.versionIn(decl,nsc),null);
+				while(nlu&&nlu.forwardTo) nlu=nlu.forwardTo;
+				if(!nlu) continue;
+				if(nlu.prevImplicitDup){
+					lu.prevImplicitDup=nlu.prevImplicitDup;
+					break;
+				}
+				if(nlu.kind.among(LastUse.Kind.implicitDup,LastUse.Kind.constPinned)&&nlu.use&&nlu.use.implicitDup){
+					lu.prevImplicitDup=nlu;
+					break;
+				}
+			}
+		}
 	}
 	void synthesizedForget(Declaration decl,Identifier use,Scope sc,Expression parent)in{
 		if(use){
