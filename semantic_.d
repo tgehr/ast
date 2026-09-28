@@ -8788,10 +8788,11 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 		return false;
 	}
+	static if(language==silq) bool quantumControlled=sc.controlDependency!=bottom||!!(flags&StmFlags.quantumReturn);
 	if(fd.inferringReturnType){
 		determineType(ret.e,context,(ty){
 			static if(language==silq){
-				if(ty.hasClassicalComponent()&&sc.controlDependency!=bottom){
+				if(ty.hasClassicalComponent()&&quantumControlled){
 					if(auto qty=ty.getQuantum())
 						ty=qty;
 				}
@@ -8809,7 +8810,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	static if(language==silq){
 		auto convertTy=fd.ret?fd.ret:ret.e.type;
-		if(sc.controlDependency!=bottom){
+		if(quantumControlled){
 			bool ok=true;
 			if(convertTy&&convertTy.hasClassicalComponent()){
 				ok=false;
