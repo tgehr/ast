@@ -29,6 +29,7 @@ abstract class Declaration: Expression{
 
 	bool isLinear(){ return true; }
 	bool isConst(){ return false; }
+	bool isPinned(){ return false; } // `const` parameters
 
 	override Expression evalImpl(){ return this; }
 
@@ -113,9 +114,12 @@ class VarDecl: Declaration{
 		//return new VarDecl(dtype.copy(args));
 		auto r=new VarDecl(copyNameImpl(args));
 		if(dtype) r.dtype=dtype.copy(args);
+		r.isConst_=isConst_;
 		return r;
 	}
-	override string toString(){ return (isConst()?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
+	bool isConst_=false;
+	override bool isConst(){ return isConst_; }
+	override string toString(){ return (isConst?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
 	@property override string kind(){ return "variable"; }
 	alias copyAnalyzedFieldsFrom=Declaration.copyAnalyzedFieldsFrom;
 	void copyAnalyzedFieldsFrom(VarDecl d){
@@ -130,10 +134,10 @@ class VarDecl: Declaration{
 	Expression vtype;
 	Expression initializer;
 	DefineExp definition;
+	Identifier outOfScopeCause;
 }
 
 class Parameter: VarDecl{
-	bool isConst_;
 	this(bool isConst, Identifier name, Expression type){
 		super(name); this.dtype=type;
 		this.isConst_=isConst;
@@ -146,7 +150,7 @@ class Parameter: VarDecl{
 	override bool isLinear(){
 		return !isConst&&(!vtype||!vtype.isClassical());
 	}
-	override bool isConst(){
+	override bool isPinned(){
 		return isConst_;
 	}
 	override string toString(){
@@ -550,6 +554,24 @@ class ConsumedDecl: DeadDecl{
 	}
 }
 
+class OutOfScopeDecl: ConsumedDecl{
+	Identifier cause;
+	this(Declaration decl,Identifier use,Identifier cause)in{
+		assert(!!cause);
+	}do{
+		super(decl,use);
+		this.cause=cause;
+	}
+	override void explain(string kind,Scope sc){
+		import std.format:format;
+		sc.note(format("%s `%s` went out of scope here",kind,use.meaning),use.loc);
+		sc.note(format("because `%s` was consumed here",cause.name),cause.loc);
+	}
+	override string toString(){
+		return text("outOfScope(",super.toString(),",",cause.loc,")");
+	}
+}
+
 class EarlyForgottenDecl: DeadDecl{
 	Declaration decl;
 	Declaration consumed;
@@ -684,4 +706,9 @@ class DeadMerge: DeadDecl{
 	override string toString(){
 		return text("deadMerge(",super.toString(),")");
 	}
+}
+
+bool isConstLocal(Declaration decl){
+	auto vd=cast(VarDecl)decl;
+	return vd&&!cast(Parameter)vd&&vd.isConst_;
 }

@@ -647,7 +647,7 @@ final class LastUse{
 			case constUse:
 				if(constConsume&&constConsume.canCancelImplicitDup())
 					return true;
-				if(prevImplicitDup)
+				if(prevImplicitDup||isConstLocal(decl))
 					return canForget(false);
 				return false;
 			case consumption:
@@ -705,7 +705,7 @@ final class LastUse{
 					markConsumed(use,false);
 					return true;
 				}
-				if(prevImplicitDup&&canForget(false)){
+				if((prevImplicitDup||isConstLocal(decl))&&canForget(false)){
 					forget(false);
 					return true;
 				}

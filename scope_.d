@@ -205,6 +205,14 @@ abstract class Scope{
 
 	bool insert(Declaration decl,bool force=false)in{assert(!decl.scope_);}do{
 		if(auto d=symtabLookup(decl.name,false,null)){
+			static if(language==silq) if(isConstLocal(d)&&!d.isSemError()){
+				if(!decl.isSemError()){
+					error(format("redefinition of `const` variable \"%s\"",decl.name),decl.name.loc);
+					note("previous definition was here",d.name.loc);
+				}
+				decl.setSemError();
+				return false;
+			}
 			if(!tryPrepareRedefine(decl,d))
 				return false;
 			//assert(!symtabLookup(decl.name,false,null));
@@ -854,7 +862,13 @@ abstract class Scope{
 		static if(language==silq){
 			auto earlyForgotten=decl.earlyForgotten;
 			decl.earlyForgotten=null;
-			auto cd=earlyForgotten?new IllegalConsumedDecl(decl,use,earlyForgotten):new ConsumedDecl(decl,use);
+			ConsumedDecl cd;
+			if(earlyForgotten){
+				cd=new IllegalConsumedDecl(decl,use,earlyForgotten);
+			}else if(auto vd=cast(VarDecl)decl){
+				if(vd.outOfScopeCause) cd=new OutOfScopeDecl(decl,use,vd.outOfScopeCause);
+			}
+			if(!cd) cd=new ConsumedDecl(decl,use);
 		}else auto cd=new ConsumedDecl(decl,use);
 		if(decl.rename){
 			cd.rename=new Identifier(decl.rename.id);
@@ -900,7 +914,7 @@ abstract class Scope{
 		if(decl.scope_ is this) return true;
 		if(decl.isToplevelDeclaration()) return false;
 		import ast.semantic_:typeConstBlocked;
-		if(decl.isConst||typeConstBlocked(decl,this)) return false;
+		if(decl.isPinned||typeConstBlocked(decl,this)) return false;
 		if(isConst(decl)){
 			if(!canRecompute(decl)) return false;
 			static if(language==silq) noteDependencyResolved(getDependency(decl));
@@ -1019,8 +1033,12 @@ abstract class Scope{
 			if(odecl !is ndecl)
 				replaceDecl(odecl,ndecl);
 			static if(language==silq){
-				if(dependencyTracked(ndecl))
+				if(dependencyTracked(ndecl)){
+					auto prevConsumingUse=consumingUse;
+					consumingUse=use;
+					scope(exit) consumingUse=prevConsumingUse;
 					pushDependencies(ndecl,true);
+				}
 			}
 			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
@@ -1073,7 +1091,7 @@ abstract class Scope{
 			if(consumedComponent&&componentConstBlocksAllow(meaning,consumedComponent,id.loc))
 				return true; // consumption only affects components that are not borrowed
 		if(isConst(meaning)) return false;
-		if(meaning.isConst) return false;
+		if(meaning.isPinned) return false;
 		return true;
 	}
 	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
@@ -1148,14 +1166,14 @@ abstract class Scope{
 					if(!checkConsumable(id,meaning))
 						doConsume=false;
 					if(doConsume&&meaning.scope_){
-						assert(!meaning.isConst);
+						assert(!meaning.isPinned);
 						if(auto nmeaning=consume(meaning,id))
 							meaning=nmeaning;
 					}
 				}
 			}
 			static if(language==silq)
-			if(kind==Lookup.constant&&!meaning.isConst&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
+			if(kind==Lookup.constant&&!meaning.isPinned&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
 				blockConst(meaning,id);
 		}
 		if(kind!=Lookup.probing&&meaning&&!typeofSuppressedCapture){
@@ -1431,6 +1449,7 @@ abstract class Scope{
 				if(dep.isTop) break;
 			}
 		}
+		Identifier consumingUse;
 		final void pushDependencies(Declaration decl,bool keep){
 			consumedDepLog[decl]=getDependency(decl).dup;
 			noteDependencyConsumed(decl,getDependency(decl));
@@ -1446,6 +1465,8 @@ abstract class Scope{
 								while(lu.forwardTo) lu=lu.forwardTo;
 								//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
 								if(lu.canCancelImplicitDup()){
+									if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause)
+										vd.outOfScopeCause=consumingUse;
 									if(lu.cancelImplicitDup()){
 										assert(lu.isConsumption(),text(lu));
 										done=false;
@@ -1608,6 +1629,22 @@ abstract class Scope{
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
+		static if(language==silq){
+			foreach(sc;scopes){
+				foreach(_,d;sc.rnsymtab.dup){
+					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
+					if(sc.rnsymtab.get(d.getId,null) !is d) continue;
+					auto origin=d;
+					while(origin.splitFrom) origin=origin.splitFrom;
+					if(!origin.scope_||!origin.scope_.isNestedIn(sc)) continue;
+					if(!sc.canForgetAppend(d)){
+						if(!sc.lastUses.betterUnforgettableError(d,sc))
+							sc.error(format("`const` variable `%s` cannot be forgotten at the end of its scope",d.getName),d.loc);
+						d.setSemForceError();
+					}
+				}
+			}
+		}
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
@@ -1864,6 +1901,7 @@ abstract class Scope{
 		symtabInsert(var);
 		var.vtype=type;
 		var.scope_=this;
+		var.isConst_=isConstLocal(decl); // (splits and merges of `const` local variables; not of `const` parameters)
 		import ast.semantic_:varDeclSemantic;
 		varDeclSemantic(var,this);
 		return var;

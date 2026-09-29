@@ -2506,7 +2506,7 @@ void erpRecordJoin(Expression stm,Scope sc){
 			if(!vd.scope_||vd.scope_.getFunction() !is fun) continue;
 			auto type=typeForDecl(vd);
 			if(!type) continue;
-			vars~=ERPVar(vd.name.id,type,!type.isClassical()&&sc.canForget(vd),vd.isConst);
+			vars~=ERPVar(vd.name.id,type,!type.isClassical()&&sc.canForget(vd),vd.isPinned);
 		}
 		if(cast(FunctionScope)c) break;
 	}

@@ -3621,7 +3621,98 @@ void resolvePatternComponentForgets(Scope.DeclProp.ComponentReplacement*[] patte
 		}
 }
 
+static if(language==silq)
+void unwrapConstLocals(ref Expression lhs,Expression* rhs,ref Identifier[] ids,ref Identifier[] checkLifted,ref CallExp[] initializers){
+	Identifier constId(Expression e){
+		if(auto ce=cast(UnaryExp!(Tok!"const"))e) return cast(Identifier)ce.e;
+		return null;
+	}
+	void add(Identifier id){
+		ids~=id;
+		if(rhs){
+			auto dupe=new CallExp(new Identifier(Id.s!"dup"),*rhs,false,false);
+			dupe.loc=(*rhs).loc;
+			*rhs=dupe;
+			initializers~=dupe;
+		}else{
+			checkLifted~=id;
+			initializers~=null;
+		}
+	}
+	if(auto id=constId(lhs)){
+		lhs=id;
+		return add(id);
+	}
+	if(auto tae=cast(TypeAnnotationExp)lhs){
+		if(auto id=constId(tae.e)){
+			tae.e=id;
+			add(id);
+		}
+		return;
+	}
+	void components(Expression[] lhss,Expression[] rhss){
+		foreach(i,ref e;lhss) unwrapConstLocals(e,rhss.length==lhss.length?&rhss[i]:null,ids,checkLifted,initializers);
+	}
+	if(auto tpl=cast(TupleExp)lhs){
+		auto rtpl=rhs?cast(TupleExp)*rhs:null;
+		components(tpl.e,rtpl?rtpl.e:[]);
+		return;
+	}
+	if(auto vec=cast(VectorExp)lhs){
+		auto rvec=rhs?cast(VectorExp)*rhs:null;
+		components(vec.e,rvec?rvec.e:[]);
+		return;
+	}
+	if(auto cat=cast(CatExp)lhs){
+		unwrapConstLocals(cat.e1,null,ids,checkLifted,initializers);
+		unwrapConstLocals(cat.e2,null,ids,checkLifted,initializers);
+	}
+}
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq){
+		Identifier[] constIds,checkLiftedIds;
+		CallExp[] initializers;
+		unwrapConstLocals(be.e1,&be.e2,constIds,checkLiftedIds,initializers);
+		if(constIds.length){
+			Expression r=defineSemantic(be,sc,flags,resetConst);
+			foreach(i,id;constIds){
+				auto vd=cast(VarDecl)id.meaning;
+				if(!vd||vd.isSemError()) continue;
+				vd.isConst_=true;
+				if(!vd.vtype||vd.vtype.isClassical()) continue;
+				if(initializers[i]&&!initializers[i].isSemError()&&sc.getDependency(vd).isTop){
+					import ast.type:freeIdentifiers;
+					SetX!Declaration read;
+					foreach(rid;initializers[i].arg.freeIdentifiers) if(rid.meaning) read.insert(rid.meaning);
+					Identifier cause=null;
+					foreach(cid;be.e2.freeIdentifiers){
+						if(cid.meaning&&cid.meaning in read&&!cid.constLookup&&!cid.implicitDup){
+							cause=cid;
+							break;
+						}
+					}
+					sc.error(format("`const` variable `%s` goes out of scope immediately",vd.getName),id.loc);
+					if(cause) sc.note(format("because `%s` is consumed here",cause.name),cause.loc);
+					vd.setSemForceError();
+					continue;
+				}
+				if(checkLiftedIds.canFind!"a is b"(id)&&sc.getDependency(vd).isTop){
+					sc.error(format("`const` variable `%s` must be initialized with a `lifted` expression",vd.getName),id.loc);
+					vd.setSemForceError();
+					continue;
+				}
+				auto use=new Identifier(vd.getId);
+				use.loc=id.loc;
+				use.meaning=vd;
+				use.scope_=sc;
+				use.constLookup=true;
+				use.type=vd.vtype;
+				use.setSemCompleted();
+				sc.lastUses.constUse(use,r,true,false);
+			}
+			return r;
+		}
+	}
 	CompoundExp[] prologues,epilogues;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -6908,7 +6999,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq)
 	if(!idx.byRef&&context.constResult!=ConstResult.indexed&&!idx.isSemError()){
 		if(auto baseId=getIdFromIndex(idx))
-			if(baseId.meaning&&baseId.constLookup&&!baseId.meaning.isConst&&!baseId.meaning.isToplevelDeclaration()&&!baseId.typeofSuppressedCapture)
+			if(baseId.meaning&&baseId.constLookup&&!baseId.meaning.isPinned&&!baseId.meaning.isToplevelDeclaration()&&!baseId.typeofSuppressedCapture)
 				sc.recordComponentConstBlock(baseId.meaning,baseId,idx);
 	}
 	idx.setSemCompleted();
