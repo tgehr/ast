@@ -526,6 +526,7 @@ class ImportExp: Declaration{
 // special declarations used during semantic analysis
 
 abstract class DeadDecl: Declaration{
+	bool sameExplanation(DeadDecl other){ return this is other; }
 	this(Identifier name){
 		super(name);
 	}
@@ -537,6 +538,10 @@ abstract class DeadDecl: Declaration{
 }
 
 class ConsumedDecl: DeadDecl{
+	override bool sameExplanation(DeadDecl other){
+		auto o=cast(ConsumedDecl)other;
+		return o&&typeid(o) is typeid(this)&&o.use is use;
+	}
 	Identifier use;
 	this(Declaration decl,Identifier use)in{
 		assert(!!use);
@@ -556,6 +561,10 @@ class ConsumedDecl: DeadDecl{
 
 class OutOfScopeDecl: ConsumedDecl{
 	Identifier cause;
+	override bool sameExplanation(DeadDecl other){
+		auto o=cast(OutOfScopeDecl)other;
+		return o&&o.use is use&&o.cause is cause;
+	}
 	this(Declaration decl,Identifier use,Identifier cause)in{
 		assert(!!cause);
 	}do{
@@ -640,8 +649,12 @@ class DeadMerge: DeadDecl{
 		assert(mergedFrom.length!=0);
 		auto deadDecls=mergedFrom.map!(d=>cast(DeadDecl)d).filter!(d=>!!d).array;
 		if(deadDecls.length){
-			foreach(dd;deadDecls)
+			DeadDecl[] explained;
+			foreach(dd;deadDecls){
+				if(explained.any!(e=>e.sameExplanation(dd))) continue;
+				explained~=dd;
 				dd.explain(kind,sc); // TODO: good?
+			}
 			return;
 		}
 		if(mergedFrom.length==1){

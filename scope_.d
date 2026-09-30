@@ -856,8 +856,12 @@ abstract class Scope{
 		final void resetConst(){ }
 		final void resetComponentReplacement(){ }
 	}
+	Q!(Declaration,Identifier)[] pendingConsumptions;
 	final ConsumedDecl recordConsumption(Declaration decl,Identifier use){
-		if(allowMerge) return null;
+		if(allowMerge){
+			if(use) pendingConsumptions~=q(decl,use);
+			return null;
+		}
 		if(!use) return null;
 		static if(language==silq){
 			auto earlyForgotten=decl.earlyForgotten;
@@ -1626,6 +1630,13 @@ abstract class Scope{
 		mergedNestedScopes~=activeNestedScopes;
 		activeNestedScopes=[];
 		allowMerge=false;
+		scope(exit){
+			auto pending=pendingConsumptions;
+			pendingConsumptions=[];
+			foreach(p;pending)
+				if(!symtabLookup(p[0].getId,false,null)&&!rnsymtab.get(p[0].getId,null))
+					recordConsumption(p[0],p[1]);
+		}
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;

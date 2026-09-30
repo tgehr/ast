@@ -384,6 +384,7 @@ final class LastUse{
 			}
 		}
 		result=scope_.consume(result,use);
+		if(!use&&explanationUse) scope_.recordConsumption(result,explanationUse);
 		if(constBlock.length) scope_.updateDeclProps(decl).constBlock=oldConstBlock;
 		assert(!!result);
 		scope_.unsplit(result);
@@ -586,6 +587,7 @@ final class LastUse{
 				isForget=true;
 				break;
 			case lazyMerge:
+				useFromMergedScopes();
 				consume(false);
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=versionIn(decl,nestedScopes[i]);
@@ -657,6 +659,18 @@ final class LastUse{
 		}
 		return true;
 	}
+	Identifier explanationUse;
+	private void useFromMergedScopes(){
+		if(use||explanationUse) return;
+		foreach(nsc;nestedScopes){
+			if(auto lu=nsc.lastUses.get(versionIn(decl,nsc),true)){
+				if(lu.use){
+					explanationUse=lu.use;
+					return;
+				}
+			}
+		}
+	}
 	bool cancelImplicitDup(){
 		//imported!"util.io".writeln("CANCELING: ",use.loc," ",dep);
 		if(forwardTo) return forwardTo.cancelImplicitDup();
@@ -666,6 +680,7 @@ final class LastUse{
 				return assert(0);
 			case lazyMerge:
 				bool ok=true;
+				useFromMergedScopes();
 				ok&=consume(false);
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=versionIn(decl,nestedScopes[i]);
