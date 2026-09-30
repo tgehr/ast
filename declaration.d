@@ -135,6 +135,7 @@ class VarDecl: Declaration{
 	Expression initializer;
 	DefineExp definition;
 	Identifier outOfScopeCause;
+	Identifier outOfScopeDup;
 }
 
 class Parameter: VarDecl{
@@ -561,20 +562,24 @@ class ConsumedDecl: DeadDecl{
 
 class OutOfScopeDecl: ConsumedDecl{
 	Identifier cause;
+	Identifier dupUse;
 	override bool sameExplanation(DeadDecl other){
 		auto o=cast(OutOfScopeDecl)other;
-		return o&&o.use is use&&o.cause is cause;
+		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse;
 	}
-	this(Declaration decl,Identifier use,Identifier cause)in{
+	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null)in{
 		assert(!!cause);
 	}do{
 		super(decl,use);
 		this.cause=cause;
+		this.dupUse=dupUse;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
 		sc.note(format("%s `%s` went out of scope here",kind,use.meaning),use.loc);
 		sc.note(format("because `%s` was consumed here",cause.name),cause.loc);
+		if(dupUse&&dupUse !is use)
+			sc.note(format("after `%s` was used in a consuming position here",dupUse.name),dupUse.loc);
 	}
 	override string toString(){
 		return text("outOfScope(",super.toString(),",",cause.loc,")");

@@ -870,7 +870,7 @@ abstract class Scope{
 			if(earlyForgotten){
 				cd=new IllegalConsumedDecl(decl,use,earlyForgotten);
 			}else if(auto vd=cast(VarDecl)decl){
-				if(vd.outOfScopeCause) cd=new OutOfScopeDecl(decl,use,vd.outOfScopeCause);
+				if(vd.outOfScopeCause) cd=new OutOfScopeDecl(decl,use,vd.outOfScopeCause,vd.outOfScopeDup);
 			}
 			if(!cd) cd=new ConsumedDecl(decl,use);
 		}else auto cd=new ConsumedDecl(decl,use);
@@ -1469,8 +1469,11 @@ abstract class Scope{
 								while(lu.forwardTo) lu=lu.forwardTo;
 								//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
 								if(lu.canCancelImplicitDup()){
-									if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause)
+									if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
 										vd.outOfScopeCause=consumingUse;
+										if(!isConstLocal(vd)&&lu.kind==LastUse.Kind.constUse&&lu.prevImplicitDup)
+											vd.outOfScopeDup=lu.prevImplicitDup.use;
+									}
 									if(lu.cancelImplicitDup()){
 										assert(lu.isConsumption(),text(lu));
 										done=false;
