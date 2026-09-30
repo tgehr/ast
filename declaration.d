@@ -576,10 +576,12 @@ class OutOfScopeDecl: ConsumedDecl{
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
-		sc.note(format("%s `%s` went out of scope here",kind,use.meaning),use.loc);
-		sc.note(format("because `%s` was consumed here",cause.name),cause.loc);
+		if(!dupUse||dupUse is use){
+			super.explain(kind,sc);
+		}else sc.note(format("%s `%s` went out of scope here",kind,use.meaning),use.loc);
 		if(dupUse&&dupUse !is use)
-			sc.note(format("after `%s` was used in a consuming position here",dupUse.name),dupUse.loc);
+			sc.note(format("`%s` was used in a consuming position here",dupUse.name),dupUse.loc);
+		sc.note(format("`%s` not recomputable after dependency `%s` was consumed here",use.name,cause.name),cause.loc);
 	}
 	override string toString(){
 		return text("outOfScope(",super.toString(),",",cause.loc,")");
