@@ -8520,6 +8520,8 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 	if(auto fd=cast(FunctionDef)meaning){
 		if(!fd.ftypeFinal){
 			auto cfd=sc.getFunction();
+			if(!cfd&&fd.sstate==SemState.passive&&!fd.tainted&&fd.numUpdatesPending==0)
+				return true;
 			if(!cfd){
 				sc.error("invalid forward reference",loc);
 				if(fd&&!fd.rret)
