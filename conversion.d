@@ -618,6 +618,13 @@ Ret!witness fixedToVector(bool witness)(Expression from,Expression to,TypeAnnota
 				return trans(direct,typeExplicitConversion!true(vec,to,type));
 			}else return true;
 		}
+		if(type==TypeAnnotationType.coercion) if(auto vec2=cast(VectorTy)to){
+			auto vec=vectorTy(Bool(fromInt.isClassical),vec2.num);
+			static if(witness){
+				if(auto next=typeExplicitConversion!true(vec,to,type))
+					return trans(new FixedToVectorConversion(from,vec,true),next);
+			}else if(typeExplicitConversion!false(vec,to,type)) return true;
+		}
 	}
 	return typeof(return).init;
 }
