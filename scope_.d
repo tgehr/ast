@@ -2373,7 +2373,7 @@ class NestedScope: Scope{
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){
 		this.parent=parent;
-		static if(language==silq) withTransTrial=parent.getWithTransTrial(); // scopes created while a `with` transformation trial analysis is active belong to the trial
+		static if(language==silq) if(parent) withTransTrial=parent.getWithTransTrial(); // scopes created while a `with` transformation trial analysis is active belong to the trial (`parent` is null for a `TypeScope`)
 	}
 	override Scope parentScope(){ return parent; }
 	override @property bool inferenceMode(){
