@@ -1145,6 +1145,7 @@ class Identifier: Expression{
 		if(byRef) return null; // TODO: why is this suddenly needed?
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
+		if(vd.definition) if(auto td=cast(FixedPointDeclaration)vd.definition.toplevel) if(!td.typeFinal) return null;
 		assert(vd.isSemFinal());
 		auto init=vd.initializer;
 		if(vd.isSemError()||!init) return null;
@@ -1802,6 +1803,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	mixin PrecedenceToString;
 	override @property int lprec(){ return lbp!op; }
 	override @property int rprec(){ return rbp!op; }
+	static if(op==Tok!":="){
+		Declaration toplevel;
+	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
 		Annotation annotation;

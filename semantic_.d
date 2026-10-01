@@ -490,6 +490,7 @@ void checkNotLinear(Expression e,Scope sc){
 Expression[] semantic(Expression[] exprs,Scope sc){
 	bool success=true;
 	foreach(ref expr;exprs) expr=makeDeclaration(expr,success,sc,false,true);
+	auto declared=exprs.dup;
 	foreach(ref expr;exprs){
 		if(auto decl=cast(Declaration)expr) expr=presemantic(decl,sc);
 		expr=toplevelSemantic(expr,sc);
@@ -532,6 +533,12 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 			if(!any) break;
 		}
 	}
+	foreach(i,decl;declared){
+		if(auto de=cast(DefineExp)decl) if(auto td=cast(ToplevelDefinition)de.toplevel){
+			finalizeToplevel(td);
+			if(td.result) exprs[i]=td.result;
+		}
+	}
 	if(!sc.allowsLinear()){
 		foreach(ref expr;exprs){
 			checkNotLinear(expr,sc);
@@ -539,7 +546,6 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 	}
 	return exprs;
 }
-// analyze a function that is passive or completed again, from its original body
 FunctionDef reanalyzePassiveFunction(FunctionDef fd){
 	fd.inferringReturnType=true;
 	fd.ftypeFinal=true;
@@ -564,9 +570,118 @@ Expression toplevelSemanticImpl(FunctionDef fd,Scope sc){
 Expression toplevelSemanticImpl(DatDecl dd,Scope sc){
 	return datDeclSemantic(dd,sc);
 }
-Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
+Expression analyzeToplevel(ToplevelDefinition td,DefineExp expr,Scope sc){
 	StmFlags flags; // TODO: check?
-	return defineOrAssignSemantic(expr,sc,flags);
+	auto top=sc.getTopScope();
+	assert(!!top);
+	top.analyzingDefinitions~=td;
+	td.sstate=SemState.started;
+	scope(exit){
+		assert(top.analyzingDefinition is td);
+		top.analyzingDefinitions=top.analyzingDefinitions[0..$-1];
+		if(td.sstate==SemState.started) td.sstate=SemState.passive;
+	}
+	td.result=defineOrAssignSemantic(expr,sc,flags);
+	if(td.numUpdatesPending==0) finalizeToplevel(td);
+	return td.result;
+}
+void finalizeToplevel(ToplevelDefinition td){
+	if(td.typeFinal) return;
+	td.typeFinal=true;
+	auto rhs=td.result;
+	if(auto de=cast(DefineExp)rhs) rhs=de.e2;
+	if(rhs&&!td.isSemError()&&td.vars.length){
+		foreach(e;rhs.subexpressions){
+			if(e.type!=bottom||e.isSemError()) continue;
+			auto sc=td.vars[0].scope_;
+			sc.error("value of top-level definition depends on itself",e.loc);
+			sc.note("top-level definition is here",td.definition.loc);
+			td.setSemError();
+			foreach(vd;td.vars) vd.setSemForceError();
+			break;
+		}
+	}
+	notifyDependents(td);
+}
+void notifyDependents(FixedPointDeclaration d){
+	auto dependents=d.dependents;
+	d.dependents=[];
+	foreach(dep;dependents){
+		if(auto ofd=cast(FunctionDef)dep){
+			if(auto fd=cast(FunctionDef)d) notify(ofd,fd);
+			else notify(ofd,null);
+		}else if(auto td=cast(ToplevelDefinition)dep) notifyToplevel(td);
+	}
+}
+void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
+	foreach(dep;d.dependents){
+		if(dep is cause||dep.isSemError()) continue;
+		if(auto td=cast(ToplevelDefinition)dep){
+			reanalyzeToplevel(td,cause);
+			continue;
+		}
+		auto ufd=cast(FunctionDef)dep;
+		while(ufd&&ufd.isSemCompleted())
+			ufd=ufd.scope_.getFunction();
+		if(!ufd||ufd is cause||ufd.sstate==SemState.started) continue;
+		if(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted) continue;
+		assert(!ufd.ftypeFinal);
+		assert(!!ufd.scope_);
+		resetFunction(ufd,null);
+		auto nufd=functionDefSemantic(ufd,ufd.scope_);
+		assert(nufd is ufd);
+	}
+}
+void reanalyzeToplevel(ToplevelDefinition td,FixedPointDeclaration cause=null){
+	if(!td.original||!td.vars.length||td.isSemError()||td.sstate==SemState.started) return;
+	auto sc=td.vars[0].scope_;
+	if(++td.numInferenceRepetitions>astopt.inferenceLimit){
+		sc.error("unable to determine type of top-level definition",td.definition.loc);
+		sc.note("you may need to annotate return types of functions it depends on, or increase the `--inference-limit=...`",td.definition.loc);
+		td.setSemError();
+		return;
+	}
+	auto typesBefore=td.vars.map!(vd=>vd.vtype).array;
+	foreach(vd;td.vars){
+		vd.replaceType=true;
+		vd.initializer=null;
+	}
+	Expression.CopyArgs args;
+	args.preserveMeanings=true;
+	auto e=td.original.copy(args);
+	e.toplevel=td;
+	analyzeToplevel(td,e,sc);
+	if(!td.isSemError()&&!equal!((a,b)=>a is b||a&&b&&a==b)(typesBefore,td.vars.map!(vd=>vd.vtype)))
+		reanalyzeDependents(td,cause);
+}
+void notifyToplevel(ToplevelDefinition td){
+	if(td.numUpdatesPending==0) return;
+	if(--td.numUpdatesPending==0) finalizeToplevel(td);
+}
+Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
+	auto td=cast(ToplevelDefinition)expr.toplevel;
+	if(!td&&!expr.isSemCompleted()&&!expr.isSemError()){
+		td=new ToplevelDefinition(expr);
+		expr.toplevel=td;
+		import ast.type:freeIdentifiers;
+		foreach(id;expr.e1.freeIdentifiers)
+			if(auto vd=cast(VarDecl)id.meaning)
+				if(vd.definition is expr&&!td.vars.canFind(vd))
+					td.vars~=vd;
+		Expression.CopyArgs args;
+		args.preserveMeanings=true;
+		td.original=expr.copy(args);
+	}
+	if(!td){
+		StmFlags flags; // TODO: check?
+		return defineOrAssignSemantic(expr,sc,flags);
+	}
+	if(td.result) return td.result;
+	if(td.sstate==SemState.started) return expr;
+	auto r=analyzeToplevel(td,expr,sc);
+	if(td.dependents.length&&!td.isSemError())
+		reanalyzeDependents(td,null);
+	return r;
 }
 Expression toplevelSemanticImpl(CommaExp ce,Scope sc){
 	StmFlags flags; // TODO: check?
@@ -2394,7 +2509,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 			}
 			if(auto vd=cast(VarDecl)id.meaning){
 				if(context.type){
-					if(vd.vtype){
+					if(vd.vtype&&!vd.replaceType){
 						if(auto nt=joinTypes(vd.vtype,context.type)){
 							vd.vtype=nt;
 							context.sc.updateType(vd);
@@ -2402,7 +2517,10 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 							context.sc.error(format("incompatible types `%s` and `%s` for variable `%s`",vd.vtype,context.type),id.loc);
 							id.setSemError();
 						}
-					}else vd.vtype=context.type;
+					}else{
+						vd.vtype=context.type;
+						vd.replaceType=false;
+					}
 				}else if(!context.sc.inferenceMode) id.setSemError();
 				id.type=id.typeFromMeaning;
 				if(context.initializer){
@@ -6623,6 +6741,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			if(vd.definition){
 				toplevelSemantic(vd.definition,vd.scope_);
 				id.type=id.typeFromMeaning;
+				if(!id.type) if(auto td=cast(ToplevelDefinition)vd.definition.toplevel)
+					if(td.sstate==SemState.started&&!td.isSemError()) id.type=bottom;
 			}
 		}
 		if(!id.type){
@@ -8517,11 +8637,39 @@ bool setFtype(FunctionDef fd,bool force){
 
 bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 	if(!sc) return false;
+	if(auto vd=cast(VarDecl)meaning){
+		if(vd.definition) if(auto td=cast(ToplevelDefinition)vd.definition.toplevel){
+			if(!td.typeFinal&&!td.isSemError()){
+				FixedPointDeclaration dep=sc.getFunction();
+				if(!dep) if(auto top=sc.getTopScope()) dep=top.analyzingDefinition;
+				if(dep&&dep !is td){
+					if(!td.dependents.canFind(dep)){
+						td.dependents~=dep;
+						dep.numUpdatesPending+=1;
+					}
+					if(auto cfd=cast(FunctionDef)dep){
+						cfd.unsealed=true;
+						markCallerTainted(sc,null);
+					}
+				}
+			}
+		}
+		return true;
+	}
 	if(auto fd=cast(FunctionDef)meaning){
 		if(!fd.ftypeFinal){
 			auto cfd=sc.getFunction();
 			if(!cfd&&fd.sstate==SemState.passive&&!fd.tainted&&fd.numUpdatesPending==0)
 				return true;
+			auto top=sc.getTopScope();
+			if(!cfd&&top&&top.analyzingDefinition){
+				auto td=top.analyzingDefinition;
+				if(!fd.dependents.canFind(td)){
+					fd.dependents~=td;
+					td.numUpdatesPending+=1;
+				}
+				return true;
+			}
 			if(!cfd){
 				sc.error("invalid forward reference",loc);
 				if(fd&&!fd.rret)
@@ -8530,8 +8678,8 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 			}else{
 				if(cfd.scope_&&cfd.scope_.isNestedIn(fd.fscope_)) cfd=fd; // TODO: ok?
 				//imported!"util.io".writeln("adding ",cfd," to ",fd);
-				if(!fd.functionDefsToUpdate.canFind(cfd)){ // TODO: make more efficient?
-					fd.functionDefsToUpdate~=cfd;
+				if(!fd.dependents.canFind(cfd)){ // TODO: make more efficient?
+					fd.dependents~=cfd;
 					cfd.numUpdatesPending+=1;
 				}
 				cfd.unsealed=true;
@@ -8542,6 +8690,102 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 	return true;
 }
 
+
+void resetFunction(FunctionDef fd,FunctionDef cause)in{
+	//imported!"util.io".writeln("RESETTING: ",fd," FROM ",cause);
+	assert(!fd.isSemFinal());
+}do{
+	auto crepls=fd.scope_.allComponentReplacements();
+	foreach(i,crepl;crepls){ // reset component replacements
+		static assert(is(typeof(crepl):T*,T));
+		crepl.constRead=null;
+		if(!crepl.read) continue;
+		if(auto id=getIdFromIndex(crepl.read)){
+			if(id.scope_&&id.scope_.isNestedIn(fd.fscope_))
+				crepl.read=null;
+		}
+	}
+	if(fd.sealed) fd.unseal();
+	if(fd.origRret) fd.rret=fd.origRret.copy();
+	assert(!!fd.origBody_);
+	fd.body_=fd.origBody_.copy();
+	auto newfscope_=new FunctionScope(fd.scope_,fd);
+	fd.sstate=SemState.initial;
+	fd.tainted=false; // tainted is per-analysis-pass; finalPassDone is sticky
+	fd.deferredSpecificityCheck=false; // reset for re-analysis
+	foreach(p;fd.params){
+		p.splitInto=[];
+		assert(p.scope_ is fd.fscope_);
+		p.scope_=null;
+		newfscope_.insert(p);
+	}
+	Declaration[] ncapturedDecls;
+	MapX!(Declaration,Identifier[]) ncaptures;
+	foreach(capture;fd.capturedDecls){ // undo consumption of captures
+		capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
+		if(fd.isConsumedCapture(capture)&&fd.scope_.canInsert(capture.name.id)){
+			assert(capture.scope_ is fd.scope_); // TODO: ok?
+			//imported!"util.io".writeln("INSERTING: ",capture);
+			capture.scope_=null;
+			fd.scope_.unconsume(capture);
+			newfscope_.symtabInsert(capture);
+		}
+		auto loc=fd.captures[capture][0].loc;
+		auto id=new Identifier(capture.getName);
+		id.loc=loc;
+		id.meaning=fd.isConsumedCapture(capture)?newfscope_.split(capture,id):capture;
+		id.type=id.typeFromMeaning;
+		id.constLookup=!fd.isConsumedCapture(capture);
+		propErr(id.meaning, id);
+		id.setSemCompleted();
+		propErr(id,fd);
+		if(id.meaning){
+			ncapturedDecls~=capture;
+			ncaptures[capture]~=id;
+		}
+	}
+	fd.fscope_=newfscope_;
+	fd.captures=ncaptures;
+	fd.capturedDecls=ncapturedDecls;
+	fd.context=null;
+	fd.thisVar=null;
+	prepareFunctionDef(fd,fd.scope_);
+}
+void resetFunctionDefsToUpdate()(FunctionDef fd){
+	notifyDependents(fd);
+}
+void finalize()(FunctionDef fd){
+	if(fd.isSemError()) return;
+	//imported!"util.io".writeln("FINALIZING: ",fd," ",fd.ftype," ",fd.dependents.length," ",fd.numUpdatesPending);
+	if(fd.ftypeFinal){
+		fd.setSemCompleted();
+		resetFunctionDefsToUpdate(fd);
+	}else{
+		fd.sstate=SemState.passive;
+		resetFunctionDefsToUpdate(fd);
+	}
+}
+void notify(FunctionDef fd,FunctionDef ufd){
+	if(fd.numUpdatesPending==0) return; // already finalized
+	if(--fd.numUpdatesPending==0){
+		if(fd.sstate!=SemState.started){ // semantic analysis is still active
+			static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
+				// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
+				fd.tainted=false;
+				if(erpRewrite(fd)){
+					fd.inferringReturnType=true;
+					resetFunction(fd,fd);
+					functionDefSemantic(fd,fd.scope_);
+					return;
+				}
+			}
+			fd.ftypeFinal=true;
+			fd.inferringReturnType=false;
+			fd.inferAnnotation=false;
+			finalize(fd);
+		}
+	}
+}
 
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	//scope(exit) imported!"util.io".writeln("RETURNED: ",fd);
@@ -8641,105 +8885,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			vars[n]=[];
 		}
 	}
-	static void resetFunction(FunctionDef fd,FunctionDef cause)in{
-		//imported!"util.io".writeln("RESETTING: ",fd," FROM ",cause);
-		assert(!fd.isSemFinal());
-	}do{
-		auto crepls=fd.scope_.allComponentReplacements();
-		foreach(i,crepl;crepls){ // reset component replacements
-			static assert(is(typeof(crepl):T*,T));
-			crepl.constRead=null;
-			if(!crepl.read) continue;
-			if(auto id=getIdFromIndex(crepl.read)){
-				if(id.scope_&&id.scope_.isNestedIn(fd.fscope_))
-					crepl.read=null;
-			}
-		}
-		if(fd.sealed) fd.unseal();
-		if(fd.origRret) fd.rret=fd.origRret.copy();
-		assert(!!fd.origBody_);
-		fd.body_=fd.origBody_.copy();
-		auto newfscope_=new FunctionScope(fd.scope_,fd);
-		fd.sstate=SemState.initial;
-		fd.tainted=false; // tainted is per-analysis-pass; finalPassDone is sticky
-		fd.deferredSpecificityCheck=false; // reset for re-analysis
-		foreach(p;fd.params){
-			p.splitInto=[];
-			assert(p.scope_ is fd.fscope_);
-			p.scope_=null;
-			newfscope_.insert(p);
-		}
-		Declaration[] ncapturedDecls;
-		MapX!(Declaration,Identifier[]) ncaptures;
-		foreach(capture;fd.capturedDecls){ // undo consumption of captures
-			capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
-			if(fd.isConsumedCapture(capture)&&fd.scope_.canInsert(capture.name.id)){
-				assert(capture.scope_ is fd.scope_); // TODO: ok?
-				//imported!"util.io".writeln("INSERTING: ",capture);
-				capture.scope_=null;
-				fd.scope_.unconsume(capture);
-				newfscope_.symtabInsert(capture);
-			}
-			auto loc=fd.captures[capture][0].loc;
-			auto id=new Identifier(capture.getName);
-			id.loc=loc;
-			id.meaning=fd.isConsumedCapture(capture)?newfscope_.split(capture,id):capture;
-			id.type=id.typeFromMeaning;
-			id.constLookup=!fd.isConsumedCapture(capture);
-			propErr(id.meaning, id);
-			id.setSemCompleted();
-			propErr(id,fd);
-			if(id.meaning){
-				ncapturedDecls~=capture;
-				ncaptures[capture]~=id;
-			}
-		}
-		fd.fscope_=newfscope_;
-		fd.captures=ncaptures;
-		fd.capturedDecls=ncapturedDecls;
-		fd.context=null;
-		fd.thisVar=null;
-		prepareFunctionDef(fd,fd.scope_);
-	}
-	auto functionDefsToUpdate=fd.functionDefsToUpdate;
+	auto dependents=fd.dependents;
 	auto numCapturesAfter=fd.capturedDecls.length;
-	static void resetFunctionDefsToUpdate()(FunctionDef fd){
-		foreach(ofd;fd.functionDefsToUpdate)
-			notify(ofd,fd);
-		fd.functionDefsToUpdate=[];
-	}
-	static void finalize()(FunctionDef fd){
-		if(fd.isSemError()) return;
-		//imported!"util.io".writeln("FINALIZING: ",fd," ",fd.ftype," ",fd.functionDefsToUpdate.length," ",fd.numUpdatesPending);
-		if(fd.ftypeFinal){
-			fd.setSemCompleted();
-			resetFunctionDefsToUpdate(fd);
-		}else{
-			fd.sstate=SemState.passive;
-			resetFunctionDefsToUpdate(fd);
-		}
-	}
-	static void notify(FunctionDef fd,FunctionDef ufd){
-		if(fd.numUpdatesPending==0) return; // already finalized
-		if(--fd.numUpdatesPending==0){
-			if(fd.sstate!=SemState.started){ // semantic analysis is still active
-				static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
-					// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
-					fd.tainted=false;
-					if(erpRewrite(fd)){
-						fd.inferringReturnType=true;
-						resetFunction(fd,fd);
-						functionDefSemantic(fd,fd.scope_);
-						return;
-					}
-				}
-				fd.ftypeFinal=true;
-				fd.inferringReturnType=false;
-				fd.inferAnnotation=false;
-				finalize(fd);
-			}
-		}
-	}
 	static if(language==silq){
 		// early-return elimination, stage 2: rewrite and analyze again, lowering loops
 		bool erpSwitch(){
@@ -8759,11 +8906,17 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	if(fd.ftypeFinal) fd.setSemCompleted();
-	if(!fd.isSemError()&&(fd.ftype!=ftypeBefore&&(ftypeBefore||functionDefsToUpdate.length)||numCapturesAfter!=numCapturesBefore)){
+	if(!fd.isSemError()&&(fd.ftype!=ftypeBefore&&(ftypeBefore||dependents.length)||numCapturesAfter!=numCapturesBefore)){
 		//imported!"util.io".writeln("NOTIFYING: ",fd," ",ftypeBefore," ⇒ ",fd.ftype," ",numCapturesBefore," ⇒ ",numCapturesAfter);
 		if(!fd.isSemFinal()) resetFunction(fd,fd);
-		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",functionDefsToUpdate);
-		if(fd.ftype!=ftypeBefore) foreach(ufd;functionDefsToUpdate){
+		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",dependents);
+		if(fd.ftype!=ftypeBefore) foreach(d;dependents){
+			if(auto td=cast(ToplevelDefinition)d){
+				reanalyzeToplevel(td,fd);
+				continue;
+			}
+			auto ufd=cast(FunctionDef)d;
+			if(!ufd) continue;
 			if(ufd.isSemError()) continue;
 			if(ufd is fd) continue;
 			while(ufd&&ufd.isSemCompleted())
@@ -8772,7 +8925,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);
-			//imported!"util.io".writeln("REANALYZING: ",ufd," ",ufd.ftype," BECAUSE OF ",fd," ",fd.ftype," ",ftypeBefore," ",functionDefsToUpdate.length);
+			//imported!"util.io".writeln("REANALYZING: ",ufd," ",ufd.ftype," BECAUSE OF ",fd," ",fd.ftype," ",ftypeBefore," ",dependents.length);
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
 			assert(nufd is ufd);
 		}

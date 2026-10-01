@@ -135,6 +135,7 @@ class VarDecl: Declaration{
 	Expression initializer;
 	DefineExp definition;
 	Identifier outOfScopeCause;
+	bool replaceType;
 	Identifier outOfScopeDup;
 }
 
@@ -162,7 +163,31 @@ class Parameter: VarDecl{
 	@property override string kind(){ return "parameter"; }
 }
 
-class FunctionDef: Declaration{
+abstract class FixedPointDeclaration: Declaration{
+	this(Identifier name){ super(name); }
+	bool typeFinal=false;
+	FixedPointDeclaration[] dependents=[];
+	size_t numUpdatesPending=0;
+	int numInferenceRepetitions=0;
+	bool unsealed=false;
+	bool tainted=false;
+}
+
+class ToplevelDefinition: FixedPointDeclaration{
+	DefineExp definition;
+	DefineExp original;
+	Expression result;
+	VarDecl[] vars;
+	this(DefineExp definition){
+		super(null);
+		this.definition=definition;
+	}
+	override ToplevelDefinition copyImpl(CopyArgs args){ assert(0); }
+	override string toString(){ return text("toplevel definition `",definition,"`"); }
+}
+
+class FunctionDef: FixedPointDeclaration{
+	alias ftypeFinal=typeFinal;
 	Parameter[] params;
 	bool isTuple;
 	bool isSquare=false;
@@ -289,16 +314,10 @@ class FunctionDef: Declaration{
 		sealed=true;
 	}
 	bool inferringReturnType;
-	bool ftypeFinal=false;
-	FunctionDef[] functionDefsToUpdate=[];
-	size_t numUpdatesPending=0;
 	Expression origRret=null;
 	CompoundExp origBody_=null;
-	int numInferenceRepetitions=0;
-	bool unsealed=false; // need to redo analysis of dependent declarations
 
 	// inference mode
-	bool tainted=false;
 	bool finalPassDone=false;
 	static if(language==silq) SetX!Id loweredConstIds; // for nested loop lowering
 	static if(language==silq) bool keepLoops=false;

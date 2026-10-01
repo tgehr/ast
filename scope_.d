@@ -140,6 +140,15 @@ enum Lookup{
 }
 
 abstract class Scope{
+	final TopScope getTopScope(){
+		for(Scope sc=this;sc;){
+			if(auto ts=cast(TopScope)sc) return ts;
+			auto nsc=cast(NestedScope)sc;
+			if(!nsc) return null;
+			sc=nsc.parent;
+		}
+		return null;
+	}
 	abstract @property ErrorHandler handler();
 	import ast.looplowering:LoopContinuation;
 	LoopContinuation loopContinuation; // loop lowering: code after a loop that the lowering may absorb
@@ -2348,6 +2357,11 @@ class TopScope: Scope{
 	override DatDecl getDatDecl(){ return null; }
 
 	string moduleName;
+
+	ToplevelDefinition[] analyzingDefinitions;
+	final ToplevelDefinition analyzingDefinition(){
+		return analyzingDefinitions.length?analyzingDefinitions[$-1]:null;
+	}
 private:
 	Scope[] imports; // TODO: local imports, import declarations
 }
