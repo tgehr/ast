@@ -7595,6 +7595,11 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 			}
 		}
 	}
+	static if(language==silq) if(tae.annotationType==TypeAnnotationType.coercion&&tae.type&&!tae.isSemError()){
+		if(auto v=classicalIntConstant(tae.e))
+			if(isNumericTy(tae.type)==NumericType.ℕt&&!fitToType(v.get,tae.type))
+				specificityErrorOrDefer(sc,format("coercion of `%s` to `%s` always fails",v.get,tae.type),tae.loc,tae);
+	}
 	if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
 		final switch(tae.annotationType){
 			case TypeAnnotationType.annotation:

@@ -450,6 +450,10 @@ class TypeAnnotationExp: Expression{
 		if(annotationType == TypeAnnotationType.annotation || ne.type == type) {
 			return ne;
 		}
+		if(annotationType==TypeAnnotationType.conversion||annotationType==TypeAnnotationType.coercion)
+			if(auto v=classicalIntConstant(ne))
+				if(auto w=fitToType(v.get,type))
+					return makeIntConstant(w.get,type);
 		if(type == ℕt(true)) {
 			// `(a - b) coerce !N`  ->  `a sub b`
 			auto se = cast(SubExp)ne;
@@ -697,6 +701,49 @@ bool isFalse(Expression e, bool eval=false){
 bool isTrue(Expression e, bool eval=false){
 	if(!e.type) return false;
 	return isNonzero(e, eval);
+}
+
+Maybe!ℤ classicalIntConstant(Expression e){
+	if(!e||!e.type||!e.type.isClassical()) return none!ℤ;
+	if(!isNumericTy(e.type)&&!isFixedIntTy(e.type)) return none!ℤ;
+	auto ne=e;
+	if(!e.isSemEvaluated()&&e.isSemCompleted()){
+		foreach(id;e.freeVars) return none!ℤ;
+		ne=e.eval();
+	}
+	auto le=cast(LiteralExp)ne;
+	if(!le) return none!ℤ;
+	auto v=le.asIntegerConstant();
+	if(!v) return none!ℤ;
+	if(isFixedIntTy(le.type?le.type:e.type)) return fitToType(v.get,le.type?le.type:e.type);
+	return v;
+}
+Maybe!ℤ fitToType(ℤ v,Expression type){
+	if(!type||!type.isClassical()) return none!ℤ;
+	if(auto fit=isFixedIntTy(type)){
+		auto b=fit.bits.eval().asIntegerConstant();
+		if(!b||b.get<0||b.get>1024) return none!ℤ;
+		auto n=b.get.to!size_t;
+		ℤ m=ℤ(1)<<n;
+		ℤ lo=fit.isSigned?-(m/2):ℤ(0), hi=fit.isSigned?m/2:m; // [lo,hi)
+		if(lo<=v&&v<hi) return just(v);
+		if(n==0) return just(ℤ(0));
+		auto w=v%m;
+		if(w<0) w+=m;
+		if(w>=hi) w-=m;
+		return just(w);
+	}
+	switch(isNumericTy(type)){
+		case NumericType.ℕt: return v>=0?just(v):none!ℤ;
+		case NumericType.ℤt: return just(v);
+		case NumericType.Bool: return just(v!=0?ℤ(1):ℤ(0));
+		default: return none!ℤ;
+	}
+}
+Expression makeIntConstant(ℤ v,Expression type){
+	auto r=LiteralExp.makeInteger(v);
+	r.type=type;
+	return r;
 }
 
 struct Id {
@@ -1958,6 +2005,24 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			if(auto vec2=cast(VectorExp)e2){ ok2=true; es2=vec2.e; }
 			if(ok1 && ok2) return new TupleExp(es1 ~ es2);
 		} else static if(util.among(op, Tok!"+", Tok!"-", Tok!"sub", Tok!"·", Tok!"^", Tok!"=", Tok!"≠")){
+			static if(util.among(op, Tok!"+", Tok!"-", Tok!"·", Tok!"=", Tok!"≠")) if(type && (isFixedIntTy(e1.type) || isFixedIntTy(e2.type))) {
+				if(auto v1=classicalIntConstant(ne1)) if(auto v2=classicalIntConstant(ne2)){
+					static if(op==Tok!"="||op==Tok!"≠"){
+						if(isNumericTy(type)==NumericType.Bool&&type.isClassical()){
+							auto r=LiteralExp.makeBoolean(op==Tok!"="?v1.get==v2.get:v1.get!=v2.get);
+							r.type=type;
+							return r;
+						}
+					}else{
+						static if(op==Tok!"+") auto v=v1.get+v2.get;
+						else static if(op==Tok!"-") auto v=v1.get-v2.get;
+						else static if(op==Tok!"·") auto v=v1.get*v2.get;
+						else static assert(0);
+						if(isFixedIntTy(type)) if(auto w=fitToType(v,type))
+							return makeIntConstant(w.get,type);
+					}
+				}
+			}
 			if(isNumericTy(e1.type) && isNumericTy(e2.type)) {
 				assert(isNumericTy(type));
 				auto v1 = ne1.asIntegerConstant(), v2 = ne2.asIntegerConstant();
