@@ -1178,6 +1178,67 @@ class ProductTy: Type{
 		if(!cod) return null;
 		return cod.tryApply(arg,false,target);
 	}
+	Expression tryMatchReverse(Expression arg,Expression resultTy,out Expression garg)in{assert(isSquare&&cast(ProductTy)cod);}do{
+		auto cod=cast(ProductTy)this.cod;
+		assert(!!cod);
+		auto nnames=freshNames(arg);
+		if(nnames!=names) return relabelAll(nnames).tryMatchReverse(arg,resultTy,garg);
+		Expression[] args;
+		auto tpl=cast(TupleExp)arg;
+		if(cod.isTuple&&tpl){
+			if(tpl.length!=cod.nargs) return null;
+			args=tpl.e;
+		}else args=[arg];
+		MapSX!(Id,UnificationResult) subst;
+		foreach(i,n;names) subst[n]=UnificationResult.init;
+		if(resultTy&&!cod.cod.hasAnyFreeVar(cod.names))
+			if(!cod.cod.unify(resultTy,subst,false))
+				return null;
+		auto fromResult=names.map!(n=>!!subst[n].bound(false)||!!subst[n].bound(true)).array;
+		foreach(i,a;args){
+			if(i>=cod.nargs) continue;
+			if(!cod.isConstForReverse[i]) continue;
+			if(!a.type||!cod.argTy(i).unify(a.type,subst,false))
+				return null;
+		}
+		foreach(i,n;names){
+			if(fromResult[i]||!isTypeTy(argTy(i))) continue;
+			foreach(j;0..cod.nargs)
+				if(!cod.isConstForReverse[j]&&cod.argTy(j).hasFreeVar(n))
+					return null;
+		}
+		auto gargs=new Expression[](names.length);
+		foreach(i,n;names){
+			Expression value=null;
+			if(auto low=subst[n].bound(false)){
+				if(argTy(i)==qtypeTy||isQNumericTy(argTy(i)))
+					low=low.getQuantum();
+				if(low&&!value) value=low;
+			}
+			if(auto high=subst[n].bound(true)){
+				if(argTy(i)==ctypeTy)
+					high=high.getClassical();
+				else if(isQNumericTy(argTy(i)))
+					high=high.getQuantum();
+				if(high&&!value) value=high;
+			}
+			if(!value) return null;
+			gargs[i]=value;
+		}
+		if(!isTuple) assert(gargs.length==1);
+		if(isTuple){
+			auto tgarg=new TupleExp(gargs);
+			tgarg.type=tupleTy(gargs.map!(garg=>garg.type).array);
+			tgarg.setSemCompleted();
+			garg=tgarg;
+		}else garg=gargs[0];
+		auto r=tryApply(garg,true);
+		if(auto inst=cast(ProductTy)r)
+			foreach(j;0..inst.nargs)
+				if(!inst.isConst[j]&&inst.argTy(j).hasClassicalComponent()) // TODO: fix
+					return null;
+		return r;
+	}
 	Expression tryApply(Expression arg,bool isSquare,Scope target=null){
 		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;

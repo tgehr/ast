@@ -6012,7 +6012,30 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				if(auto codft=cast(ProductTy)nft.cod){
 					if(codft.isSquare) return false;
 					bool canMatch=isRhs||!isPresemantic&&codft.isConstForReverse.all;
-					if(!canMatch) return true; // TODO: matching based on return type
+					static if(!isRhs) if(!canMatch&&!isPresemantic&&context.type){
+						auto cargsExp=ce.arg;
+						if(auto tpl=cast(TupleExp)cargsExp){
+							if(codft.isTuple&&tpl.length==codft.nargs){
+								foreach(i,ref a;tpl.e)
+									if(codft.isConstForReverse[i]&&!a.isSemCompleted()&&!a.isSemError())
+										a=expressionSemantic(a,expSemContext(sc,ConstResult.yes,InType.no));
+							}
+						}else if(codft.nargs==1&&codft.isConstForReverse[0]&&!ce.arg.isSemCompleted()&&!ce.arg.isSemError())
+							ce.arg=expressionSemantic(ce.arg,expSemContext(sc,ConstResult.yes,InType.no));
+						Expression garg;
+						if(nft.tryMatchReverse(ce.arg,context.type,garg)){
+							Expression.CopyArgs cargs={ preserveMeanings: true };
+							auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
+							nce.loc=ce.e.loc;
+							auto nnce=new CallExp(nce,ce.arg,false,false);
+							nnce.loc=ce.loc;
+							nnce=cast(CallExp)callSemantic(nnce,context);
+							assert(!!nnce);
+							ce=nnce;
+							return true;
+						}
+					}
+					if(!canMatch) return true;
 					if(matchArg(codft)) return true;
 					propErr(ce.arg,ce);
 					if(ce.arg.isSemError()) return true;
@@ -6044,8 +6067,22 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				if(!ce.type){
 					if(ft.cod.hasAnyFreeVar(ft.names)){
-						sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
-						ce.setSemError();
+						Expression ncod=null;
+						MapSX!(Id,Expression) subst;
+						bool ok=true;
+						auto tpl=cast(TupleExp)ce.arg;
+						foreach(i,n;ft.names){
+							if(!ft.cod.hasFreeVar(n)) continue;
+							auto a=ft.isTuple&&tpl&&tpl.length==ft.nargs?tpl.e[i]:!ft.isTuple?ce.arg:null;
+							if(!ft.isConstForReverse[i]||!a||!a.isSemCompleted()){ ok=false; break; }
+							subst[n]=a;
+						}
+						if(ok) ncod=ft.cod.substitute(subst);
+						if(ncod) ce.type=ncod;
+						else{
+							sc.error("arguments of reversed function call cannot appear in result type",ce.loc);
+							ce.setSemError();
+						}
 					}else ce.type=ft.cod;
 				}
 				return true;

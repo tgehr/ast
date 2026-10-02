@@ -1919,8 +1919,30 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		auto be=cast(typeof(this))rhs;
-		if(!be) return false;
-		return e1.unify(be.e1,subst,meet)&&e2.unify(be.e2,subst,meet);
+		if(be) return e1.unify(be.e1,subst,meet)&&e2.unify(be.e2,subst,meet);
+		static if(util.among(op,Tok!"+",Tok!"-",Tok!"·")) return unifyArithmetic(rhs,subst,meet);
+		else return false;
+	}
+	static if(util.among(op,Tok!"+",Tok!"-",Tok!"·"))
+	private bool unifyArithmetic(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
+		// `x op c` or `c op x` with constant `c` unifies with a constant `k` if `x` unifies with the unique solution
+		if(!e1.type||!e2.type||!isNumericTy(e1.type)||!isNumericTy(e2.type)||!rhs.type||!isNumericTy(rhs.type)) return false;
+		auto kv=rhs.asIntegerConstant(true);
+		if(!kv) return false;
+		auto c1=e1.asIntegerConstant(true), c2=e2.asIntegerConstant(true);
+		if(!!c1==!!c2) return false;
+		auto var=c1?e2:e1;
+		ℤ c=c1?c1.get:c2.get, k=kv.get, target;
+		static if(op==Tok!"+") target=k-c;
+		else static if(op==Tok!"-") target=c1?c-k:k+c;
+		else static if(op==Tok!"·"){
+			if(c==0||k%c!=0) return false;
+			target=k/c;
+		}
+		if(target<0&&isSubtype(var.type,ℕt(true))) return false;
+		auto lit=LiteralExp.makeInteger(target);
+		lit.loc=rhs.loc;
+		return var.unify(lit,subst,meet);
 	}
 
 	override Expression evalImpl(){
