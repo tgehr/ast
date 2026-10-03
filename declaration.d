@@ -256,6 +256,7 @@ class FunctionDef: FixedPointDeclaration{
 
 	// semantic information
 	FunctionScope fscope_;
+	DatDecl dataTypeOf=null;
 	VarDecl context;
 	static if(language==psi) VarDecl contextVal;
 	VarDecl thisVar; // for constructors
@@ -499,6 +500,7 @@ class DatDecl: Declaration{
 		bdy.setSemCompleted();
 		fd=new FunctionDef(null, fparams, isTuple, null, bdy);
 		fd.loc=this.loc;
+		fd.dataTypeOf=this;
 		fd.isSquare=true;
 		fd.annotation=pure_;
 		fd.scope_=this.scope_;
