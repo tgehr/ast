@@ -1246,13 +1246,18 @@ class ProductTy: Type{
 		MapSX!(Id,Expression) subst;
 		if(isTuple){
 			auto targTy=arg.type.isTupleTy();
-			if(!targTy) return null; // arg.type may be empty (⊥) even if dom is a tuple
+			if(!targTy) return null; // (arg.type may be ⊥)
 			assert(!!tdom);
-			foreach(i,n;names){
-				auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
-				exp.type=targTy[i];
-				exp.setSemCompleted();
-				subst[n]=exp.eval();
+			auto targ=cast(TupleExp)arg;
+			if(targ&&targ.length==names.length){
+				foreach(i,n;names) subst[n]=targ.e[i].eval();
+			}else{
+				foreach(i,n;names){
+					auto exp=new IndexExp(arg,LiteralExp.makeInteger(i));
+					exp.type=targTy[i];
+					exp.setSemCompleted();
+					subst[n]=exp.eval();
+				}
 			}
 		}else{
 			assert(names.length==1);
@@ -1610,8 +1615,53 @@ class VariadicTy: Type{
 			if(isClassical_) return tt.getClassical;
 			return tt;
 		}
+		if(auto r=reduce(ne)){
+			if(isClassical_) if(auto cr=r.getClassical()) return cr;
+			return r;
+		}
 		if(ne is next) return this;
 		return variadicTy(ne,isClassical_);
+	}
+	private static Expression reduce(Expression list){
+		Expression n,x;
+		if(isVectorCall(list,n,x)){
+			if((isType(x)||isQNumeric(x))&&n.type&&isSubtype(n.type,ℕt(true)))
+				return vectorTy(x,n);
+			return null;
+		}
+		if(auto cat=cast(CatExp)list){
+			auto l=variadicTy(cat.e1,false).eval(), r=variadicTy(cat.e2,false).eval();
+			auto lv=cast(VectorTy)l, rv=cast(VectorTy)r;
+			if(lv&&rv&&lv.next==rv.next){
+				auto num=new AddExp(lv.num,rv.num);
+				num.type=ℕt(true);
+				num.loc=cat.loc;
+				num.setSemCompleted();
+				return vectorTy(lv.next,num.eval());
+			}
+			auto lt=l.isTupleTy(), rt=r.isTupleTy();
+			if(lt&&rt&&!cast(VariadicTy)l&&!cast(VariadicTy)r){
+				Expression[] types;
+				foreach(i;0..lt.length) types~=lt[i];
+				foreach(i;0..rt.length) types~=rt[i];
+				return tupleTy(types);
+			}
+		}
+		return null;
+	}
+	private static bool isVectorCall(Expression e,out Expression n,out Expression x){
+		auto ce=cast(CallExp)e;
+		if(!ce||ce.isSquare) return false;
+		Identifier id=cast(Identifier)ce.e;
+		if(auto sce=cast(CallExp)ce.e) if(sce.isSquare) id=cast(Identifier)sce.e;
+		if(!id||!id.meaning) return false;
+		import ast.semantic_:isPreludeSymbol;
+		if(isPreludeSymbol(id.meaning)!="vector") return false;
+		auto tpl=cast(TupleExp)ce.arg;
+		if(!tpl||tpl.length!=2) return false;
+		n=tpl.e[0];
+		x=tpl.e[1];
+		return true;
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		if(auto r=cast(VariadicTy)rhs)

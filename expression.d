@@ -1462,7 +1462,7 @@ class IndexExp: Expression{ //e[a]
 		if(exprs.length){
 			if(auto v=na.asIntegerConstant()){
 				auto idx=v.get();
-				if(0<=idx&&idx<exprs.length){
+				if(0<=idx&&idx<exprs.length&&iota(exprs.length).all!(j=>j==idx||exprs[j].isTotal())){
 					auto r=exprs[cast(size_t)idx].eval();
 					static if(language==silq){
 						if(isClassical_)
@@ -1477,6 +1477,18 @@ class IndexExp: Expression{ //e[a]
 		r.isArraySyntax=isArraySyntax;
 		r.isClassical_=isClassical_;
 		return r;
+	}
+
+	override bool isTotal(){
+		if(!e.isTotal()||!a.isTotal()||!e.type) return false;
+		auto idx=a.asIntegerConstant();
+		if(!idx) return false;
+		if(auto vt=cast(VectorTy)e.type){
+			auto len=vt.num.asIntegerConstant();
+			return len&&0<=idx.get()&&idx.get()<len.get();
+		}
+		if(auto tt=cast(TupleTy)e.type) return 0<=idx.get()&&idx.get()<tt.length;
+		return false;
 	}
 
 	AAssignExp.Replacement[] replacements;
@@ -1504,7 +1516,7 @@ class SliceExp: Expression{
 				if(auto rv=nr.asIntegerConstant()){
 					auto lid=lv.get(), rid=rv.get();
 					if(cast(size_t)lid==0 && cast(size_t)rid==exprs.length) return e;
-					if(0<=lid&&lid<=rid&&rid<=exprs.length){
+					if(0<=lid&&lid<=rid&&rid<=exprs.length&&iota(exprs.length).all!(j=>lid<=j&&j<rid||exprs[j].isTotal())){
 						auto rexprs=exprs[cast(size_t)lid..cast(size_t)rid];
 						if(tpl){
 							auto res=new TupleExp(rexprs);
@@ -1744,6 +1756,13 @@ class CallExp: Expression{
 	}
 	override bool mayBeQuantum(){
 		return super.mayBeQuantum()||isType(this); // may evaluate to unit type
+	}
+
+	override bool isTotal(){
+		// TODO: get rid of special-casing
+		if(!isSemCompleted()) return false;
+		auto r=isSemEvaluated()?this:this.eval();
+		return !!isFixedIntTy(r);
 	}
 
 	override Annotation getAnnotation(){
@@ -2110,7 +2129,7 @@ class FieldExp: Expression{
 
 	override Expression evalImpl(){
 		auto ne = e.eval();
-		if(!f.meaning && f.name == "length"){ // TODO: make sure `e`s side-effects are preserved
+		if(!f.meaning && f.name == "length" && ne.isTotal()){
 			if(auto vec=cast(VectorExp)ne) return LiteralExp.makeInteger(vec.e.length);
 			if(auto tpl=cast(TupleExp)ne) return LiteralExp.makeInteger(tpl.e.length);
 			if(auto vt=cast(VectorTy)ne.type)

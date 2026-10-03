@@ -6872,11 +6872,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			return fe;
 		}else return noMember();
 	}else if(auto r=builtIn(fe,sc)){
-		bool hasSideEffect(){ // TODO: fix
-			static if(language==silq) return !fe.e.isQfree();
-			else return false;
-		}
-		if(fe.f.name=="length"&&!hasSideEffect){
+		if(fe.f.name=="length"&&fe.e.isTotal()){
 			if(auto vt=cast(VectorTy)fe.e.type){
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=vt.num.copy(cargs);
