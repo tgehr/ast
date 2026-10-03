@@ -217,6 +217,7 @@ abstract class Expression: Node{
 				else upperBound=meetTypes(upperBound,ur.upperBound);
 			}
 		}
+
 		this(Expression e,bool meet){
 			if(meet) upperBound=e;
 			else lowerBound=e;
@@ -1399,6 +1400,7 @@ class IndexExp: Expression{ //e[a]
 		if(ne is e&&na is a) return this;
 		auto r=new IndexExp(ne,na);
 		r.isArraySyntax=isArraySyntax;
+		static if(language==silq) r.isClassical_=isClassical_;
 		r.loc=loc;
 		return r;
 	}
@@ -1428,7 +1430,7 @@ class IndexExp: Expression{ //e[a]
 			assert(isType(this), format("index not a type: %s", this));
 			if(auto r=super.getClassical()) return r;
 			auto r=new IndexExp(e,a);
-			r.isClassical_=isClassical_;
+			r.isClassical_=true;
 			r.type=getClassicalTy(type);
 			r.setSemEvaluated();
 			return r;
@@ -2108,6 +2110,13 @@ class FieldExp: Expression{
 
 	override Expression evalImpl(){
 		auto ne = e.eval();
+		if(!f.meaning && f.name == "length"){ // TODO: make sure `e`s side-effects are preserved
+			if(auto vec=cast(VectorExp)ne) return LiteralExp.makeInteger(vec.e.length);
+			if(auto tpl=cast(TupleExp)ne) return LiteralExp.makeInteger(tpl.e.length);
+			if(auto vt=cast(VectorTy)ne.type)
+				if(auto len=vt.num.asIntegerConstant())
+					return LiteralExp.makeInteger(len.get);
+		}
 		if(ne is e) return this;
 		return new FieldExp(ne,f);
 	}

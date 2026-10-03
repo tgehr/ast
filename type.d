@@ -1554,12 +1554,43 @@ class VariadicTy: Type{
 		// if(auto at=cast(ArrayTy)rhs) // TODO
 		if(auto tt=rhs.isTupleTy()){
 			auto types=iota(tt.length).map!(i=>tt[i]).array;
-			auto tpl=new TupleExp(types);
-			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
-			tpl.setSemCompleted();
-			return next.unify(tpl,subst,meet);
+			if(auto id=cast(Identifier)next){
+				if(id.id in subst){
+					if(auto bound=subst[id.id].bound(meet)){
+						if(auto cmb=combineTypeLists(bound,types,meet)){
+							auto ur=subst[id.id];
+							if(meet) ur.upperBound=cmb;
+							else ur.lowerBound=cmb;
+							subst[id.id]=ur;
+							return true;
+						}
+					}
+				}
+			}
+			return next.unify(typeList(types),subst,meet);
 		}
 		return false;
+	}
+	private static TupleExp typeList(Expression[] types){
+		auto tpl=new TupleExp(types);
+		tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+		tpl.setSemCompleted();
+		return tpl;
+	}
+	private static TupleExp combineTypeLists(Expression bound,Expression[] types,bool meet){
+		Expression[] bs;
+		if(auto tpl=cast(TupleExp)bound) bs=tpl.e;
+		else if(auto vec=cast(VectorExp)bound) bs=vec.e;
+		else return null;
+		if(bs.length!=types.length) return null;
+		Expression[] cs;
+		foreach(i;0..bs.length){
+			if(!(isType(bs[i])||isQNumeric(bs[i]))) return null;
+			auto c=combineTypes(bs[i],types[i],meet);
+			if(!c) return null;
+			cs~=c;
+		}
+		return typeList(cs);
 	}
 	override Expression evalImpl(){
 		assert(isTypeTy(type));
@@ -1601,7 +1632,13 @@ class VariadicTy: Type{
 		return false;
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){
-		return this==r?this:null; // TODO
+		if(this==r) return this;
+		if(auto vt=cast(VariadicTy)r){
+			if(!isEqual(next,vt.next,null)) return null; // TODO: combine elementwise
+			bool classical=meet?isClassical_||vt.isClassical_:isClassical_&&vt.isClassical_;
+			return variadicTy(next,classical);
+		}
+		return null; // TODO
 	}
 	override Expression getClassical(){
 		if(isClassical_) return this;

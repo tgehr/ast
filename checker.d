@@ -778,6 +778,7 @@ class Checker {
 		visExpr(e.e);
 		visExpr(e.a);
 		auto expectedType = ast_sem.indexType(e.e.type, e.a);
+		if(e.isClassical_ && expectedType) expectedType = ast_ty.getClassicalTy(expectedType);
 		assert(e.type == expectedType, format("index type mismatch: %s has type %s, indexed with %s results in %s instead of %s at %s", e.e, e.e.type, e.a, expectedType, e.type, e.loc));
 	}
 

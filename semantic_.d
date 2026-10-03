@@ -864,7 +864,7 @@ bool isBuiltIn(FieldExp fe)in{
 	assert(fe.e.isSemCompleted());
 }do{
 	if(fe.f.meaning) return false;
-	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type){
+	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type||cast(VariadicTy)fe.e.type){
 		if(fe.f.name=="length"){
 			return true;
 		}
@@ -876,7 +876,7 @@ Expression builtIn(FieldExp fe,Scope sc)in{
 	assert(fe.e.isSemCompleted());
 }do{
 	if(fe.f.meaning) return null;
-	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type){
+	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type||cast(VariadicTy)fe.e.type){
 		if(fe.f.name=="length"){
 			fe.type=ℕt(true); // no superpositions over arrays with different lengths
 			return fe;
@@ -4775,6 +4775,24 @@ Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 			return null;
 		}
 		return checkTpl(index);
+	}else if(auto vt=cast(VariadicTy)aty){
+		if(!index.type||!index.type.isClassical()||!isSubtype(index.type,ℕt(true))){
+			if(isEmpty(index.type)) return bottom;
+			if(sc) sc.error(format("index for type `%s` should be a classical natural number",aty),index.loc);
+			return null;
+		}
+		Expression.CopyArgs cargs={ preserveSemantic: true };
+		auto elt=new IndexExp(vt.next.copy(cargs),index.copy(cargs));
+		elt.loc=index.loc;
+		Expression kind=null;
+		if(auto at=cast(ArrayTy)vt.next.type) kind=at.next;
+		else if(auto vecTy=cast(VectorTy)vt.next.type) kind=vecTy.next;
+		if(!kind) return null;
+		elt.type=kind;
+		elt.setSemCompleted();
+		Expression r=elt.eval();
+		if(vt.isClassical_) if(auto cr=r.getClassical()) r=cr;
+		return r;
 	}else if(isEmpty(aty)){
 		return bottom;
 	}else{
@@ -6854,7 +6872,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			return fe;
 		}else return noMember();
 	}else if(auto r=builtIn(fe,sc)){
-		bool hasSideEffect(){
+		bool hasSideEffect(){ // TODO: fix
 			static if(language==silq) return !fe.e.isQfree();
 			else return false;
 		}
@@ -6866,6 +6884,11 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 				return expressionSemantic(len,context);
 			}else if(auto tt=cast(TupleTy)fe.e.type){
 				auto len=LiteralExp.makeInteger(tt.length);
+				len.loc=fe.loc;
+				return expressionSemantic(len,context);
+			}else if(auto vt=cast(VariadicTy)fe.e.type){
+				Expression.CopyArgs cargs={ preserveMeanings: true };
+				auto len=new FieldExp(vt.next.copy(cargs),new Identifier(Id.s!"length"));
 				len.loc=fe.loc;
 				return expressionSemantic(len,context);
 			}
@@ -7189,6 +7212,28 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	auto at=cast(ArrayTy)sl.e.type;
 	auto vt=cast(VectorTy)sl.e.type;
 	auto tt=cast(TupleTy)sl.e.type;
+	if(auto vart=cast(VariadicTy)sl.e.type){
+		Expression.CopyArgs cargs={ preserveSemantic: true };
+		auto tsl=new SliceExp(vart.next.copy(cargs),sl.l.copy(cargs),sl.r.copy(cargs));
+		tsl.loc=sl.loc;
+		auto lv=sl.l.eval(), rv=sl.r.eval();
+		if(auto lat=cast(ArrayTy)vart.next.type) tsl.type=lat;
+		else if(auto lvt=cast(VectorTy)vart.next.type){
+			if(lv.isDeterministic()&&rv.isDeterministic()){
+				auto se=new NSubExp(rv,lv);
+				se.type=nSubType(sl.r.type,sl.l.type);
+				se.setSemCompleted();
+				tsl.type=vectorTy(lvt.next,se.eval());
+			}else tsl.type=arrayTy(lvt.next);
+		}else{
+			sc.error(format("cannot slice `%s`",sl.e.type),sl.loc);
+			sl.setSemError();
+			return sl;
+		}
+		tsl.setSemCompleted();
+		sl.type=variadicTy(tsl.eval(),vart.isClassical_);
+		return sl;
+	}
 	auto lval=sl.l.eval(), rval=sl.r.eval();
 	auto mlc=lval.asIntegerConstant();
 	auto mrc=rval.asIntegerConstant();
