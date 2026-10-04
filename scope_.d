@@ -429,6 +429,19 @@ abstract class Scope{
 					return r.constBlock[$-1];
 			return null;
 		}
+		final void registerConstCapture(Declaration decl,Location loc,Expression type){
+			if(decl.isToplevelDeclaration()||decl.isPinned()) return;
+			if(!type||type.isClassical()) return; // TODO: why needed?
+			if(auto prev=isConstHere(decl)) if(prev.meaning is decl&&prev.loc==loc) return;
+			auto cid=new Identifier(decl.getId);
+			cid.loc=loc;
+			cid.scope_=this;
+			cid.meaning=decl;
+			cid.type=type;
+			cid.constLookup=true;
+			cid.setSemCompleted();
+			blockConst(decl,cid);
+		}
 		final void blockConst(Declaration decl,Identifier constBlock){
 			if(!decl.isToplevelDeclaration){
 				if(auto props=updateDeclProps(decl))

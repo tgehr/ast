@@ -1193,8 +1193,20 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 Expression statementSemanticImpl(ReturnExp ret,Scope sc,ref StmFlags flags,bool resetConst=true){
 	return returnExpSemantic(ret,sc,flags);
 }
+void registerConstCaptures(FunctionDef fd,Scope sc){
+	static if(language==silq){
+		if(!fd||fd.isSemError()) return;
+		foreach(d;fd.capturedDecls){
+			auto ids=fd.captures.get(d,null);
+			if(!ids.length||!ids.all!(id=>id.constLookup&&!id.lazyCapture&&!id.isSemError())) continue;
+			auto type=ids[0].type?ids[0].type:typeForDecl(d);
+			sc.registerConstCapture(d,fd.loc,type);
+		}
+	}
+}
 Expression statementSemanticImpl(FunctionDef fd,Scope sc,ref StmFlags flags,bool resetConst=true){
 	fd=functionDefSemantic(fd,sc);
+	registerConstCaptures(fd,sc);
 	Expression r=fd;
 	if(fd.isSemCompleted()){
 		auto ce=new CompoundExp([fd]);
@@ -6550,6 +6562,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	if(!le.isSemError()){
 		le.setSemCompleted();
 	}
+	if(!inType) registerConstCaptures(le.fd,sc);
 	if(inType) le.fd.scope_=null;
 	return le;
 }
