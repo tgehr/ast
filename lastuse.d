@@ -2,7 +2,7 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.lastuse;
 import astopt;
-import util: MapX, MapSX;
+import util: SetX, MapX, MapSX;
 
 import std.range, std.algorithm, std.conv, std.format;
 import ast.expression,ast.type,ast.declaration,ast.scope_;
@@ -283,8 +283,12 @@ final class LastUse{
 			for(start=this;start&&start.prev&&start.prev.splitFrom;)
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
+		SetX!LastUse visited;
 		for(auto lu=start;lu;lu=lu.next){
 			if(lu is this) continue;
+			visited.insert(lu);
+			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
+			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
