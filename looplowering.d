@@ -170,11 +170,37 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	enum NONE=-3,LSH=-2,SHARED=-1;
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
 	if(!carried[0].length) return null;
+	bool[Declaration] loopState;
+	foreach(q;carried[0]~carried[1]) loopState[q[1]]=true;
+	bool dependsTransitivelyOnLoopState(Declaration decl,Dependency dep){
+		bool[Declaration] visited;
+		Declaration[] todo;
+		foreach(d;dep.dependencies) todo~=d;
+		while(todo.length){
+			auto d=todo[$-1];
+			todo=todo[0..$-1];
+			if(d in visited) continue;
+			visited[d]=true;
+			if(d !is decl&&d in loopState) return true;
+			auto dd=state.prevStateSnapshot.dependencyOf(d);
+			if(dd.isTop){
+				// a dependency that was recomputable at the loop entry but is not after an iteration (as the loop consumes
+				// one of its dependencies) could no longer be forgotten after the loop
+				if(!state.origStateSnapshot.dependencyOf(d).isTop) return true;
+				continue; // (not recomputable anyway: the traversal ends here)
+			}
+			foreach(e;dd.dependencies) todo~=e;
+		}
+		return false;
+	}
 	Dependency[] classDeps;
 	int[] classOf;
 	foreach(p;carried[0]){
 		auto dep=state.prevStateSnapshot.dependencyOf(p[1]);
 		if(dep.isTop) return null;
+		// the lifted copies of `p` are forgotten after the loop, which requires its dependencies, and eventually theirs:
+		// the transitive dependencies must not be modified by the loop (e.g., consumed by an early return within it)
+		if(dependsTransitivelyOnLoopState(p[1],dep)) return null;
 		int c=-1;
 		foreach(j,ref d;classDeps) if(sameDeps(d,dep)){ c=cast(int)j; break; }
 		if(c==-1){
