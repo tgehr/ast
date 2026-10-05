@@ -2521,6 +2521,7 @@ bool erpRecording(Scope sc){
 }
 void erpRecordJoin(Expression stm,Scope sc){
 	ERPVar[] vars;
+	VarDecl[] decls; // (parallel to `vars`)
 	SetX!Id seen;
 	auto fun=sc.getFunction();
 	for(Scope c=sc;c;c=c.parentScope()){
@@ -2533,8 +2534,29 @@ void erpRecordJoin(Expression stm,Scope sc){
 			auto type=typeForDecl(vd);
 			if(!type) continue;
 			vars~=ERPVar(vd.name.id,type,!type.isClassical()&&sc.canForget(vd),vd.isPinned);
+			decls~=vd;
 		}
 		if(cast(FunctionScope)c) break;
+	}
+	// A lifted variable is passed to the join point as `const`, and forgotten after the call. This is only possible if its
+	// dependencies are still available then: the quantum variables that are not lifted are consumed by the call.
+	for(bool changed=true;changed;){
+		changed=false;
+		foreach(k,ref v;vars){
+			if(!v.lifted) continue;
+			if(!sc.dependencyTracked(decls[k])){ v.lifted=false; changed=true; continue; }
+			auto dep=sc.getDependency(decls[k]);
+			if(dep.isTop){ v.lifted=false; changed=true; continue; }
+			foreach(d;dep.dependencies){
+				if(!d.name) continue;
+				foreach(w;vars){
+					if(w.name!=d.name.id||w.lifted||w.isConst||w.type.isClassical()) continue;
+					v.lifted=false;
+					changed=true;
+				}
+				if(!v.lifted) break;
+			}
+		}
 	}
 	if(erpKey(stm)) erpJoins[erpKey(stm)]=vars;
 }
