@@ -45,6 +45,7 @@ abstract class Declaration: Expression{
 	Declaration mergedInto=null;
 	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
+	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
 	Declaration canonicalSource_=null;
 	Declaration canonicalSource(){ // TODO: compute eagerly instead?
@@ -644,6 +645,35 @@ class EarlyForgottenDecl: DeadDecl{
 	}
 }
 
+class EarlyReturnForgottenDecl: ConsumedDecl{
+	Declaration decl;
+	ReturnExp ret;
+	this(Declaration decl,Identifier use,ReturnExp ret)in{
+		assert(!!ret);
+	}do{
+		super(decl,use);
+		this.decl=decl;
+		this.ret=ret;
+	}
+	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		import std.format:format;
+		if(isSemError()) return true; // (report only once)
+		setSemForceError();
+		if(cast(Parameter)decl) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",decl.kind,decl.getName),decl.loc);
+		else sc.error(format("%s `%s` is not consumed (perhaps return it)",decl.kind,decl.getName),decl.loc);
+		sc.note("at function return",ret.loc);
+		sc.note(format("`%s` cannot be forgotten before the conditional, as it is used again here",decl.getName),id.loc);
+		return true;
+	}
+	override void explain(string kind,Scope sc){
+		import std.format:format;
+		sc.note(format("%s `%s` forgotten here, before a conditional with an early return",kind,use.meaning),use.loc);
+		sc.note("early return is here",ret.loc);
+	}
+	override string toString(){
+		return text("earlyReturnForgotten(",super.toString(),",",ret.loc,")");
+	}
+}
 class IllegalConsumedDecl: ConsumedDecl{
 	EarlyForgottenDecl earlyForgotten;
 	this(Declaration decl,Identifier use,EarlyForgottenDecl earlyForgotten)in{

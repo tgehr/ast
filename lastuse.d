@@ -404,8 +404,8 @@ final class LastUse{
 					nested.pushDependencies(result,false);
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(result,use);
-					if(auto lu=nested.lastUses.get(result,true))
-						lu.markConsumed(use,isForget);
+					if(auto lu=nested.lastUses.get(result,true)) // (a copy whose dependency was consumed within the nested scope only mirrors the forget)
+						lu.markConsumed(use,isForget&&!lu.dep.isTop);
 				}
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
@@ -425,8 +425,8 @@ final class LastUse{
 		consumable,
 	}
 
-	bool canForget(bool forceConsumed){
-		return getForgettability(forceConsumed)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
+	bool canForget(bool forceConsumed,ReturnExp earlyReturn=null){
+		return getForgettability(forceConsumed,earlyReturn)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 
 	bool isLastSplitSibling(){
@@ -445,10 +445,10 @@ final class LastUse{
 		return true;
 	}
 
-	Forgettability getForgettability(bool forceConsumed){
+	Forgettability getForgettability(bool forceConsumed,ReturnExp earlyReturn=null){
 		import ast.semantic_:typeConstBlocked;
 		if(typeConstBlocked(decl,scope_)) return Forgettability.none;
-		if(forwardTo) return forwardTo.getForgettability(forceConsumed);
+		if(forwardTo) return forwardTo.getForgettability(forceConsumed,earlyReturn);
 		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
 		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
 		final switch(kind)with(Kind){
@@ -461,8 +461,8 @@ final class LastUse{
 			case lazySplit:
 				assert(!!splitFrom);
 				auto r=Forgettability.none;
-				if(forceConsumed||isLastSplitSibling())
-					r=max(r,splitFrom.getForgettability(forceConsumed));
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop)
+					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn));
 				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl))
 					r=Forgettability.forgettable;
 				//imported!"util.io".writeln("RESULT: ",r);
@@ -551,10 +551,10 @@ final class LastUse{
 		}
 	}
 
-	void forget(bool forceConsumed){
+	void forget(bool forceConsumed,ReturnExp earlyReturn=null){
 		bool isForget=false;
 		if(forwardTo){
-			forwardTo.forget(forceConsumed);
+			forwardTo.forget(forceConsumed,earlyReturn);
 			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
 			assert(isConsumption(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption()));
 			if(scope_.lastUses.lastUses.get(decl,null) is this)
@@ -572,15 +572,17 @@ final class LastUse{
 				assert(0); // always forwarded
 			case lazySplit:
 				assert(!!splitFrom);
-				if(forceConsumed||isLastSplitSibling()){
-					if(splitFrom.canForget(forceConsumed)){
-						splitFrom.forget(forceConsumed);
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop){
+					if(splitFrom.canForget(forceConsumed,earlyReturn)){
+						if(earlyReturn&&dep.isTop) // (forgotten before the split because of the early return)
+							splitFrom.decl.forgottenBeforeEarlyReturn=earlyReturn;
+						splitFrom.forget(forceConsumed,earlyReturn);
 						if(scope_.rnsymtab.get(decl.getId,null) is decl){
 							scope_.symtabRemove(decl);
 							scope_.pushDependencies(decl,false);
 						}
 						markConsumed(use,false);
-						if(forceConsumed) removeFromUnusedSiblings();
+						if(forceConsumed||earlyReturn) removeFromUnusedSiblings(); // (forgotten before the split)
 						return;
 					}
 				}
@@ -1071,14 +1073,14 @@ struct LastUses{
 		return parent.get(decl,false);
 	}
 
-	bool canForget(Declaration decl,bool forceHere,bool forceConsumed){
-		return getForgettability(decl,forceHere,forceConsumed)>=(forceConsumed?LastUse.Forgettability.consumable:LastUse.Forgettability.forgettable);
+	bool canForget(Declaration decl,bool forceHere,bool forceConsumed,ReturnExp earlyReturn=null){
+		return getForgettability(decl,forceHere,forceConsumed,earlyReturn)>=(forceConsumed?LastUse.Forgettability.consumable:LastUse.Forgettability.forgettable);
 	}
-	private LastUse.Forgettability getForgettability(Declaration decl,bool forceHere,bool forceConsumed){
+	private LastUse.Forgettability getForgettability(Declaration decl,bool forceHere,bool forceConsumed,ReturnExp earlyReturn=null){
 		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse&&!forceHere&&parent)
-			return parent.getForgettability(decl,false,forceConsumed);
-		return lastUse?lastUse.getForgettability(forceConsumed):LastUse.Forgettability.none;
+			return parent.getForgettability(decl,false,forceConsumed,earlyReturn);
+		return lastUse?lastUse.getForgettability(forceConsumed,earlyReturn):LastUse.Forgettability.none;
 	}
 	bool canRedefine(Declaration decl){
 		//imported!"util.io".writeln("CAN REDEFINE: ",decl," ",lastUses," ",lastUses.get(decl,null));
@@ -1092,15 +1094,15 @@ struct LastUses{
 			return parent.betterUnforgettableError(decl,sc);
 		return lastUse&&lastUse.betterUnforgettableError(sc);
 	}
-	void forget(Declaration decl,bool forceConsumed)in{
-		assert(canForget(decl,false,forceConsumed));
+	void forget(Declaration decl,bool forceConsumed,ReturnExp earlyReturn=null)in{
+		assert(canForget(decl,false,forceConsumed,earlyReturn));
 	}do{
 		auto lastUse=lastUses.get(decl,null);
 		if(!lastUse){
 			assert(!!parent);
-			return parent.forget(decl,forceConsumed);
+			return parent.forget(decl,forceConsumed,earlyReturn);
 		}
-		lastUse.forget(forceConsumed);
+		lastUse.forget(forceConsumed,earlyReturn);
 	}
 	void pin(Declaration decl,bool forceHere){
 		if(!decl.scope_) return;

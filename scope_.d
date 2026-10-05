@@ -889,8 +889,11 @@ abstract class Scope{
 			auto earlyForgotten=decl.earlyForgotten;
 			decl.earlyForgotten=null;
 			ConsumedDecl cd;
+			auto earlyReturn=decl.forgottenBeforeEarlyReturn;
 			if(earlyForgotten){
 				cd=new IllegalConsumedDecl(decl,use,earlyForgotten);
+			}else if(earlyReturn){
+				cd=new EarlyReturnForgottenDecl(decl,use,earlyReturn);
 			}else if(auto vd=cast(VarDecl)decl){
 				if(vd.outOfScopeCause) cd=new OutOfScopeDecl(decl,use,vd.outOfScopeCause,vd.outOfScopeDup);
 			}
@@ -1542,8 +1545,10 @@ abstract class Scope{
 			//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 		}do{
 			if(cast(DeadDecl)decl) return true;
-			if(lastUses.canForget(decl,true,false)){
-				lastUses.forget(decl,false);
+			static if(is(T==ReturnExp)) auto earlyReturn=cause;
+			else ReturnExp earlyReturn=null;
+			if(lastUses.canForget(decl,true,false,earlyReturn)){
+				lastUses.forget(decl,false,earlyReturn);
 				return true;
 			}
 			if(!canSplit(decl)) return false;
