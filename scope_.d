@@ -2051,7 +2051,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null, scope SetX!Id* unchangedConst=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -2082,12 +2082,23 @@ abstract class Scope{
 				bool isConstParamDecl=false;
 				if(canForget&&!type.isClassical()){
 					isConstParamDecl=mustBeConstFromDummies?decl.getId in mustBeConst:true;
+					if(mayChange&&unchangedConst&&unchangedOnContinuingPaths(decl,loopScope)){
+						isConstParamDecl=true;
+						unchangedConst.insert(id);
+					}
 				}
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
 			}
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;
+		}
+		static bool unchangedOnContinuingPaths(Declaration decl,NestedScope loopScope){
+			Declaration split=null;
+			foreach(d;decl.splitInto) if(d.scope_ is loopScope) split=d;
+			if(!split) return false;
+			auto current=loopScope.rnsymtab.get(split.getId,null);
+			return current&&current.isDerivedFrom(split);
 		}
 		static if(language==silq) Dependency dependencyOf(Declaration decl){
 			if(decl !in dependencies.dependencies) return Dependency(true);
