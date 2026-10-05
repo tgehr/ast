@@ -23,6 +23,8 @@ void clearModuleCache(){
 	moduleSources=null;
 }
 
+bool delegate(string path,out string code) moduleSourceOverride; // TODO: get rid of global
+
 import util.io;
 string readCode(File f){
 	// TODO: use memory-mapped file with 4 padding zero bytes
@@ -209,7 +211,8 @@ int importModule(string path,ErrorHandler err,out Expression[] exprs,out TopScop
 
 int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Location.init){
 	string code;
-	try code=readCode(path);
+	if(moduleSourceOverride&&moduleSourceOverride(path,code)) code~="\0\0\0\0";
+	else try code=readCode(path);
 	catch(Exception){
 		string error;
 		if(!file.exists(path)){
