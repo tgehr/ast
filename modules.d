@@ -15,6 +15,13 @@ private TopScope preludeScope=null;
 private Source preludeSrc=null;
 private TopScope operatorScope=null;
 private static Q!(Expression[],TopScope)[string] modules;
+private static Source[] moduleSources; // sources read by parseFile, for clearModuleCache
+
+void clearModuleCache(){
+	modules=null;
+	foreach(src;moduleSources) src.dispose();
+	moduleSources=null;
+}
 
 import util.io;
 string readCode(File f){
@@ -221,6 +228,7 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 		}
 	}
 	auto src=new Source(path, code);
+	moduleSources~=src;
 	auto nerr=err.nerrors;
 	r=parseSource(src,err);
 	return nerr!=err.nerrors;
