@@ -45,6 +45,7 @@ abstract class Declaration: Expression{
 	Declaration mergedInto=null;
 	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
+	static if(language==silq) SetX!Declaration definitionReads; // direct dependencies
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
 	Declaration canonicalSource_=null;

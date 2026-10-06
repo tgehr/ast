@@ -3950,6 +3950,10 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 							auto dep=rhs[i].getDependency(sc);
 							dep.joinWith(getIndexDependency(lhs[i]));
 							dependencies~=q(id.meaning,dep);
+							foreach(x;rhs[i].subexpressions)
+								if(auto rid=cast(Identifier)x)
+									if(rid.meaning&&(rid.constLookup||rid.implicitDup))
+										id.meaning.definitionReads.insert(rid.meaning);
 						}else badUnpackLhs=true;
 					}else badUnpackLhs=true;
 				}
