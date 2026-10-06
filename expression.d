@@ -2752,7 +2752,7 @@ class LambdaExp: Expression{
 	}
 	override string toString(){
 		string d=fd.isSquare?"[]":"()";
-		return _brk(d[0]~join(map!(to!string)(fd.params),",")~d[1]~(fd.annotation?text(fd.annotation):"")~(fd.body_?fd.body_.toStringFunctionDef():";"));
+		return _brk("λ"~d[0]~join(map!(to!string)(fd.params),",")~d[1]~(fd.annotation?text(fd.annotation):"")~(fd.body_?fd.body_.toStringFunctionDef():";"));
 	}
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
