@@ -23,6 +23,10 @@ Identifier temporaryIdentifier(Id name,Location loc){
 	return id;
 }
 Identifier temporaryIdentifier(Location loc){ return temporaryIdentifier(freshName(),loc); }
+// For a long-running host that checks one file after another in one process
+// (the language server): resetting the counter between checks numbers each
+// check's temporaries as a fresh compile would. They appear in diagnostics.
+void resetFreshNameCount(int count){ freshNameCounter=count; }
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	assert(bits.isSemEvaluated());

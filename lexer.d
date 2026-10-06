@@ -13,7 +13,7 @@ import std.utf;
 
 //import core.memory;
 
-import util : lowerf, escape, mallocAppender, toEngNum, displayWidth;
+import util : lowerf, escape, toEngNum, displayWidth;
 
 mixin("enum TokenType{"~TokenNames()~"}");
 
@@ -504,7 +504,7 @@ private:
 	}
 
 	size_t lexTo(Token[] res)in{assert(res.length);}do{
-		alias mallocAppender appender;
+		import std.array: appender;
 		if(!code.length) return 0;
 		auto p=code.ptr;
 		auto s=p;    // used if the input has to be sliced

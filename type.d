@@ -38,6 +38,37 @@ import ast.modules: isInPrelude;
 import ast.scope_: Scope, TypeTransition;
 import util: MapX, MapSX;
 
+// The type constructors below share one instance per distinct argument list.
+// std.functional.memoize would keep every instance for the life of the
+// process, which a long-running host cannot afford: each check builds fresh
+// types (a 𝔹^n for each new n), so each check would leave its syntax tree
+// reachable from the cache. These caches can be dropped between checks with
+// clearTypeCaches. A one-shot compile never does, and behaves as before.
+private void function()[] typeCacheClearers;
+
+void clearTypeCaches(){
+	foreach(clear;typeCacheClearers) clear();
+}
+
+private template memoize(alias fun){
+	import std.traits: Parameters, ReturnType;
+	import std.typecons: Tuple;
+	alias Args=Tuple!(Parameters!fun);
+	ReturnType!fun[Args] cache;
+	bool registered=false;
+	ReturnType!fun memoize(Parameters!fun args){
+		if(!registered){
+			registered=true;
+			typeCacheClearers~=function(){ cache=null; };
+		}
+		auto key=Args(args);
+		if(auto r=key in cache) return *r;
+		auto r=fun(args);
+		cache[key]=r;
+		return r;
+	}
+}
+
 enum NumericType{
 	none,
 	Bool,
