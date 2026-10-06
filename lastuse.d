@@ -408,12 +408,15 @@ final class LastUse{
 				if(nested.forgottenVarsOnEntry.canFind(result)){
 					nested.forgottenVarsOnEntry=nested.forgottenVarsOnEntry.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
-				if(nested.rnsymtab.get(result.getId,null) is result){
-					nested.symtabRemove(result);
-					nested.pushDependencies(result,false);
+				auto copy=nested.rnsymtab.get(result.getId,null);
+				if(copy&&copy !is result&&!result.splitSequence.canFind(copy)) copy=null;
+				if(copy){
+					nested.symtabRemove(copy);
+					if(copy is result||nested.dependencyTracked(copy))
+						nested.pushDependencies(copy,false);
 					if(use&&!use.constLookup&&!use.implicitDup)
-						nested.recordConsumption(result,use);
-					if(auto lu=nested.lastUses.get(result,true)) // (a copy whose dependency was consumed within the nested scope only mirrors the forget)
+						nested.recordConsumption(copy,use);
+					if(auto lu=nested.lastUses.get(copy,true))
 						lu.markConsumed(use,isForget&&!lu.dep.isTop);
 				}
 				if(nested.forgottenVars.canFind(result)){
