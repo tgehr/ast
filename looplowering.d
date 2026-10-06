@@ -2215,6 +2215,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	auto retName=new Identifier(freshName());
 	retName.loc=loop.loc;
 	auto nbdy=loop.bdy.copy(cargsDefault);
+	// (nested blocks used as statements share the enclosing scope, e.g., when the analysis wrapped a nested loop: flatten
+	// them, so that nested loops are in the same block as the statements after them and can take continuations)
+	nbdy.s=flattenStatementBlocks(nbdy.s);
 	static if(is(T==ForExp)){
 		auto lhs=cast(Expression[])ids(loopParams,false);
 		if(loopParams[0][3]&&loopParams[0][2]!is loopVarType){
@@ -2579,7 +2582,9 @@ void erpBeforeBody(FunctionDef fd){
 // record join-point information after statement `stms[i]` (originally `original`) has been analyzed
 void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
 	if(!erpRecording(sc)) return;
-	if(i+1<stms.length&&(cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
+	// (also for the last statement of a block: the loop lowering may place it before other statements, e.g., the recursive
+	// call at the end of the body of a loop function)
+	if((cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
 		erpRecordJoin(original,sc);
 	if((cast(ForExp)original||cast(WhileExp)original||cast(RepeatExp)original)&&containsReturn(original)){
 		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
@@ -2924,4 +2929,14 @@ bool endsWithReturn(Expression e){
 	if(auto ce=cast(CompoundExp)e) return ce.s.length&&endsWithReturn(ce.s[$-1]);
 	if(auto ite=cast(IteExp)e) return ite.othw&&endsWithReturn(ite.then)&&endsWithReturn(ite.othw);
 	return false;
+}
+
+// splices nested blocks used as statements (which are analyzed in the enclosing scope) into the enclosing block
+Expression[] flattenStatementBlocks(Expression[] stms){
+	Expression[] r;
+	foreach(x;stms){
+		if(auto ce=cast(CompoundExp)x) r~=flattenStatementBlocks(ce.s);
+		else r~=x;
+	}
+	return r;
 }
