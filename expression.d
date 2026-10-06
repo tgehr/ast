@@ -2547,9 +2547,21 @@ class ForExp: Expression{
 	VarDecl loopVar;
 
 	override Expression evalImpl(){ return this; }
-	mixin VariableFree; // TODO
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		if(auto r=aggr.componentsImpl(e=>e.freeVarsImpl(dg))) return r;
+		SetX!Id bound;
+		if(var) bound[var.id]=[];
+		import ast.substitute:defineLhsBoundVarsImpl;
+		if(pattern) pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
+		return bdy.freeVarsImpl((id){ return id.id in bound?0:dg(id); });
+	}
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){ return this; } // TODO
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
+		return combineTypes(this,rhs,meet)!is null;
+	}
 	override int componentsImpl(scope int delegate(Expression) dg){
-		return 0; // TODO: ok?
+		if(auto r=aggr.componentsImpl(dg)) return r;
+		return dg(bdy);
 	}
 }
 
