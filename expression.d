@@ -2548,14 +2548,13 @@ class ForExp: Expression{
 
 	override Expression evalImpl(){ return this; }
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
-		if(auto r=aggr.componentsImpl(e=>e.freeVarsImpl(dg))) return r;
-		SetX!Id bound;
-		if(var) bound[var.id]=[];
-		import ast.substitute:defineLhsBoundVarsImpl;
-		if(pattern) pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
-		return bdy.freeVarsImpl((id){ return id.id in bound?0:dg(id); });
+		import ast.substitute:statementFreeVarsImpl;
+		return statementFreeVarsImpl(this,dg);
 	}
-	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){ return this; } // TODO
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
+		import ast.substitute:substituteForExp;
+		return substituteForExp(this,subst,tt);
+	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null;
 	}
@@ -3030,7 +3029,37 @@ class VectorForExp: Expression{
 		if(args.preserveSemantic) enforce(!fd&&!len,"TODO");
 		return new VectorForExp(fe.copy(args));
 	}
-	override string toString(){ return _brk("["~fe.bdy.s[0].toString()~" "~fe.toStringNoBody()~"]"); }
+	override string toString(){
+		if(fd) if(auto r=analyzedToString()) return _brk(r);
+		return _brk("["~fe.bdy.s[0].toString()~" "~fe.toStringNoBody()~"]");
+	}
+	private string analyzedToString(){
+		if(!fd.body_||fd.params.length!=1||!fd.params[0].name) return null;
+		Expression[] stmts;
+		void add(Expression x){
+			if(auto ce=cast(CompoundExp)x) foreach(y;ce.s) add(y);
+			else stmts~=x;
+		}
+		foreach(x;fd.body_.s) add(x);
+		if(!stmts.length) return null;
+		auto ret=cast(ReturnExp)stmts[$-1];
+		if(!ret||!ret.e) return null;
+		auto pname=fd.params[0].name;
+		string binder=pname.toString();
+		if(stmts.length==2){ // (element pattern)
+			auto de=cast(DefineExp)stmts[0];
+			auto id=de?cast(Identifier)de.e2:null;
+			if(!id||id.id!=pname.id) return fallbackToString();
+			binder=de.e1.toString();
+		}else if(stmts.length!=1) return fallbackToString();
+		return "["~ret.e.toString()~" for "~binder~" in "~fe.aggr.toString()~"]";
+	}
+	private string fallbackToString(){ // (the synthesized function, as a lambda applied to the element)
+		auto pname=fd.params[0].name.toString();
+		string d=fd.isSquare?"[]":"()";
+		auto lambda="λ"~d[0]~fd.params.map!(to!string).join(",")~d[1]~(fd.annotation?text(fd.annotation):"")~fd.body_.toStringFunctionDef();
+		return "[("~lambda~")("~pname~") for "~pname~" in "~fe.aggr.toString()~"]";
+	}
 	override @property string kind(){ return "vector comprehension"; }
 	override bool isConstant(){ return false; } // TODO?
 	override bool isTotal(){ return fe.isTotal(); }
@@ -3038,6 +3067,19 @@ class VectorForExp: Expression{
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto vfe=cast(VectorForExp)rhs;
 		if(!vfe) return false;
+		if(fd&&vfe.fd){
+			if(!ctx.functionDefEquals(fd,vfe.fd)) return false;
+			auto a=fe.aggr,b=vfe.fe.aggr;
+			if(auto ra=a.isRange()){
+				auto rb=b.isRange();
+				if(!rb||ra.leftExclusive!=rb.leftExclusive||ra.rightExclusive!=rb.rightExclusive) return false;
+				if(!isEqual(ra.left,rb.left,&ctx)||!isEqual(ra.right,rb.right,&ctx)) return false;
+				if(!ra.step!=!rb.step||ra.step&&!isEqual(ra.step,rb.step,&ctx)) return false;
+				return true;
+			}
+			auto ca=a.isContainer(),cb=b.isContainer();
+			return ca&&cb&&isEqual(ca.e,cb.e,&ctx);
+		}
 		return isEqual(fe,vfe.fe,&ctx);
 	}
 
@@ -3058,7 +3100,34 @@ class VectorForExp: Expression{
 		if(fe.pattern) fe.pattern.defineLhsBoundVarsImpl((id){ bound[id.id]=[]; return 0; });
 		return fe.bdy.s[0].freeVarsImpl((id){ return id.id in bound?0:dg(id); });
 	}
-	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){ return this; } // TODO
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
+		import ast.substitute:substituteForExp,substituteFunctionDefExp,substituteForAggregate;
+		ForExp nfe;
+		if(fd){
+			auto naggr=substituteForAggregate(fe.aggr,subst,tt);
+			if(naggr.range is fe.aggr.range&&naggr.container is fe.aggr.container) nfe=fe;
+			else{
+				nfe=new ForExp(fe.var,fe.pattern,naggr,fe.bdy);
+				nfe.loc=fe.loc;
+				nfe.fescope_=fe.fescope_;
+				nfe.loopVar=fe.loopVar;
+				nfe.type=fe.type;
+				nfe.sstate=fe.sstate;
+			}
+		}else nfe=cast(ForExp)substituteForExp(fe,subst,tt);
+		assert(!!nfe);
+		auto nfd=fd?cast(FunctionDef)substituteFunctionDefExp(fd,subst,false,tt):null;
+		assert(!fd||nfd);
+		auto nlen=len?len.substitute(subst,tt):null;
+		auto nlowered=lowered?lowered.substitute(subst,tt):null;
+		if(nfe is fe&&nfd is fd&&nlen is len&&nlowered is lowered) return this;
+		auto r=new VectorForExp(nfe);
+		r.loc=loc;
+		r.fd=nfd;
+		r.len=nlen;
+		r.lowered=nlowered;
+		return r;
+	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		return combineTypes(this,rhs,meet)!is null; // TODO
 	}

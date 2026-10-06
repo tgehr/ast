@@ -788,7 +788,7 @@ private Expression substStm(ForExp fe,ref BlockSubst ctx){
 	}
 	auto bctx=ctx.nested();
 	Identifier nvar=fe.var;
-	if(fe.var) nvar=bctx.bindVar(fe.var,fe.var.type);
+	if(fe.var) nvar=bctx.bindVar(fe.var,fe.var.type?fe.var.type:fe.loopVar?fe.loopVar.vtype:null); // (the binding occurrence may have no type)
 	Expression npattern=fe.pattern?substituteDefineLhs(fe.pattern,bctx):null;
 	auto nbdy=substituteBlockCompound(fe.bdy,bctx);
 	if(bctx.changed) ctx.changed=true;
@@ -1309,6 +1309,34 @@ void computeCapturesFromBody(FunctionDef fd){
 	});
 }
 
+// substitution into the range or container of a `for` loop (no variables are bound there)
+ForAggregate substituteForAggregate(ForAggregate aggr,MapSX!(Id,Expression) subst,TypeTransition* tt=null){
+	Expression sub(Expression e){ return e&&e.isSemCompleted()?e.substitute(subst,tt):e; }
+	if(auto rng=aggr.isRange()){
+		auto nleft=sub(rng.left),nstep=sub(rng.step),nright=sub(rng.right);
+		if(nleft is rng.left&&nstep is rng.step&&nright is rng.right) return aggr;
+		return ForAggregate(ForRange(rng.leftExclusive,nleft,nstep,rng.rightExclusive,nright));
+	}else if(auto cont=aggr.isContainer()){
+		auto ne=sub(cont.e);
+		if(ne is cont.e) return aggr;
+		return ForAggregate(ForContainer(ne));
+	}
+	return aggr;
+}
+// capture-avoiding substitution into a `for` loop (the loop variable or pattern and the variables defined in the body are
+// bound, and renamed if a substituted expression has a free variable of the same name)
+Expression substituteForExp(ForExp fe,MapSX!(Id,Expression) subst,TypeTransition* tt=null){
+	MapSX!(Id,Expression) active;
+	foreach(k,v;subst) if(statementFreeVarsImpl(fe,(id)=>id.id==k?1:0)) active[k]=v;
+	if(!active.length) return fe;
+	SetX!Id taken;
+	foreach(k,v;subst) taken[k]=[];
+	statementFreeVarsImpl(fe,(id){ taken[id.id]=[]; return 0; });
+	collectBoundNamesImpl(fe,taken);
+	MapSX!(Declaration,Declaration) declMap;
+	auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&taken,&declMap,false,tt);
+	return substituteStatement(fe,ctx);
+}
 Expression substituteFunctionDefExp(FunctionDef fd,MapSX!(Id,Expression) subst,bool bindNameInEnclosing=false,TypeTransition* tt=null){
 	MapSX!(Id,Expression) active;
 	foreach(k,v;subst) if(functionDefFreeVarsImpl(fd,(id)=>id.id==k?1:0)) active[k]=v;
