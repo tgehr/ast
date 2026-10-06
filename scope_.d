@@ -2199,6 +2199,11 @@ abstract class Scope{
 		return split;
 	}
 
+	static if(language==silq) private static bool forgottenBeforeEarlyReturn(Declaration decl){
+		for(auto d=decl.splitFrom;d;d=d.splitFrom)
+			if(d.forgottenBeforeEarlyReturn) return true;
+		return false;
+	}
 	void restoreStateSnapshot(ref ScopeState state,bool forWithTransTrial=false)in{
 		assert(state.restoreable);
 	}do{
@@ -2223,6 +2228,16 @@ abstract class Scope{
 						toRemove~=lu.decl;
 					recordConsumption(lu.decl,lu.use);
 					continue;
+				}
+			}
+			static if(language==silq) if(!forWithTransTrial){
+				if(auto lu=lastUses.lastUses.get(decl,null)){
+					if(lu.isConsumption()&&forgottenBeforeEarlyReturn(decl)){
+						if(!toRemove.canFind(lu.decl))
+							toRemove~=lu.decl;
+						recordConsumption(lu.decl,lu.use);
+						continue;
+					}
 				}
 			}
 			rnsymtab[decl.getId]=updateDecl(decl);
