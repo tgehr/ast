@@ -272,7 +272,7 @@ final class LastUse{
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
-					lu.updateDependenciesOnConsumptionLocal();
+					lu.updateDependenciesOnConsumptionLocal(false);
 				}
 			}
 		}else updateDependenciesOnConsumptionLocal();
@@ -284,11 +284,6 @@ final class LastUse{
 	private bool readSplitAtDefinition(Declaration d){
 		import std.algorithm:any;
 		return decl.splitSequence.any!(x=>x in d.definitionReads);
-	}
-	private bool readVersionAtDefinition(Declaration d){
-		if(readSplitAtDefinition(d)) return true;
-		foreach(x;d.definitionReads) if(x.isSplitFrom(decl)) return true;
-		return false;
 	}
 	private void updateDependenciesOnConsumptionLocal(bool descend=true){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
@@ -318,7 +313,7 @@ final class LastUse{
 			visited.insert(lu);
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited) continue;
-			if(splitFrom&&!isConsumption()&&lu.decl&&definedInScope(lu.decl)&&(nested?readVersionAtDefinition(lu.decl):readSplitAtDefinition(lu.decl))) continue;
+			if(splitFrom&&!isConsumption()&&lu.decl&&definedInScope(lu.decl)&&readSplitAtDefinition(lu.decl)) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested) replaceVersions(lu.dep,decl,cdep);
 			else lu.dep.replace(decl,cdep);
