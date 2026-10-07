@@ -2726,8 +2726,9 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			}else{
 				undefinedIdentifierError(id,failures,context.sc);
 				e.e.setSemError();
+				e.setSemError();
 				idx.setSemError();
-				return idx;
+				return e;
 			}
 		}
 		if(auto idx=cast(IndexExp)next){
