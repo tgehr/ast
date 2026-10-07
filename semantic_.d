@@ -2854,11 +2854,11 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			return true; // TODO: ok?
 		}
 		if(auto idx2=cast(IndexExp)unwrap(e.e)) return checkReplaceable(idx2);
-		static if(isPresemantic){
+		if(!e.e.isSemError()){
 			context.sc.error("not supported at this location",unwrap(e.e).loc);
 			unwrap(e.e).setSemError();
 			e.e.setSemError();
-		}else assert(e.e.isSemError());
+		}
 		return false;
 	}
 	if(!checkReplaceable(idx)){
