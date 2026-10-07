@@ -5437,7 +5437,11 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 				}
 			}else if(auto tpll=cast(TupleExp)lhs){
 				if(auto tt=rhsty?rhsty.isTupleTy:null){
-					assert(tpll.length==tt.length);
+					if(tpll.length!=tt.length){
+						assert(ae.isSemError()||sc.inferenceMode);
+						foreach(i,exp;tpll.e[0..min($,tt.length)]) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
+						return;
+					}
 					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
 				}else if(auto at=cast(ArrayTy)rhsty){
 					foreach(exp;tpll.e) updateVars2(exp,olhs,indexed,at.next,rhsdep,stage);
