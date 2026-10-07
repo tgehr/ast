@@ -2593,6 +2593,16 @@ class RawProductScope: NestedScope{
 		return annotation;
 	}
 	void forceClose(){}
+	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
+		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures);
+		if(decl&&kind==Lookup.consuming&&!decl.isToplevelDeclaration()&&!ident.typeofSuppressedCapture){
+			error(format("cannot consume `%s` in a type",ident),ident.loc);
+			ident.typeofSuppressedCapture=true;
+			ident.setSemError();
+		}
+		return decl;
+	}
 }
 
 class CapturingScope(T): NestedScope{
