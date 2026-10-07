@@ -2022,6 +2022,7 @@ Expression statementSemanticImplDefault(Expression e,Scope sc,ref StmFlags flags
 	e=expressionSemantic(e,context);
 	if(!e.isSemError()){
 		sc.error("not supported at this location",oe.loc);
+		e=oe; // (`e` could e.g. be a type)
 		e.setSemForceError();
 	}
 	return e;
