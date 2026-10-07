@@ -3555,8 +3555,10 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 				if(auto idx=cast(IndexExp)e){
 					replaceMeaning(idx.e);
 					propErr(idx.e,e);
+					propErr(idx.a,e);
 					if(idx.e.type&&idx.a.type)
 						idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
+					if(!idx.type) idx.setSemError();
 					assert(idx.type||idx.isSemError());
 					return;
 				}
