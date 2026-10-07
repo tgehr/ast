@@ -1243,14 +1243,30 @@ struct Parser{
 		expect(Tok!"in");
 		bool leftExclusive=false,rightExclusive=false;
 		bool hasLeft=false;
-		auto save=saveState();
-		if(tok.type==Tok!"("){ hasLeft=true; leftExclusive=true; nextToken(); }
-		else if(tok.type==Tok!"["){ hasLeft=true; nextToken(); }
+		Expression first=null;
+		bool isRange=false;
+		if(util.among(tok.type,Tok!"(",Tok!"[")){
+			auto save=saveState();
+			for(int depth=0;;nextToken()){
+				switch(ttype){
+					case Tok!"(",Tok!"[",Tok!"{": depth++; break;
+					case Tok!")",Tok!"]",Tok!"}": depth--; break;
+					case Tok!"..": isRange=depth==1; break;
+					default: break;
+				}
+				if(isRange||depth<=0||ttype==Tok!"EOF") break;
+				if(depth==1&&util.among(ttype,Tok!",",Tok!"for")) break;
+			}
+			restoreState(save);
+		}else{
+			first=parseExpression();
+			isRange=ttype==Tok!"..";
+		}
 		ForAggregate aggr;
-		auto exp=parseExpression();
-		if(ttype==Tok!".."){
-			commitState(save);
-			auto left=exp;
+		if(isRange){
+			if(tok.type==Tok!"("){ hasLeft=true; leftExclusive=true; nextToken(); }
+			else if(tok.type==Tok!"["){ hasLeft=true; nextToken(); }
+			auto left=first?first:parseExpression();
 			Expression step=null;
 			expect(Tok!"..");
 			auto right=parseExpression(0,false);
@@ -1263,13 +1279,10 @@ struct Parser{
 				if(tok.type==Tok!")"){ rightExclusive=true; nextToken(); }
 				else expect(Tok!"]");
 			}else rightExclusive=true;
-			if(leftExclusive == rightExclusive) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
+			if(leftExclusive == rightExclusive && !muteerr) handler.warning("deprecation: use half-open intervals", begin.to(tok.loc));
 			aggr=ForAggregate(ForRange(leftExclusive,left,step,rightExclusive,right));
 		}else{
-			if(hasLeft){
-				restoreState(save);
-				exp=parseCondition();
-			}else commitState(save);
+			auto exp=first?first:util.among(tok.type,Tok!"(",Tok!"[")?parseCondition():parseExpression();
 			aggr=ForAggregate(ForContainer(exp));
 		}
 		return res=New!ForExp(var,pattern,aggr,null);
