@@ -2408,7 +2408,7 @@ struct ForRange{
 		if(r==ℤt(true)){
 			if(isSubtype(left.type,ℕt(true))&&(!step||isSubtype(step.type,ℕt(true))))
 				return ℕt(true);
-			if(isSubtype(right.type,ℕt(true))&&step){
+			if(isSubtype(right.type,ℕt(true))&&step&&!step.isSemError()){
 				if(auto val=step.asIntegerConstant(true)){
 					if(val.get()<0)
 						return ℕt(true);
