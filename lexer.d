@@ -940,6 +940,7 @@ private:
 				isPrefixed=true,p+=2;
 				while(isHex(*p)) p++;
 			}
+			if(isPrefixed&&p==s+2) return tokError("missing digits after base prefix",s[0..p-s]);
 		}
 		if(!isPrefixed){
 			while(isDec(*p)) p++;
