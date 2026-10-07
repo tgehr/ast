@@ -6488,7 +6488,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				return !!ce.type;
 			}else{
-				if(!ce.type&&ce.arg.isSemCompleted()&&ft.isConstForReverse.all)
+				if(!ce.type&&fullyAnalyzed(ce.arg)&&ft.isConstForReverse.all)
 					ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				if(!ce.type){
 					if(ft.cod.hasAnyFreeVar(ft.names)){
@@ -8840,6 +8840,12 @@ Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 		return ty;
 	assert(ty.e.type);
 	return ty.e.type;
+}
+
+private bool fullyAnalyzed(Expression e){
+	if(!e.isSemCompleted()) return false;
+	foreach(c;e.components) if(!fullyAnalyzed(c)) return false;
+	return true;
 }
 
 Expression[] cartesianTypes(BinaryExp!(Tok!"×") pr){
