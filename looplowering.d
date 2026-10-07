@@ -172,6 +172,126 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	if(!carried[0].length) return null;
 	bool[Declaration] loopState;
 	foreach(q;carried[0]~carried[1]) loopState[q[1]]=true;
+	// Versions of quantum variables: within a block, a variable that is defined several times at the top level
+	// of the block gets fresh names for its intermediate values; its last definition in the loop body restores the name
+	// (definitions in nested blocks are handled recursively: a conditional all of whose branches define the variable is a
+	// definition, and other nested definitions update the current name in place). The partitioning below is by name: this allows values of
+	// different classes to pass through the same variable within an iteration (e.g., with swaps). (No renaming is needed
+	// to keep intermediate values alive: a quantum variable cannot be redefined before it is consumed.)
+	Id[const(void)*] versionOf;
+	Id vname(Identifier id){
+		if(auto v=cast(const(void)*)id in versionOf) return *v;
+		return varName(id);
+	}
+	{
+		// (loop-carried and loop-local variables)
+		Id[] candidates;
+		SetX!Id seen;
+		void candidate(Id n){
+			if(n in seen) return;
+			seen.insert(n);
+			candidates~=n;
+		}
+		foreach(p;carried[0]~carried[1]){
+			auto ty=typeForDecl(p[1]);
+			if(ty&&!ty.isClassical()) candidate(p[1].name.id);
+		}
+		visitStm(loop.bdy,(Expression y){
+			if(auto de=cast(DefineExp)y) visitStm(de.e1,(Expression z){
+				if(auto id=cast(Identifier)z) if(!id.constLookup&&id.type&&!id.type.isClassical()) candidate(varName(id));
+			});
+		});
+		foreach(x;candidates){
+			Id[const(void)*] vers;
+			bool isX(Expression e){
+				auto id=cast(Identifier)e;
+				return id&&varName(id)==x;
+			}
+			Identifier simpleDef(Expression s){ // `x` defined by a component of the left-hand side of a definition
+				auto de=cast(DefineExp)s;
+				if(!de||de.isSwap) return null;
+				Identifier r=null;
+				size_t count=0;
+				visitStm(de.e1,(Expression y){ if(isX(y)) count++; });
+				if(count!=1) return null;
+				if(isX(de.e1)) r=cast(Identifier)de.e1;
+				else if(auto tpl=cast(TupleExp)de.e1) foreach(c;tpl.e) if(isX(c)) r=cast(Identifier)c;
+				return r&&!r.constLookup?r:null;
+			}
+			Expression[] flatten(CompoundExp b){ // (as in `addStm`)
+				Expression[] r;
+				void add(Expression s){
+					if(auto ce=cast(CompoundExp)s) if(!ce.blscope_){
+						foreach(t;ce.s) add(t);
+						return;
+					}
+					r~=s;
+				}
+				foreach(s;b.s) add(s);
+				return r;
+			}
+			// a definition of `x`, or a conditional all of whose branches define it (the branches then end with the same
+			// new version)
+			bool isDef(Expression s){
+				if(simpleDef(s)) return true;
+				auto ite=cast(IteExp)s;
+				return ite&&ite.othw&&flatten(ite.then).any!(t=>isDef(t))&&flatten(ite.othw).any!(t=>isDef(t));
+			}
+			// `entry`/`exit`: names of `x` at the start and end of the block
+			void renameBlock(CompoundExp b,Id entry,Id exit){
+				void renameAll(Expression e,Id name){
+					visitStmSkip(e,(Expression y){
+						if(auto ce=cast(CompoundExp)y){
+							renameBlock(ce,name,name);
+							return false;
+						}
+						if(isX(y)&&name!=x) vers[cast(const(void)*)y]=name;
+						return true;
+					});
+				}
+				auto flat=flatten(b);
+				auto numDefs=flat.count!(s=>isDef(s));
+				assert(numDefs||entry==exit);
+				Id name=entry;
+				size_t j=0;
+				foreach(s;flat){
+					if(!isDef(s)){
+						renameAll(s,name);
+						continue;
+					}
+					auto next=++j==numDefs?exit:freshName();
+					if(auto lhs=simpleDef(s)){
+						renameAll((cast(DefineExp)s).e2,name);
+						if(next!=x) vers[cast(const(void)*)lhs]=next;
+					}else{
+						auto ite=cast(IteExp)s;
+						renameAll(ite.cond,name);
+						renameBlock(ite.then,name,next);
+						renameBlock(ite.othw,name,next);
+					}
+					name=next;
+				}
+				assert(name==exit);
+			}
+			renameBlock(loop.bdy,x,x);
+			foreach(k,v;vers) versionOf[k]=v;
+		}
+	}
+	bool versionCopyFailed=false;
+	// copy of `e` with the versions of variables applied
+	Expression vcopy(Expression e){
+		auto c=e.copy();
+		if(!versionOf.length) return c;
+		Expression[] on,cn;
+		walkShallow(e,(Expression x){ on~=x; });
+		walkShallow(c,(Expression x){ cn~=x; });
+		if(on.length!=cn.length){
+			if(on.any!(x=>cast(const(void)*)x in versionOf)) versionCopyFailed=true; // (checked before the split is used)
+			return c;
+		}
+		foreach(k,x;on) if(auto v=cast(const(void)*)x in versionOf) (cast(Identifier)cn[k]).id=*v;
+		return c;
+	}
 	bool dependsTransitivelyOnLoopState(Declaration decl,Dependency dep){
 		bool[Declaration] visited;
 		Declaration[] todo;
@@ -250,11 +370,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto ie=cast(IndexExp)x){
 					Expression r=ie;
 					while(cast(IndexExp)r) r=(cast(IndexExp)r).e;
-					if(auto id=cast(Identifier)r) strongDef(varName(id));
+					if(auto id=cast(Identifier)r) strongDef(vname(id));
 				}else if(auto id=cast(Identifier)x) if(!id.constLookup){
-					strongDef(varName(id));
+					strongDef(vname(id));
 					targets.insert(id);
-					if(id.type) info.types[varName(id)]=id.type;
+					if(id.type) info.types[vname(id)]=id.type;
 				}
 			});
 		}
@@ -284,19 +404,19 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				visitStm(we.trans,(Expression y){
 					if(auto id=cast(Identifier)y)
 						if(id.type&&!id.type.isClassical())
-							strongDef(varName(id));
+							strongDef(vname(id));
 				});
 			}else if(auto ae=cast(AAssignExp)x){
 				Expression lhs=ae.e1;
 				while(cast(IndexExp)lhs) lhs=(cast(IndexExp)lhs).e;
-				if(auto id=cast(Identifier)lhs) strongDef(varName(id));
+				if(auto id=cast(Identifier)lhs) strongDef(vname(id));
 				else addDefs(ae.e1);
 			}else if(auto ce=cast(CallExp)x){
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) info.nonQfree=true;
 			}else if(auto id=cast(Identifier)x){
 				if(id in targets||cast(DatDecl)id.meaning) return true;
-				auto n=varName(id);
+				auto n=vname(id);
 				info.uses.insert(n);
 				if(id.type) info.types[n]=id.type;
 				if(!id.constLookup&&!id.implicitDup){
@@ -330,7 +450,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	MapX!(Id,size_t) occurrences(Expression[] ss){
 		MapX!(Id,size_t) r;
 		foreach(s;ss) walkCond(s,false,(Expression x,bool c){
-			if(auto id=cast(Identifier)x) r[varName(id)]=r.get(varName(id),0)+1;
+			if(auto id=cast(Identifier)x) r[vname(id)]=r.get(vname(id),0)+1;
 		});
 		return r;
 	}
@@ -482,7 +602,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			while(cast(IndexExp)r) r=(cast(IndexExp)r).e;
 			auto id=cast(Identifier)r;
 			if(!id) return false;
-			auto n=varName(id);
+			auto n=vname(id);
 			if(roots.canFind(n)) return false;
 			roots~=n;
 		}
@@ -491,7 +611,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			void check(Expression e){
 				visitStm(e,(Expression x){
 					if(auto id=cast(Identifier)x){
-						auto n=varName(id);
+						auto n=vname(id);
 						foreach(j,r;roots) if(j!=k&&r==n) ok=false;
 					}
 				});
@@ -521,7 +641,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			walkShallow(ce,(Expression y){
 				covered.insert(y);
 				if(auto id=cast(Identifier)y) if(id.type&&!id.type.isClassical()&&!cast(FunctionDef)id.meaning){
-					if(!simple&&(id.constLookup||id.implicitDup)&&varName(id) in rootInfo.defs) ok=false;
+					if(!simple&&(id.constLookup||id.implicitDup)&&vname(id) in rootInfo.defs) ok=false;
 				}
 				if(cast(LambdaExp)y||cast(FunctionDef)y) ok=false;
 			});
@@ -702,7 +822,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(t in isCarried) return false;
 		size_t occ=0;
 		walkCond(ites[q].e,false,(Expression x,bool c){
-			if(auto id=cast(Identifier)x) if(varName(id)==t) occ++;
+			if(auto id=cast(Identifier)x) if(vname(id)==t) occ++;
 		});
 		if(occ!=totalOcc.get(t,0)) return false;
 		size_t[] defs;
@@ -885,7 +1005,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						if(!ft.isSquare&&ft.annotation<Annotation.qfree&&P>0) ok=false;
 				}else if(auto id=cast(Identifier)x){
 					if(cast(DatDecl)id.meaning) return;
-					auto c=colorOf(varName(id));
+					auto c=colorOf(vname(id));
 					if(c==P&&P>0) lateAll=true;
 					if(c!=NONE&&c!=0) ok=false;
 				}
@@ -1003,7 +1123,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) ok=false;
 			}else if(auto id=cast(Identifier)x){
 				if(cast(DatDecl)id.meaning) return;
-				if(colorOf(varName(id))!=NONE) ok=false;
+				if(colorOf(vname(id))!=NONE) ok=false;
 				if(!id.constLookup&&!id.implicitDup&&id.type&&!id.type.isClassical()) ok=false;
 			}
 		});
@@ -1022,7 +1142,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree&&Y!=P) ok=false;
 			}else if(auto id=cast(Identifier)x){
 				if(cast(DatDecl)id.meaning) return;
-				auto c=colorOf(varName(id));
+				auto c=colorOf(vname(id));
 				if(!native(c,Y)&&(!upTo||c>Y)) ok=false;
 			}
 		});
@@ -1049,7 +1169,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		visitStm(ites[j].heads[0],(Expression x){
 			if(auto id=cast(Identifier)x){
 				if(cast(DatDecl)id.meaning) return;
-				auto c=colorOf(varName(id));
+				auto c=colorOf(vname(id));
 				if(c==NONE) return;
 				if(Z!=NONE&&c!=Z) ok=false;
 				Z=c;
@@ -1165,11 +1285,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				visitStm(we.cond,(Expression x){
 					if(auto id=cast(Identifier)x){
 						if(cast(DatDecl)id.meaning) return;
-						auto c=colorOf(varName(id));
+						auto c=colorOf(vname(id));
 						if(native(c,X)) return;
 						if(Y!=NONE&&c!=Y) ok=false;
 						Y=c;
-						vars~=varName(id);
+						vars~=vname(id);
 					}
 				});
 				if(it.info.nonQfree&&X!=P){
@@ -1197,11 +1317,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				visitStm(it.heads[0],(Expression x){
 					if(auto id=cast(Identifier)x){
 						if(cast(DatDecl)id.meaning) return;
-						auto c=colorOf(varName(id));
+						auto c=colorOf(vname(id));
 						if(native(c,X)) return;
 						if(Y!=NONE&&c!=Y) ok=false;
 						Y=c;
-						vars~=varName(id);
+						vars~=vname(id);
 					}
 				});
 				if(it.info.nonQfree&&X!=P){
@@ -1238,8 +1358,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(Y<0||native(Y,X)||u in isCondVar) continue;
 				if(Y>X) return null;
 				bool consume=!!(u in consumed);
+				// A late atom also runs in the main loop (on copies of the lifted state), which consumes the quantum value
+				// there; the late loop could only receive a copy of it, which cannot be uncomputed after the main loop.
+				if(consume&&X>P&&Y==P) return null;
 				foreach(n,x;nodes) if(condOf[n]>=0&&cast(WhileExp)ites[condOf[n]].e&&inScope(n)&&x !in condCovered)
-					if(auto id=cast(Identifier)x) if(varName(id)==u) return null;
+					if(auto id=cast(Identifier)x) if(vname(id)==u) return null;
 				struct Group{
 					size_t wAt,rAt,level,rLevel;
 					bool slot;
@@ -1299,7 +1422,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						continue;
 					}
 					if(auto id=cast(Identifier)x){
-						if(varName(id)==u&&!anchor(n)) return null;
+						if(vname(id)==u&&!anchor(n)) return null;
 						continue;
 					}
 					auto ie=cast(IndexExp)x;
@@ -1310,7 +1433,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						r=je.e;
 					}
 					auto rid=cast(Identifier)r;
-					if(!rid||varName(rid)!=u) continue;
+					if(!rid||vname(rid)!=u) continue;
 					covered.insert(rid);
 					if(!anchor(n)) return null;
 				}
@@ -1392,7 +1515,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(Z==NONE) return null;
 			Id[] vars;
 			visitStm(ites[j].heads[0],(Expression x){
-				if(auto id=cast(Identifier)x) if(colorOf(varName(id))!=NONE) vars~=varName(id);
+				if(auto id=cast(Identifier)x) if(colorOf(vname(id))!=NONE) vars~=vname(id);
 			});
 			auto n=pos[cast(const(void)*)ites[j].heads[0]];
 			size_t level,wAt,rAt,rLevel;
@@ -1463,9 +1586,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			stmts~=define(mkId(l.name),annot(empty,arrayTy(ety)));
 		}
 		Expression logEntry(Log l){
-			if(l.ite!=size_t.max) return dupOf(ites[l.ite].heads[0].copy());
+			if(l.ite!=size_t.max) return dupOf(vcopy(ites[l.ite].heads[0]));
 			if(!l.access) return dupOf(mkId(l.var));
-			auto one=new VectorExp([dupOf(l.access.copy())]);
+			auto one=new VectorExp([dupOf(vcopy(l.access))]);
 			one.loc=loc;
 			return one;
 		}
@@ -1481,19 +1604,19 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(l.slot!=Id.init) return [define(mkId(l.slot),logEntry(l))];
 			if(!l.access||!l.bound) return [append(logEntry(l))];
 			auto one=logEntry(l);
-			Expression bound=l.bound.copy();
+			Expression bound=vcopy(l.bound);
 			if(l.bound is l.access.e){
 				auto len=new Identifier(Id.s!"length");
 				len.loc=loc;
 				bound=new FieldExp(bound,len);
 				bound.loc=loc;
 			}
-			Expression cond=new LtExp(l.access.a.copy(),bound);
+			Expression cond=new LtExp(vcopy(l.access.a),bound);
 			cond.loc=loc;
 			if(!isSubtype(l.access.a.type,ℕt(true))){
 				auto zero=LiteralExp.makeInteger(0);
 				zero.loc=loc;
-				auto nonneg=new GeExp(l.access.a.copy(),zero);
+				auto nonneg=new GeExp(vcopy(l.access.a),zero);
 				nonneg.loc=loc;
 				cond=new AndThenExp(nonneg,cond);
 				cond.loc=loc;
@@ -1542,6 +1665,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(l.access) elemOf[cast(const(void)*)nodes[l.node]]=l.tmp;
 				else foreach(n;l.rnodes) renameOf[cast(const(void)*)nodes[n]]=l.tmp;
 			}
+			foreach(n;nodes) if(auto v=cast(const(void)*)n in versionOf) if(cast(const(void)*)n !in renameOf) renameOf[cast(const(void)*)n]=*v;
 			bool ok=true;
 			void renameItrans(Expression c,Id[Id] names){
 				if(!names.length) return;
@@ -1572,11 +1696,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(on.length!=cn.length){
 					Id[Id] names;
 					foreach(x;on){
-						if(cast(const(void)*)x in elemOf||cast(const(void)*)x in extracted) ok=false;
-						if(auto t=cast(const(void)*)x in renameOf) if(auto id=cast(Identifier)x) names[varName(id)]=*t;
+						if(cast(const(void)*)x in elemOf||cast(const(void)*)x in extracted||cast(const(void)*)x in versionOf) ok=false;
+						if(auto t=cast(const(void)*)x in renameOf) if(auto id=cast(Identifier)x) names[vname(id)]=*t;
 						FunctionDef fd=cast(FunctionDef)x;
 						if(auto le=cast(LambdaExp)x) fd=le.fd;
-						if(fd) foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) if(auto t=cast(const(void)*)id in renameOf) names[varName(id)]=*t;
+						if(fd) foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) if(auto t=cast(const(void)*)id in renameOf) names[vname(id)]=*t;
 					}
 					if(names.length){
 						import ast.substitute:statementFreeVarsImpl;
@@ -1603,7 +1727,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(ofd) foreach(decl;ofd.capturedDecls) foreach(id;ofd.captures[decl]){
 						if(auto t=cast(const(void)*)id in renameOf){
 							import ast.substitute:functionDefFreeVarsImpl;
-							auto name=varName(id),tmp=*t;
+							auto name=vname(id),tmp=*t;
 							functionDefFreeVarsImpl(cfd,(Identifier y){
 								if(y.id==name) y.id=tmp;
 								return 0;
@@ -1626,12 +1750,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						continue;
 					}
 					if(auto t=cast(const(void)*)x in renameOf){
-						itransNames[varName(cast(Identifier)x)]=*t;
+						itransNames[vname(cast(Identifier)x)]=*t;
 						(cast(Identifier)cn[k]).id=*t;
 					}
 				}
 				visitStm(o,(Expression x){
-					if(auto t=cast(const(void)*)x in renameOf) if(auto id=cast(Identifier)x) itransNames[varName(id)]=*t;
+					if(auto t=cast(const(void)*)x in renameOf) if(auto id=cast(Identifier)x) itransNames[vname(id)]=*t;
 				});
 				renameItrans(c,itransNames);
 				renameSkipped(c,itransNames);
@@ -1858,7 +1982,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				emit(cp(atoms[a].e));
 			}
 			while(open.length) popFrame();
-			if(!ok) return null;
+			if(!ok||versionCopyFailed) return null;
 			bdy~=top;
 		}
 		if(readsLogs){
@@ -2607,6 +2731,26 @@ struct ERPReturn{
 	Q!(Id,Expression)[] consumed; // quantum variables consumed by the returned expression
 }
 ERPReturn[size_t] erpReturns;
+SetX!Id[size_t] erpForgettableAtReturn; // quantum variables that can be forgotten before the returned expression is evaluated
+void erpBeforeReturn(ReturnExp ret,Scope sc){
+	if(!erpRecording(sc)||!erpKey(ret)) return;
+	SetX!Id forgettable,seen;
+	auto fun=sc.getFunction();
+	for(Scope c=sc;c;c=c.parentScope()){
+		foreach(_,d;c.rnsymtab){
+			auto vd=cast(VarDecl)d;
+			if(!vd||vd.isSemError()||cast(DeadDecl)d||!vd.name) continue;
+			if(vd.name.id in seen) continue;
+			seen.insert(vd.name.id);
+			if(!vd.scope_||vd.scope_.getFunction() !is fun) continue;
+			auto type=typeForDecl(vd);
+			if(!type||type.isClassical()) continue;
+			if(sc.canForget(vd)) forgettable.insert(vd.name.id);
+		}
+		if(cast(FunctionScope)c) break;
+	}
+	erpForgettableAtReturn[erpKey(ret)]=forgettable;
+}
 void erpRecordReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)) return;
 	ERPReturn r;
@@ -2701,10 +2845,21 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	});
 	if(auto we=cast(WhileExp)loop) if(erpKey(we) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
 	if(!ok) return null;
-	// Consumed variables that are lifted after the loop keep their values (the analysis `dup`s them, as they are still
-	// used); the others get placeholders. Returns consuming loop-local quantum variables are not supported (TODO).
+	// Consumed variables that are lifted after the loop and can be forgotten at each return consuming them keep their values
+	// (the analysis `dup`s them, as they are still used); the others get placeholders. Returns consuming loop-local quantum
+	// variables are not supported (TODO).
+	bool forgettableAtReturns(Id n){
+		bool r=true;
+		visitStm(loop,(Expression x){
+			if(auto ret=cast(ReturnExp)x) if(erpReturns[erpKey(ret)].consumed.any!(c=>c[0]==n)){
+				auto f=erpKey(ret) in erpForgettableAtReturn;
+				if(!f||n !in *f) r=false;
+			}
+		});
+		return r;
+	}
 	bool needsPlaceholder(Id n){
-		foreach(v;*after) if(v.name==n) return !v.lifted;
+		foreach(v;*after) if(v.name==n) return !v.lifted||!forgettableAtReturns(n);
 		ok=false;
 		return false;
 	}

@@ -9113,6 +9113,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		ret.setSemError();
 		return ret;
 	}
+	static if(language==silq) erpBeforeReturn(ret,sc);
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	static if(language==silq) auto bottom=Dependency(); // variable is a workaround for DMD regression
 
