@@ -307,7 +307,17 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				// a dependency that was recomputable at the loop entry but is not after an iteration (as the loop consumes
 				// one of its dependencies) could no longer be forgotten after the loop
 				if(!state.origStateSnapshot.dependencyOf(d).isTop) return true;
-				continue; // (not recomputable anyway: the traversal ends here)
+				// a variable that could still be forgotten at its last use (before it became non-recomputable) may be
+				// forgotten there, before the loop: it is not available after the loop unless it is consumed later
+				if(auto lu=sc.lastUses.get(d,false)){
+					for(;;){ // (the last use itself, not a split into a nested scope)
+						while(lu.forwardTo) lu=lu.forwardTo;
+						if(lu.kind!=imported!"ast.lastuse".LastUse.Kind.lazySplit) break;
+						lu=lu.getSplitFrom();
+					}
+					if(lu.isConsumption()||!lu.dep.isTop) return true;
+				}
+				continue; // (not recomputable anyway, but available: the traversal ends here)
 			}
 			foreach(e;dd.dependencies) todo~=e;
 		}

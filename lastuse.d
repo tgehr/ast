@@ -136,6 +136,7 @@ final class LastUse{
 	LastUse splitFrom=null;
 	LastUse splitSource=null;
 	NestedScope[] nestedScopes;
+	NestedScope[] nestedAfter;
 	LastUse prev=null,next=null;
 
 	bool isConsumption(){
@@ -206,6 +207,8 @@ final class LastUse{
 		assert(!next||next.prev is this);
 		if(prev) prev.next=next;
 		if(next) next.prev=prev;
+		if(prev) prev.nestedAfter~=nestedAfter;
+		nestedAfter=[];
 		prev=next=null;
 	}
 	void prepend(LastUse prev)in{
@@ -247,19 +250,19 @@ final class LastUse{
 			slu.markConsumed(null,false);
 		}
 	}
-	private void markConsumed(Identifier theUse,bool isForget){
+	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false){
 		if(!use) use=theUse;
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
 		if(isConsumption()) return;
 		if(splitSource&&splitSource.splitFrom)
-			splitSource.splitFrom.markConsumed(theUse,false);
-		if(splitFrom) splitFrom.markConsumed(theUse,false);
+			splitSource.splitFrom.markConsumed(theUse,false,true);
+		if(splitFrom) splitFrom.markConsumed(theUse,false,true);
 		if(isForget){
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
-		updateDependenciesOnConsumptionLocal();
+		updateDependenciesOnConsumptionLocal(!fromNested);
 	}
 	private void updateDependenciesOnConsumption(){
 		//imported!"util.io".writeln("UPDATING ALL: ",this);
@@ -282,7 +285,12 @@ final class LastUse{
 		import std.algorithm:any;
 		return decl.splitSequence.any!(x=>x in d.definitionReads);
 	}
-	private void updateDependenciesOnConsumptionLocal(){
+	private bool readVersionAtDefinition(Declaration d){
+		if(readSplitAtDefinition(d)) return true;
+		foreach(x;d.definitionReads) if(x.isSplitFrom(decl)) return true;
+		return false;
+	}
+	private void updateDependenciesOnConsumptionLocal(bool descend=true){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
@@ -292,18 +300,33 @@ final class LastUse{
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
 		SetX!LastUse visited;
+		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by){
+			if(dep.isTop) return;
+			Declaration[] xs;
+			foreach(x;dep.dependencies) if(x is d||x.isSplitFrom(d)||d.isSplitFrom(x)) xs~=x;
+			foreach(x;xs) dep.replace(x,by);
+		}
+		void walk(LastUse start,Dependency cdep,bool nested){
 		for(auto lu=start;lu;lu=lu.next){
+			scope(success) if(descend) foreach(nsc;lu.nestedAfter){
+				auto head=nsc.lastUses.lastLastUse;
+				if(!head) continue;
+				while(head.prev) head=head.prev;
+				walk(head,cdep.dup,true);
+			}
 			if(lu is this) continue;
 			visited.insert(lu);
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited) continue;
-			if(splitFrom&&!isConsumption()&&lu.decl&&definedInScope(lu.decl)&&readSplitAtDefinition(lu.decl)) continue;
+			if(splitFrom&&!isConsumption()&&lu.decl&&definedInScope(lu.decl)&&(nested?readVersionAtDefinition(lu.decl):readSplitAtDefinition(lu.decl))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			lu.dep.replace(decl,cdep);
+			if(nested) replaceVersions(lu.dep,decl,cdep);
+			else lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
-				cdep.replace(lu.decl,lu.dep);
+				if(nested) replaceVersions(cdep,lu.decl,lu.dep);
+				else cdep.replace(lu.decl,lu.dep);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
 					lu.checkConsumable();
@@ -334,6 +357,8 @@ final class LastUse{
 				}
 			}
 		}
+		}
+		walk(splitFrom?start:this,cdep,false);
 	}
 
 	bool checkConsumable(){
@@ -764,11 +789,13 @@ struct LastUses{
 	MapX!(Declaration,LastUse[]) retired;
 	LastUse lastLastUse;
 
+	LastUse nestingPoint;
 	void prepareNesting(Scope parent)do{
 		foreach(k,d;parent.rnsymtab){
 			if(cast(DeadDecl)d) continue;
 			lazySplitSink(d,parent);
 		}
+		nestingPoint=lastLastUse;
 	}
 	void nest(NestedScope r)in{
 		with(r.lastUses){
@@ -780,6 +807,7 @@ struct LastUses{
 		//imported!"util.io".writeln("NESTING IN: ",lastUses);
 		//imported!"util.io".writeln("NESTING IN: ",r.parent.dependencies," ",r.dependencies);
 		r.lastUses.parent=&this;
+		if(nestingPoint) nestingPoint.nestedAfter~=r;
 		foreach(k,d;r.parent.rnsymtab){
 			if(cast(DeadDecl)d) continue;
 			if(d.sstate!=SemState.completed) continue;
@@ -884,7 +912,7 @@ struct LastUses{
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
-				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false);
+				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true);
 			lastUse.updateDependenciesOnConsumption();
 		}
 	}
