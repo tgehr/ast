@@ -5264,6 +5264,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		if(cast(IndexExp)ae.e1&&!cast(Identifier)ae.e2){
 			auto tmp=temporaryIdentifier(ae.e2.loc);
 			tde=new DefineExp(tmp,ae.e2);
+			tde.loc=ae.loc;
 			tmp=tmp.copy();
 			tmp.byRef=true;
 			tde=statementSemantic(tde,sc,flags);
