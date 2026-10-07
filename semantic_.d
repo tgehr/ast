@@ -3262,7 +3262,11 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 
 Expression defineLhsSemanticImpl(WildcardExp e,DefineLhsContext context){
 	e.type=context.type;
-	if(!isPresemantic) e.setSemCompleted();
+	static if(!isPresemantic){
+		if(e.type) e.setSemCompleted();
+		else if(!context.sc.inferenceMode) e.setSemError();
+		else markDeferredSpecificityCheck(context.sc);
+	}
 	return e;
 }
 
