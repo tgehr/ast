@@ -5560,7 +5560,10 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		auto we=new WithExp(trans,bdy);
 		we.loc=be.loc;
 		auto r=statementSemantic(we,sc,flags);
-		if(!r.isSemError()) finishIndexReplacement(r,sc);
+		if(r.isSemError()){
+			sc.resetLocalComponentReplacements();
+			epilogues=[]; // (avoids error messages)
+		}else finishIndexReplacement(r,sc);
 		return lowerIndexReplacement(prologues,epilogues,r,sc,flags);
 	}
 	be.e1=oe1;
