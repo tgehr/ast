@@ -7184,8 +7184,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			if(auto r=builtIn(id,sc)){
 				if(context.constResult!=ConstResult.called&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
 					sc.error("special operator must be called directly",id.loc);
-					id.setSemError();
-					r.setSemError();
+					id.setSemForceError();
+					return id;
 				}
 				return r;
 			}
