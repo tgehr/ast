@@ -7172,7 +7172,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		if(!avoidCapture){
 			id.meaning=null;
 			id.meaning=lookupMeaning(id,lookup,sc,true,&failures);
-		}else if(sc) sc.recordAccess(id,id.meaning);
+		}else if(sc&&!id.isSemError()) sc.recordAccess(id,id.meaning);
 		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
 				if(context.constResult!=ConstResult.called&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
