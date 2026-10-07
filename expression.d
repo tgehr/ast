@@ -1210,6 +1210,7 @@ class Identifier: Expression{
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
 		if(vd.definition) if(auto td=cast(FixedPointDeclaration)vd.definition.toplevel) if(!td.typeFinal) return null;
+		if(!vd.scope_&&!vd.isSemFinal()) return null;
 		assert(vd.isSemFinal());
 		auto init=vd.initializer;
 		if(vd.isSemError()||!init) return null;
