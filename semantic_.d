@@ -6602,7 +6602,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					case "sampleFrom":
 						return handleSampleFrom(ce,sc,inType);
 				}
-				default: assert(0,text("TODO: ",id.name));
+				default:
+					sc.error(format("cannot call expression of type %s",fun.type),ce.loc);
+					ce.setSemError();
+					return ce;
 			}
 		}else assert(0);
 	}else if(isType(fun.type)&&isEmpty(fun.type)){
