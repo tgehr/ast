@@ -124,7 +124,16 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 		}
 		return cast(Identifier)e||cast(IndexExp)e||cast(SliceExp)e;
 	}
-	if(auto tpl=cast(TupleExp)olhs) return tpl.e.all!validDefEntry;
+	if(auto tpl=cast(TupleExp)olhs){
+		if(noImplicitDup){
+			static bool writesBack(Expression e){
+				auto id=cast(Identifier)unwrap(e);
+				return id&&id.meaning;
+			}
+			if(tpl.e.any!writesBack) return false;
+		}
+		return tpl.e.all!validDefEntry;
+	}
 	if(auto cat=cast(CatExp)olhs) return validDefEntry(unwrap(cat.e1))&&validDefEntry(unwrap(cat.e2))
 		                              &&(knownLength(cat.e1,true)||knownLength(cat.e2,true));
 	if(auto ce=cast(CallExp)olhs){
@@ -375,7 +384,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	static if(createFresh) Expression nlhs;
 	Expression lhs(){ // TODO: solve better
 		static if(createFresh){
-			if(!nlhs) nlhs=olhs.copy();
+			if(nlhs) return nlhs;
+			nlhs=olhs.copy();
 			if(noImplicitDup){ // TODO: this is a hack
 				void removeImplicitDup(Expression e){
 					e.implicitDup=false;
@@ -409,7 +419,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res;
 	}
 	static if(reverseMode){
-		if(cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
+		if(!noImplicitDup&&cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
 			lhs.implicitDup=true;
 	}
 	static if(language==silq){

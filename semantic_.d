@@ -382,6 +382,13 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 		}
 		if(auto id=cast(Identifier)unwrap(be.e1)){
 			if(id.implicitDup) return be;
+			static if(language==silq) if(sc.getWithTransInverse()){
+				auto decl=sc.lookupHere(id,false,Lookup.probing,null);
+				if(decl&&!cast(DeadDecl)decl&&decl.scope_&&!sc.lastUses.canRedefine(decl)){
+					id.implicitDup=true;
+					return be;
+				}
+			}
 			auto vd=makeVar(id);
 			propErr(vd,be);
 			return be;
