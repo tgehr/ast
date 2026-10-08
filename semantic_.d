@@ -1057,6 +1057,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		if(definitelyReturns(branch))
 			branch.blscope_.closeUnreachable(sc);
 	}
+	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
@@ -1101,7 +1102,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 			}
 		}
 	}
-	ite.type=definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
+	ite.type=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
 	static if(language==silq) if(redefined.length){ // (`condForget` is evaluated after the branches)
 		ite.setSemCompleted();
 		Expression r=ite;
@@ -6826,6 +6827,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 			sc.error(format("type `%s` of `if` expression with quantum control has classical components",ite.type),ite.loc);
 			ite.setSemError();
 		}
+		if(ite.type&&ite.cond.type&&isEmpty(ite.cond.type)) ite.type=bottom;
 	}
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("consumed in one branch of if expression", ite.loc);

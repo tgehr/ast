@@ -928,7 +928,7 @@ class Checker {
 
 	void implExpr(ast_exp.IteExp e) {
 		expectConst(e.cond, "if-condition");
-		assert(ast_ty.isNumericTy(e.cond.type) == ast_ty.NumericType.Bool);
+		assert(ast_ty.isNumericTy(e.cond.type) == ast_ty.NumericType.Bool || ast_ty.isEmpty(e.cond.type));
 		visExpr(e.cond);
 
 		bool scopedBranch(ast_exp.CompoundExp branch) {
