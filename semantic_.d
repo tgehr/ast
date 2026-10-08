@@ -1501,6 +1501,7 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 		}
 		if(range.step){
 			range.step=expressionSemantic(range.step,context.nestConst);
+			propErr(range.step,fe);
 			if(range.step.isSemCompleted() && !isSubtype(range.step.type, ℤt(true))){
 				sc.error(format("step should be a classical integer, not `%s`",range.step.type),range.step.loc);
 				fe.setSemError();
