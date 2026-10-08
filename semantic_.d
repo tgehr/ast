@@ -4981,7 +4981,11 @@ Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)i
 		if(!indices.length) return rhsty;
 		Expression impl(){
 			bool quantumIndex=!indices[0].type.isClassical;
-			if(auto tt=baseTy.isTupleTy){
+			enum maxExpandedVector=1<<20; // TODO: track symbolically instead
+			auto vtBase=cast(VectorTy)baseTy;
+			bool expand=true;
+			if(vtBase) if(auto n=vtBase.num.asIntegerConstant(true)) expand=n.get()<=maxExpandedVector;
+			if(auto tt=expand?baseTy.isTupleTy:null){
 				if(auto lit=indices[0].asIntegerConstant(true)){
 					auto c=lit.get();
 					if(c<0||c>=tt.length) return baseTy;
@@ -4999,6 +5003,9 @@ Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)i
 				}
 			}
 			if(auto vt=cast(VectorTy)baseTy){
+				if(auto lit=indices[0].asIntegerConstant(true))
+					if(auto n=vt.num.asIntegerConstant(true))
+						if(lit.get()<0||lit.get()>=n.get()) return baseTy;
 				auto nnext=joinTypes(vt.next,rec(vt.next,indices[1..$]));
 				if(nnext&&quantumIndex) nnext=nnext.getQuantum();
 				if(!nnext) return null;
