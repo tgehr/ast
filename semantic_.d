@@ -8823,7 +8823,11 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 	MapX!(Declaration,Identifier[]) ncaptures;
 	foreach(capture;fd.capturedDecls){ // undo consumption of captures
 		capture.splitInto=capture.splitInto.filter!(x=>!x.scope_.isNestedIn(fd.fscope_)).array;
-		if(fd.isConsumedCapture(capture)&&fd.scope_.canInsert(capture.name.id)){
+		bool consumed=fd.isConsumedCapture(capture);
+		static if(language==silq) if(consumed&&capture.name&&capture.name.id in fd.consumingCaptures&&capture.scope_)
+			if(auto efd=fd.scope_.getFunction()) if(!capture.scope_.isNestedIn(efd.fscope_))
+				consumed=false;
+		if(consumed&&fd.scope_.canInsert(capture.name.id)){
 			assert(capture.scope_ is fd.scope_); // TODO: ok?
 			//imported!"util.io".writeln("INSERTING: ",capture);
 			capture.scope_=null;
@@ -8833,9 +8837,9 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 		auto loc=fd.captures[capture][0].loc;
 		auto id=new Identifier(capture.getName);
 		id.loc=loc;
-		id.meaning=fd.isConsumedCapture(capture)?newfscope_.split(capture,id):capture;
+		id.meaning=consumed?newfscope_.split(capture,id):capture;
 		id.type=id.typeFromMeaning;
-		id.constLookup=!fd.isConsumedCapture(capture);
+		id.constLookup=!consumed;
 		propErr(id.meaning, id);
 		id.setSemCompleted();
 		propErr(id,fd);
@@ -8998,6 +9002,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fd.erpStage==1&&fd.ftypeFinal&&!fd.isSemFinal()&&!fd.tainted)
 			if(erpSwitch()) return functionDefSemantic(fd,sc);
 	}
+	static if(language==silq) if(fd.captureReanalysis&&!fd.isSemFinal()){
+		fd.captureReanalysis=false;
+		resetFunction(fd,fd);
+		return functionDefSemantic(fd,sc);
+	}
 	if(fd.ftypeFinal && !fd.finalPassDone && fd.deferredSpecificityCheck && !fd.isSemFinal() && !fd.tainted){
 		fd.finalPassDone=true;
 		fd.inferringReturnType=true;
@@ -9029,12 +9038,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
 			assert(nufd is ufd);
 		}
-		return functionDefSemantic(fd,sc);
-	}
-	static if(language==silq) if(fd.captureReanalysis&&!fd.isSemFinal()){
-		// some classical captures have to be consumed (see `Scope.checkCaptureRedefinition`)
-		fd.captureReanalysis=false;
-		resetFunction(fd,fd);
 		return functionDefSemantic(fd,sc);
 	}
 	static if(language==silq)

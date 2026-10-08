@@ -182,7 +182,13 @@ abstract class Scope{
 			auto type=typeForDecl(capture);
 			if(type&&type.isClassical()&&ids.any!(id=>!id.constLookup)){
 				fd.consumingCaptures.insert(decl.name.id);
-				fd.captureReanalysis=true;
+				bool enclosing=false;
+				for(auto efd=fd.scope_.getFunction();efd&&capture.scope_&&!capture.scope_.isNestedIn(efd.fscope_);efd=efd.scope_.getFunction()){
+					efd.consumingCaptures.insert(decl.name.id);
+					efd.captureReanalysis=true;
+					enclosing=true;
+				}
+				if(!enclosing) fd.captureReanalysis=true;
 				return true;
 			}
 			if(!decl.isSemError()){
@@ -1952,9 +1958,9 @@ abstract class Scope{
 		return Annotation.none;
 	}
 
-	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost){
+	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost,bool consumedClassical=false){
 		if(!meaning) return false;
-		if(!meaning.isLinear()&&!id.byRef) return true;
+		if(!meaning.isLinear()&&!id.byRef&&!consumedClassical) return true;
 		auto type=id.typeFromMeaning(meaning);
 		if(!type) return false;
 		return insertCaptureImpl(id,meaning,type,outermost);
@@ -2717,7 +2723,14 @@ class CapturingScope(T): NestedScope{
 		auto meaningBefore=meaning,pmeaning=meaning;
 		if(!id.lazyCapture){
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
-			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures) consumed=true;
+			bool consumedClassical=false;
+			static if(language==silq&&is(T==FunctionDef)){
+				if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures){
+					auto efd=decl.scope_?decl.scope_.getFunction():null;
+					if(!efd||!meaning.scope_||meaning.scope_.isNestedIn(efd.fscope_))
+						consumed=consumedClassical=true;
+				}
+			}
 			if(!id.isSemError){
 				if(consumed) meaning=parent.split(meaning,id);
 				decl.addCapture(meaning,id);
@@ -2726,7 +2739,7 @@ class CapturingScope(T): NestedScope{
 			if(consumed){
 				symtabInsert(meaning);
 				meaning=consume(meaning,id);
-				origin.insertCapture(id,meaning,this);
+				origin.insertCapture(id,meaning,this,consumedClassical);
 				void replace(Scope csc){ // TODO: this is a bit hacky
 					foreach(sc;csc.activeNestedScopes){
 						sc.replaceDecl(meaningBefore,meaning);
