@@ -182,13 +182,11 @@ abstract class Scope{
 			auto type=typeForDecl(capture);
 			if(type&&type.isClassical()&&ids.any!(id=>!id.constLookup)){
 				fd.consumingCaptures.insert(decl.name.id);
-				bool enclosing=false;
+				fd.captureReanalysis=true;
 				for(auto efd=fd.scope_.getFunction();efd&&capture.scope_&&!capture.scope_.isNestedIn(efd.fscope_);efd=efd.scope_.getFunction()){
 					efd.consumingCaptures.insert(decl.name.id);
 					efd.captureReanalysis=true;
-					enclosing=true;
 				}
-				if(!enclosing) fd.captureReanalysis=true;
 				return true;
 			}
 			if(!decl.isSemError()){
@@ -2724,13 +2722,7 @@ class CapturingScope(T): NestedScope{
 		if(!id.lazyCapture){
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
 			bool consumedClassical=false;
-			static if(language==silq&&is(T==FunctionDef)){
-				if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures){
-					auto efd=decl.scope_?decl.scope_.getFunction():null;
-					if(!efd||!meaning.scope_||meaning.scope_.isNestedIn(efd.fscope_))
-						consumed=consumedClassical=true;
-				}
-			}
+			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures) consumed=consumedClassical=true;
 			if(!id.isSemError){
 				if(consumed) meaning=parent.split(meaning,id);
 				decl.addCapture(meaning,id);
