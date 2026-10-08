@@ -1343,6 +1343,10 @@ class UnaryExp(TokenType op): AUnaryExp{
 				if(auto v=ne.asIntegerConstant()){
 					return LiteralExp.makeInteger(-v.get());
 				}
+			}else static if(op==Tok!"+"){
+				if(auto v=ne.asIntegerConstant()){
+					return LiteralExp.makeInteger(v.get());
+				}
 			}
 		}
 		if(ne is e) return this;
