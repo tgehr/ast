@@ -979,7 +979,15 @@ enum StmFlags{
 
 Expression statementSemanticImpl(CallExp ce,Scope sc,ref StmFlags flags,bool resetConst=true){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
-	return callSemantic(ce,context.nestConst);
+	auto r=callSemantic(ce,context.nestConst);
+	static if(language==silq){ // TODO: get rid of this
+		if(r !is ce&&r.isSemCompleted()&&isBuiltInCall(ce)==BuiltIn.query){
+			ce.type=r.type;
+			ce.setSemCompleted();
+			return ce;
+		}
+	}
+	return r;
 }
 
 Expression statementSemanticImpl(IndexExp idx,Scope sc,ref StmFlags flags,bool resetConst=true){
