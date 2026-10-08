@@ -2418,6 +2418,7 @@ class WithTransTrial{ // silq: token identifying one activation of the trial ana
 	bool active=true;
 	SetX!Id accessedAggregates; // variables accessed as a whole (not only through components) in the transformation
 	SetX!Id liftedComponents; // replacement candidates for consumed components of lifted aggregates (which could be duplicated)
+	SetX!Id rereadComponents; // replacement candidates whose component is read again in the transformation
 }
 
 class NestedScope: Scope{

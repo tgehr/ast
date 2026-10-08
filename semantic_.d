@@ -3615,6 +3615,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	crepls=crepls.filter!((crepl){
 		auto idx=cast(IndexExp)crepl.write;
 		if(!idx||crepl.name !in trial.liftedComponents) return true;
+		if(crepl.name in trial.rereadComponents) return false;
 		auto id=getIdFromIndex(idx);
 		return !id||id.id !in trial.accessedAggregates;
 	}).array;
@@ -7133,6 +7134,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				assert(creplDecl is rid.meaning);
 				replaceIndex=true;
 				replaceIndexLoc=i;
+				static if(language==silq)
+					if(auto trial=sc.getWithTransTrial()) if(crepl.name in trial.liftedComponents) trial.rereadComponents.insert(crepl.name);
 				break;
 			}
 		}
@@ -7142,7 +7145,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 					auto rid=getIdFromIndex(crepl.write);
 					assert(rid && rid.meaning);
 					auto sameScope=rid.scope_ is cid.scope_;
-					if(!sameScope&&sc.getWithTransBody()&&rid.scope_&&cid.scope_)
+					if(!sameScope&&rid.scope_&&cid.scope_)
 						if(rid.scope_.getFunction()&&rid.scope_.getFunction() is cid.scope_.getFunction())
 							sameScope=true;
 					if(rid.meaning is creplDecl && cid.scope_ && sameScope){
@@ -7150,6 +7153,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						assert(cid.type==rid.type);
 						assert(creplDecl is rid.meaning);
 						if(indexReplacementAliasError(crepl,idx,sc,inType,context.constResult)){
+							static if(language==silq)
+								if(auto trial=sc.getWithTransTrial()) if(crepl.name in trial.liftedComponents) trial.rereadComponents.insert(crepl.name);
 							idx.setSemError();
 							break;
 						}

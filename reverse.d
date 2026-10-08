@@ -388,7 +388,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nlhs=olhs.copy();
 			if(noImplicitDup){ // TODO: this is a hack
 				void removeImplicitDup(Expression e){
-					e.implicitDup=false;
+					if(!cast(IndexExp)e)
+						e.implicitDup=false;
 					if(auto tae=cast(TypeAnnotationExp)e){
 						removeImplicitDup(tae.e);
 					}else if(auto tpl=cast(TupleExp)e){
