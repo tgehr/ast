@@ -663,6 +663,8 @@ class ArrayTy: Type{
 				if(meet) return vectorTy(nnext,rvec.num);
 				else return arrayTy(nnext);
 			}
+			auto len=rvec.num.asIntegerConstant(true);
+			if(!len||len.get()!=0) return null;
 		}
 		if(auto rtup=r.isTupleTy()){
 			if(meet){
