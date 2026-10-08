@@ -9731,9 +9731,18 @@ Expression typeSemantic(Expression expr, Scope sc, bool allowQNumeric=false)in{a
 	}else return unwrap(expr.eval());
 }
 
+private T reportingErrorsOf(T)(Declaration decl,lazy T analyze){ // TODO: get rid of this
+	if(!decl.isToplevelDeclaration()) return analyze;
+	auto handler=decl.scope_.handler;
+	auto suppress=handler.suppress;
+	handler.suppress=0;
+	scope(exit) handler.suppress=suppress;
+	return analyze;
+}
+
 Expression typeForDecl(Declaration decl){
 	if(auto dat=cast(DatDecl)decl){
-		if(!dat.dtype&&dat.scope_&&dat.sstate!=SemState.started) dat=cast(DatDecl)presemantic(dat,dat.scope_);
+		if(!dat.dtype&&dat.scope_&&dat.sstate!=SemState.started) dat=cast(DatDecl)reportingErrorsOf(dat,presemantic(dat,dat.scope_));
 		if(!dat.dtype) return null;
 		assert(cast(AggregateTy)dat.dtype);
 		static if(language==silq){
@@ -9750,7 +9759,7 @@ Expression typeForDecl(Declaration decl){
 	}
 	if(auto fd=cast(FunctionDef)decl){
 		if(!fd.ftype||!fd.ftypeFinal) setFtype(fd,true);
-		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started) fd=functionDefSemantic(fd,fd.scope_);
+		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started) fd=reportingErrorsOf(fd,functionDefSemantic(fd,fd.scope_));
 		assert(!!fd);
 		return fd.ftype;
 	}
