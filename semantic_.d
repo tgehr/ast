@@ -3348,6 +3348,11 @@ Expression defineLhsSemanticImplUnsupported(Expression e,DefineLhsContext contex
 	auto sc=context.sc;
 	if(!e.isSemError()){
 		sc.error("not supported as definition left-hand side",e.loc);
+		if(e.isSemFinal()){ // e.g. a type, which may be shared
+			auto r=new ErrorExp();
+			r.loc=e.loc;
+			e=r;
+		}
 		e.setSemError();
 	}
 	return e;
