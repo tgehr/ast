@@ -5571,7 +5571,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	static if(language==silq)
 	if(!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
 		auto tmp=temporaryIdentifier(be.e1.loc);
-		auto de=new DefineExp(tmp,be.e1);
+		auto de=new DefineExp(tmp,be.e1.copy());
 		de.loc=be.e1.loc;
 		be.e1=tmp.copy();
 		auto trans=new CompoundExp([de]);
