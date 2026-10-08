@@ -2414,7 +2414,11 @@ private:
 	Scope[] imports; // TODO: local imports, import declarations
 }
 
-class WithTransTrial{ bool active=true; } // silq: token identifying one activation of the trial analysis of a `with` transformation (whose effects on scopes not belonging to the trial are rolled back)
+class WithTransTrial{ // silq: token identifying one activation of the trial analysis of a `with` transformation (whose effects on scopes not belonging to the trial are rolled back)
+	bool active=true;
+	SetX!Id accessedAggregates; // variables accessed as a whole (not only through components) in the transformation
+	SetX!Id liftedComponents; // replacement candidates for consumed components of lifted aggregates (which could be duplicated)
+}
 
 class NestedScope: Scope{
 	Scope parent;

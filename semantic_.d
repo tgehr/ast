@@ -1109,8 +1109,14 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	}
 	CompoundExp[] prologues,epilogues;
 	bool haveWithTransReplacements=false;
-	static if(language==silq)
-		haveWithTransReplacements=prepareWithTransReplacements(with_,sc,flags,prologues,epilogues);
+	static if(language==silq){
+		IndexExp[] unsupported;
+		haveWithTransReplacements=prepareWithTransReplacements(with_,sc,flags,prologues,epilogues,unsupported);
+		foreach(idx;unsupported){
+			sc.error("replacing a component through a type conversion is not supported yet",idx.loc);
+			with_.setSemForceError();
+		}
+	}
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	if(auto ret=mayReturn(with_.trans)){
@@ -3517,7 +3523,7 @@ Scope.DeclProp.ComponentReplacement[][] groupWithTransReplacements(Scope.DeclPro
 	auto sorted=zip(decls,r).array.sort!"a[0].getName<b[0].getName";
 	return sorted.map!"a[1]".array;
 }
-bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues){
+bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,ref IndexExp[] unsupported){
 	if(with_.isIndices) return false;
 	bool hasIndexExp=false;
 	foreach(e;with_.trans.subexpressions){
@@ -3560,8 +3566,8 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	handler.suppress++;
 	scope(exit) handler.suppress--;
 	auto trans=with_.trans.copy();
+	auto trial=new WithTransTrial;
 	{ // mark the scope chain as belonging to the trial analysis (trial effects on scopes not belonging to the trial are rolled back)
-		auto trial=new WithTransTrial;
 		foreach(s;chain) s.withTransTrial=trial;
 		scope(exit){
 			foreach(i,s;chain) s.withTransTrial=withTransTrials[i];
@@ -3599,7 +3605,27 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 				preWrites.insert(crepl.write);
 		crepls=crepls.filter!(crepl=>!crepl.write||crepl.write !in preWrites).array;
 	}
+	crepls=crepls.filter!((crepl){
+		auto idx=cast(IndexExp)crepl.write;
+		if(!idx||crepl.name !in trial.liftedComponents) return true;
+		auto id=getIdFromIndex(idx);
+		return !id||id.id !in trial.accessedAggregates;
+	}).array;
 	if(!crepls.length) return false;
+	static bool pathConverts(IndexExp idx){
+		for(Expression e=idx.e;;){
+			if(auto tae=cast(TypeAnnotationExp)e){
+				if(tae.annotationType!=TypeAnnotationType.annotation) return true;
+				e=tae.e;
+			}else if(auto i=cast(IndexExp)e) e=i.e;
+			else return false;
+		}
+	}
+	foreach(crepl;crepls){
+		auto idx=cast(IndexExp)crepl.write;
+		if(idx&&pathConverts(idx)) unsupported~=idx;
+	}
+	if(unsupported.length) return false;
 	auto creplss=groupWithTransReplacements(crepls);
 	auto r=buildIndexReplacements(creplss,sc,flags,prologues,epilogues,with_.loc);
 	foreach(crepl;crepls){
@@ -6765,6 +6791,8 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		if(id.meaning) setImplicitDup();
 		bool avoidCapture=false;
 		static if(language==silq){
+			if(id.meaning&&id.meaning.name&&context.constResult!=ConstResult.indexed)
+				if(auto trial=sc.getWithTransTrial()) trial.accessedAggregates.insert(id.meaning.name.id);
 			if(id.meaning && !id.meaning.isSemError()) {
 				auto crepls=sc.componentReplacements(id.meaning);
 				if(crepls.length){
@@ -7171,6 +7199,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 				if(id.meaning&&!idx.isSemError){
 					auto name=freshName();
 					wsc.nameIndex(idx,name);
+					if(!dep.isTop) if(auto trial=sc.getWithTransTrial()) trial.liftedComponents.insert(name);
 					auto var=addVar(name,idx.type,idx.loc,sc);
 					sc.addDependency(var,getDependency(idx,sc));
 					sc.lastUses.definition(var,idx);
