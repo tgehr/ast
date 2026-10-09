@@ -308,6 +308,7 @@ final class LastUse{
 		void walk(LastUse start,Dependency cdep,bool nested){
 		for(auto lu=start;lu;lu=lu.next){
 			scope(success) if(descend) foreach(nsc;lu.nestedAfter){
+				if(nsc.lastUses.discarded) continue;
 				auto head=nsc.lastUses.lastLastUse;
 				if(!head) continue;
 				while(head.prev) head=head.prev;
@@ -787,6 +788,7 @@ struct LastUses{
 	MapX!(Declaration,LastUse) lastUses;
 	MapX!(Declaration,LastUse[]) retired;
 	LastUse lastLastUse;
+	bool discarded=false;
 
 	LastUse nestingPoint;
 	void prepareNesting(Scope parent)do{

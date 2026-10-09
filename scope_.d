@@ -2159,6 +2159,7 @@ abstract class Scope{
 		MapX!(Declaration,LastUse) lastUses;
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
+		size_t numMergedNestedScopes;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		MapX!(Id,Declaration) nsymtab=symtab.dup;
@@ -2179,10 +2180,12 @@ abstract class Scope{
 				prevCapturedDecls=fd.capturedDecls;
 		}
 		static if(language==silq){
-			return ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
+			auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		}else{
-			return ScopeState(nsymtab,nrnsymtab,nlastUses,prevCaptures,restoreable);
+			auto r=ScopeState(nsymtab,nrnsymtab,nlastUses,prevCaptures,restoreable);
 		}
+		r.numMergedNestedScopes=mergedNestedScopes.length;
+		return r;
 	}
 	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
 		if(decl.scope_ is this){
@@ -2286,6 +2289,8 @@ abstract class Scope{
 			rnsymtab[decl.getId]=updateDecl(decl);
 		}
 		lastUses.restoreSnapshot(state.lastUses,this);
+		foreach(scopes;mergedNestedScopes[state.numMergedNestedScopes..$])
+			foreach(sc;scopes) sc.lastUses.discarded=true;
 		state=ScopeState.init;
 	}
 	void fixLoopSplitMergeGraph( // skip subgraph generated during fixed-point iteration
