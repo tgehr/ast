@@ -43,7 +43,12 @@ bool cannotFail(Expression e){
 			}
 			if(auto prim=isPrimitive(fd)){
 				if(!util.among(prim,"dup","M","H","X","Y","Z","P","rX","rY","rZ")) ok=false;
-			}else if(!(fd.boolAttribute(Id.s!"artificial")&&util.among(fd.getName,"dup","measure","rotZ"))) ok=false;
+			}else{
+				// (the prelude's `dup` and `measure` are curried: the called function is the one returned by the outer
+				// definition, which the parser marks `artificial` without a value)
+				import ast.modules:isInPrelude;
+				if(!(isInPrelude(fd)&&fd.attributes.getPtr(Id.s!"artificial")&&util.among(fd.getName,"dup","measure","rotZ"))) ok=false;
+			}
 		}else if(cast(IndexExp)x||cast(SliceExp)x||cast(DivExp)x||cast(IDivExp)x||cast(ModExp)x||cast(PowExp)x
 			||cast(AssertExp)x||cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x||cast(ReturnExp)x){
 			ok=false;
@@ -467,6 +472,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	auto totalOcc=occurrences(stms);
 	Expression[const(void)*] replacedBy;
 	StmInfo[const(void)*] synthInfo;
+	bool dceRemoved=false; // (whether the loop has dead code)
 	void dce(ref Expression[] stms,ref StmInfo[] infos,scope bool delegate(Id) liveAtEnd){
 		struct Ver{ Id var; int stm; }
 		Ver[] vers;
@@ -522,6 +528,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 		}
 		if(dead.any){
+			dceRemoved=true;
 			Expression[] nstms;
 			StmInfo[] ninfos;
 			foreach(i,s;stms){
@@ -1042,7 +1049,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(!progress) return null;
 		setupRanks();
 	}
-	if((atomColor.filter!(c=>c>=0).array~(atomColor.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2) return null;
+	// (a loop whose lifted state is computed by a single loop is still rewritten without its dead code: otherwise, the
+	// results of the recursive function it is lowered to would depend on the quantum variables the dead code reads)
+	if((atomColor.filter!(c=>c>=0).array~(atomColor.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2&&!dceRemoved) return null;
 	if(hasQuantumReturn){
 		// The split-off loops also run for basis states that have returned already: their computations must not fail
 		// on such quantum data (e.g., a division by zero that the return guards against).
@@ -1660,9 +1669,52 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			return false;
 		}
+		// A shared atom is only replicated into the loops that use what it defines: otherwise, a loop computing lifted state
+		// could read quantum variables that the lifted state does not depend on, as the results of the recursive function the
+		// loop is lowered to depend on all of its arguments.
+		auto neededShared=new bool[](atoms.length);
+		static bool intersect(ref SetX!Id x,ref SetX!Id y){
+			foreach(n;x) if(n in y) return true;
+			return false;
+		}
+		foreach(a;0..atoms.length){
+			if(atomColor[a]!=SHARED) continue;
+			auto inf=&ainfos[a];
+			if(!inf.isForget&&(inf.effects||inf.nonQfree||!cannotFail(atoms[a].e))) neededShared[a]=true; // (not removed)
+			foreach(l;logs) if(l.src==X&&l.var in inf.defs) neededShared[a]=true;
+		}
+		for(bool changed=true;changed;){
+			changed=false;
+			foreach(a;0..atoms.length){
+				if(atomColor[a]!=SHARED||neededShared[a]) continue;
+				if(ainfos[a].isForget){ // (a shared forget is dropped with the shared atoms computing what it forgets)
+					bool computed=false,needed=false;
+					foreach(b;0..atoms.length){
+						if(b==a||atomColor[b]!=SHARED||ainfos[b].isForget) continue;
+						if(!intersect(ainfos[a].defs,ainfos[b].defs)) continue; // (`defs`: the forgotten variables)
+						computed=true;
+						needed|=neededShared[b];
+					}
+					if(!computed||needed){
+						neededShared[a]=true;
+						changed=true;
+					}
+					continue;
+				}
+				foreach(b;0..atoms.length){
+					if(b==a||!keepAtom(b,X)) continue;
+					if(atomColor[b]==SHARED&&(!neededShared[b]||ainfos[b].isForget)) continue; // (see above)
+					if(!intersect(ainfos[a].defs,ainfos[b].uses)) continue;
+					neededShared[a]=true;
+					changed=true;
+					break;
+				}
+			}
+		}
 		bool keepIn(size_t a,int X){
 			if(!keepAtom(a,X)) return false;
 			if(atomColor[a]!=SHARED) return true;
+			if(!neededShared[a]) return false;
 			foreach_reverse(k;atoms[a].ites) if(ites[k].isLoop) return hasIn(k);
 			return true;
 		}
