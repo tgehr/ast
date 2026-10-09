@@ -388,7 +388,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			nlhs=olhs.copy();
 			if(noImplicitDup){ // TODO: this is a hack
 				void removeImplicitDup(Expression e){
-					if(!cast(IndexExp)e)
+					if(cast(Identifier)e)
 						e.implicitDup=false;
 					if(auto tae=cast(TypeAnnotationExp)e){
 						removeImplicitDup(tae.e);
@@ -466,7 +466,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		d2.loc=loc;
 		return res=new CompoundExp([d1,d2]);
 	}
-	if(isLiftedBuiltIn(olhs)) return forget();
+	if(cast(Identifier)olhs?isLiftedBuiltIn(olhs):isLiftedBuiltIn(lhs)) return forget();
 	if(auto ce=cast(CallExp)olhs){
 		if(isForgettableCallLhs(ce))
 			return forget();

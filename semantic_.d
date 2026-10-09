@@ -1118,7 +1118,12 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	bool haveWithTransReplacements=false;
 	static if(language==silq){
 		IndexExp[] unsupported;
-		haveWithTransReplacements=prepareWithTransReplacements(with_,sc,flags,prologues,epilogues,unsupported);
+		bool restructured=false;
+		haveWithTransReplacements=prepareWithTransReplacements(with_,sc,flags,prologues,epilogues,unsupported,restructured);
+		if(restructured){
+			assert(!haveWithTransReplacements);
+			return statementSemanticImpl(with_,sc,flags,resetConst);
+		}
 		foreach(idx;unsupported){
 			sc.error("replacing a component through a type conversion is not supported yet",idx.loc);
 			with_.setSemForceError();
@@ -3530,7 +3535,7 @@ Scope.DeclProp.ComponentReplacement[][] groupWithTransReplacements(Scope.DeclPro
 	auto sorted=zip(decls,r).array.sort!"a[0].getName<b[0].getName";
 	return sorted.map!"a[1]".array;
 }
-bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,ref IndexExp[] unsupported){
+bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,ref IndexExp[] unsupported,ref bool restructured){
 	if(with_.isIndices) return false;
 	bool hasIndexExp=false;
 	foreach(e;with_.trans.subexpressions){
@@ -3573,6 +3578,10 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	handler.suppress++;
 	scope(exit) handler.suppress--;
 	auto trans=with_.trans.copy();
+	Expression[] origSubexps,trialSubexps; // (to find nodes of the trial copy in the original transformation)
+	foreach(e;with_.trans.subexpressions) origSubexps~=e;
+	foreach(e;trans.subexpressions) trialSubexps~=e;
+	assert(origSubexps.length==trialSubexps.length);
 	auto trial=new WithTransTrial;
 	{ // mark the scope chain as belonging to the trial analysis (trial effects on scopes not belonging to the trial are rolled back)
 		foreach(s;chain) s.withTransTrial=trial;
@@ -3612,6 +3621,39 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 				preWrites.insert(crepl.write);
 		crepls=crepls.filter!(crepl=>!crepl.write||crepl.write !in preWrites).array;
 	}
+	if(trans.blscope_){ // a component of a variable declared within the transformation can only be borrowed after the declaration
+		bool declaredInTrans(Declaration decl){
+			for(auto s=decl?decl.scope_:null;s;s=s.parentScope())
+				if(s is trans.blscope_) return true;
+			return false;
+		}
+		SetX!Id later;
+		foreach(crepl;crepls){
+			auto idx=cast(IndexExp)crepl.write;
+			if(!idx) continue;
+			auto id=getIdFromIndex(idx);
+			if(id&&declaredInTrans(id.meaning)) later.insert(crepl.name);
+		}
+		if(later.length){
+			auto k=trans.s.countUntil!(s=>s.subexpressions.any!((e){
+				auto id=cast(Identifier)e;
+				return id&&id.id in later;
+			}));
+			if(k>0&&trans.s.length==with_.trans.s.length){ // split the transformation before the first statement borrowing such a component
+				// (`with{ A; B }do C` is equivalent to `with{ A }do{ with{ B }do C }`)
+				auto inner=new WithExp(new CompoundExp(with_.trans.s[k..$]),with_.bdy);
+				inner.trans.loc=with_.trans.s[k].loc.to(with_.trans.s[$-1].loc);
+				inner.loc=with_.loc;
+				with_.trans.s=with_.trans.s[0..k];
+				with_.trans.loc=with_.trans.s[0].loc.to(with_.trans.s[$-1].loc);
+				with_.bdy=new CompoundExp([inner]);
+				with_.bdy.loc=inner.bdy.loc;
+				restructured=true;
+				return false;
+			}
+			crepls=crepls.filter!(crepl=>crepl.name !in later).array; // (declared within the same statement)
+		}
+	}
 	crepls=crepls.filter!((crepl){
 		auto idx=cast(IndexExp)crepl.write;
 		if(!idx||crepl.name !in trial.liftedComponents) return true;
@@ -3629,9 +3671,40 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			else return false;
 		}
 	}
+	static bool isOperand(Expression e,Expression target){ // (not within a nested statement)
+		if(e is target) return true;
+		if(cast(CompoundExp)e) return false;
+		foreach(c;e.components) if(isOperand(c,target)) return true;
+		return false;
+	}
 	foreach(crepl;crepls){
 		auto idx=cast(IndexExp)crepl.write;
-		if(idx&&pathConverts(idx)) unsupported~=idx;
+		if(!idx||!pathConverts(idx)) continue;
+		auto j=trialSubexps.countUntil!(e=>e is idx);
+		auto oidx=j<0?null:cast(IndexExp)origSubexps[j];
+		auto k=oidx?with_.trans.s.countUntil!(s=>isOperand(s,oidx)):-1;
+		if(k<0){
+			unsupported~=idx;
+			continue;
+		}
+		// name the converted value, so that its components can be borrowed after the conversion:
+		// `with{ x:=(t as T)[i]; }do C` becomes `with{ c:=t as T; x:=c[i]; }do C`
+		for(auto p=&oidx.e;;){
+			auto tae=cast(TypeAnnotationExp)*p;
+			if(tae&&tae.annotationType!=TypeAnnotationType.annotation){
+				auto id=new Identifier(freshName());
+				id.loc=tae.loc;
+				auto def=new DefineExp(id,tae);
+				def.loc=tae.loc;
+				*p=id.copy();
+				with_.trans.s=with_.trans.s[0..k]~def~with_.trans.s[k..$];
+				restructured=true;
+				return false;
+			}
+			if(tae) p=&tae.e;
+			else if(auto i=cast(IndexExp)*p) p=&i.e;
+			else assert(0);
+		}
 	}
 	if(unsupported.length) return false;
 	auto creplss=groupWithTransReplacements(crepls);
