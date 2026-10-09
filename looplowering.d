@@ -1677,11 +1677,18 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach(n;x) if(n in y) return true;
 			return false;
 		}
+		SetX!Id evaluated; // (read by the conditions of the loops and conditionals in this loop and by the logs it writes)
+		foreach(k,ref it;ites) if(hasIn(k)) foreach(u;it.info.uses) evaluated.insert(u);
+		foreach(l;logs) if(l.src==X&&l.primary){
+			if(l.ite!=size_t.max) foreach(u;ites[l.ite].info.uses) evaluated.insert(u);
+			foreach(e;only(l.access,l.bound)) visitStm(e,(Expression x){ if(auto id=cast(Identifier)x) evaluated.insert(vname(id)); });
+		}
 		foreach(a;0..atoms.length){
 			if(atomColor[a]!=SHARED) continue;
 			auto inf=&ainfos[a];
 			if(!inf.isForget&&(inf.effects||inf.nonQfree||!cannotFail(atoms[a].e))) neededShared[a]=true; // (not removed)
 			foreach(l;logs) if(l.src==X&&l.var in inf.defs) neededShared[a]=true;
+			if(!inf.isForget&&intersect(inf.defs,evaluated)) neededShared[a]=true;
 		}
 		for(bool changed=true;changed;){
 			changed=false;
