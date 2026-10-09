@@ -669,7 +669,7 @@ class ArrayTy: Type{
 		if(auto rtup=r.isTupleTy()){
 			if(meet){
 				auto ntypes=iota(rtup.length).map!(i=>combineTypes(next,rtup[i],meet)).array;
-				if(all!(x=>x is null)(ntypes)) return tupleTy(ntypes);
+				if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
 			}else{
 				auto rtype=iota(rtup.length).map!(i=>rtup[i]).fold!((a,b)=>a?combineTypes(a,b,meet):null)(next);
 				if(rtype) return arrayTy(rtype);
