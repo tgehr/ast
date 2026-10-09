@@ -330,12 +330,16 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	Dependency[] classDeps;
 	int[] classOf;
+	typeof(carried[0]) lifted;
 	foreach(p;carried[0]){
 		auto dep=state.prevStateSnapshot.dependencyOf(p[1]);
-		if(dep.isTop) return null;
 		// the lifted copies of `p` are forgotten after the loop, which requires its dependencies, and eventually theirs:
 		// the transitive dependencies must not be modified by the loop (e.g., consumed by an early return within it)
-		if(dependsTransitivelyOnLoopState(p[1],dep)) return null;
+		if(dep.isTop||dependsTransitivelyOnLoopState(p[1],dep)){ // (then `p` is not lifted)
+			carried[1]~=p;
+			continue;
+		}
+		lifted~=p;
 		int c=-1;
 		foreach(j,ref d;classDeps) if(sameDeps(d,dep)){ c=cast(int)j; break; }
 		if(c==-1){
@@ -344,6 +348,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		classOf~=c;
 	}
+	carried[0]=lifted;
+	if(!carried[0].length) return null;
 	auto late=new bool[](classDeps.length);
 	auto rank=new int[](classDeps.length);
 	int P;
