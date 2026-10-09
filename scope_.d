@@ -2361,6 +2361,12 @@ abstract class Scope{
 				if(sc.withTransBody) return sc.withTransBody;
 			return null;
 		}
+		Scope withTransTransformation=null;
+		final Scope getWithTransTransformation(){
+			for(auto sc=this;sc;sc=sc.parentScope())
+				if(sc.withTransTransformation) return sc.withTransTransformation;
+			return null;
+		}
 		static if(language==silq){ // hoisting of recomputable aliased const lookups (TODO: replace with more general solution)
 			static struct AliasedConstReads{
 				Expression stmt; // the statement the lookups were hoisted for
@@ -2454,7 +2460,7 @@ private:
 
 class WithTransTrial{ // silq: token identifying one activation of the trial analysis of a `with` transformation (whose effects on scopes not belonging to the trial are rolled back)
 	bool active=true;
-	SetX!Id accessedAggregates; // variables accessed as a whole (not only through components) in the transformation
+	SetX!Declaration accessedAggregates; // variables accessed as a whole (not only through components) in the transformation (see `accessRoot`)
 	SetX!Id liftedComponents; // replacement candidates for consumed components of lifted aggregates (which could be duplicated)
 	SetX!Id rereadComponents; // replacement candidates whose component is read again in the transformation
 }

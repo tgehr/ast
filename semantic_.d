@@ -1139,7 +1139,11 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			with_.setSemForceError();
 		}
 	}
+	static if(language==silq)
+	if(haveWithTransReplacements) sc.withTransTransformation=sc;
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
+	static if(language==silq)
+	if(haveWithTransReplacements) sc.withTransTransformation=null;
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
 	if(auto ret=mayReturn(with_.trans)){
 		sc.error("cannot return from within `with` transformation",ret.loc);
@@ -2720,7 +2724,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 					}
 				}
 				static if(language==silq)
-				if(r&&sc.getWithTransBody()){
+				if(r&&(sc.getWithTransBody()||sc.getWithTransTransformation())){
 					auto creplDecl=id.meaning;
 					auto crepls=sc.componentReplacements(creplDecl);
 					if(!crepls.length)
@@ -3588,6 +3592,13 @@ ConvertedAggregateBlock[] convertedAggregateBlocks(Scope sc){
 	}
 	return r;
 }
+Declaration accessRoot(Declaration decl){ // (the declaration a variable access refers to, up to splits, merges and promotions)
+	for(;;){
+		decl=decl.canonicalSource;
+		if(!decl.promotedFrom) return decl;
+		decl=decl.promotedFrom;
+	}
+}
 void blockConvertedAggregates(Scope sc,ConvertedAggregateBlock[] blocks){
 	foreach(block;blocks)
 		sc.blockConvertedAggregate(block.aggregate,block.convertedWrite,block.name);
@@ -3678,6 +3689,14 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 				preWrites.insert(crepl.write);
 		crepls=crepls.filter!(crepl=>!crepl.write||crepl.write !in preWrites).array;
 	}
+	crepls=crepls.filter!((crepl){
+		auto idx=cast(IndexExp)crepl.write;
+		if(!idx||crepl.name !in trial.liftedComponents) return true;
+		if(crepl.name in trial.rereadComponents) return false;
+		auto id=getIdFromIndex(idx);
+		return !id||!id.meaning||accessRoot(id.meaning) !in trial.accessedAggregates;
+	}).array;
+	if(!crepls.length) return false;
 	if(trans.blscope_){ // a component of a variable declared within the transformation can only be borrowed after the declaration
 		bool declaredInTrans(Declaration decl){
 			for(auto s=decl?decl.scope_:null;s;s=s.parentScope())
@@ -3711,14 +3730,6 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			crepls=crepls.filter!(crepl=>crepl.name !in later).array; // (declared within the same statement)
 		}
 	}
-	crepls=crepls.filter!((crepl){
-		auto idx=cast(IndexExp)crepl.write;
-		if(!idx||crepl.name !in trial.liftedComponents) return true;
-		if(crepl.name in trial.rereadComponents) return false;
-		auto id=getIdFromIndex(idx);
-		return !id||id.id !in trial.accessedAggregates;
-	}).array;
-	if(!crepls.length) return false;
 	static bool pathConverts(IndexExp idx){
 		for(Expression e=idx.e;;){
 			if(auto tae=cast(TypeAnnotationExp)e){
@@ -4478,11 +4489,12 @@ void checkIndexReplacement(Expression be,Scope sc){
 				}
 			}
 		}
-		foreach(i;0..crepls.length){
-			if(!crepls[i].read){
-				sc.error("replaced component must be consumed in right-hand side", indicesToReplace[i].loc);
-				indicesToReplace[i].setSemError();
+		foreach(crepl;crepls){
+			if(crepl.write&&!crepl.read){
+				sc.error("replaced component must be consumed in right-hand side", crepl.write.loc);
+				crepl.write.setSemError();
 				be.setSemError();
+				if(auto d=sc.rnsymtab.get(crepl.name,null)) sc.symtabRemove(d); // (avoids redefinition error)
 			}
 		}
 	}
@@ -6948,7 +6960,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		bool avoidCapture=false;
 		static if(language==silq){
 			if(id.meaning&&id.meaning.name&&context.constResult!=ConstResult.indexed)
-				if(auto trial=sc.getWithTransTrial()) trial.accessedAggregates.insert(id.meaning.name.id);
+				if(auto trial=sc.getWithTransTrial()) trial.accessedAggregates.insert(accessRoot(id.meaning));
 			if(id.meaning && !id.meaning.isSemError()) {
 				auto crepls=sc.componentReplacements(id.meaning);
 				auto blocking=sc.blockingComponentReplacement(id.meaning);
