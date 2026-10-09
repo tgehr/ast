@@ -194,9 +194,13 @@ final class LastUse{
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere,forceConsumed)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
+	static bool mergesSameValue(Declaration decl,NestedScope nsc){
+		return decl.isDerivedFrom(versionIn(decl,nsc).canonicalSource);
+	}
 	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes){
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
+			if(!mergesSameValue(decl,nsc)) return false;
 			auto cdecl=versionIn(decl,nestedScopes[i]);
 			return nsc.lastUses.canCancelImplicitDup(cdecl);
 		}).any;
@@ -947,6 +951,7 @@ struct LastUses{
 		add(lu);
 		if(!lu.prevImplicitDup){
 			foreach(nsc;nestedScopes){
+				if(!LastUse.mergesSameValue(decl,nsc)) continue;
 				auto nlu=nsc.lastUses.lastUses.get(LastUse.versionIn(decl,nsc),null);
 				while(nlu&&nlu.forwardTo) nlu=nlu.forwardTo;
 				if(!nlu) continue;
