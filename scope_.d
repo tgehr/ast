@@ -1981,6 +1981,7 @@ abstract class Scope{
 		var.vtype=type;
 		var.scope_=this;
 		var.isConst_=isConstLocal(decl); // (splits and merges of `const` local variables; not of `const` parameters)
+		if(auto vd=cast(VarDecl)decl) var.setTemporary(vd.isTemporary);
 		import ast.semantic_:varDeclSemantic;
 		varDeclSemantic(var,this);
 		return var;

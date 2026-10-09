@@ -350,6 +350,7 @@ struct Parser{
 		displayExpectErr=true;
 		auto e=New!Identifier(name);
 		e.loc=tok.loc;
+		e.isTemporary=ttype==Tok!"_";
 		nextToken();
 		return e;
 	}

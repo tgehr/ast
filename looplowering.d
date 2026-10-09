@@ -2199,20 +2199,18 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		Expression adjIte=null;
 		Expression adjUpd=null;
 		if(auto range=loop.aggr.isRange){
-			leftName=new Identifier(freshName());
-			leftName.loc=range.left.loc;
+			leftName=temporaryIdentifier(range.left.loc);
 			auto leftInit=range.left.copy(cargsDefault);
 			leftInit.loc=range.left.loc;
 			leftDef=new DefineExp(leftName,leftInit);
 			leftDef.loc=range.left.loc;
-			rightName=new Identifier(freshName());
-			rightName.loc=range.right.loc;
+			rightName=temporaryIdentifier(range.right.loc);
 			auto rightInit=range.right.copy(cargsDefault);
 			rightInit.loc=range.right.loc;
 			rightDef=new DefineExp(rightName,rightInit);
 			rightDef.loc=range.right.loc;
 			if(range.step){
-				stepName=new Identifier(freshName());
+				stepName=temporaryIdentifier(range.step.loc);
 				auto stepInit=range.step.copy(cargsDefault);
 				stepInit.loc=range.step.loc;
 				stepDef=new DefineExp(stepName,stepInit);
@@ -2317,8 +2315,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			assert(0,"unknown aggregate type");
 		}
 	}else static if(is(T==RepeatExp)){
-		auto numName=new Identifier(freshName());
-		numName.loc=loop.num.loc;
+		auto numName=temporaryIdentifier(loop.num.loc);
 		auto numInit=loop.num.copy(cargsDefault);
 		numInit.loc=loop.num.loc;
 		auto numDef=new DefineExp(numName,numInit);

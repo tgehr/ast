@@ -19,13 +19,10 @@ Id freshName(){ // TODO: improve mechanism for generating temporaries
 Identifier temporaryIdentifier(Id name,Location loc){
 	auto id=new Identifier(name);
 	id.loc=loc;
-	auto var=new VarDecl(new Identifier(name));
-	var.name.loc=loc;
-	var.loc=loc;
-	var.isTemporary=true;
-	id.meaning=var;
+	id.isTemporary=true;
 	return id;
 }
+Identifier temporaryIdentifier(Location loc){ return temporaryIdentifier(freshName(),loc); }
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	assert(bits.isSemEvaluated());
@@ -308,6 +305,7 @@ VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success
 		nid.loc=id.loc;
 		vd=new VarDecl(nid);
 		vd.loc=id.loc;
+		vd.setTemporary(id.isTemporary);
 	}
 	if(!vd.scope_){
 		if(forceInsert||sc.canInsert(vd.name.id))
@@ -1099,8 +1097,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	if(with_.bdy.s.length){
 		if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
 			if(ret.e.sstate==SemState.initial){
-				auto id=new Identifier(freshName());
-				id.loc=ret.e.loc;
+				auto id=temporaryIdentifier(ret.e.loc);
 				auto id2=id.copy();
 				auto def=new DefineExp(id2,ret.e);
 				def.loc=ret.loc;
@@ -1206,9 +1203,10 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,unchecked,noImplicitDup)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
+		auto nerrors=sc.handler.nerrors;
 		with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
-		if(with_.itrans.isSemError()){
+		if(with_.itrans.isSemError()&&sc.handler.nerrors!=nerrors){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
 		}
 		propErr(with_.itrans,with_);
@@ -1707,8 +1705,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	Expression[] prologue;
 	Expression[] uninit;
 	if(auto cnt=fe.aggr.isContainer()){
-		auto cntId=new Identifier(freshName());
-		cntId.loc=cnt.loc;
+		auto cntId=temporaryIdentifier(cnt.loc);
 		auto cde=new DefineExp(cntId,cnt.e);
 		cde.loc=cnt.loc;
 		init~=cde;
@@ -2550,6 +2547,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 				nid.loc=id.loc;
 				auto vd=new VarDecl(nid);
 				vd.loc=id.loc;
+				vd.setTemporary(id.isTemporary);
 				vd.vtype=context.type;
 				id.meaning=vd;
 			}
@@ -3697,6 +3695,26 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		return !id||!id.meaning||accessRoot(id.meaning) !in trial.accessedAggregates;
 	}).array;
 	if(!crepls.length) return false;
+	static bool isOperand(Expression e,Expression target){ // (not within a nested statement)
+		if(e is target) return true;
+		if(cast(CompoundExp)e) return false;
+		if(auto ite=cast(IteExp)e) return isOperand(ite.cond,target); // (`components` includes the contents of `othw`)
+		foreach(c;e.components) if(isOperand(c,target)) return true;
+		return false;
+	}
+	IndexExp originalIndex(IndexExp idx){ // (the node of the original transformation corresponding to `idx`)
+		auto j=trialSubexps.countUntil!(e=>e is idx);
+		return j<0?null:cast(IndexExp)origSubexps[j];
+	}
+	// a component accessed within a nested statement of the transformation (e.g., in a branch of an `if`) is not replaced,
+	// as replaced components are extracted before the transformation
+	crepls=crepls.filter!((crepl){
+		auto idx=cast(IndexExp)crepl.write;
+		if(!idx) return true;
+		auto oidx=originalIndex(idx);
+		return !oidx||with_.trans.s.any!(s=>isOperand(s,oidx));
+	}).array;
+	if(!crepls.length) return false;
 	if(trans.blscope_){ // a component of a variable declared within the transformation can only be borrowed after the declaration
 		bool declaredInTrans(Declaration decl){
 			for(auto s=decl?decl.scope_:null;s;s=s.parentScope())
@@ -3739,19 +3757,12 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			else return false;
 		}
 	}
-	static bool isOperand(Expression e,Expression target){ // (not within a nested statement)
-		if(e is target) return true;
-		if(cast(CompoundExp)e) return false;
-		foreach(c;e.components) if(isOperand(c,target)) return true;
-		return false;
-	}
 	foreach(crepl;crepls){
 		auto idx=cast(IndexExp)crepl.write;
 		if(!idx||!pathConverts(idx)) continue;
-		auto j=trialSubexps.countUntil!(e=>e is idx);
-		auto oidx=j<0?null:cast(IndexExp)origSubexps[j];
+		auto oidx=originalIndex(idx);
 		auto k=oidx?with_.trans.s.countUntil!(s=>isOperand(s,oidx)):-1;
-		if(k<0){
+		if(k<0){ // (not found)
 			unsupported~=idx;
 			continue;
 		}
@@ -3760,7 +3771,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		for(auto p=&oidx.e;;){
 			auto tae=cast(TypeAnnotationExp)*p;
 			if(tae&&tae.annotationType!=TypeAnnotationType.annotation){
-				auto id=temporaryIdentifier(freshName(),tae.loc);
+				auto id=temporaryIdentifier(tae.loc);
 				auto def=new DefineExp(id,tae);
 				def.loc=tae.loc;
 				*p=new Identifier(id.id);
@@ -5013,8 +5024,7 @@ bool hasPatternLhs(Expression e){
 	return false;
 }
 LetExp patternForgetLet(Expression b,Identifier[] vars){
-	auto tmp=new Identifier(freshName);
-	tmp.loc=b.loc;
+	auto tmp=temporaryIdentifier(b.loc);
 	Expression[] ss=[new DefineExp(tmp,b)];
 	ss[0].loc=b.loc;
 	foreach(v;vars){
@@ -5085,8 +5095,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	Expression tde=null;
 	if(sc.allowsLinear){
 		if(cast(IndexExp)ae.e1&&!cast(Identifier)ae.e2){
-			auto tmp=new Identifier(freshName);
-			tmp.loc=ae.e2.loc;
+			auto tmp=temporaryIdentifier(ae.e2.loc);
 			tde=new DefineExp(tmp,ae.e2);
 			tmp=tmp.copy();
 			tmp.byRef=true;
@@ -5383,8 +5392,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	}
 	static if(language==silq)
 	if(!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
-		auto tmp=new Identifier(freshName());
-		tmp.loc=be.e1.loc;
+		auto tmp=temporaryIdentifier(be.e1.loc);
 		auto de=new DefineExp(tmp,be.e1);
 		de.loc=be.e1.loc;
 		be.e1=tmp.copy();
@@ -6844,7 +6852,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						return true;
 					}else{
 						if(!meaning.isSemError()){
-							sc.error(format("cannot synthesize forget expression for `%s`",fe.var),fe.var.loc);
+							sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
 							meaning.setSemForceError();
 						}
 						id.setSemError();
@@ -7165,8 +7173,7 @@ bool hoistAliasedConstRead(Scope hsc,IndexExp idx,Scope sc){ // TODO: replace wi
 	Expression.CopyArgs cargs={preserveSemantic: true};
 	auto rhs=dupExp(idx.copy(cargs),idx.loc,context);
 	rhs.loc=idx.loc;
-	auto tid=new Identifier(name);
-	tid.loc=idx.loc;
+	auto tid=temporaryIdentifier(name,idx.loc);
 	auto de=new DefineExp(tid,rhs);
 	de.loc=idx.loc;
 	auto ce=new CompoundExp([de]);

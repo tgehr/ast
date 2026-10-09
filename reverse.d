@@ -453,7 +453,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return lowerDefine!flags(newLhs,newRhs,loc,sc,unchecked,noImplicitDup);
 	}
 	if(auto tpll=cast(TupleExp)olhs){
-		auto tplr=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i){ auto id=new Identifier(freshName); id.loc=orhs.loc; return id; }).array);
+		auto tplr=new TupleExp(iota(tpll.e.length).map!(delegate Expression(i)=>temporaryIdentifier(orhs.loc)).array);
 		tplr.loc=orhs.loc;
 		auto d1=lowerDefine!(flags&~LowerDefineFlags.createFresh)(tplr,rhs,loc,sc,unchecked,noImplicitDup);
 		enforce(tpll.e.length==tplr.e.length);
@@ -919,8 +919,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 	}
 	if(auto we=cast(WildcardExp)olhs){
-		auto tmp=new Identifier(freshName);
-		tmp.loc=orhs.loc;
+		auto tmp=temporaryIdentifier(orhs.loc);
 		auto de=new DefineExp(tmp,rhs);
 		de.loc=rhs.loc;
 		auto fe=new ForgetExp(tmp.copy(),null);
@@ -929,8 +928,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	if(auto ite=cast(IteExp)olhs){
 		if(ite.then.s.length==1&&ite.othw&&ite.othw.s.length==1){
-			auto tmp=new Identifier(freshName());
-			tmp.loc=orhs.loc;
+			auto tmp=temporaryIdentifier(orhs.loc);
 			auto d1=lowerDefine!flags(tmp,orhs,orhs.loc,sc,unchecked,noImplicitDup);
 			auto thenlhs=ite.then.s[0];
 			auto othwlhs=ite.othw.s[0];

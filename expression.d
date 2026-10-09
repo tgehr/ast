@@ -990,16 +990,19 @@ class Identifier: Expression{
 			}
 		}
 		static if(language==silq) r.moved=moved;
+		r.isTemporary=isTemporary;
 		return r;
 	}
+	bool isTemporary=false; // introduced by the compiler for an intermediate value
 	override string toString(){
 		if(auto initializer=temporaryInitializer()) return _brk(initializer);
 		static if(language==silq) return _brk((moved?"move(":"")~(classical?"!":"")~name~(moved?")":""));
 		else return _brk(name);
 	}
-	string temporaryInitializer(){ // (a temporary is displayed as its initializer)
+	string temporaryInitializer(){
 		auto vd=meaning?cast(VarDecl)meaning.canonicalSource:null;
 		if(!vd||!vd.isTemporary||!vd.initializer) return null;
+		if(cast(Identifier)vd.initializer) return vd.initializer.toString();
 		auto rep=vd.initializer.loc.rep;
 		return rep.length?rep:vd.initializer.toString();
 	}

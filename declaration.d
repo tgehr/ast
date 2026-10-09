@@ -121,7 +121,11 @@ class VarDecl: Declaration{
 		return r;
 	}
 	bool isConst_=false;
-	bool isTemporary=false; // introduced by the compiler
+	bool isTemporary=false; // introduced by the compiler for an intermediate value
+	void setTemporary(bool isTemporary){
+		this.isTemporary=isTemporary;
+		if(isTemporary) name.meaning=this;
+	}
 	override bool isConst(){ return isConst_; }
 	override string toString(){ return (isConst?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
 	@property override string kind(){ return "variable"; }
