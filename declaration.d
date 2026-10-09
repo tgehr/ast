@@ -68,19 +68,28 @@ abstract class Declaration: Expression{
 	}
 
 	@property Declaration[] derivedSequence(){
-		auto result=[this];
-		if(splitFrom) result~=splitFrom.derivedSequence;
-		foreach(d;mergedFrom)
-			result~=d.derivedSequence;
+		Declaration[] result;
+		SetX!Declaration visited;
+		void visit(Declaration d){
+			if(d in visited) return;
+			visited.insert(d);
+			result~=d;
+			if(d.splitFrom) visit(d.splitFrom);
+			foreach(m;d.mergedFrom) visit(m);
+		}
+		visit(this);
 		return result;
 	}
 	bool isDerivedFrom(Declaration origin){
-		if(this is origin) return true;
-		if(splitFrom&&splitFrom.isDerivedFrom(origin))
-			return true;
-		if(mergedFrom.length&&mergedFrom.all!(d=>d.isDerivedFrom(origin)))
-		   return true;
-		return false;
+		MapX!(Declaration,bool) memo;
+		bool rec(Declaration d){
+			if(d is origin) return true;
+			if(d in memo) return memo[d];
+			bool r=d.splitFrom&&rec(d.splitFrom)||d.mergedFrom.length&&d.mergedFrom.all!(m=>rec(m));
+			memo[d]=r;
+			return r;
+		}
+		return rec(this);
 	}
 	// semantic information
 	Expression typeConstBlocker=null;
