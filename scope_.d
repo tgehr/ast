@@ -299,6 +299,7 @@ abstract class Scope{
 				return r;
 			}
 			DeclProp inherit(){ return default_(); }
+			enum inheritIsDefault=true; // set to false if inherit becomes nontrivial
 			DeclProp merged()in{
 				//assert(!constBlock);
 				assert(!componentReplacements.length);
@@ -423,8 +424,10 @@ abstract class Scope{
 		// memory corruption occurs
 		final DeclProp* updateDeclProps(Declaration decl){
 			if(auto r=declProps.tryGet(decl)) return r;
-			foreach(ref prop;nestedDeclProp(decl)){
-				return &declProps.set(decl,prop.inherit);
+			static if(!DeclProp.inheritIsDefault){
+				foreach(ref prop;nestedDeclProp(decl)){
+					return &declProps.set(decl,prop.inherit);
+				}
 			}
 			return &declProps.set(decl,DeclProp.default_());
 		}

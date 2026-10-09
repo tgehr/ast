@@ -1741,7 +1741,7 @@ struct FreeIdentifiers{
 	Expression self;
 	int opApply(scope int delegate(Identifier) dg){
 		int rec(Expression e){
-			if(auto id=cast(Identifier)e) if(auto r=dg(id)) return r;
+			if(auto id=cast(Identifier)e) return dg(id);
 			if(auto pt=cast(ProductTy)e){
 				foreach(id;pt.dom.freeIdentifiers)
 					if(auto r=dg(id)) return r;

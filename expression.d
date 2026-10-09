@@ -565,9 +565,15 @@ class LiteralExp: Expression{
 		return ℤ(str);
 	}
 
+	private string parsedStr; // lit.str when parsedVal was computed (for cache)
+	private ℤ parsedVal;
 	override Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(lit.type!=Tok!"0") return none!(ℤ);
-		return just(parseIntegerConstant(lit.str));
+		if(parsedStr !is lit.str){
+			parsedVal=parseIntegerConstant(lit.str);
+			parsedStr=lit.str;
+		}
+		return just(parsedVal);
 	}
 	// returns (x, y, b, n) where the value is x/y * b**n; y > 0, b > 0
 	private static Maybe!(Q!(ℤ, ℤ, int, int)) parseRationalConstant(string str){
