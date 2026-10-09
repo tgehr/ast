@@ -1177,7 +1177,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	bool usable(size_t j,int Y){
 		if(condOK(j,Y)) return true;
 		if(!isClassicalIte(j)||!iteHas(j,Y)) return false;
-		if(cast(WhileExp)ites[j].e) return false;
+		if(cast(WhileExp)ites[j].e) return logs.any!(l=>l.dst==Y&&l.count==j); // (replayed with the logged iteration counts)
 		foreach(h;ites[j].heads) if(ites[j].info.nonQfree) return false;
 		return headsOK(j,Y,true);
 	}
