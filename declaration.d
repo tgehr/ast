@@ -117,9 +117,11 @@ class VarDecl: Declaration{
 		auto r=new VarDecl(copyNameImpl(args));
 		if(dtype) r.dtype=dtype.copy(args);
 		r.isConst_=isConst_;
+		r.isTemporary=isTemporary;
 		return r;
 	}
 	bool isConst_=false;
+	bool isTemporary=false; // introduced by the compiler
 	override bool isConst(){ return isConst_; }
 	override string toString(){ return (isConst?"const ":"")~getName~(dtype?": "~dtype.toString():vtype?": "~vtype.toString():""); }
 	@property override string kind(){ return "variable"; }
@@ -558,6 +560,7 @@ abstract class DeadDecl: Declaration{
 		return this; // TODO: ok?
 	}
 	bool reportUndefinedIdentifier(Identifier id,Scope sc){ return false; }
+	bool reportRedefinition(Declaration decl,Scope sc){ return false; }
 	abstract void explain(string kind,Scope sc);
 }
 
@@ -577,6 +580,20 @@ class ConsumedDecl: DeadDecl{
 	override void explain(string kind,Scope sc){
 		import std.format:format;
 		sc.note(format("%s `%s` consumed here",kind,use.meaning),use.loc);
+	}
+	static if(language==silq)
+	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
+		import std.format:format;
+		if(!use.meaning) return false;
+		auto blocking=sc.blockingComponentReplacement(use.meaning);
+		if(!blocking) return false; // (consumed by a conversion whose result has components that are being replaced)
+		sc.error(format("cannot access aggregate `%s` while its components are being replaced",use.meaning.getName),id.loc);
+		sc.note("replaced component is here",blocking.location.loc);
+		return true;
+	}
+	static if(language==silq)
+	override bool reportRedefinition(Declaration decl,Scope sc){
+		return use.meaning&&sc.blockedRedefinitionError(decl,use.meaning);
 	}
 	override string toString(){
 		return text("consumed(",super.toString(),",",use.loc,")");
@@ -701,6 +718,13 @@ class DeadMerge: DeadDecl{
 			if(auto dd=cast(DeadDecl)d)
 				handled=dd.reportUndefinedIdentifier(id,sc)||handled;
 		return handled;
+	}
+	override bool reportRedefinition(Declaration decl,Scope sc){
+		foreach(d;mergedFrom)
+			if(auto dd=cast(DeadDecl)d)
+				if(dd.reportRedefinition(decl,sc))
+					return true;
+		return false;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;

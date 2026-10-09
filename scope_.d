@@ -199,6 +199,7 @@ abstract class Scope{
 		return true;
 	}
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
+		static if(language==silq) if(blockedRedefinitionError(newDecl,oldDecl)) return false;
 		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
 			lastUses.forget(oldDecl,true);
 			return true;
@@ -229,7 +230,17 @@ abstract class Scope{
 			if(!tryPrepareRedefine(decl,d))
 				return false;
 			//assert(!symtabLookup(decl.name,false,null));
-		}else static if(language==silq) if(!checkCaptureRedefinition(decl)) return false;
+		}else static if(language==silq){
+			for(Scope sc=this;sc;sc=cast(FunctionScope)sc?null:sc.parentScope()){
+				auto d=sc.peekSymtab(decl.name.id,false);
+				if(!d) continue;
+				if(auto dd=cast(DeadDecl)d)
+					if(dd.reportRedefinition(decl,this))
+						return false;
+				break;
+			}
+			if(!checkCaptureRedefinition(decl)) return false;
+		}
 		rename(decl);
 		symtabInsert(decl);
 		decl.scope_=this;
@@ -259,10 +270,13 @@ abstract class Scope{
 			Identifier[] constBlock;
 			static if(language==silq){
 				static struct ComponentReplacement{
-					IndexExp write;
+					IndexExp write; // null for temporary conversion
 					Id name;
 					IndexExp read;
 					IndexExp constRead;
+					IndexExp convertedWrite;
+					IndexExp location(){ return write?write:convertedWrite; }
+					bool blocksAggregate(){ return !write&&convertedWrite; }
 				}
 				ComponentReplacement[] componentReplacements;
 				void nameIndex(IndexExp index,Id name){
@@ -850,6 +864,23 @@ abstract class Scope{
 			foreach(ref prop;nestedDeclProp(decl))
 				r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
 			return r;
+		}
+		final DeclProp.ComponentReplacement* blockingComponentReplacement(Declaration decl){
+			for(auto d=decl;d;d=d.splitFrom){
+				auto blocking=componentReplacements(d).find!(crepl=>crepl.blocksAggregate);
+				if(!blocking.empty) return blocking.front;
+			}
+			return null;
+		}
+		final bool blockedRedefinitionError(Declaration newDecl,Declaration oldDecl){
+			auto blocking=blockingComponentReplacement(oldDecl);
+			if(!blocking) return false;
+			if(!oldDecl.isSemError()&&!newDecl.isSemError()){
+				redefinitionError(newDecl,oldDecl);
+				note("replaced component is here",blocking.location.loc);
+			}
+			newDecl.setSemError();
+			return true;
 		}
 		static struct ComponentReplacementContext{
 			private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
@@ -1990,6 +2021,10 @@ abstract class Scope{
 		auto id=getIdFromIndex(write);
 		assert(id&&id.meaning);
 		updateDeclProps(id.meaning).componentReplacements~=DeclProp.ComponentReplacement(write,name,read);
+	}
+	static if(language==silq)
+	void blockConvertedAggregate(Declaration decl,IndexExp convertedWrite,Id name){
+		updateDeclProps(decl).componentReplacements~=DeclProp.ComponentReplacement(null,name,null,null,convertedWrite);
 	}
 
 	struct ScopeState{

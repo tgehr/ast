@@ -987,8 +987,15 @@ class Identifier: Expression{
 		return r;
 	}
 	override string toString(){
+		if(auto initializer=temporaryInitializer()) return _brk(initializer);
 		static if(language==silq) return _brk((moved?"move(":"")~(classical?"!":"")~name~(moved?")":""));
 		else return _brk(name);
+	}
+	string temporaryInitializer(){ // (a temporary is displayed as its initializer)
+		auto vd=meaning?cast(VarDecl)meaning.canonicalSource:null;
+		if(!vd||!vd.isTemporary||!vd.initializer) return null;
+		auto rep=vd.initializer.loc.rep;
+		return rep.length?rep:vd.initializer.toString();
 	}
 	override @property string kind(){return "identifier";}
 

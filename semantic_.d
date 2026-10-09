@@ -16,6 +16,16 @@ private int freshNameCounter=0;
 Id freshName(){ // TODO: improve mechanism for generating temporaries
 	return Id.intern(text("__tmp",freshNameCounter++));
 }
+Identifier temporaryIdentifier(Id name,Location loc){
+	auto id=new Identifier(name);
+	id.loc=loc;
+	auto var=new VarDecl(new Identifier(name));
+	var.name.loc=loc;
+	var.loc=loc;
+	var.isTemporary=true;
+	id.meaning=var;
+	return id;
+}
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	assert(bits.isSemEvaluated());
@@ -1142,6 +1152,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			if(crepl.write)
 				refreshWithTransReplMeanings(crepl.write,sc);
 		auto bodyCrepls=sc.localComponentReplacements();
+		auto blocks=convertedAggregateBlocks(sc);
 		finishIndexReplacement(with_,sc,&with_.replacements);
 		sc.clearConsumed();
 		foreach(crepl;bodyCrepls)
@@ -1156,6 +1167,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 					}
 				}
 			}
+		blockConvertedAggregates(sc,blocks);
 	}
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransBody=sc;
@@ -2697,6 +2709,17 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				else enum allowComponentConstBlocks=false;
 				auto r=checkAssignable(id.meaning,idx.e.loc,sc,true,allowComponentConstBlocks);
 				static if(language==silq)
+				if(r){
+					if(auto blocking=sc.blockingComponentReplacement(id.meaning)){
+						if(!idx.isSemError()){
+							sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),idx.loc);
+							sc.note("replaced component is here",blocking.location.loc);
+						}
+						idx.setSemError();
+						r=false;
+					}
+				}
+				static if(language==silq)
 				if(r&&sc.getWithTransBody()){
 					auto creplDecl=id.meaning;
 					auto crepls=sc.componentReplacements(creplDecl);
@@ -3389,8 +3412,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 		Expression[] reads;
 		foreach(ref crepl;crepls){
 			if(!crepl.write) continue;
-			auto id=new Identifier(crepl.name);
-			id.loc=loc;
+			auto id=temporaryIdentifier(crepl.name,loc);
 			id.byRef=true;
 			auto idx=crepl.write.copy();
 			idx.loc=crepl.write.loc;
@@ -3450,7 +3472,12 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 							idx=cast(IndexExp)lef;
 					}
 				}
-				assert(idx&&idx.byRef,text(de));
+				if(!idx||!idx.byRef){
+					sc.error("component is already being replaced",de.loc);
+					de.setSemForceError();
+					prologue.setSemForceError();
+					continue;
+				}
 				bool anyQuantum=false;
 				for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
 					anyQuantum|=!idx2.a.type.isClassical();
@@ -3534,6 +3561,36 @@ Scope.DeclProp.ComponentReplacement[][] groupWithTransReplacements(Scope.DeclPro
 	}
 	auto sorted=zip(decls,r).array.sort!"a[0].getName<b[0].getName";
 	return sorted.map!"a[1]".array;
+}
+struct ConvertedAggregateBlock{
+	Declaration aggregate;
+	IndexExp convertedWrite;
+	Id name;
+}
+ConvertedAggregateBlock[] convertedAggregateBlocks(Scope sc){
+	// a variable is being replaced as a whole while components of a temporary converted copy of it are being replaced
+	// (e.g., `with{ x:=(t as T)[i]; }do C` becomes `with{ c:=t as T; x:=c[i]; }do C`, `t` cannot be accessed in `C`)
+	ConvertedAggregateBlock[] r;
+	foreach(crepl;sc.localComponentReplacements()){
+		if(!crepl.write) continue;
+		auto id=getIdFromIndex(crepl.write);
+		auto var=id&&id.meaning?cast(VarDecl)id.meaning.canonicalSource:null;
+		if(!var||!var.isTemporary) continue;
+		auto e=var.initializer;
+		bool converts=false;
+		for(auto tae=cast(TypeAnnotationExp)e;tae;tae=cast(TypeAnnotationExp)e){
+			converts|=tae.annotationType!=TypeAnnotationType.annotation;
+			e=tae.e;
+		}
+		auto aggregate=cast(Identifier)e;
+		if(!converts||!aggregate||!aggregate.meaning) continue;
+		r~=ConvertedAggregateBlock(sc.updateDecl(aggregate.meaning),crepl.write,crepl.name);
+	}
+	return r;
+}
+void blockConvertedAggregates(Scope sc,ConvertedAggregateBlock[] blocks){
+	foreach(block;blocks)
+		sc.blockConvertedAggregate(block.aggregate,block.convertedWrite,block.name);
 }
 bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,ref IndexExp[] unsupported,ref bool restructured){
 	if(with_.isIndices) return false;
@@ -3692,11 +3749,11 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		for(auto p=&oidx.e;;){
 			auto tae=cast(TypeAnnotationExp)*p;
 			if(tae&&tae.annotationType!=TypeAnnotationType.annotation){
-				auto id=new Identifier(freshName());
-				id.loc=tae.loc;
+				auto id=temporaryIdentifier(freshName(),tae.loc);
 				auto def=new DefineExp(id,tae);
 				def.loc=tae.loc;
-				*p=id.copy();
+				*p=new Identifier(id.id);
+				(*p).loc=id.loc;
 				with_.trans.s=with_.trans.s[0..k]~def~with_.trans.s[k..$];
 				restructured=true;
 				return false;
@@ -3715,6 +3772,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			sc.nameIndex(crepl.write,crepl.name);
 		}
 	}
+	blockConvertedAggregates(sc,convertedAggregateBlocks(sc));
 	return r;
 }
 }
@@ -4712,7 +4770,7 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 			auto crepls=meaning.scope_.componentReplacements(meaning);
 			if(crepls.length){
 				sc.error(format("cannot access aggregate `%s` while its components are being replaced",meaning.getName),loc);
-				if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+				if(crepls[0].location) sc.note("replaced component is here",crepls[0].location.loc);
 				return false;
 			}else{
 				sc.error("cannot assign to variable in closure context",loc);
@@ -5998,7 +6056,24 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			void badReverseImplicitDup(Expression arg){
 				if(unwrap(arg).implicitDup) return;
 				if(!ce.checkReverse) return;
-				sc.error(format("use `dup(%s)` for `moved` classical argument of reversed function call",arg),arg.loc);
+				Expression display=arg;
+				if(auto id=cast(Identifier)arg){
+					if(!id.meaning){ // (display temporaries as their initializers)
+						auto nid=new Identifier(id.id);
+						nid.loc=id.loc;
+						DeadDecl[] failures;
+						nid.meaning=lookupMeaning(nid,Lookup.probing,sc,false,&failures);
+						static Declaration consumed(Declaration d){
+							if(auto cd=cast(ConsumedDecl)d) return cd.use.meaning;
+							if(auto dm=cast(DeadMerge)d) if(dm.mergedFrom.length==1) return consumed(dm.mergedFrom[0]);
+							return null;
+						}
+						if(!nid.meaning&&failures.length==1)
+							nid.meaning=consumed(failures[0]);
+						display=nid;
+					}
+				}
+				sc.error(format("use `dup(%s)` for `moved` classical argument of reversed function call",display),arg.loc);
 				arg.setSemForceError();
 				error=true;
 			}
@@ -6876,11 +6951,13 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 				if(auto trial=sc.getWithTransTrial()) trial.accessedAggregates.insert(id.meaning.name.id);
 			if(id.meaning && !id.meaning.isSemError()) {
 				auto crepls=sc.componentReplacements(id.meaning);
-				if(crepls.length){
+				auto blocking=sc.blockingComponentReplacement(id.meaning);
+				if(crepls.length||blocking){
 					avoidCapture=true;
-					if(context.constResult!=ConstResult.indexed){
+					if(context.constResult!=ConstResult.indexed||blocking){
 						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
-						if(crepls[0].write) sc.note("replaced component is here",crepls[0].write.loc);
+						auto crepl=blocking?blocking:crepls[0];
+						if(crepl.location) sc.note("replaced component is here",crepl.location.loc);
 						id.setSemError();
 					}
 				}
