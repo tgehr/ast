@@ -249,6 +249,7 @@ final class LastUse{
 			if(sib is nsc) continue;
 			if(sib.rnsymtab.get(decl.getId,null) !is decl) continue;
 			auto slu=sib.lastUses.lastUses.get(decl,null);
+			while(slu&&slu.kind==Kind.lazySplitSink) slu=slu.forwardTo;
 			if(!slu||slu.kind!=Kind.lazySplit||slu.forwardTo) continue;
 			sib.symtabRemove(decl);
 			slu.markConsumed(null,false);
