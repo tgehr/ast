@@ -926,6 +926,22 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 	}
 	refreshCtl();
+	MapX!(Id,Declaration) invariants; // (quantum variables the loop reads but does not change)
+	{
+		SetX!Id defined;
+		foreach(ref info;ainfos) foreach(d;info.defs) defined.insert(d);
+		visitStm(loop.bdy,(Expression x){
+			auto id=cast(Identifier)x;
+			if(!id||!id.meaning||!id.type||id.type.isClassical()||cast(FunctionDef)id.meaning||cast(DatDecl)id.meaning) return;
+			auto n=vname(id);
+			if(n !in isCarried&&n !in defined) invariants[n]=id.meaning;
+		});
+	}
+	bool rankDependsOn(int r,Declaration d){
+		foreach(j;0..classDeps.length)
+			if(rank[j]==r) foreach(x;classDeps[j].dependencies) if(x.canonicalSource is d.canonicalSource) return true;
+		return false;
+	}
 	int colorOf(Id n){ return color.get(n,NONE); }
 	bool isClassicalName(Id n,ref StmInfo info){
 		if(n in classical||n in isCondVar) return true;
@@ -947,6 +963,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		foreach(u;info.uses) add(u);
 		foreach(d;info.defs) add(d);
+		if(0<=c&&c<P) foreach(u;info.uses) if(auto d=invariants.get(u,null)) if(!rankDependsOn(c,d)) c=P; // (the lifted state would depend on `d`)
 		return c;
 	}
 	int reads(ref StmInfo info){
