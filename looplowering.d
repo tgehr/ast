@@ -3162,8 +3162,15 @@ bool endsWithReturn(Expression e){
 Expression[] flattenStatementBlocks(Expression[] stms){
 	Expression[] r;
 	foreach(x;stms){
-		if(auto ce=cast(CompoundExp)x) r~=flattenStatementBlocks(ce.s);
-		else r~=x;
+		if(auto ce=cast(CompoundExp)x){
+			r~=flattenStatementBlocks(ce.s);
+			continue;
+		}
+		if(auto ite=cast(IteExp)x){ // (also in the branches of conditionals)
+			ite.then.s=flattenStatementBlocks(ite.then.s);
+			if(ite.othw) ite.othw.s=flattenStatementBlocks(ite.othw.s);
+		}
+		r~=x;
 	}
 	return r;
 }
