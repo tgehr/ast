@@ -1075,6 +1075,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// (a loop whose lifted state is computed by a single loop is still rewritten without its dead code: otherwise, the
 	// results of the recursive function it is lowered to would depend on the quantum variables the dead code reads)
 	if((atomColor.filter!(c=>c>=0).array~(atomColor.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2&&!dceRemoved) return null;
+	foreach(a,c;atomColor) if(c==P) foreach(u;ainfos[a].consumed) if(u in isCarried&&colorOf(u)>P) return null; // (the main loop runs on copies of late lifted state)
 	if(hasQuantumReturn){
 		// The split-off loops also run for basis states that have returned already: their computations must not fail
 		// on such quantum data (e.g., a division by zero that the return guards against).
