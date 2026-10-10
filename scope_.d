@@ -2250,6 +2250,11 @@ abstract class Scope{
 			if(d.forgottenBeforeEarlyReturn) return true;
 		return false;
 	}
+	static if(language==silq) private bool consumedOutside(Declaration decl){ // (in an enclosing scope, which is not restored)
+		if(!decl.scope_||decl.scope_ is this||decl.scope_.rnsymtab.get(decl.getId,null) is decl) return false;
+		auto lu=lastUses.lastUses.get(decl,null);
+		return lu&&lu.isConsumption();
+	}
 	void restoreStateSnapshot(ref ScopeState state,bool forWithTransTrial=false)in{
 		assert(state.restoreable);
 	}do{
@@ -2264,6 +2269,7 @@ abstract class Scope{
 			if(auto lu=state.lastUses.get(decl,null))
 				if(lu.isConsumption()&&!forWithTransTrial)
 					continue;
+			static if(language==silq) if(!forWithTransTrial&&consumedOutside(decl)) continue;
 			symtab[decl.name.id]=updateDecl(decl);
 		}
 		rnsymtab.clear();
@@ -2278,7 +2284,7 @@ abstract class Scope{
 			}
 			static if(language==silq) if(!forWithTransTrial){
 				if(auto lu=lastUses.lastUses.get(decl,null)){
-					if(lu.isConsumption()&&forgottenBeforeEarlyReturn(decl)){
+					if(lu.isConsumption()&&(forgottenBeforeEarlyReturn(decl)||consumedOutside(decl))){
 						if(!toRemove.canFind(lu.decl))
 							toRemove~=lu.decl;
 						recordConsumption(lu.decl,lu.use);
