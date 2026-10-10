@@ -2763,6 +2763,7 @@ bool isInfiniteLoop(Expression e){
 	if(!we) return false;
 	if(we.cond.type) return isTrue(we.cond);
 	if(auto id=cast(Identifier)we.cond) return id.id==Id.s!"true";
+	if(auto le=cast(LiteralExp)we.cond) return le.lit.type==Tok!"0"&&le.lit.str=="1";
 	return false;
 }
 bool erpRecording(Scope sc){
