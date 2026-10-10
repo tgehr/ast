@@ -830,15 +830,18 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	void refreshCtl(){
 		foreach(k,ref it;ites){
 			size_t f=size_t.max;
-			foreach(ai,ref at;atoms) if(at.ites.canFind(k)){
-				f=ai;
-				break;
+			size_t[] ctx;
+			foreach(ai,ref at;atoms){
+				auto x=at.ites.countUntil(k);
+				if(x<0) continue;
+				if(f==size_t.max){
+					f=ai;
+					ctx=at.ites[0..x];
+				}else ctx=ctx[0..commonPrefix(ctx,at.ites[0..x]).length]; // (the controls moved into loops differ between atoms)
 			}
 			if(f==size_t.max) continue;
 			if(!it.isWith) it.first=f;
-			auto c=atoms[f].ites;
-			auto x=c.countUntil(k);
-			if(x>=0) it.ctx=c[0..x];
+			it.ctx=ctx;
 		}
 	}
 	bool hoistLocal(size_t q,Id t){
