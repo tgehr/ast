@@ -1969,8 +1969,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						auto lb=new CompoundExp([]);
 						lb.loc=we.bdy.loc;
 						Expression wcopy=lb;
-						auto owner=atomColor[ites[chain[d]].pseudo];
-						if(owner==X||owner==SHARED){
+						if(keepIn(ites[chain[d]].pseudo,X)){ // (the transformation runs in this loop)
 							auto nw=new WithExp(cast(CompoundExp)cp(we.trans),lb);
 							nw.loc=we.loc;
 							wcopy=nw;
