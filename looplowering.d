@@ -1247,6 +1247,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto start=pos[key];
 			foreach(d;ainfos[ai].defs) defPos[d]=defPos.get(d,[])~start;
 		}
+		foreach(ai,ref a;atoms) if(a.stm==i&&cast(const(void)*)a.e in isExtractAtom) // (the arguments of an extracted call)
+			walkCond(a.parts[0],false,(Expression x,bool c){
+				if(x !is a.parts[0]) if(auto p=cast(const(void)*)x in pos) owner[*p]=cast(int)ai;
+			});
 		foreach(k,ref it;ites) if(it.stm==i)
 			foreach(h;it.heads)
 				walkCond(h,false,(Expression x,bool c){
