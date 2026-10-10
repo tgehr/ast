@@ -276,7 +276,7 @@ final class LastUse{
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
-					lu.updateDependenciesOnConsumptionLocal(false);
+					lu.updateDependenciesOnConsumptionLocal(); // (including forgets in nested scopes of the branches)
 				}
 			}
 		}else updateDependenciesOnConsumptionLocal();
@@ -287,7 +287,9 @@ final class LastUse{
 	}
 	private bool readSplitAtDefinition(Declaration d){
 		import std.algorithm:any;
-		return decl.splitSequence.any!(x=>x in d.definitionReads);
+		if(decl.splitSequence.any!(x=>x in d.definitionReads)) return true;
+		foreach(r;d.definitionReads) if(r.isSplitFrom(decl)) return true; // (a further split in a nested scope)
+		return false;
 	}
 	private void updateDependenciesOnConsumptionLocal(bool descend=true){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);

@@ -2230,10 +2230,6 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			allLifted=false;
 			continue;
 		}
-		// (copies of closures cannot be forgotten using recomputed values: their captured variables differ)
-		bool closure=false;
-		visitStm(typeForDecl(p[1]),(Expression x){ if(cast(FunTy)x) closure=true; });
-		if(closure) return null;
 		auto n=p[1].name.id;
 		liftedNames.insert(n);
 		size_t c=classDeps.length;
