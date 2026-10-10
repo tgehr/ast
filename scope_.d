@@ -1800,6 +1800,11 @@ abstract class Scope{
 				removeOSym(this,sym);
 				continue;
 			}
+			auto cur=scopes[0].rnsymtab.get(sym.getId,null);
+			if(!cur||cast(DeadDecl)cur){ // (consumed when merging the dependencies of another variable)
+				removeOSym(this,sym);
+				continue;
+			}
 			foreach(sc;scopes[1..$]){
 				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
