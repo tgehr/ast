@@ -1748,6 +1748,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach_reverse(k;atoms[a].ites) if(ites[k].isLoop) return hasIn(k);
 			return true;
 		}
+		foreach(a;0..atoms.length){ // (a needed shared atom in a nested loop that does not run here is dropped)
+			if(atomColor[a]!=SHARED||!neededShared[a]||ainfos[a].isForget||keepIn(a,X)) continue;
+			auto defs=&ainfos[a].defs;
+			foreach(b;0..atoms.length) if(b!=a&&keepIn(b,X)&&intersect(*defs,ainfos[b].uses)) return null;
+			foreach(k,ref it;ites) if(hasIn(k)&&intersect(*defs,it.info.uses)) return null;
+			foreach(l;logs) if(l.src==X&&l.var in *defs) return null;
+		}
 		Expression[] bdy;
 		foreach(i,s;stms){
 			Expression[] nodes;
