@@ -696,6 +696,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		return n;
 	}
 	void flatten(Expression e,size_t i,size_t[] ctx,bool[] inElse){
+		if(auto fe=cast(ForgetExp)e) if(!fe.val&&fe.var.type&&fe.var.type.isClassical()) return; // (the split loops forget classical variables where needed)
 		if(auto ite=cast(IteExp)e){
 			bool b=false;
 			auto info=analyzeStm(ite.cond,b);
