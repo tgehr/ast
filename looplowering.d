@@ -1453,7 +1453,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							bool same=g.rAt<=at;
 							foreach(b;g.rAt..at+1) if(same){
 								auto cb=atoms[b].ites;
-								if(atoms[b].stm!=i||cb.length<g.rLevel||cb[0..g.rLevel]!=c0[0..g.rLevel]) same=false;
+								if(atoms[b].stm!=i||cb.length<g.rLevel||cb[0..g.rLevel]!=c0[0..g.rLevel]||atoms[b].inElse[0..g.rLevel]!=atoms[g.rAt].inElse[0..g.rLevel]) same=false;
 							}
 							if(!same) continue;
 							auto first=g.reads[0];
