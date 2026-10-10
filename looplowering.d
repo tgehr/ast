@@ -1449,6 +1449,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							if(!same) continue;
 							auto first=g.reads[0];
 							if(defPos.get(u,[]).any!(d=>first<=d&&d<n)) continue;
+							auto cn=owner[n]>=0?atoms[owner[n]].ites:ites[condOf[n]].ctx;
+							bool redefined=false; // (by a later iteration of a loop that the shared read is outside of)
+							foreach(k;cn[min(g.rLevel,cn.length)..$]) if(ites[k].isLoop){
+								auto start=pos[cast(const(void)*)ites[k].e],end=endOf(k);
+								if(defPos.get(u,[]).any!(d=>start<=d&&d<end)) redefined=true;
+							}
+							if(redefined) continue;
 							g.reads~=n;
 							return true;
 						}
