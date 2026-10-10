@@ -223,7 +223,7 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 		if(!fd.context) fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null); // TODO: replace contextTy by suitable record type; make name `outer` available
 		static if(language==psi) fd.contextVal=fd.context;
 	}
-	if(fd.capturedDecls.any!(d=>d.isLinear)){
+	if(fd.capturedDecls.any!(d=>d.isLinear||typeForDecl(d)&&typeForDecl(d).hasQuantumComponent())){
 		assert(!!fd.context);
 		fd.context.vtype=contextTy(false);
 	}
