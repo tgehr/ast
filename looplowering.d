@@ -1038,6 +1038,16 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		return true;
 	}
+	// (the results of a main loop that is not `qfree` cannot be forgotten: it cannot log quantum values)
+	bool mainNonQfree=ainfos.any!(i=>i.nonQfree)||ites.any!(it=>it.info.nonQfree);
+	static if(is(T==WhileExp)) visitStm(loop.cond,(Expression x){
+		if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) if(!ft.isSquare&&ft.annotation<Annotation.qfree) mainNonQfree=true;
+	});
+	bool logsOK(){
+		if(!mainNonQfree) return true;
+		foreach(a,c;atomColor) if(c>P) foreach(u;ainfos[a].uses) if(colorOf(u)==P&&!isClassicalName(u,ainfos[a])) return false;
+		return true;
+	}
 	bool lateAll=false;
 	bool guardOK(){
 		static if(is(T==WhileExp)){
@@ -1069,7 +1079,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	for(;;){
 		lateReq=[];
 		lateAll=false;
-		if(colorAtoms(false,true)&&guardOK()||colorAtoms(true,true)&&guardOK()||colorAtoms(false,false)&&guardOK()||colorAtoms(true,false)&&guardOK()) break;
+		if(colorAtoms(false,true)&&guardOK()&&logsOK()||colorAtoms(true,true)&&guardOK()&&logsOK()||colorAtoms(false,false)&&guardOK()&&logsOK()||colorAtoms(true,false)&&guardOK()&&logsOK()) break;
 		bool progress=false;
 		if(lateAll) foreach(ref x;late) if(!x){ x=true; progress=true; }
 		foreach(c;lateReq) if(!late[c]){ late[c]=true; progress=true; }
