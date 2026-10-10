@@ -2,8 +2,10 @@
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 
 // Lowering of loops to recursive functions (`--remove-loops`):
+//  - `sliceLoop`: lowers a loop with loop-carried lifted state into a main loop and loops that recompute the lifted state
+//    (each lowered into a recursive function)
 //  - `splitLoop`: splits a loop into several loops, such that loop-carried lifted state can be lowered
-//    into `qfree` recursive functions (with logs communicating values between the loops)
+//    into `qfree` recursive functions (with logs communicating values between the loops; used where `sliceLoop` is not)
 //  - `lowerLoop`: lowers a single loop into a recursive function
 //  - early-return elimination: prepares functions whose loops contain `return` statements for `lowerLoop`
 module ast.looplowering;
@@ -166,6 +168,40 @@ private bool sameDeps(ref Dependency a,ref Dependency b){
 	return true;
 }
 
+// Whether a lifted copy of the loop-carried variable `decl` with dependencies `dep` could not be forgotten after the loop,
+// as its (transitive) dependencies are changed by the loop
+private bool dependsTransitivelyOnLoopState(ref FixedPointIterState state,Scope sc,bool[Declaration] loopState,Declaration decl,Dependency dep){
+	bool[Declaration] visited;
+	Declaration[] todo;
+	foreach(d;dep.dependencies) todo~=d;
+	while(todo.length){
+		auto d=todo[$-1];
+		todo=todo[0..$-1];
+		if(d in visited) continue;
+		visited[d]=true;
+		if(d !is decl&&d in loopState) return true;
+		auto dd=state.prevStateSnapshot.dependencyOf(d);
+		if(dd.isTop){
+			// a dependency that was recomputable at the loop entry but is not after an iteration (as the loop consumes
+			// one of its dependencies) could no longer be forgotten after the loop
+			if(!state.origStateSnapshot.dependencyOf(d).isTop) return true;
+			// a variable that could still be forgotten at its last use (before it became non-recomputable) may be
+			// forgotten there, before the loop: it is not available after the loop unless it is consumed later
+			if(auto lu=sc.lastUses.get(d,false)){
+				for(;;){ // (the last use itself, not a split into a nested scope)
+					while(lu.forwardTo) lu=lu.forwardTo;
+					if(lu.kind!=imported!"ast.lastuse".LastUse.Kind.lazySplit) break;
+					lu=lu.getSplitFrom();
+				}
+				if(lu.isConsumption()||!lu.dep.isTop) return true;
+			}
+			continue; // (not recomputable anyway, but available: the traversal ends here)
+		}
+		foreach(e;dd.dependencies) todo~=e;
+	}
+	return false;
+}
+
 Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(is(T==ForExp)){
 		auto range=loop.aggr.isRange;
@@ -297,37 +333,6 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(k,x;on) if(auto v=cast(const(void)*)x in versionOf) (cast(Identifier)cn[k]).id=*v;
 		return c;
 	}
-	bool dependsTransitivelyOnLoopState(Declaration decl,Dependency dep){
-		bool[Declaration] visited;
-		Declaration[] todo;
-		foreach(d;dep.dependencies) todo~=d;
-		while(todo.length){
-			auto d=todo[$-1];
-			todo=todo[0..$-1];
-			if(d in visited) continue;
-			visited[d]=true;
-			if(d !is decl&&d in loopState) return true;
-			auto dd=state.prevStateSnapshot.dependencyOf(d);
-			if(dd.isTop){
-				// a dependency that was recomputable at the loop entry but is not after an iteration (as the loop consumes
-				// one of its dependencies) could no longer be forgotten after the loop
-				if(!state.origStateSnapshot.dependencyOf(d).isTop) return true;
-				// a variable that could still be forgotten at its last use (before it became non-recomputable) may be
-				// forgotten there, before the loop: it is not available after the loop unless it is consumed later
-				if(auto lu=sc.lastUses.get(d,false)){
-					for(;;){ // (the last use itself, not a split into a nested scope)
-						while(lu.forwardTo) lu=lu.forwardTo;
-						if(lu.kind!=imported!"ast.lastuse".LastUse.Kind.lazySplit) break;
-						lu=lu.getSplitFrom();
-					}
-					if(lu.isConsumption()||!lu.dep.isTop) return true;
-				}
-				continue; // (not recomputable anyway, but available: the traversal ends here)
-			}
-			foreach(e;dd.dependencies) todo~=e;
-		}
-		return false;
-	}
 	Dependency[] classDeps;
 	int[] classOf;
 	typeof(carried[0]) lifted;
@@ -335,7 +340,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto dep=state.prevStateSnapshot.dependencyOf(p[1]);
 		// the lifted copies of `p` are forgotten after the loop, which requires its dependencies, and eventually theirs:
 		// the transitive dependencies must not be modified by the loop (e.g., consumed by an early return within it)
-		if(dep.isTop||dependsTransitivelyOnLoopState(p[1],dep)){ // (then `p` is not lifted)
+		if(dep.isTop||dependsTransitivelyOnLoopState(state,sc,loopState,p[1],dep)){ // (then `p` is not lifted)
 			carried[1]~=p;
 			continue;
 		}
@@ -2162,9 +2167,1151 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	return r;
 }
 
+// statements of a loop body, for `sliceLoop`
+private final class SliceNode{
+	enum Kind{ atom, ite, loop, with_, block }
+	Kind kind;
+	Expression e;
+	SliceNode[] a,b; // (branches of a conditional, bodies of loops, `with` statements and blocks)
+	size_t id;
+	bool quantum; // (conditional with a quantum condition)
+	bool inR; // (in a quantum region, i.e., under quantum control: the main loop cannot write logs there)
+	SliceNode region; // (the outermost quantum conditional containing the statement)
+	// the atom, the condition, the loop header or the `with` transformation reads `uses` and `cuses`, defines `defs` and
+	// `cdefs` (`strong` and `cstrong`: without reading them), and consumes `consumed` (`pconsumed`: partially)
+	SetX!Id uses,defs,strong,consumed,pconsumed; // (quantum values and functions: they are recomputed)
+	SetX!Id cuses,cdefs,cstrong,cfresh; // (other classical values: they are logged; `cfresh`: defined by `:=`)
+	bool nonQfree;
+	// classical results of calls that are not `qfree`: the main loop evaluates them before the atom and logs them
+	CallExp[] extracted;
+	SetX!Id xconsumed; // (consumed by the extracted calls)
+	// components of a definition of a tuple of variables, which are recomputed separately
+	SliceNode[] comps;
+	Expression[] lhs,rhs;
+	Id measured,result; // (`result:=measure(measured)`)
+	this(Kind kind,Expression e,size_t id,bool inR,SliceNode region){
+		this.kind=kind; this.e=e; this.id=id; this.inR=inR; this.region=region;
+	}
+}
+
+// Lowering of a loop with lifted state (loop-carried quantum variables that can be forgotten at the loop header, see
+// `dependsTransitivelyOnLoopState`) by recomputation. The lifted state cannot simply be threaded through the recursive
+// function of `lowerLoop`: its results depend on all of its arguments, and cannot be forgotten at all if the loop body
+// is not `qfree`. Instead:
+//  - a main loop runs the loop body on copies of the lifted variables and logs the classical values that the lifted
+//    state depends on (at the statements that read them, or before quantum conditionals that read them)
+//  - for each class of lifted variables (with the same dependencies), a `qfree` loop recomputes them from their values
+//    at the loop entry, the logs and the quantum variables that the loop does not change, using the statements of the
+//    loop body that the class depends on (other lifted variables they read are recomputed from copies)
+//  - the copies are forgotten using the recomputed values.
+// A lifted variable can be forgotten given its dependencies, so the statements that compute it are `qfree` (apart from
+// the classical values they read), and its value only depends on quantum values that are either lifted themselves or
+// not changed by the loop. (The recomputing loops are not split again: their results only depend on what they read.)
+Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
+	alias K=SliceNode.Kind;
+	static if(is(T==ForExp)){
+		auto range=loop.aggr.isRange;
+		if(!range||!loop.loopVar) return null;
+	}
+	if(loop.noSplit||containsReturn(loop.bdy)) return null;
+	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
+	if(!carried[0].length) return null;
+	bool[Declaration] loopState;
+	foreach(p;carried[0]~carried[1]) loopState[p[1]]=true;
+	SetX!Id carriedNames,liftedNames;
+	Dependency[] classDeps;
+	Id[][] classVars;
+	bool allLifted=true;
+	foreach(p;carried[0]~carried[1]) carriedNames.insert(p[1].name.id);
+	foreach(p;carried[1]) if(!typeForDecl(p[1]).isClassical()) allLifted=false;
+	foreach(p;carried[0]){
+		auto dep=state.prevStateSnapshot.dependencyOf(p[1]);
+		if(dep.isTop||dependsTransitivelyOnLoopState(state,sc,loopState,p[1],dep)){
+			allLifted=false;
+			continue;
+		}
+		// (copies of closures cannot be forgotten using recomputed values: their captured variables differ)
+		bool closure=false;
+		visitStm(typeForDecl(p[1]),(Expression x){ if(cast(FunTy)x) closure=true; });
+		if(closure) return null;
+		auto n=p[1].name.id;
+		liftedNames.insert(n);
+		size_t c=classDeps.length;
+		foreach(j,ref d;classDeps) if(sameDeps(d,dep)){ c=j; break; }
+		if(c==classDeps.length){
+			classDeps~=dep;
+			classVars~=null;
+		}
+		classVars[c]~=n;
+	}
+	if(!liftedNames.length) return null;
+	static Id[] sorted(ref SetX!Id s){
+		Id[] r;
+		foreach(x;s) r~=x;
+		r.sort!((a,b)=>a.str<b.str);
+		return r;
+	}
+	// statements
+	static bool nonQfreeCall(Expression x){
+		if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) return !ft.isSquare&&ft.annotation<Annotation.qfree;
+		return false;
+	}
+	static bool isVar(Identifier id){
+		if(!id.meaning||cast(DatDecl)id.meaning) return false;
+		if(auto fd=cast(FunctionDef)id.meaning) return !fd.isToplevelDeclaration();
+		return !!cast(VarDecl)id.meaning;
+	}
+	static bool recomputed(Identifier id){ // (quantum values and functions are recomputed, other classical values are logged)
+		if(cast(FunctionDef)id.meaning||!id.type) return true;
+		return !id.type.isClassical()||!!cast(FunTy)id.type;
+	}
+	MapX!(Id,Expression) ctypeOf; // (types of classical variables)
+	MapX!(Id,Declaration) invariantDecl; // (quantum variables that the loop reads)
+	bool consumes(Identifier id){ return isVar(id)&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup; }
+	// calls that are not `qfree` with classical results that can be extracted from the statement `s`
+	CallExp[] extractable(Expression s){
+		SetX!Expression lhsNodes;
+		visitStm(s,(Expression x){
+			Expression l=null;
+			if(auto de=cast(DefineExp)x) l=de.e1;
+			else if(auto ae=cast(AAssignExp)x) l=ae.e1;
+			if(l) visitStm(l,(Expression y){ lhsNodes.insert(y); });
+		});
+		CallExp[] calls;
+		visitStmSkip(s,(Expression x){
+			if(cast(LambdaExp)x||cast(FunctionDef)x||x in lhsNodes) return false;
+			if(auto ce=cast(CallExp)x) if(nonQfreeCall(ce)&&ce.type&&ce.type.isClassical()&&!cast(FunTy)ce.type){
+				calls~=ce;
+				return false;
+			}
+			return true;
+		});
+		if(!calls.length) return null;
+		// (they are evaluated before the statement: they must not consume variables that it reads otherwise; the copies of
+		// the statement have to correspond to it)
+		SetX!Expression inCalls;
+		SetX!Id consumed;
+		foreach(ce;calls) visitStm(ce,(Expression y){
+			inCalls.insert(y);
+			if(auto id=cast(Identifier)y) if(consumes(id)) consumed.insert(varName(id));
+		});
+		bool ok=true;
+		visitStm(s,(Expression x){
+			if(x in inCalls) return;
+			if(auto id=cast(Identifier)x) if(isVar(id)&&varName(id) in consumed) ok=false;
+		});
+		Expression[] on,cn;
+		walkShallow(s,(Expression x){ on~=x; });
+		walkShallow(s.copy(),(Expression x){ cn~=x; });
+		if(on.length!=cn.length) ok=false;
+		foreach(ce;calls) if(!on.canFind!((x,y)=>x is y)(ce)) ok=false;
+		return ok?calls:null;
+	}
+	void analyze(SliceNode n,Expression s,CallExp[] ext=null){
+		SetX!Expression extSet;
+		foreach(ce;ext) extSet.insert(ce);
+		SetX!Identifier targets,partial,assigned,indexed;
+		void lhs(Expression e,bool strong,bool fresh){
+			if(auto id=cast(Identifier)e){
+				if(id.constLookup) return;
+				if(!strong) partial.insert(id);
+				else if(fresh) targets.insert(id);
+				else assigned.insert(id);
+			}else if(auto ie=cast(IndexExp)e){
+				Expression r=ie;
+				while(auto ie2=cast(IndexExp)r) r=ie2.e;
+				if(auto id=cast(Identifier)r) partial.insert(id);
+				else lhs(r,false,false);
+			}else if(auto tae=cast(TypeAnnotationExp)e) lhs(tae.e,strong,fresh);
+			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) lhs(c,strong,fresh);
+			else if(auto vec=cast(VectorExp)e) foreach(c;vec.e) lhs(c,strong,fresh);
+			else if(auto cat=cast(CatExp)e){ lhs(cat.e1,strong,fresh); lhs(cat.e2,strong,fresh); }
+			else if(auto ce=cast(CallExp)e) lhs(ce.arg,strong,fresh); // (reversed call)
+		}
+		visitStm(s,(Expression x){
+			if(auto de=cast(DefineExp)x) lhs(de.e1,true,true);
+			else if(auto ae=cast(AAssignExp)x) lhs(ae.e1,!!cast(AssignExp)x,false);
+			else if(auto ie=cast(IndexExp)x){
+				Expression r=ie;
+				while(auto ie2=cast(IndexExp)r) r=ie2.e;
+				if(auto id=cast(Identifier)r) indexed.insert(id);
+			}
+		});
+		visitStmSkip(s,(Expression x){
+			if(x in extSet){
+				n.extracted~=cast(CallExp)x;
+				visitStm(x,(Expression y){
+					if(auto id=cast(Identifier)y) if(consumes(id)) n.xconsumed.insert(varName(id));
+				});
+				return false;
+			}
+			if(nonQfreeCall(x)) n.nonQfree=true;
+			if(auto fd=cast(FunctionDef)x) if(fd.name){
+				n.defs.insert(fd.name.id);
+				n.strong.insert(fd.name.id);
+			}
+			auto id=cast(Identifier)x;
+			if(!id||!isVar(id)) return true;
+			auto name=varName(id);
+			bool def=id in targets||id in assigned;
+			if(recomputed(id)){
+				if(def){
+					n.defs.insert(name);
+					n.strong.insert(name);
+					return true;
+				}
+				n.uses.insert(name);
+				if(id.type&&!id.type.isClassical()&&!cast(FunctionDef)id.meaning) if(name !in invariantDecl) invariantDecl[name]=id.meaning;
+				if(id in partial) n.defs.insert(name);
+				else if(!id.constLookup&&!id.implicitDup&&id.type&&!id.type.isClassical()){
+					if(id in indexed){ // (the rest of it is still defined)
+						n.defs.insert(name);
+						n.pconsumed.insert(name);
+					}else n.consumed.insert(name);
+				}
+			}else{
+				if(name !in ctypeOf) ctypeOf[name]=id.type;
+				if(def){
+					n.cdefs.insert(name);
+					n.cstrong.insert(name);
+					if(id in targets) n.cfresh.insert(name);
+					return true;
+				}
+				n.cuses.insert(name);
+				if(id in partial) n.cdefs.insert(name);
+			}
+			return true;
+		});
+	}
+	// analysis of an atom (with components for definitions of tuples of variables)
+	void analyzeAtom(SliceNode n,Expression s){
+		if(auto de=cast(DefineExp)s) if(auto m=cast(Identifier)de.e1) if(auto ce=cast(CallExp)de.e2) if(!ce.isSquare){
+			Expression f=ce.e;
+			while(cast(CallExp)f&&(cast(CallExp)f).isSquare) f=(cast(CallExp)f).e;
+			auto fid=cast(Identifier)f;
+			auto fd=fid?cast(FunctionDef)fid.meaning:null;
+			import ast.modules:isInPrelude;
+			if(fd&&isInPrelude(fd)&&fd.getName=="measure"&&isVar(m)&&m.type&&m.type.isClassical())
+				if(auto u=cast(Identifier)ce.arg) if(consumes(u)){
+					n.measured=varName(u);
+					n.result=varName(m);
+				}
+		}
+		auto ext=n.inR?null:extractable(s);
+		auto de=cast(DefineExp)s;
+		auto l=de?cast(TupleExp)de.e1:null,r=de?cast(TupleExp)de.e2:null;
+		if(!de||de.isSwap||!l||!r||l.e.length!=r.e.length||l.e.length<2||!l.e.all!(x=>cast(Identifier)x&&!x.constLookup)){
+			analyze(n,s,ext);
+			return;
+		}
+		foreach(j;0..l.e.length){
+			auto c=new SliceNode(K.atom,r.e[j],0,n.inR,n.region);
+			analyze(c,r.e[j],ext);
+			auto id=cast(Identifier)l.e[j];
+			if(isVar(id)){
+				auto name=varName(id);
+				if(recomputed(id)){
+					c.defs.insert(name);
+					c.strong.insert(name);
+				}else{
+					if(name !in ctypeOf) ctypeOf[name]=id.type;
+					c.cdefs.insert(name);
+					c.cstrong.insert(name);
+					c.cfresh.insert(name);
+				}
+			}
+			n.comps~=c;
+			n.lhs~=l.e[j];
+			n.rhs~=r.e[j];
+			foreach(x;only(&n.uses,&n.defs,&n.strong,&n.consumed,&n.pconsumed,&n.cuses,&n.cdefs,&n.cstrong,&n.cfresh,&n.xconsumed).zip(only(&c.uses,&c.defs,&c.strong,&c.consumed,&c.pconsumed,&c.cuses,&c.cdefs,&c.cstrong,&c.cfresh,&c.xconsumed)))
+				foreach(v;*x[1]) x[0].insert(v);
+			n.nonQfree|=c.nonQfree;
+			n.extracted~=c.extracted;
+		}
+	}
+	// analysis of a sequence of statements (`strong`: defined by it, for a `with` transformation)
+	void analyzeSeq(SliceNode n,Expression[] stms,bool isAtom){
+		SetX!Id defined,cdefined,touched,firstStrong;
+		foreach(t;stms){
+			auto x=new SliceNode(K.atom,t,0,n.inR,n.region);
+			analyze(x,t);
+			foreach(u;x.uses) if(u !in defined) n.uses.insert(u);
+			foreach(u;x.consumed) if(u !in defined) n.consumed.insert(u);
+			foreach(u;x.pconsumed) if(u !in defined) n.pconsumed.insert(u);
+			foreach(u;x.cuses) if(u !in cdefined) n.cuses.insert(u);
+			foreach(d;x.strong) if(d !in touched) firstStrong.insert(d);
+			foreach(u;x.consumed) defined.remove(u);
+			foreach(d;x.defs) if(d !in x.consumed||d in x.strong) defined.insert(d);
+			foreach(u;x.uses) touched.insert(u);
+			foreach(d;x.defs) touched.insert(d);
+			foreach(d;x.cdefs){
+				cdefined.insert(d);
+				n.cdefs.insert(d);
+			}
+			foreach(d;x.cstrong) n.cstrong.insert(d);
+			foreach(d;x.cfresh) n.cfresh.insert(d);
+			n.nonQfree|=x.nonQfree;
+		}
+		foreach(d;defined){
+			n.defs.insert(d);
+			if(!isAtom||d in firstStrong) n.strong.insert(d);
+		}
+		foreach(d;n.pconsumed) n.defs.insert(d);
+	}
+	SliceNode[] nodes;
+	SetX!Id loopVarNames; // (variables of nested `for` loops)
+	bool unsupported=false;
+	SliceNode[] build(Expression[] stms,bool inR,SliceNode region){
+		SliceNode[] r;
+		SliceNode mk(K kind,Expression e){
+			auto n=new SliceNode(kind,e,nodes.length,inR,region);
+			nodes~=n;
+			r~=n;
+			return n;
+		}
+		void add(Expression s){
+			if(auto ce=cast(CompoundExp)s){
+				if(!ce.blscope_){
+					foreach(t;ce.s) add(t);
+					return;
+				}
+				auto n=mk(K.block,s);
+				n.a=build(ce.s,inR,region);
+			}else if(auto ite=cast(IteExp)s){
+				auto n=mk(K.ite,s);
+				n.quantum=!(ite.cond.type&&ite.cond.type.isClassical());
+				analyze(n,ite.cond);
+				auto nregion=region?region:n.quantum?n:null;
+				n.a=build(ite.then.s,inR||n.quantum,nregion);
+				if(ite.othw) n.b=build(ite.othw.s,inR||n.quantum,nregion);
+			}else if(auto fe=cast(ForExp)s){
+				auto rng=fe.aggr.isRange;
+				if(!rng||!fe.loopVar){
+					unsupported=true;
+					return;
+				}
+				auto n=mk(K.loop,s);
+				analyze(n,rng.left);
+				if(rng.step) analyze(n,rng.step);
+				analyze(n,rng.right);
+				loopVarNames.insert(fe.loopVar.name.id);
+				n.a=build(fe.bdy.s,inR,region);
+			}else if(auto re=cast(RepeatExp)s){
+				auto n=mk(K.loop,s);
+				analyze(n,re.num);
+				n.a=build(re.bdy.s,inR,region);
+			}else if(auto we=cast(WhileExp)s){
+				auto n=mk(K.loop,s);
+				analyze(n,we.cond);
+				n.a=build(we.bdy.s,inR,region);
+			}else if(auto we=cast(WithExp)s){
+				if(we.isIndices){ // (replacement of components: an atom)
+					auto n=mk(K.atom,s);
+					analyzeSeq(n,we.trans.s~we.bdy.s~(we.itrans?we.itrans.s:[]),true);
+					return;
+				}
+				// (the transformation is kept as a whole)
+				auto n=mk(K.with_,s);
+				analyzeSeq(n,we.trans.s,false);
+				n.a=build(we.bdy.s,inR,region);
+			}else{
+				auto n=mk(K.atom,s);
+				analyzeAtom(n,s);
+			}
+		}
+		foreach(s;stms) add(s);
+		return r;
+	}
+	auto body_=build(loop.bdy.s,false,null);
+	if(unsupported) return null;
+	SetX!Id bodyDefs; // (names that the loop body changes)
+	foreach(n;nodes){
+		foreach(d;n.defs) bodyDefs.insert(d);
+		foreach(d;n.consumed) bodyDefs.insert(d);
+		foreach(d;n.cdefs) bodyDefs.insert(d);
+	}
+	foreach(v;loopVarNames) bodyDefs.insert(v);
+	static if(is(T==ForExp)){
+		auto mainVar=loop.loopVar.name.id;
+		if(mainVar in bodyDefs) return null;
+	}
+	static if(is(T==WhileExp)){
+		auto cnode=new SliceNode(K.atom,loop.cond,0,false,null);
+		analyze(cnode,loop.cond);
+		if(cnode.consumed.length||cnode.pconsumed.length) return null; // (the recomputation does not evaluate the condition)
+	}
+	// classical values that the recomputation can read directly (the others are logged or, in quantum regions, recomputed)
+	bool available(Id u){
+		static if(is(T==ForExp)) if(u==mainVar) return true;
+		return u in loopVarNames||u !in bodyDefs;
+	}
+	// (the whole loop is lowered precisely if its body is `qfree` and only carries the lifted state of a single class
+	// whose dependencies include all quantum variables that the loop reads)
+	{
+		bool bodyQfree=!nodes.any!(n=>n.nonQfree||n.extracted.length);
+		static if(is(T==WhileExp)) bodyQfree&=!cnode.nonQfree;
+		if(bodyQfree&&allLifted&&classDeps.length==1){
+			bool precise=true;
+			foreach(u,d;invariantDecl){
+				if(u in bodyDefs) continue;
+				bool found=false;
+				foreach(x;classDeps[0].dependencies) if(x.canonicalSource is d.canonicalSource) found=true;
+				if(!found) precise=false;
+			}
+			if(precise) return null;
+		}
+	}
+	SetX!Id[] regionLocal=new SetX!Id[](nodes.length); // (classical variables that a quantum region defines)
+	foreach(n;nodes) if(n.region) foreach(d;n.cfresh) regionLocal[n.region.id].insert(d);
+	// consumption within statements (for statements that are not part of a recomputation)
+	SetX!Id[] subConsumed=new SetX!Id[](nodes.length);
+	SetX!Id consumedIn(SliceNode n){
+		auto r=n.consumed.dup;
+		foreach(u;n.xconsumed) r.insert(u);
+		foreach(c;n.a~n.b) foreach(u;consumedIn(c)) r.insert(u);
+		subConsumed[n.id]=r.dup;
+		return r;
+	}
+	foreach(n;body_) consumedIn(n);
+	// backward slicing for each class
+	struct Live{ SetX!Id q,c; } // (names whose values are needed: `c` for classical values in quantum regions)
+	static Live dupL(Live l){ return Live(l.q.dup,l.c.dup); }
+	static Live joinL(Live x,Live y){
+		auto r=dupL(x);
+		foreach(v;y.q) r.q.insert(v);
+		foreach(v;y.c) r.c.insert(v);
+		return r;
+	}
+	static bool eqL(ref Live x,ref Live y){ return x.q==y.q&&x.c==y.c; }
+	struct Slice{
+		size_t cls;
+		bool[] kept;
+		SetX!Id[] entryLogs; // (classical values that quantum regions and `with` transformations read)
+		SetX!Id[] disp,dispAfter; // (values to forget before or after the statement: what the original computation consumes)
+		bool[][] compKept; // (recomputed components of atoms)
+		bool[] measDisp; // (the value consumed by a measurement is forgotten using its logged result)
+		SetX!Id carried; // (the class and the other lifted variables it reads)
+		SetX!Id locals; // (carried variables whose values the recomputation only needs within iterations)
+	}
+	Slice S;
+	bool fwdFailed=false;
+	SetX!Id droppedDefs; // (values that statements which are not part of the recomputation change)
+	bool anyKept(SliceNode[] ns){ return ns.any!(c=>S.kept[c.id]); }
+	Live backNode(SliceNode n,Live live){
+		Live back(SliceNode[] ns,Live l){
+			foreach_reverse(c;ns) l=backNode(c,l);
+			return l;
+		}
+		final switch(n.kind){
+			case K.atom:{
+				if(n.comps.length){
+					auto ck=new bool[](n.comps.length);
+					foreach(j,c;n.comps){
+						foreach(d;c.defs) if(d in live.q) ck[j]=true;
+						if(n.inR) foreach(d;c.cdefs) if(d in live.c) ck[j]=true;
+					}
+					if(!ck.any) return live;
+					S.kept[n.id]=true;
+					S.compKept[n.id]=ck;
+					auto r=dupL(live);
+					foreach(c;n.comps){
+						foreach(d;c.strong) r.q.remove(d);
+						foreach(d;c.cstrong) r.c.remove(d);
+					}
+					foreach(j,c;n.comps) if(ck[j]){
+						foreach(u;c.uses) r.q.insert(u);
+						if(n.inR) foreach(u;c.cuses) if(!available(u)) r.c.insert(u);
+					}
+					return r;
+				}
+				bool k=false;
+				foreach(d;n.defs) if(d in live.q) k=true;
+				if(n.inR) foreach(d;n.cdefs) if(d in live.c) k=true;
+				if(!k) return live;
+				S.kept[n.id]=true;
+				auto r=dupL(live);
+				foreach(d;n.strong) r.q.remove(d);
+				foreach(d;n.cstrong) r.c.remove(d);
+				foreach(u;n.uses) r.q.insert(u);
+				if(n.inR) foreach(u;n.cuses) if(!available(u)) r.c.insert(u);
+				return r;
+			}
+			case K.ite:{
+				auto lt=back(n.a,dupL(live)),le=back(n.b,dupL(live));
+				if(!anyKept(n.a)&&!anyKept(n.b)) return live;
+				S.kept[n.id]=true;
+				auto r=joinL(lt,le);
+				if(n.quantum||n.inR){ // (otherwise, the condition is logged)
+					foreach(u;n.uses) r.q.insert(u);
+					foreach(u;n.cuses) if(!available(u)) r.c.insert(u);
+				}
+				if(n.quantum&&!n.inR){
+					S.entryLogs[n.id]=r.c;
+					r.c=SetX!Id.init;
+				}
+				return r;
+			}
+			case K.loop:{
+				auto lc=dupL(live); // (needed at the end of the body)
+				if(n.inR&&cast(WhileExp)n.e){ // (the condition is evaluated after each iteration)
+					foreach(u;n.uses) lc.q.insert(u);
+					foreach(u;n.cuses) if(!available(u)) lc.c.insert(u);
+				}
+				auto le=dupL(lc);
+				Live ls;
+				for(;;){
+					ls=back(n.a,dupL(le));
+					auto le2=joinL(lc,ls);
+					if(eqL(le2,le)) break;
+					le=le2;
+				}
+				if(!anyKept(n.a)) return live;
+				S.kept[n.id]=true;
+				auto r=le;
+				if(n.inR){ // (otherwise, the header is logged)
+					foreach(u;n.uses) r.q.insert(u);
+					foreach(u;n.cuses) if(!available(u)) r.c.insert(u);
+				}
+				return r;
+			}
+			case K.with_:{
+				// (the inverse transformation consumes what the transformation defines, to restore what it consumes)
+				bool restores=false;
+				foreach(u;n.consumed) if(u in live.q) restores=true;
+				foreach(u;n.pconsumed) if(u in live.q) restores=true;
+				auto lb=dupL(live);
+				if(restores) foreach(d;n.strong) lb.q.insert(d);
+				auto ls=back(n.a,lb);
+				if(!anyKept(n.a)) return live;
+				if(!restores){
+					lb=dupL(live);
+					foreach(d;n.strong) lb.q.insert(d);
+					ls=back(n.a,lb);
+				}
+				S.kept[n.id]=true;
+				auto r=ls;
+				foreach(d;n.strong) r.q.remove(d);
+				foreach(d;n.cdefs) r.c.remove(d);
+				foreach(u;n.uses) r.q.insert(u);
+				SetX!Id cl;
+				foreach(u;n.cuses) if(!available(u)) cl.insert(u);
+				if(n.inR) foreach(u;cl) r.c.insert(u);
+				else S.entryLogs[n.id]=cl;
+				return r;
+			}
+			case K.block:{
+				auto r=back(n.a,dupL(live));
+				if(!anyKept(n.a)) return live;
+				S.kept[n.id]=true;
+				return r;
+			}
+		}
+	}
+	// forward pass: values that the recomputation computes but the original computation consumes in statements that are
+	// not part of the recomputation are forgotten there
+	SetX!Id fwdNode(SliceNode n,SetX!Id avail){
+		SetX!Id fwd(SliceNode[] ns,SetX!Id l){
+			foreach(c;ns) l=fwdNode(c,l);
+			return l;
+		}
+		S.disp[n.id]=SetX!Id.init;
+		S.dispAfter[n.id]=SetX!Id.init;
+		void dispose(ref SetX!Id names,bool after=false){
+			SetX!Id d;
+			foreach(u;names) if(u in avail) d.insert(u);
+			foreach(u;d){
+				(after?S.dispAfter:S.disp)[n.id].insert(u);
+				avail.remove(u);
+			}
+		}
+		if(!S.kept[n.id]){
+			dispose(subConsumed[n.id]);
+			// (the recomputed value is the measured one unless other statements change it)
+			S.measDisp[n.id]=n.measured!=Id.init&&n.measured in S.disp[n.id]&&n.measured !in droppedDefs;
+			return avail;
+		}
+		final switch(n.kind){
+			case K.atom:
+				if(n.comps.length){
+					// (what the components that are not recomputed consume is forgotten after the atom, unless another
+					// component redefines it)
+					auto ck=S.compKept[n.id];
+					SetX!Id before,after,redefined,read;
+					foreach(j,c;n.comps) if(ck[j]){
+						foreach(d;c.strong) redefined.insert(d);
+						foreach(u;c.uses) read.insert(u);
+						foreach(u;c.xconsumed) before.insert(u);
+					}
+					foreach(j,c;n.comps) if(!ck[j]) foreach(cs;only(&c.consumed,&c.xconsumed)) foreach(u;*cs){
+						if(u !in redefined) after.insert(u);
+						else if(u in read&&u in avail) fwdFailed=true;
+						else before.insert(u);
+					}
+					dispose(before);
+					foreach(j,c;n.comps) if(ck[j]) foreach(u;c.consumed) avail.remove(u);
+					foreach(j,c;n.comps) if(ck[j]) foreach(d;c.defs) if(d !in c.consumed||d in c.strong) avail.insert(d);
+					dispose(after,true);
+					return avail;
+				}
+				dispose(n.xconsumed);
+				foreach(u;n.consumed) avail.remove(u);
+				foreach(d;n.defs) if(d !in n.consumed||d in n.strong) avail.insert(d);
+				return avail;
+			case K.ite:{
+				if(n.quantum||n.inR) foreach(u;n.consumed) avail.remove(u);
+				else dispose(n.consumed);
+				auto at=fwd(n.a,avail.dup),ae=fwd(n.b,avail.dup);
+				SetX!Id r;
+				foreach(u;at) if(u in ae) r.insert(u);
+				return r;
+			}
+			case K.loop:{
+				if(n.inR) foreach(u;n.consumed) avail.remove(u);
+				else dispose(n.consumed);
+				auto entry=avail.dup;
+				for(;;){
+					auto end=fwd(n.a,entry.dup);
+					SetX!Id lost;
+					foreach(u;entry) if(u !in end) lost.insert(u);
+					if(!lost.length) break;
+					foreach(u;lost){
+						S.disp[n.id].insert(u);
+						entry.remove(u);
+					}
+				}
+				return entry;
+			}
+			case K.with_:
+				foreach(u;n.consumed) avail.remove(u);
+				foreach(d;n.strong) avail.insert(d);
+				avail=fwd(n.a,avail);
+				foreach(d;n.strong) avail.remove(d);
+				foreach(u;n.consumed) avail.insert(u);
+				return avail;
+			case K.block:{
+				auto inner=fwd(n.a,avail.dup);
+				SetX!Id r;
+				foreach(u;inner) if(u in avail) r.insert(u);
+				return r;
+			}
+		}
+	}
+	Live back(SliceNode[] ns,Live live){
+		foreach_reverse(n;ns) live=backNode(n,live);
+		return live;
+	}
+	SetX!Id fwd(SliceNode[] ns,SetX!Id avail){
+		foreach(n;ns) avail=fwdNode(n,avail);
+		return avail;
+	}
+	Slice[] slices;
+	foreach(cls;0..classDeps.length){
+		S=Slice(cls,new bool[](nodes.length),new SetX!Id[](nodes.length),new SetX!Id[](nodes.length),new SetX!Id[](nodes.length),new bool[][](nodes.length),new bool[](nodes.length));
+		Live le;
+		foreach(v;classVars[cls]) le.q.insert(v);
+		for(;;){
+			auto ls=back(body_,dupL(le));
+			auto le2=dupL(le);
+			foreach(v;ls.q) if(v in carriedNames) le2.q.insert(v);
+			if(eqL(le2,le)) break;
+			le=le2;
+		}
+		S.kept[]=false;
+		S.entryLogs=new SetX!Id[](nodes.length);
+		S.compKept=new bool[][](nodes.length);
+		auto ls=back(body_,dupL(le));
+		foreach(v;le.q) if(v !in liftedNames) return null; // (the class depends on a carried variable that is not lifted)
+		foreach(v;ls.q) if(v in bodyDefs&&v !in liftedNames) return null;
+		if(ls.c.length) return null;
+		S.carried=le.q.dup;
+		foreach(n;nodes){
+			if(!S.kept[n.id]) continue;
+			final switch(n.kind){
+				case K.atom:
+					foreach(c;n.comps.length?n.comps.zip(S.compKept[n.id]).filter!(x=>x[1]).map!(x=>x[0]).array:[n]){
+						if(c.nonQfree) return null;
+						if(n.inR){
+							foreach(d;c.cdefs) if(d !in regionLocal[n.region.id]) return null;
+						}else foreach(d;c.cdefs) if(d in carriedNames||d !in c.cfresh) return null;
+					}
+					break;
+				case K.ite:
+					if((n.quantum||n.inR)&&n.nonQfree) return null;
+					if(n.quantum&&!n.inR) foreach(u;S.entryLogs[n.id]) if(u in regionLocal[n.id]) return null;
+					break;
+				case K.loop:
+					if(n.inR&&n.nonQfree) return null;
+					if(n.consumed.length||n.pconsumed.length) return null;
+					break;
+				case K.with_:
+					if(n.nonQfree) return null;
+					foreach(d;n.cdefs) if(d !in n.cfresh) return null;
+					break;
+				case K.block:
+					break;
+			}
+		}
+		foreach(n;nodes) if(S.kept[n.id]) foreach(d;n.strong) if(d in carriedNames&&d !in S.carried) S.locals.insert(d);
+		droppedDefs=SetX!Id.init;
+		foreach(n;nodes){
+			if(n.kind!=K.atom&&n.kind!=K.with_) continue;
+			if(!S.kept[n.id]) foreach(d;n.defs) droppedDefs.insert(d);
+			else foreach(j,c;n.comps) if(!S.compKept[n.id][j]) foreach(d;c.defs) droppedDefs.insert(d);
+		}
+		auto end=fwd(body_,S.carried.dup);
+		if(fwdFailed) return null;
+		foreach(v;S.carried) if(v !in end) return null;
+		slices~=S;
+	}
+	// logs
+	enum LogKey{ value, call, cond, left, step, right, num, count, measurement }
+	struct Log{
+		size_t node;
+		LogKey key;
+		Id var,name;
+		Expression type;
+		size_t idx; // (of an extracted call)
+	}
+	Log[] logs;
+	size_t logOf(size_t node,LogKey key,Id var,Expression type,size_t idx=0){
+		foreach(i,ref l;logs) if(l.node==node&&l.key==key&&l.var==var&&l.idx==idx) return i;
+		logs~=Log(node,key,var,freshName(),type,idx);
+		return logs.length-1;
+	}
+	// (the recomputed parts of an atom)
+	SliceNode[] keptParts(SliceNode n,ref Slice sl){
+		if(!n.comps.length) return [n];
+		SliceNode[] r;
+		foreach(j,c;n.comps) if(sl.compKept[n.id][j]) r~=c;
+		return r;
+	}
+	foreach(ref sl;slices){
+		foreach(n;nodes){
+			if(sl.measDisp[n.id]) logOf(n.id,LogKey.measurement,n.result,ctypeOf[n.result]);
+			if(!sl.kept[n.id]||n.inR) continue;
+			final switch(n.kind){
+				case K.atom:
+					foreach(c;keptParts(n,sl)){
+						foreach(u;sorted(c.cuses)) if(!available(u)) logOf(n.id,LogKey.value,u,ctypeOf[u]);
+						foreach(ce;c.extracted) logOf(n.id,LogKey.call,Id.init,ce.type,n.extracted.countUntil!((x,y)=>x is y)(ce));
+					}
+					break;
+				case K.ite:
+					if(!n.quantum) logOf(n.id,LogKey.cond,Id.init,Bool(true));
+					else foreach(u;sorted(sl.entryLogs[n.id])) logOf(n.id,LogKey.value,u,ctypeOf[u]);
+					break;
+				case K.loop:
+					if(auto fe=cast(ForExp)n.e){
+						auto rng=fe.aggr.isRange;
+						logOf(n.id,LogKey.left,Id.init,rng.left.type);
+						if(rng.step) logOf(n.id,LogKey.step,Id.init,rng.step.type);
+						logOf(n.id,LogKey.right,Id.init,rng.right.type);
+					}else if(auto re=cast(RepeatExp)n.e) logOf(n.id,LogKey.num,Id.init,re.num.type);
+					else logOf(n.id,LogKey.count,Id.init,ℕt(true));
+					break;
+				case K.with_:
+					foreach(u;sorted(sl.entryLogs[n.id])) logOf(n.id,LogKey.value,u,ctypeOf[u]);
+					break;
+				case K.block:
+					break;
+			}
+		}
+	}
+	foreach(ref l;logs){ // (the logs are defined before the loop)
+		if(!l.type||!l.type.isClassical()) return null;
+		bool ok=true;
+		l.type.freeVarsImpl((Identifier id){
+			auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+			if(n in bodyDefs) ok=false;
+			static if(is(T==ForExp)) if(n==mainVar) ok=false;
+			return 0;
+		});
+		if(!ok) return null;
+	}
+	size_t[][] logsAt=new size_t[][](nodes.length);
+	foreach(i,ref l;logs) logsAt[l.node]~=i;
+	// emission
+	auto loc=loop.loc;
+	E setLoc(E:Expression)(E e){ e.loc=loc; return e; }
+	Identifier mkId(Id n){ return setLoc(new Identifier(n)); }
+	Expression annot(Expression e,Expression t){ return setLoc(new TypeAnnotationExp(e,t,TypeAnnotationType.annotation)); }
+	Expression define(Expression l,Expression r){ return setLoc(new DefineExp(l,r)); }
+	Expression dupOf(Expression e){ return setLoc(new CallExp(mkId(Id.s!"dup"),e,false,false)); }
+	Expression forgetOf(Id n,Expression v=null){ return setLoc(new ForgetExp(mkId(n),v)); }
+	Expression zero(){ return annot(setLoc(LiteralExp.makeInteger(0)),ℕt(true)); }
+	Expression inc(Id n){ return setLoc(new AddAssignExp(mkId(n),setLoc(LiteralExp.makeInteger(1)))); }
+	Expression appendLog(size_t li,Expression e){
+		return setLoc(new CatAssignExp(mkId(logs[li].name),setLoc(new VectorExp([e]))));
+	}
+	CompoundExp block(Expression[] s){ return setLoc(new CompoundExp(s)); }
+	void renameItrans(Expression c,Id[Id] names){
+		walkShallow(c,(Expression x){
+			if(auto we=cast(WithExp)x) if(we.itrans)
+				walkShallow(we.itrans,(Expression y){
+					if(auto id=cast(Identifier)y) if(auto t=id.id in names) id.id=*t;
+				});
+		});
+	}
+	void renameSkipped(Expression c,Id[Id] names){
+		void ren(Expression y){
+			visitStm(y,(Expression z){
+				if(auto id=cast(Identifier)z) if(auto t=id.id in names) id.id=*t;
+			});
+		}
+		walkShallow(c,(Expression x){
+			if(auto tae=cast(TypeAnnotationExp)x) ren(tae.t);
+			else if(auto ce=cast(CallExp)x) if(ce.isSquare) ren(ce.arg);
+		});
+	}
+	// (renames variables in the copy `c`)
+	Expression rename(Expression c,Id[Id] names){
+		if(!names.length) return c;
+		import ast.substitute:statementFreeVarsImpl;
+		statementFreeVarsImpl(c,(Identifier y){
+			if(auto t=y.id in names) y.id=*t;
+			return 0;
+		});
+		walkShallow(c,(Expression x){
+			if(auto le=cast(LambdaExp)x) le.orig=le.fd.copy();
+			if(auto id=cast(Identifier)x) if(auto t=id.id in names) id.id=*t;
+		});
+		renameItrans(c,names);
+		renameSkipped(c,names);
+		return c;
+	}
+	Expression cp(Expression o,Id[Id] names){ return rename(o.copy(),names); }
+	// copy of `o` with the extracted `calls` replaced by the values of `temps`
+	Expression cpX(Expression o,CallExp[] calls,Id[] temps,Id[Id] names){
+		auto c=o.copy();
+		if(calls.length){
+			Expression[] on,cn;
+			walkShallow(o,(Expression x){ on~=x; });
+			walkShallow(c,(Expression x){ cn~=x; });
+			assert(on.length==cn.length);
+			foreach(k,x;on) foreach(j,ce;calls) if(x is ce){
+				auto cc=cast(CallExp)cn[k];
+				cc.e=mkId(Id.s!"dup");
+				cc.arg=mkId(temps[j]);
+				cc.isSquare=false;
+				cc.isClassical_=false;
+			}
+		}
+		return rename(c,names);
+	}
+	Expression[] stmts;
+	static if(is(T==ForExp)){
+		auto lo=freshName(),hi=freshName(),st=range.step?freshName():Id.init;
+		stmts~=define(mkId(lo),annot(range.left.copy(),range.left.type));
+		if(range.step) stmts~=define(mkId(st),annot(range.step.copy(),range.step.type));
+		stmts~=define(mkId(hi),annot(range.right.copy(),range.right.type));
+		Expression mkLoop(CompoundExp b){
+			auto r=setLoc(new ForExp(mkId(mainVar),null,ForAggregate(ForRange(range.leftExclusive,mkId(lo),range.step?mkId(st):null,range.rightExclusive,mkId(hi))),b));
+			r.noSplit=true;
+			return r;
+		}
+	}else{
+		auto num=freshName();
+		static if(is(T==RepeatExp)) stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
+		else stmts~=define(mkId(num),zero());
+		Expression mkLoop(CompoundExp b){
+			auto r=setLoc(new RepeatExp(mkId(num),b));
+			r.noSplit=true;
+			return r;
+		}
+	}
+	// the main loop
+	Id[Id] copyOf;
+	auto liftedOrder=sorted(liftedNames);
+	foreach(v;liftedOrder){
+		copyOf[v]=freshName();
+		stmts~=define(mkId(copyOf[v]),dupOf(mkId(v)));
+	}
+	foreach(ref l;logs) stmts~=define(mkId(l.name),annot(setLoc(new VectorExp([])),arrayTy(l.type)));
+	auto mRebuild=new bool[](nodes.length);
+	bool computeRebuild(SliceNode n){
+		bool r=logsAt[n.id].length!=0;
+		foreach(c;n.a~n.b) r|=computeRebuild(c);
+		return mRebuild[n.id]=r;
+	}
+	foreach(n;body_) computeRebuild(n);
+	size_t logAt(SliceNode n,LogKey key,Id var=Id.init){
+		foreach(li;logsAt[n.id]) if(logs[li].key==key&&logs[li].var==var) return li;
+		return size_t.max;
+	}
+	Expression[] emitM(SliceNode[] ns){
+		Expression[] r;
+		foreach(n;ns){
+			foreach(li;logsAt[n.id]) if(logs[li].key==LogKey.value) r~=appendLog(li,dupOf(mkId(logs[li].var)));
+			if(n.kind==K.atom){
+				CallExp[] calls;
+				Id[] temps;
+				foreach(li;logsAt[n.id]) if(logs[li].key==LogKey.call){
+					auto ce=n.extracted[logs[li].idx],t=freshName();
+					r~=define(mkId(t),cp(ce,copyOf));
+					r~=appendLog(li,dupOf(mkId(t)));
+					calls~=ce;
+					temps~=t;
+				}
+				r~=cpX(n.e,calls,temps,copyOf);
+				auto ml=logAt(n,LogKey.measurement,n.result);
+				if(ml!=size_t.max) r~=appendLog(ml,dupOf(mkId(n.result)));
+				continue;
+			}
+			if(!mRebuild[n.id]){
+				r~=cp(n.e,copyOf);
+				continue;
+			}
+			final switch(n.kind){
+				case K.atom: assert(0);
+				case K.ite:{
+					auto ite=cast(IteExp)n.e;
+					auto then=block(emitM(n.a));
+					CompoundExp othw=ite.othw?block(emitM(n.b)):null;
+					auto cl=logAt(n,LogKey.cond);
+					if(cl!=size_t.max){
+						if(!othw) othw=block([]);
+						then.s=appendLog(cl,setLoc(LiteralExp.makeBoolean(true)))~then.s;
+						othw.s=appendLog(cl,setLoc(LiteralExp.makeBoolean(false)))~othw.s;
+					}
+					r~=setLoc(new IteExp(cp(ite.cond,copyOf),then,othw));
+					break;
+				}
+				case K.loop:{
+					auto bdy=block(emitM(n.a));
+					Expression logged(LogKey key,Expression e,Expression type){
+						auto li=logAt(n,key);
+						if(li==size_t.max) return e;
+						auto t=freshName();
+						r~=define(mkId(t),annot(e,type));
+						r~=appendLog(li,dupOf(mkId(t)));
+						return mkId(t);
+					}
+					if(auto fe=cast(ForExp)n.e){
+						auto rng=fe.aggr.isRange;
+						auto left=logged(LogKey.left,cp(rng.left,copyOf),rng.left.type);
+						auto step=rng.step?logged(LogKey.step,cp(rng.step,copyOf),rng.step.type):null;
+						auto right=logged(LogKey.right,cp(rng.right,copyOf),rng.right.type);
+						auto nl=setLoc(new ForExp(mkId(fe.loopVar.name.id),null,ForAggregate(ForRange(rng.leftExclusive,left,step,rng.rightExclusive,right)),bdy));
+						nl.noSplit=fe.noSplit;
+						r~=nl;
+					}else if(auto re=cast(RepeatExp)n.e){
+						auto nl=setLoc(new RepeatExp(logged(LogKey.num,cp(re.num,copyOf),re.num.type),bdy));
+						nl.noSplit=re.noSplit;
+						r~=nl;
+					}else{
+						auto we=cast(WhileExp)n.e;
+						auto cl=logAt(n,LogKey.count);
+						Id cnt;
+						if(cl!=size_t.max){
+							cnt=freshName();
+							r~=define(mkId(cnt),zero());
+							bdy.s~=inc(cnt);
+						}
+						auto nl=setLoc(new WhileExp(cp(we.cond,copyOf),bdy));
+						nl.noSplit=we.noSplit;
+						r~=nl;
+						if(cl!=size_t.max) r~=appendLog(cl,dupOf(mkId(cnt)));
+					}
+					break;
+				}
+				case K.with_:{
+					auto we=cast(WithExp)n.e;
+					r~=setLoc(new WithExp(cast(CompoundExp)cp(we.trans,copyOf),block(emitM(n.a))));
+					break;
+				}
+				case K.block:
+					r~=block(emitM(n.a));
+					break;
+			}
+		}
+		return r;
+	}
+	{
+		auto mbdy=block(emitM(body_));
+		mbdy.loc=loop.bdy.loc;
+		static if(is(T==WhileExp)){
+			mbdy.s~=inc(num);
+			auto ml=setLoc(new WhileExp(cp(loop.cond,copyOf),mbdy));
+			ml.noSplit=true;
+			stmts~=ml;
+		}else stmts~=mkLoop(mbdy);
+	}
+	// the recomputations
+	Id[Id][] renames;
+	foreach(ref sl;slices){
+		Id[Id] names;
+		foreach(w;sorted(sl.carried)) if(!classVars[sl.cls].canFind(w)){
+			names[w]=freshName();
+			stmts~=define(mkId(names[w]),dupOf(mkId(w)));
+		}
+		foreach(v;sorted(sl.locals)) names[v]=freshName();
+		renames~=names;
+	}
+	foreach(si,ref sl;slices){
+		S=sl;
+		Id[size_t] counter;
+		Id[] counters;
+		Expression[] readLog(size_t li,out Id t){
+			auto c=counter.get(li,Id.init);
+			if(c==Id.init){
+				c=counter[li]=freshName();
+				counters~=c;
+			}
+			t=freshName();
+			return [define(mkId(t),dupOf(setLoc(new IndexExp(mkId(logs[li].name),mkId(c))))),inc(c)];
+		}
+		Expression[] emitS(SliceNode[] ns,Id[Id] names){
+			Expression[] r;
+			foreach(n;ns){
+				foreach(u;sorted(S.disp[n.id])){
+					if(S.measDisp[n.id]&&u==n.measured){
+						Id t;
+						r~=readLog(logAt(n,LogKey.measurement,n.result),t);
+						r~=forgetOf(names.get(u,u),mkId(t));
+					}else r~=forgetOf(names.get(u,u));
+				}
+				scope(success) foreach(u;sorted(S.dispAfter[n.id])) r~=forgetOf(names.get(u,u));
+				if(!S.kept[n.id]) continue;
+				final switch(n.kind){
+					case K.atom:{
+						auto nnames=names;
+						CallExp[] calls;
+						Id[] temps;
+						auto parts=keptParts(n,S);
+						if(!n.inR){
+							nnames=names.dup;
+							SetX!Id cu;
+							foreach(c;parts) foreach(u;c.cuses) cu.insert(u);
+							foreach(u;sorted(cu)) if(!available(u)){
+								Id t;
+								r~=readLog(logAt(n,LogKey.value,u),t);
+								nnames[u]=t;
+							}
+							foreach(c;parts) foreach(ce;c.extracted){
+								Id t;
+								r~=readLog(logOf(n.id,LogKey.call,Id.init,ce.type,n.extracted.countUntil!((x,y)=>x is y)(ce)),t);
+								calls~=ce;
+								temps~=t;
+							}
+						}
+						if(parts.length==n.comps.length||!n.comps.length){
+							r~=cpX(n.e,calls,temps,nnames);
+							break;
+						}
+						Expression[] ls,rs;
+						foreach(j,c;n.comps) if(S.compKept[n.id][j]){
+							ls~=n.lhs[j].copy();
+							rs~=cpX(n.rhs[j],calls,temps,null);
+						}
+						auto def=ls.length==1?define(ls[0],rs[0]):define(setLoc(new TupleExp(ls)),setLoc(new TupleExp(rs)));
+						def.loc=n.e.loc;
+						r~=rename(def,nnames);
+						break;
+					}
+					case K.ite:{
+						auto ite=cast(IteExp)n.e;
+						Expression cond;
+						auto inner=names;
+						if(!n.quantum&&!n.inR){
+							Id t;
+							r~=readLog(logAt(n,LogKey.cond),t);
+							cond=mkId(t);
+						}else{
+							if(n.quantum&&!n.inR){
+								inner=names.dup;
+								foreach(u;sorted(S.entryLogs[n.id])){
+									Id t;
+									r~=readLog(logAt(n,LogKey.value,u),t);
+									inner[u]=t;
+								}
+							}
+							cond=cp(ite.cond,inner);
+						}
+						auto then=block(emitS(n.a,inner));
+						CompoundExp othw=ite.othw?block(emitS(n.b,inner)):null;
+						r~=setLoc(new IteExp(cond,then,othw));
+						break;
+					}
+					case K.loop:{
+						Expression read(LogKey key,Expression e){
+							if(n.inR) return cp(e,names);
+							Id t;
+							r~=readLog(logAt(n,key),t);
+							return mkId(t);
+						}
+						if(auto fe=cast(ForExp)n.e){
+							auto rng=fe.aggr.isRange;
+							auto left=read(LogKey.left,rng.left);
+							auto step=rng.step?read(LogKey.step,rng.step):null;
+							auto right=read(LogKey.right,rng.right);
+							auto nl=setLoc(new ForExp(mkId(fe.loopVar.name.id),null,ForAggregate(ForRange(rng.leftExclusive,left,step,rng.rightExclusive,right)),block(emitS(n.a,names))));
+							r~=nl;
+						}else if(auto re=cast(RepeatExp)n.e){
+							auto num=read(LogKey.num,re.num);
+							auto nl=setLoc(new RepeatExp(num,block(emitS(n.a,names))));
+							r~=nl;
+						}else{
+							auto we=cast(WhileExp)n.e;
+							if(n.inR){
+								auto nl=setLoc(new WhileExp(cp(we.cond,names),block(emitS(n.a,names))));
+								r~=nl;
+							}else{
+								Id t;
+								r~=readLog(logAt(n,LogKey.count),t);
+								auto nl=setLoc(new RepeatExp(mkId(t),block(emitS(n.a,names))));
+								r~=nl;
+							}
+						}
+						break;
+					}
+					case K.with_:{
+						auto we=cast(WithExp)n.e;
+						auto tnames=names;
+						if(!n.inR){
+							tnames=names.dup;
+							foreach(u;sorted(S.entryLogs[n.id])){
+								Id t;
+								r~=readLog(logAt(n,LogKey.value,u),t);
+								tnames[u]=t;
+							}
+						}
+						r~=setLoc(new WithExp(cast(CompoundExp)cp(we.trans,tnames),block(emitS(n.a,names))));
+						break;
+					}
+					case K.block:
+						r~=block(emitS(n.a,names));
+						break;
+				}
+			}
+			return r;
+		}
+		auto sbdy=emitS(body_,renames[si]);
+		if(sbdy.length){
+			foreach(c;counters) stmts~=define(mkId(c),zero());
+			auto b=block(sbdy);
+			b.loc=loop.bdy.loc;
+			stmts~=mkLoop(b);
+		}
+	}
+	// (the copies of other lifted variables that the recomputations read end up with their recomputed values)
+	foreach(si,ref sl;slices) foreach(w;sorted(sl.carried)) if(auto c=w in renames[si]) stmts~=forgetOf(*c,dupOf(mkId(w)));
+	foreach(v;liftedOrder) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
+	auto lowered=new CompoundExp(stmts);
+	lowered.loc=loc;
+	sc.restoreStateSnapshot(state.origStateSnapshot);
+	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
+		import util.io:stderr;
+		stderr.writeln(loop);
+		stderr.writeln("-loop-slicing→");
+		stderr.writeln(lowered);
+	}
+	return statementSemantic(lowered,sc,flags);
+}
+
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
+	if(auto r=sliceLoop(loop,state,sc,flags)) return r;
 	if(auto r=splitLoop(loop,state,sc,flags)) return r;
 	enum returnOnlyMoved=false; // (experimental)
 	enum separateConstParams=true; // (necessary inside a `with` transformation)

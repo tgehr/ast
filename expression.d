@@ -2316,7 +2316,9 @@ class RepeatExp: Expression{
 		this.num=num; this.bdy=bdy;
 	}
 	override RepeatExp copyImpl(CopyArgs args){
-		return new RepeatExp(num.copy(args),bdy.copy(args));
+		auto r=new RepeatExp(num.copy(args),bdy.copy(args));
+		static if(language==silq) r.noSplit=noSplit;
+		return r;
 	}
 	override string toString(){ return _brk("repeat "~num.toString()~" "~bdy.toString()); }
 	override @property string kind(){ return "repeat loop"; }
@@ -2543,6 +2545,7 @@ class ForExp: Expression{
 	}
 	override ForExp copyImpl(CopyArgs args){
 		auto r=new ForExp(var?var.copy(args):null,pattern?pattern.copy(args):null,aggr.copy(args),bdy.copy(args));
+		static if(language==silq) r.noSplit=noSplit;
 		if(args.preserveSemantic){
 			enforce(!fescope_&&!loopVar,"TODO");
 		}
@@ -2589,7 +2592,9 @@ class WhileExp: Expression{
 		this.bdy=bdy;
 	}
 	override WhileExp copyImpl(CopyArgs args){
-		return new WhileExp(cond.copy(args),bdy.copy(args));
+		auto r=new WhileExp(cond.copy(args),bdy.copy(args));
+		static if(language==silq) r.noSplit=noSplit;
+		return r;
 	}
 	override string toString(){ return _brk("while "~cond.toString()~bdy.toString()); }
 	override @property string kind(){ return "while loop"; }
