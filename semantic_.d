@@ -1604,6 +1604,41 @@ bool finalizeLoopIteration(
 bool loopIterationConverged(CompoundExp bdy,Expression loopExp,bool returns,ref FixedPointIterState state){
 	return bdy.isSemError()||loopExp.isSemError()||returns||state.converged;
 }
+// The first iteration of a loop that contains loops analyzes them with a single iteration each, as its result usually
+// only determines the state at the start of the next iteration (otherwise, the iterations of nested loops multiply)
+struct LoopIterations{
+	Scope sc;
+	bool outer; // (inside such an iteration)
+	bool nested;
+	int n=0;
+	BlockScope lsc;
+	this(Scope sc,Expression bdy){
+		this.sc=sc;
+		for(auto s=sc;s;s=s.parentScope()){
+			if(cast(FunctionScope)s) break;
+			if(auto bs=cast(BlockScope)s) if(bs.isLoopBody&&bs.speculative) outer=true;
+		}
+		foreach(x;bdy.subexpressions) if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x) nested=true;
+	}
+	void setup(BlockScope lsc){
+		this.lsc=lsc;
+		lsc.speculative=outer||nested&&n++==0;
+	}
+	void adjust(ref bool converged,bool error,bool deferred){
+		if(outer){
+			if(!converged||deferred){ // (the result may differ from the fixed point)
+				for(auto s=sc;s;s=s.parentScope()){
+					if(cast(FunctionScope)s) break;
+					if(auto bs=cast(BlockScope)s) if(bs.isLoopBody&&bs.speculative) bs.cutShort=true;
+				}
+			}
+			converged=true;
+		}else if(nested&&n==1){
+			if(lsc.cutShort&&!error) converged=false;
+			n++;
+		}
+	}
+}
 // Whether `sc` is inside a loop body of the function it belongs to.
 bool insideLoopBody(Scope sc){
 	for(auto s=sc;s;s=s.parentScope()){
@@ -1779,15 +1814,18 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		vd.setSemCompleted();
 		if(vd.scope_) fesc.lastUses.definition(vd,null);
 	}
+	auto iterations=LoopIterations(sc,fe.bdy);
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=fe.bdy.copy(cargs);
 		auto fesc=bdy.blscope_=state.makeScopes(sc);
+		iterations.setup(fesc);
 		setupForIter(fesc);
 		bdy=compoundExpSemantic(bdy,sc,flags);
 		assert(!!bdy);
 		auto returns=finalizeLoopIteration(state,sc,flags,bdy,fe,"for",constForgets,anyDeferredSpecificityCheck);
 		converged|=loopIterationConverged(bdy,fe,returns,state);
+		iterations.adjust(converged,bdy.isSemError()||fe.isSemError(),anyDeferredSpecificityCheck);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in for loop",fe.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",fe.loc);
@@ -1795,7 +1833,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 			break;
 		}
 	}
-	runFinalLoopIteration(fe,sc,flags,state,bdy,"for",constForgets,anyDeferredSpecificityCheck,
+	if(!iterations.outer) runFinalLoopIteration(fe,sc,flags,state,bdy,"for",constForgets,anyDeferredSpecificityCheck,
 		(BlockScope fesc){ setupForIter(fesc); });
 	state.fixSplitMergeGraph(sc);
 	fe.bdy=bdy;
@@ -1829,16 +1867,19 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 		propErr(ncond,we);
 		condSucceeded|=ncond.isSemCompleted();
 	}
+	auto iterations=LoopIterations(sc,we.bdy);
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=we.bdy.copy(cargs);
 		auto wesc=bdy.blscope_=state.makeScopes(sc);
+		iterations.setup(wesc);
 		setupWhileIter(wesc,ncond);
 		bdy=compoundExpSemantic(bdy,sc,flags);
 		if(condSucceeded&&ncond.isSemError())
 			sc.note("variable declaration may be missing in while loop body", we.loc);
 		auto returns=finalizeLoopIteration(state,sc,flags,bdy,we,"while",constForgets,anyDeferredSpecificityCheck);
 		converged|=loopIterationConverged(bdy,we,returns,state);
+		iterations.adjust(converged,bdy.isSemError()||we.isSemError(),anyDeferredSpecificityCheck);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in while loop",we.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",we.loc);
@@ -1848,7 +1889,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 
 	}
 	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
-	runFinalLoopIteration(we,sc,flags,state,bdy,"while",constForgets,anyDeferredSpecificityCheck,
+	if(!iterations.outer) runFinalLoopIteration(we,sc,flags,state,bdy,"while",constForgets,anyDeferredSpecificityCheck,
 		(BlockScope wesc){ setupWhileIter(wesc,ncond); },
 		(){
 			if(condSucceeded&&ncond.isSemError())
@@ -1886,13 +1927,16 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	int numTries=-1;
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	Declaration[] constForgets;
+	auto iterations=LoopIterations(sc,re.bdy);
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
 		bdy.blscope_=state.makeScopes(sc);
+		iterations.setup(bdy.blscope_);
 		bdy=compoundExpSemantic(bdy,sc,flags);
 		auto returns=finalizeLoopIteration(state,sc,flags,bdy,re,"repeat",constForgets,anyDeferredSpecificityCheck);
 		converged|=loopIterationConverged(bdy,re,returns,state);
+		iterations.adjust(converged,bdy.isSemError()||re.isSemError(),anyDeferredSpecificityCheck);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in repeat loop",re.loc);
 			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",re.loc);
@@ -1901,7 +1945,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 		}
 	}
 	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
-	runFinalLoopIteration(re,sc,flags,state,bdy,"repeat",constForgets,anyDeferredSpecificityCheck);
+	if(!iterations.outer) runFinalLoopIteration(re,sc,flags,state,bdy,"repeat",constForgets,anyDeferredSpecificityCheck);
 	state.fixSplitMergeGraph(sc);
 	re.bdy=bdy;
 	re.type=isPositive(re.num)&&definitelyReturns(re.bdy)?bottom:unit;

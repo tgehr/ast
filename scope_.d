@@ -2827,6 +2827,7 @@ class BlockScope: NestedScope{
 	Annotation restriction_;
 	bool isLoopBody=false;
 	bool loopFinalPass=false;
+	bool speculative=false,cutShort=false;
 	bool loopDeferredSpecificityCheck=false;
 	override @property bool inferenceMode(){
 		if(isLoopBody && !loopFinalPass) return true;
