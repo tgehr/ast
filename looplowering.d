@@ -2199,7 +2199,8 @@ private final class SliceNode{
 // function of `lowerLoop`: its results depend on all of its arguments, and cannot be forgotten at all if the loop body
 // is not `qfree`. Instead:
 //  - a main loop runs the loop body on copies of the lifted variables and logs the classical values that the lifted
-//    state depends on (at the statements that read them, or before quantum conditionals that read them)
+//    state depends on (at the statements that read them, or before quantum conditionals that read them); it omits the
+//    statements that only compute values that neither the other loop state, nor the logs, nor any effects depend on
 //  - for each class of lifted variables (with the same dependencies), a `qfree` loop recomputes them from their values
 //    at the loop entry, the logs and the quantum variables that the loop does not change, using the statements of the
 //    loop body that the class depends on (other lifted variables they read are recomputed from copies)
@@ -2881,6 +2882,15 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(j,c;n.comps) if(sl.compKept[n.id][j]) r~=c;
 		return r;
 	}
+	// (classical conditions and loop headers that only read values that the loop does not change are not logged: the
+	// recomputations evaluate them as well)
+	bool direct(Expression e){
+		auto t=new SliceNode(K.atom,e,0,false,null);
+		analyze(t,e);
+		if(t.uses.length||t.defs.length||t.consumed.length||t.pconsumed.length||t.cdefs.length||t.nonQfree) return false;
+		foreach(u;t.cuses) if(!available(u)) return false;
+		return true;
+	}
 	foreach(ref sl;slices){
 		foreach(n;nodes){
 			if(sl.measDisp[n.id]) logOf(n.id,LogKey.measurement,n.result,ctypeOf[n.result]);
@@ -2893,17 +2903,19 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					}
 					break;
 				case K.ite:
-					if(!n.quantum) logOf(n.id,LogKey.cond,Id.init,Bool(true));
-					else foreach(u;sorted(sl.entryLogs[n.id])) logOf(n.id,LogKey.value,u,ctypeOf[u]);
+					if(!n.quantum){
+						if(!direct((cast(IteExp)n.e).cond)) logOf(n.id,LogKey.cond,Id.init,Bool(true));
+					}else foreach(u;sorted(sl.entryLogs[n.id])) logOf(n.id,LogKey.value,u,ctypeOf[u]);
 					break;
 				case K.loop:
 					if(auto fe=cast(ForExp)n.e){
 						auto rng=fe.aggr.isRange;
-						logOf(n.id,LogKey.left,Id.init,rng.left.type);
-						if(rng.step) logOf(n.id,LogKey.step,Id.init,rng.step.type);
-						logOf(n.id,LogKey.right,Id.init,rng.right.type);
-					}else if(auto re=cast(RepeatExp)n.e) logOf(n.id,LogKey.num,Id.init,re.num.type);
-					else logOf(n.id,LogKey.count,Id.init,ℕt(true));
+						if(!direct(rng.left)) logOf(n.id,LogKey.left,Id.init,rng.left.type);
+						if(rng.step&&!direct(rng.step)) logOf(n.id,LogKey.step,Id.init,rng.step.type);
+						if(!direct(rng.right)) logOf(n.id,LogKey.right,Id.init,rng.right.type);
+					}else if(auto re=cast(RepeatExp)n.e){
+						if(!direct(re.num)) logOf(n.id,LogKey.num,Id.init,re.num.type);
+					}else logOf(n.id,LogKey.count,Id.init,ℕt(true));
 					break;
 				case K.with_:
 					foreach(u;sorted(sl.entryLogs[n.id])) logOf(n.id,LogKey.value,u,ctypeOf[u]);
@@ -2926,6 +2938,75 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	size_t[][] logsAt=new size_t[][](nodes.length);
 	foreach(i,ref l;logs) logsAt[l.node]~=i;
+	auto hasLogs=new bool[](nodes.length); // (in the subtree)
+	bool computeHasLogs(SliceNode n){
+		bool r=logsAt[n.id].length!=0;
+		foreach(c;n.a~n.b) r|=computeHasLogs(c);
+		return hasLogs[n.id]=r;
+	}
+	foreach(n;body_) computeHasLogs(n);
+	// statements that the main loop keeps: they may fail, have effects or change values that the loop state that is not
+	// lifted or the logs depend on (the lifted variables that no kept statement accesses are not copied)
+	auto mayFail=new bool[](nodes.length); // (the atom, the condition, the loop header or the transformation)
+	foreach(n;nodes){
+		final switch(n.kind){
+			case K.atom: mayFail[n.id]=!cannotFail(n.e); break;
+			case K.ite: mayFail[n.id]=!cannotFail((cast(IteExp)n.e).cond); break;
+			case K.loop:
+				if(auto fe=cast(ForExp)n.e){
+					auto rng=fe.aggr.isRange;
+					mayFail[n.id]=!cannotFail(rng.left)||rng.step&&!cannotFail(rng.step)||!cannotFail(rng.right);
+				}else if(auto re=cast(RepeatExp)n.e) mayFail[n.id]=!cannotFail(re.num);
+				else mayFail[n.id]=true; // (it may diverge)
+				break;
+			case K.with_:{
+				auto we=cast(WithExp)n.e;
+				mayFail[n.id]=!cannotFail(we.trans)||we.itrans&&!cannotFail(we.itrans);
+				break;
+			}
+			case K.block: break;
+		}
+	}
+	auto mKept=new bool[](nodes.length);
+	SetX!Id mLive;
+	{
+		foreach(v;carriedNames) if(v !in liftedNames) mLive.insert(v);
+		foreach(ref l;logs) if(l.var!=Id.init) mLive.insert(l.var);
+		static if(is(T==WhileExp)) foreach(s;only(&cnode.uses,&cnode.cuses)) foreach(u;*s) mLive.insert(u);
+		bool changed=true;
+		void add(Id u){
+			if(u in mLive) return;
+			mLive.insert(u);
+			changed=true;
+		}
+		bool mark(SliceNode n){
+			bool k=false;
+			foreach(c;n.a~n.b) k|=mark(c)||hasLogs[c.id];
+			bool writes=false,writesLive=false;
+			foreach(s;only(&n.defs,&n.consumed,&n.pconsumed,&n.cdefs,&n.xconsumed)) foreach(u;*s){
+				writes=true;
+				if(u in mLive) writesLive=true;
+			}
+			foreach(li;logsAt[n.id]) if(logs[li].key!=LogKey.value) k=true;
+			final switch(n.kind){
+				case K.atom: k|=n.nonQfree||n.extracted.length||!writes||writesLive; break;
+				case K.ite,K.loop: k|=n.nonQfree||writesLive; break;
+				case K.with_,K.block: break; // (a transformation without a body is undone)
+			}
+			k|=mayFail[n.id];
+			if(k&&!mKept[n.id]){
+				mKept[n.id]=true;
+				changed=true;
+				foreach(s;only(&n.uses,&n.defs,&n.consumed,&n.pconsumed,&n.cuses,&n.cdefs,&n.xconsumed)) foreach(u;*s) add(u);
+				foreach(ce;n.extracted) visitStm(ce,(Expression y){ if(auto id=cast(Identifier)y) if(isVar(id)) add(varName(id)); });
+			}
+			return mKept[n.id];
+		}
+		while(changed){
+			changed=false;
+			foreach(n;body_) mark(n);
+		}
+	}
 	// emission
 	auto loc=loop.loc;
 	E setLoc(E:Expression)(E e){ e.loc=loc; return e; }
@@ -3017,7 +3098,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	// the main loop
 	Id[Id] copyOf;
-	auto liftedOrder=sorted(liftedNames);
+	auto liftedOrder=sorted(liftedNames).filter!(v=>v in mLive).array;
 	foreach(v;liftedOrder){
 		copyOf[v]=freshName();
 		stmts~=define(mkId(copyOf[v]),dupOf(mkId(v)));
@@ -3026,7 +3107,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	auto mRebuild=new bool[](nodes.length);
 	bool computeRebuild(SliceNode n){
 		bool r=logsAt[n.id].length!=0;
-		foreach(c;n.a~n.b) r|=computeRebuild(c);
+		foreach(c;n.a~n.b){
+			r|=computeRebuild(c);
+			r|=!mKept[c.id];
+		}
 		return mRebuild[n.id]=r;
 	}
 	foreach(n;body_) computeRebuild(n);
@@ -3038,6 +3122,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		Expression[] r;
 		foreach(n;ns){
 			foreach(li;logsAt[n.id]) if(logs[li].key==LogKey.value) r~=appendLog(li,dupOf(mkId(logs[li].var)));
+			if(!mKept[n.id]) continue;
 			if(n.kind==K.atom){
 				CallExp[] calls;
 				Id[] temps;
@@ -3082,16 +3167,20 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						r~=appendLog(li,dupOf(mkId(t)));
 						return mkId(t);
 					}
+					bool empty=!bdy.s.length&&!n.nonQfree&&!mayFail[n.id]; // (only the header is logged)
 					if(auto fe=cast(ForExp)n.e){
 						auto rng=fe.aggr.isRange;
 						auto left=logged(LogKey.left,cp(rng.left,copyOf),rng.left.type);
 						auto step=rng.step?logged(LogKey.step,cp(rng.step,copyOf),rng.step.type):null;
 						auto right=logged(LogKey.right,cp(rng.right,copyOf),rng.right.type);
+						if(empty) break;
 						auto nl=setLoc(new ForExp(mkId(fe.loopVar.name.id),null,ForAggregate(ForRange(rng.leftExclusive,left,step,rng.rightExclusive,right)),bdy));
 						nl.noSplit=fe.noSplit;
 						r~=nl;
 					}else if(auto re=cast(RepeatExp)n.e){
-						auto nl=setLoc(new RepeatExp(logged(LogKey.num,cp(re.num,copyOf),re.num.type),bdy));
+						auto num=logged(LogKey.num,cp(re.num,copyOf),re.num.type);
+						if(empty) break;
+						auto nl=setLoc(new RepeatExp(num,bdy));
 						nl.noSplit=re.noSplit;
 						r~=nl;
 					}else{
@@ -3130,7 +3219,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto ml=setLoc(new WhileExp(cp(loop.cond,copyOf),mbdy));
 			ml.noSplit=true;
 			stmts~=ml;
-		}else stmts~=mkLoop(mbdy);
+		}else if(mbdy.s.length) stmts~=mkLoop(mbdy);
 	}
 	// the recomputations
 	Id[Id][] renames;
@@ -3208,7 +3297,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						auto ite=cast(IteExp)n.e;
 						Expression cond;
 						auto inner=names;
-						if(!n.quantum&&!n.inR){
+						if(!n.quantum&&!n.inR&&logAt(n,LogKey.cond)!=size_t.max){
 							Id t;
 							r~=readLog(logAt(n,LogKey.cond),t);
 							cond=mkId(t);
@@ -3230,7 +3319,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					}
 					case K.loop:{
 						Expression read(LogKey key,Expression e){
-							if(n.inR) return cp(e,names);
+							if(n.inR||logAt(n,key)==size_t.max) return cp(e,names);
 							Id t;
 							r~=readLog(logAt(n,key),t);
 							return mkId(t);
