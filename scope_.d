@@ -2060,21 +2060,24 @@ abstract class Scope{
 			if(mustBeConstFromDummies)
 				foreach(v;(*mustBeConstFromDummies).byValue)
 					mustBeConst.insert(v.getId);
+			import ast.semantic_: typeForDecl;
+			SetX!Declaration inTypes; // (types of parameters cannot depend on other parameters)
+			if(separateConstParams) foreach(id,decl;rnsymtab)
+				if(auto type=typeForDecl(decl))
+					foreach(tid;type.freeIdentifiers) if(tid.meaning) inTypes.insert(tid.meaning.canonicalSource);
 			foreach(id,decl;rnsymtab){
-				import ast.semantic_: typeForDecl;
 				auto type=typeForDecl(decl);
 				if(!type) continue;
 				// variables whose names do not occur in the loop cannot change in it (they may still be split into the
 				// loop scope, e.g. by an early `return` that has to forget them); they are not loop parameters
 				if(namesInLoop&&id !in *namesInLoop&&(!decl.name||decl.name.id !in *namesInLoop)) continue;
 				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
-				if(!mayChange){
-					if(type.isClassical) continue;
-				}
 				if(mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is loopScope);
 				if(!mayChange){
-					if(!separateConstParams||type.isClassical()) continue; // use const captures
+					if(!separateConstParams) continue;
 					if(!accessedDecls||decl.canonicalSource !in *accessedDecls) continue; // not captured
+					// (classical variables are passed as well: a function without captures is analyzed only once)
+					if(type.isClassical()&&(!cast(VarDecl)decl&&!cast(Parameter)decl||decl.isToplevelDeclaration()||isTypeTy(type)||cast(FunTy)type||decl.canonicalSource in inTypes)) continue; // (const capture)
 					Expression.CopyArgs cargsConst;
 					r[0]~=q(id,decl,type.copy(cargsConst),false); // separate const parameter
 					continue;

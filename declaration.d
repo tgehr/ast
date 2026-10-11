@@ -733,10 +733,18 @@ class DeadMerge: DeadDecl{
 		return handled;
 	}
 	override bool reportRedefinition(Declaration decl,Scope sc){
-		foreach(d;mergedFrom)
-			if(auto dd=cast(DeadDecl)d)
-				if(dd.reportRedefinition(decl,sc))
-					return true;
+		SetX!DeadDecl visited;
+		return reportRedefinitionImpl(decl,sc,visited);
+	}
+	private bool reportRedefinitionImpl(Declaration decl,Scope sc,ref SetX!DeadDecl visited){
+		foreach(d;mergedFrom){
+			auto dd=cast(DeadDecl)d;
+			if(!dd||dd in visited) continue;
+			visited.insert(dd);
+			if(auto dm=cast(DeadMerge)dd){
+				if(dm.reportRedefinitionImpl(decl,sc,visited)) return true;
+			}else if(dd.reportRedefinition(decl,sc)) return true;
+		}
 		return false;
 	}
 	override void explain(string kind,Scope sc){

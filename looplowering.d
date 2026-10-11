@@ -3321,6 +3321,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			}
 		}
 		collectAccesses(loop.bdy);
+		static if(is(T==WhileExp)) collectAccesses(loop.cond);
 	}
 	SetX!Id namesInLoop; // names occurring in the loop
 	void collectNames(Expression e){
@@ -3349,6 +3350,29 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	SetX!Id unchangedConst; // (variables that are only consumed by early returns, see `loopParams`)
 	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst);
 	auto constParams=loopParams_[0], movedParams=loopParams_[1];
+	// (the loop bounds are passed as `const` parameters as well)
+	Q!(Id,Declaration,Expression,bool) boundParam(Identifier name,Expression type){
+		auto decl=new VarDecl(name.copy());
+		decl.loc=name.loc;
+		decl.vtype=type;
+		decl.sstate=SemState.completed;
+		Expression.CopyArgs cargs;
+		return q(name.id,cast(Declaration)decl,type.copy(cargs),false);
+	}
+	static if(is(T==ForExp)){
+		Identifier rightName=null,stepName=null;
+		if(auto range=loop.aggr.isRange){
+			rightName=temporaryIdentifier(range.right.loc);
+			constParams~=boundParam(rightName,range.right.type);
+			if(range.step){
+				stepName=temporaryIdentifier(range.step.loc);
+				constParams~=boundParam(stepName,range.step.type);
+			}
+		}
+	}else static if(is(T==RepeatExp)){
+		auto numName=temporaryIdentifier(loop.num.loc);
+		constParams~=boundParam(numName,loop.num.type);
+	}
 	static if(is(T==WhileExp)){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
 	}else static if(is(T==ForExp)){
@@ -3446,9 +3470,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		Expression ncond;
 		Identifier leftName;
 		Expression leftDef;
-		Identifier stepName=null;
 		Expression stepDef=null;
-		Identifier rightName;
 		Expression rightDef;
 		Identifier modMatchName=null;
 		Expression modMatchDef=null;
@@ -3461,13 +3483,11 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			leftInit.loc=range.left.loc;
 			leftDef=new DefineExp(leftName,leftInit);
 			leftDef.loc=range.left.loc;
-			rightName=temporaryIdentifier(range.right.loc);
 			auto rightInit=range.right.copy(cargsDefault);
 			rightInit.loc=range.right.loc;
 			rightDef=new DefineExp(rightName,rightInit);
 			rightDef.loc=range.right.loc;
 			if(range.step){
-				stepName=temporaryIdentifier(range.step.loc);
 				auto stepInit=range.step.copy(cargsDefault);
 				stepInit.loc=range.step.loc;
 				stepDef=new DefineExp(stepName,stepInit);
@@ -3572,7 +3592,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 			assert(0,"unknown aggregate type");
 		}
 	}else static if(is(T==RepeatExp)){
-		auto numName=temporaryIdentifier(loop.num.loc);
 		auto numInit=loop.num.copy(cargsDefault);
 		numInit.loc=loop.num.loc;
 		auto numDef=new DefineExp(numName,numInit);
@@ -3735,10 +3754,30 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	auto cmpbdy=cast(CompoundExp)bdy;
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
-	auto fd=new FunctionDef(fdn,params,true,null,fbdy);
+	// (the return type and the annotation are given explicitly where possible, avoiding a second analysis of the function)
+	Expression rret=null;
+	if(!continuation&&!hasEarlyReturns&&!isInfinite){
+		Expression[] rids;
+		foreach(i,p;allParams){
+			if(i<loopParams.length) continue;
+			static if(returnOnlyMoved) bool returned=i>=loopConstParams.length;
+			else bool returned=p[3]&&p[0] !in unchangedConst;
+			if(!returned||sc.canInsert(p[1].name.id)) continue; // (see `returnTpl`)
+			auto rid=new Identifier(params[i].name.id);
+			rid.loc=loop.loc;
+			rids~=rid;
+		}
+		auto rtpl=new TupleExp(rids);
+		rtpl.loc=loop.loc;
+		rret=new TypeofExp(rtpl);
+		rret.loc=loop.loc;
+	}
+	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
 	foreach(p;constParams) if(p[3]) fd.loweredConstIds.insert(p[0]);
 	fd.attributes[Id.s!"silq-loop"] = LiteralExp.makeString(lowerf(T.stringof[0..$-"Exp".length]));
 	fd.annotation=pure_;
+	visitStm(loop.bdy,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.annotation=min(fd.annotation,ft.annotation); });
+	static if(is(T==WhileExp)) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.annotation=min(fd.annotation,ft.annotation); });
 	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){
