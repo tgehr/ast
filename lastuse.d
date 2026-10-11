@@ -100,7 +100,7 @@ final class LastUse{
 		// needed (see LastUses.remapFrom)
 		auto r=new LastUse(kind,scope_,decl,use,parent,nestedScopes.dup);
 		r.constBlock=constBlock;
-		static if(language==silq) r.dep=dep;
+		r.dep=dep;
 		r.forwardTo=forwardTo;
 		r.constConsume=constConsume;
 		r.prevImplicitDup=prevImplicitDup;
@@ -128,8 +128,7 @@ final class LastUse{
 	Identifier use=null;
 	Identifier[] constBlock;
 	Expression parent=null;
-	static if(language==silq)
-		auto dep=Dependency(true);
+	auto dep=Dependency(true);
 	LastUse forwardTo=null;
 	LastUse constConsume=null;
 	LastUse prevImplicitDup=null;
@@ -507,14 +506,12 @@ final class LastUse{
 				return r;
 			case lazyMerge:
 				auto r=getMergeForgettability(decl,nestedScopes,true,forceConsumed);
-				static if(language==silq){
-					if(!forceConsumed){
-						foreach(nsc;nestedScopes){
-							foreach(ssc;nsc.siblingScopes){
-								if(auto bs=cast(BlockScope)ssc){
-									if(bs.isLoopBody&&bs.diverges){
-										return Forgettability.none;
-									}
+				if(!forceConsumed){
+					foreach(nsc;nestedScopes){
+						foreach(ssc;nsc.siblingScopes){
+							if(auto bs=cast(BlockScope)ssc){
+								if(bs.isLoopBody&&bs.diverges){
+									return Forgettability.none;
 								}
 							}
 						}
@@ -840,18 +837,16 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
-		static if(language==silq){
-			lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
-			if(lastUse.dep.isTop){
-				// TODO: make sure classical variables have dependency ∅ instead?
-				import ast.semantic_:typeForDecl;
-				auto type=typeForDecl(lastUse.decl);
-				if(type&&type.isClassical) lastUse.dep=Dependency(false);
-			}
-			assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
-			if(lastUse.kind==LastUse.Kind.synthesizedForget)
-				lastUse.scope_.noteDependencyResolved(lastUse.dep);
+		lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
+		if(lastUse.dep.isTop){
+			// TODO: make sure classical variables have dependency ∅ instead?
+			import ast.semantic_:typeForDecl;
+			auto type=typeForDecl(lastUse.decl);
+			if(type&&type.isClassical) lastUse.dep=Dependency(false);
 		}
+		assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
+		if(lastUse.kind==LastUse.Kind.synthesizedForget)
+			lastUse.scope_.noteDependencyResolved(lastUse.dep);
 		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
 			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
 			if(auto prop=lastUse.scope_.declProps.tryGet(lastUse.decl)){
@@ -1037,8 +1032,7 @@ struct LastUses{
 			finish(le);
 			return le;
 		}
-		static if(language==silq) auto depOk=!use.scope_.getDependency(use.meaning).isTop;
-		else enum depOk=true;
+		auto depOk=!use.scope_.getDependency(use.meaning).isTop;
 		if(!inType&&depOk){
 			if(isStatement){
 				auto ce=cast(CompoundExp)parent;
@@ -1201,7 +1195,6 @@ struct LastUses{
 	}
 
 	// TODO: snapshotting is a bit hacky
-	static if(language==silq)
 	void substituteDependency(Declaration decl,Dependency dep){
 		foreach(_,lu;lastUses)
 			lu.dep.replace(decl,dep);

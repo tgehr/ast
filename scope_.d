@@ -8,7 +8,6 @@ import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap;
 
-static if(language==silq){
 struct Dependency{
 	bool isTop;
 	SetX!Declaration dependencies;
@@ -128,7 +127,6 @@ struct DummyWitnessContext{
 	MapSX!(Declaration,Dependency) consumedDeps; // dependency each decl had when it was consumed while this context was active
 	SetX!Id[] nestedLoopCarried; // the loop-carried candidates of each nested quantum loop analyzed while this context was active
 	Dependency[] reconstructed; // dependencies of quantum guards whose inputs change while borrowed
-}
 }
 
 import ast.lastuse;
@@ -265,656 +263,638 @@ abstract class Scope{
 		rnsymtab.remove(decl.getId);
 	}
 
-	static if(language==silq){
-		static struct DeclProp{
-			Identifier[] constBlock;
-			static if(language==silq){
-				static struct ComponentReplacement{
-					IndexExp write; // null for temporary conversion
-					Id name;
-					IndexExp read;
-					IndexExp constRead;
-					IndexExp convertedWrite;
-					IndexExp location(){ return write?write:convertedWrite; }
-					bool blocksAggregate(){ return !write&&convertedWrite; }
-				}
-				ComponentReplacement[] componentReplacements;
-				void nameIndex(IndexExp index,Id name){
-					auto r=ComponentReplacement(index,name,IndexExp.init);
-					if(index.isSemError()) swap(r.write,r.read);
-					componentReplacements~=r;
-				}
-			}
-			/+private+/ Identifier[] accesses;
-			/+private+/ Declaration[] capturers;
-			static DeclProp default_(){
-				return DeclProp.init;
-			}
-			DeclProp dup(){
-				return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup);
-			}
-			DeclProp move(){
-				auto r=DeclProp(constBlock,componentReplacements,accesses,capturers);
-				this=typeof(this).init;
-				return r;
-			}
-			DeclProp inherit(){ return default_(); }
-			enum inheritIsDefault=true; // set to false if inherit becomes nontrivial
-			DeclProp merged()in{
-				//assert(!constBlock);
-				assert(!componentReplacements.length);
-			}do{
-				constBlock=[]; // TODO: ok?
-				return this;
-			}
-			void merge(DeclProp nested)in{
-				//assert(!nested.constBlock);
-				assert(!nested.componentReplacements.length);
-			}do{
-				accesses~=nested.accesses;
-				capturers~=nested.capturers;
-			}
-			void replaceDecl(Declaration splitFrom,Declaration splitInto){
-				foreach(id;accesses){ // TODO: avoid considering the same access multiple times in different scopes
-					// foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
-					//imported!"util.io".writeln("ADJUSTING: ",id.loc," ",id.meaning is splitFrom," ",id.meaning is splitInto);
-					id.meaning=splitInto;
-					//if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
-				}
-				foreach(capturer;capturers){
-					void doIt(T)(T capturer){
-						if(splitFrom !in capturer.captures) return;
-						capturer.captures[splitInto]=capturer.captures[splitFrom];
-						capturer.captures.remove(splitFrom);
-						foreach(ref oldDecl;capturer.capturedDecls){
-							if(oldDecl is splitFrom){
-								oldDecl=splitInto;
-								break;
-							}
-						}
-						foreach(id;capturer.captures[splitInto])
-							id.meaning=splitInto;
-					}
-					if(auto fd=cast(FunctionDef)capturer) doIt(fd);
-					else if(auto dat=cast(DatDecl)capturer) doIt(dat);
-					else assert(0,text(typeid(capturer)));
-				}
-			}
+	static struct DeclProp{
+		Identifier[] constBlock;
+		static struct ComponentReplacement{
+			IndexExp write; // null for temporary conversion
+			Id name;
+			IndexExp read;
+			IndexExp constRead;
+			IndexExp convertedWrite;
+			IndexExp location(){ return write?write:convertedWrite; }
+			bool blocksAggregate(){ return !write&&convertedWrite; }
 		}
-		static struct DeclProps{
-			private MapSX!(Declaration,DeclProp) props;
-			DeclProps dup(){ return DeclProps(props.dup); }
-			void clear(){ props.clear(); }
-			DeclProp* tryGet(Declaration decl){ return props.getPtr(decl); }
-			ref DeclProp set(Declaration decl,DeclProp prop){
-				return props[decl]=prop;
-			}
-			void remove(Declaration decl){
-				props.remove(decl);
-			}
-			void merge(ref DeclProps nested){
-				foreach(decl,ref prop;nested.props){
-					if(decl !in props) props[decl]=prop.merged();
-					else props[decl].merge(prop);
-				}
-			}
-			void replaceDecl(Declaration splitFrom,Declaration splitInto){
-				if(auto declProp=tryGet(splitFrom)){
-					declProp.replaceDecl(splitFrom,splitInto);
-					props[splitInto]=declProp.move();
-					props.remove(splitFrom);
-				}
-			}
-			void moveComponentReplacements(Declaration prev,Declaration new_){
-				if(auto prevProp=tryGet(prev)){
-					if(new_ !in props) set(new_,DeclProp.default_());
-					auto newProp=tryGet(new_);
-					assert(newProp&&!newProp.componentReplacements.length);
-					newProp.componentReplacements=prevProp.componentReplacements;
-					prevProp.componentReplacements=[];
-				}
-			}
+		ComponentReplacement[] componentReplacements;
+		void nameIndex(IndexExp index,Id name){
+			auto r=ComponentReplacement(index,name,IndexExp.init);
+			if(index.isSemError()) swap(r.write,r.read);
+			componentReplacements~=r;
 		}
-		final DeclProps saveDeclProps(){ return declProps.dup; }
-		final void resetDeclProps(DeclProps previous){ declProps=previous; }
-		final void mergeDeclProps(ref DeclProps nested,ComponentConstBlock[] nestedComponentConstBlocks){
-			static if(language==silq){
-				foreach(decl,ref prop;nested.props){
-					if(!prop.constBlock.length) continue;
-					if(!decl.scope_||!this.isNestedIn(decl.scope_)) continue;
-					foreach(read;prop.constBlock){
-						Expression.CopyArgs cargs={preserveSemantic: true};
-						auto nread=read.copy(cargs);
-						nread.scope_=this;
-						blockConst(decl,nread);
-						recordAccess(nread,decl);
-						foreach(ccb;nestedComponentConstBlocks)
-							if(ccb.read is read)
-								componentConstBlocks~=ComponentConstBlock(decl,ccb.component,nread);
-					}
-					prop.constBlock=[];
-				}
+		/+private+/ Identifier[] accesses;
+		/+private+/ Declaration[] capturers;
+		static DeclProp default_(){
+			return DeclProp.init;
+		}
+		DeclProp dup(){
+			return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup);
+		}
+		DeclProp move(){
+			auto r=DeclProp(constBlock,componentReplacements,accesses,capturers);
+			this=typeof(this).init;
+			return r;
+		}
+		DeclProp inherit(){ return default_(); }
+		enum inheritIsDefault=true; // set to false if inherit becomes nontrivial
+		DeclProp merged()in{
+			//assert(!constBlock);
+			assert(!componentReplacements.length);
+		}do{
+			constBlock=[]; // TODO: ok?
+			return this;
+		}
+		void merge(DeclProp nested)in{
+			//assert(!nested.constBlock);
+			assert(!nested.componentReplacements.length);
+		}do{
+			accesses~=nested.accesses;
+			capturers~=nested.capturers;
+		}
+		void replaceDecl(Declaration splitFrom,Declaration splitInto){
+			foreach(id;accesses){ // TODO: avoid considering the same access multiple times in different scopes
+				// foreach(id,decl;declProps.accesses.map!(x=>x)) hangs the compiler
+				//imported!"util.io".writeln("ADJUSTING: ",id.loc," ",id.meaning is splitFrom," ",id.meaning is splitInto);
+				id.meaning=splitInto;
+				//if(id.scope_) id.scope_.lastUses.replaceDecl(splitFrom,splitInto);
 			}
-			declProps.merge(nested);
-		}
-		final int nestedDeclProps(scope int delegate(ref DeclProps) dg){
-			if(auto r=dg(declProps)) return r;
-			return outerDeclProps(dg);
-		}
-		int outerDeclProps(scope int delegate(ref DeclProps) dg){
-			return 0;
-		}
-		final nestedDeclProp(Declaration decl){
-			static struct NestedDeclProps{
-				Scope sc;
-				Declaration decl;
-				int opApply(scope int delegate(ref DeclProp) dg){
-					foreach(ref props;&sc.nestedDeclProps){
-						if(auto prop=props.tryGet(decl)){
-							if(auto r=dg(*prop))
-								return r;
+			foreach(capturer;capturers){
+				void doIt(T)(T capturer){
+					if(splitFrom !in capturer.captures) return;
+					capturer.captures[splitInto]=capturer.captures[splitFrom];
+					capturer.captures.remove(splitFrom);
+					foreach(ref oldDecl;capturer.capturedDecls){
+						if(oldDecl is splitFrom){
+							oldDecl=splitInto;
+							break;
 						}
 					}
-					return 0;
+					foreach(id;capturer.captures[splitInto])
+						id.meaning=splitInto;
 				}
-			}
-			return NestedDeclProps(this,decl);
-		}
-		// DMD/LDC bug: if this function returns ref DeclProp,
-		// memory corruption occurs
-		final DeclProp* updateDeclProps(Declaration decl){
-			if(auto r=declProps.tryGet(decl)) return r;
-			static if(!DeclProp.inheritIsDefault){
-				foreach(ref prop;nestedDeclProp(decl)){
-					return &declProps.set(decl,prop.inherit);
-				}
-			}
-			return &declProps.set(decl,DeclProp.default_());
-		}
-		final void recordAccess(Identifier id,Declaration meaning){
-			if(!meaning.isToplevelDeclaration()){
-				lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
-				if(!id.constLookup&&!id.implicitDup)
-					lastUses.consumption(meaning,id,this); // TODO: ok?
-				updateDeclProps(meaning).accesses~=id;
+				if(auto fd=cast(FunctionDef)capturer) doIt(fd);
+				else if(auto dat=cast(DatDecl)capturer) doIt(dat);
+				else assert(0,text(typeid(capturer)));
 			}
 		}
-		final void recordCapturer(Declaration capturer,Declaration meaning){
-			if(!meaning.isToplevelDeclaration){
-				updateDeclProps(meaning).capturers~=capturer;
+	}
+	static struct DeclProps{
+		private MapSX!(Declaration,DeclProp) props;
+		DeclProps dup(){ return DeclProps(props.dup); }
+		void clear(){ props.clear(); }
+		DeclProp* tryGet(Declaration decl){ return props.getPtr(decl); }
+		ref DeclProp set(Declaration decl,DeclProp prop){
+			return props[decl]=prop;
+		}
+		void remove(Declaration decl){
+			props.remove(decl);
+		}
+		void merge(ref DeclProps nested){
+			foreach(decl,ref prop;nested.props){
+				if(decl !in props) props[decl]=prop.merged();
+				else props[decl].merge(prop);
 			}
 		}
-		private final Identifier isConstHere(Declaration decl){
-			if(auto r=declProps.tryGet(decl))
-				if(r.constBlock.length)
-					return r.constBlock[$-1];
-			return null;
-		}
-		final void registerConstCapture(Declaration decl,Location loc,Expression type){
-			if(decl.isToplevelDeclaration()||decl.isPinned()) return;
-			if(!type||type.isClassical()) return; // TODO: why needed?
-			if(auto prev=isConstHere(decl)) if(prev.meaning is decl&&prev.loc==loc) return;
-			auto cid=new Identifier(decl.getId);
-			cid.loc=loc;
-			cid.scope_=this;
-			cid.meaning=decl;
-			cid.type=type;
-			cid.constLookup=true;
-			cid.setSemCompleted();
-			blockConst(decl,cid);
-		}
-		final void blockConst(Declaration decl,Identifier constBlock){
-			if(!decl.isToplevelDeclaration){
-				if(auto props=updateDeclProps(decl))
-					props.constBlock~=constBlock;
+		void replaceDecl(Declaration splitFrom,Declaration splitInto){
+			if(auto declProp=tryGet(splitFrom)){
+				declProp.replaceDecl(splitFrom,splitInto);
+				props[splitInto]=declProp.move();
+				props.remove(splitFrom);
 			}
 		}
-		static struct ComponentConstBlock{
+		void moveComponentReplacements(Declaration prev,Declaration new_){
+			if(auto prevProp=tryGet(prev)){
+				if(new_ !in props) set(new_,DeclProp.default_());
+				auto newProp=tryGet(new_);
+				assert(newProp&&!newProp.componentReplacements.length);
+				newProp.componentReplacements=prevProp.componentReplacements;
+				prevProp.componentReplacements=[];
+			}
+		}
+	}
+	final DeclProps saveDeclProps(){ return declProps.dup; }
+	final void resetDeclProps(DeclProps previous){ declProps=previous; }
+	final void mergeDeclProps(ref DeclProps nested,ComponentConstBlock[] nestedComponentConstBlocks){
+		foreach(decl,ref prop;nested.props){
+			if(!prop.constBlock.length) continue;
+			if(!decl.scope_||!this.isNestedIn(decl.scope_)) continue;
+			foreach(read;prop.constBlock){
+				Expression.CopyArgs cargs={preserveSemantic: true};
+				auto nread=read.copy(cargs);
+				nread.scope_=this;
+				blockConst(decl,nread);
+				recordAccess(nread,decl);
+				foreach(ccb;nestedComponentConstBlocks)
+					if(ccb.read is read)
+						componentConstBlocks~=ComponentConstBlock(decl,ccb.component,nread);
+			}
+			prop.constBlock=[];
+		}
+		declProps.merge(nested);
+	}
+	final int nestedDeclProps(scope int delegate(ref DeclProps) dg){
+		if(auto r=dg(declProps)) return r;
+		return outerDeclProps(dg);
+	}
+	int outerDeclProps(scope int delegate(ref DeclProps) dg){
+		return 0;
+	}
+	final nestedDeclProp(Declaration decl){
+		static struct NestedDeclProps{
+			Scope sc;
 			Declaration decl;
-			IndexExp component;
-			Identifier read;
-		}
-		private ComponentConstBlock[] componentConstBlocks;
-		final void recordComponentConstBlock(Declaration decl,Identifier read,IndexExp component)in{
-			assert(decl&&!decl.isToplevelDeclaration);
-			assert(!!read);
-			assert(!!component);
-		}do{
-			if(auto props=declProps.tryGet(decl))
-				if(props.constBlock.length&&props.constBlock[$-1] is read)
-					componentConstBlocks~=ComponentConstBlock(decl,component,read);
-		}
-		int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
-			return 0;
-		}
-		final int nestedComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
-			foreach(ccb;componentConstBlocks)
-				if(auto r=dg(ccb)) return r;
-			return outerComponentConstBlocks(dg);
-		}
-		final bool isComponentConstBlock(Identifier read){
-			bool result=false;
-			nestedComponentConstBlocks((ComponentConstBlock ccb){
-				if(ccb.read is read) result=true;
-				return result;
-			});
-			return result;
-		}
-		final bool hasNonComponentConstBlock(Declaration decl){
-			for(auto d=decl;d;d=d.splitFrom)
-				foreach(ref prop;nestedDeclProp(d))
-					foreach(read;prop.constBlock)
-						if(!isComponentConstBlock(read)) return true;
-			return false;
-		}
-		final bool componentConstBlocksAllow(Declaration decl,IndexExp write,Location loc){
-			import ast.semantic_:guaranteedDisjointComponents,InType;
-			bool any=false,result=true;
-			for(auto d=decl;d;d=d.splitFrom)
-				foreach(ref prop;nestedDeclProp(d)){
-					foreach(read;prop.constBlock){
-						any=true;
-						bool component=false;
-						nestedComponentConstBlocks((ComponentConstBlock ccb){
-							if(ccb.read !is read) return 0;
-							component=true;
-							if(!guaranteedDisjointComponents(ccb.component,write,loc,this,InType.no))
-								result=false;
-							return 1;
-						});
-						if(!component||!result) return false;
+			int opApply(scope int delegate(ref DeclProp) dg){
+				foreach(ref props;&sc.nestedDeclProps){
+					if(auto prop=props.tryGet(decl)){
+						if(auto r=dg(*prop))
+							return r;
 					}
 				}
-			return any&&result;
-		}
-		final bool componentConstBlockRedefined(ConstBlockContext context){
-			foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
-				if(peekSymtab(ccb.decl.getId,true) !is ccb.decl)
-					return true;
-			return false;
-		}
-		final bool componentConstBlockConsumedDuringBorrow(ConstBlockContext context){
-			foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
-				if(peekSymtab(ccb.decl.getId,true) !is ccb.decl&&ccb.read.consumedDuringBorrow)
-					return true;
-			return false;
-		}
-		static struct TrackedTemporary{
-			Expression expr;
-			Dependency dep;
-			Identifier read; // for recordConstBlockedConsumption
-			TrackedTemporary dup(){
-				return TrackedTemporary(expr,dep.dup);
+				return 0;
 			}
 		}
-		final bool trackTemporary(Expression expr){
-			//imported!"util.io".writeln("TRACKING: ",expr," ",expr.loc);
-			import ast.semantic_:getDependency;
-			auto implicitDup=expr.implicitDup;
-			expr.implicitDup=false;
-			auto dep=getDependency(expr,this);
-			expr.implicitDup=implicitDup;
-			if(dep.isTop) return false;
-			trackedTemporaries~=TrackedTemporary(expr,dep);
-			if(auto id=cast(Identifier)expr){
-				if(id.implicitDup&&id.meaning) {
-					recordImplicitDup(id);
-				}
-			}
-			return true;
-		}
-		void pinLastUse(Declaration decl){
-			lastUses.pin(decl,true);
-		}
-		private struct TypeConstBlockEntry{
-			Declaration decl;
-		}
-		private TypeConstBlockEntry[] typeConstBlockLog;
-		private static void releaseTypeConstBlockEntry(TypeConstBlockEntry entry){
-			auto decl=entry.decl;
-			assert(decl.typeConstBlockDepth>0);
-			if(--decl.typeConstBlockDepth==0) decl.typeConstBlocker=null;
-		}
-		final void recordTypeConstBlock(Declaration decl)in{
-			assert(!!decl);
-		}do{
-			typeConstBlockLog~=TypeConstBlockEntry(decl);
-			decl.typeConstBlockDepth++;
-		}
-		final size_t saveTypeConstBlocks(){
-			return typeConstBlockLog.length;
-		}
-		final void releaseTypeConstBlocks(size_t save,bool doRelease)in{
-			assert(save<=typeConstBlockLog.length);
-		}do{
-			foreach_reverse(i;save..typeConstBlockLog.length){
-				auto entry=typeConstBlockLog[i];
-				if(doRelease) releaseTypeConstBlockEntry(entry);
-			}
-			typeConstBlockLog.length=save;
-		}
-		final void filterTypeConstBlocks(size_t save,Expression type)in{
-			assert(save<=typeConstBlockLog.length);
-		}do{
-			filterTypeConstBlocks(save,(Declaration decl){
-				if(!type) return false;
-				foreach(id;type.freeIdentifiers){
-					if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
-						return true;
-				}
-				return false;
-			});
-		}
-		final void filterTypeConstBlocks(size_t save,bool delegate(Declaration) keep)in{
-			assert(save<=typeConstBlockLog.length);
-		}do{
-			size_t j=save;
-			foreach(i;save..typeConstBlockLog.length){
-				auto entry=typeConstBlockLog[i];
-				if(keep(entry.decl)) typeConstBlockLog[j++]=entry;
-				else releaseTypeConstBlockEntry(entry);
-			}
-			typeConstBlockLog.length=j;
-		}
-		final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
-			assert(read.meaning&&read is isConst(read.meaning));
-			assert(read.scope_);
-		}do{
-			if(read.meaning.isSemError()) return;
-			import ast.semantic_:getDependency;
-			auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
-			read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
-		}
-		final void recordImplicitDup(Identifier id)in{
-			assert(!!id);
-			assert(id.implicitDup);
-			assert(!id.constLookup);
-			assert(!!id.meaning);
-			assert(id.scope_ is this);
-		}do{
-			if(!id.meaning.isToplevelDeclaration()){
-				if(isConsumable(id)) lastUses.implicitDup(id);
-			}
-		}
-
-		final bool checkImplicitDupCancel(Identifier id)in{
-			assert(id&&id.meaning);
-		}do{
-			return checkDeclarationCancel(id.meaning,id);
-		}
-		final bool checkDeclarationCancel(Declaration decl,Identifier use)in{
-			assert(!!decl);
-		}do{
-			if(use&&use.isSemError()) return false;
-			bool ok=true;
-			if(auto declProp=declProps.tryGet(decl)){
-				bool seen=false;
-				DeadDecl[] failures;
-				foreach(access;declProp.accesses){
-					if((!use||use.scope_!is this||seen)&&access !is use){
-						if(ok&&use){
-							if(auto cd=recordConsumption(decl,use))
-								failures~=cd;
-						}
-						ok=false;
-						if(use) use.setSemForceError();
-						decl.setSemForceError();
-						access.setSemForceError();
-						import ast.semantic_:undefinedIdentifierError;
-						undefinedIdentifierError(access,failures,this);
-					}
-					if(use&&access is use) seen=true;
-				}
-				// TODO: can we have `use.sstate != SemState.error` here?
-			}
-			return ok;
-		}
-
-		final bool cancelImplicitDup(Identifier id)in{
-			assert(!!id.implicitDup);
-			assert(!!id.meaning);
-			assert(!id.constLookup);
-		}do{
-			bool ok=true;
-			if(!checkConsumable(id)){
-				ok=false;
-				id.setSemForceError();
-				id.meaning.setSemForceError();
-			}
-			lastUses.cancelImplicitDup(id.meaning); // TOOD: what if this fails?
-			return ok;
-		}
-		final void pushTrackedTemporaryDependencies(Declaration decl){
-			foreach(ref tt;trackedTemporaries){
-				if(tt.dep.isTop) continue;
-				this.pushUp(tt.dep,decl);
-				if(!tt.dep.isTop) continue;
-				if(auto id=cast(Identifier)tt.expr){
-					if(!tt.read){
-						if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
-							if(!cancelImplicitDup(id)){
-								decl.setSemForceError();
-							}
-						}
-					}
-				}
-			}
-		}
-		final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
-			//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
-			bool success=true;
-			foreach(ref tt;trackedTemporaries){
-				if(!tt.dep.isTop) continue; // nothing to do for recomputable temporaries
-				if(auto id=cast(Identifier)tt.expr){
-					if(tt.read){ // non-recomputable const-blocked consumption
-						if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
-							success=false;
-							assert(tt.read.meaning);
-							blockConst(tt.read.meaning,tt.read); // TODO: why needed?
-							if(tt.read.scope_.checkConsumable(id,tt.read.meaning))
-								assert(tt.read.meaning.isSemError);
-							id.setSemForceError();
-							id.meaning.setSemForceError();
-							parent.setSemForceError();
-						}
-					}
-				}
-			}
-			foreach(ref tt;trackedTemporaries){
-				//imported!"util.io".writeln("CHECKING TRACKED TEMPORARY: ",tt);
-				if(!tt.dep.isTop) continue;
-				if(auto id=cast(Identifier)tt.expr){
-					if(id.isSemError()) parent.setSemForceError();
-					continue;
-				}
-				success=false;
-				import ast.semantic_:nonLiftedError;
-				nonLiftedError(tt.expr,this);
-				tt.expr.setSemError();
-				parent.setSemForceError();
-			}
-			return success;
-		}
-		final Identifier isConst(Declaration decl){
+		return NestedDeclProps(this,decl);
+	}
+	// DMD/LDC bug: if this function returns ref DeclProp,
+	// memory corruption occurs
+	final DeclProp* updateDeclProps(Declaration decl){
+		if(auto r=declProps.tryGet(decl)) return r;
+		static if(!DeclProp.inheritIsDefault){
 			foreach(ref prop;nestedDeclProp(decl)){
-				auto r=prop.constBlock;
-				if(r.length) return r[$-1];
+				return &declProps.set(decl,prop.inherit);
 			}
-			return null;
 		}
-		final void inheritConstBlocks(Declaration prev,Declaration new_){ // new_ replaces prev, so it inherits prev's active const blocks
-			static if(language==silq){
-				foreach(ref props;&nestedDeclProps){
-					bool done=false;
-					for(auto d=prev;d&&!done;d=d.splitFrom)
-						if(auto prop=props.tryGet(d))
-							if(prop.constBlock.length){
-								if(!props.tryGet(new_)) props.set(new_,DeclProp.default_());
-								props.tryGet(new_).constBlock~=prop.constBlock;
-								done=true;
-							}
+		return &declProps.set(decl,DeclProp.default_());
+	}
+	final void recordAccess(Identifier id,Declaration meaning){
+		if(!meaning.isToplevelDeclaration()){
+			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
+			if(!id.constLookup&&!id.implicitDup)
+				lastUses.consumption(meaning,id,this); // TODO: ok?
+			updateDeclProps(meaning).accesses~=id;
+		}
+	}
+	final void recordCapturer(Declaration capturer,Declaration meaning){
+		if(!meaning.isToplevelDeclaration){
+			updateDeclProps(meaning).capturers~=capturer;
+		}
+	}
+	private final Identifier isConstHere(Declaration decl){
+		if(auto r=declProps.tryGet(decl))
+			if(r.constBlock.length)
+				return r.constBlock[$-1];
+		return null;
+	}
+	final void registerConstCapture(Declaration decl,Location loc,Expression type){
+		if(decl.isToplevelDeclaration()||decl.isPinned()) return;
+		if(!type||type.isClassical()) return; // TODO: why needed?
+		if(auto prev=isConstHere(decl)) if(prev.meaning is decl&&prev.loc==loc) return;
+		auto cid=new Identifier(decl.getId);
+		cid.loc=loc;
+		cid.scope_=this;
+		cid.meaning=decl;
+		cid.type=type;
+		cid.constLookup=true;
+		cid.setSemCompleted();
+		blockConst(decl,cid);
+	}
+	final void blockConst(Declaration decl,Identifier constBlock){
+		if(!decl.isToplevelDeclaration){
+			if(auto props=updateDeclProps(decl))
+				props.constBlock~=constBlock;
+		}
+	}
+	static struct ComponentConstBlock{
+		Declaration decl;
+		IndexExp component;
+		Identifier read;
+	}
+	private ComponentConstBlock[] componentConstBlocks;
+	final void recordComponentConstBlock(Declaration decl,Identifier read,IndexExp component)in{
+		assert(decl&&!decl.isToplevelDeclaration);
+		assert(!!read);
+		assert(!!component);
+	}do{
+		if(auto props=declProps.tryGet(decl))
+			if(props.constBlock.length&&props.constBlock[$-1] is read)
+				componentConstBlocks~=ComponentConstBlock(decl,component,read);
+	}
+	int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+		return 0;
+	}
+	final int nestedComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+		foreach(ccb;componentConstBlocks)
+			if(auto r=dg(ccb)) return r;
+		return outerComponentConstBlocks(dg);
+	}
+	final bool isComponentConstBlock(Identifier read){
+		bool result=false;
+		nestedComponentConstBlocks((ComponentConstBlock ccb){
+			if(ccb.read is read) result=true;
+			return result;
+		});
+		return result;
+	}
+	final bool hasNonComponentConstBlock(Declaration decl){
+		for(auto d=decl;d;d=d.splitFrom)
+			foreach(ref prop;nestedDeclProp(d))
+				foreach(read;prop.constBlock)
+					if(!isComponentConstBlock(read)) return true;
+		return false;
+	}
+	final bool componentConstBlocksAllow(Declaration decl,IndexExp write,Location loc){
+		import ast.semantic_:guaranteedDisjointComponents,InType;
+		bool any=false,result=true;
+		for(auto d=decl;d;d=d.splitFrom)
+			foreach(ref prop;nestedDeclProp(d)){
+				foreach(read;prop.constBlock){
+					any=true;
+					bool component=false;
+					nestedComponentConstBlocks((ComponentConstBlock ccb){
+						if(ccb.read !is read) return 0;
+						component=true;
+						if(!guaranteedDisjointComponents(ccb.component,write,loc,this,InType.no))
+							result=false;
+						return 1;
+					});
+					if(!component||!result) return false;
 				}
 			}
+		return any&&result;
+	}
+	final bool componentConstBlockRedefined(ConstBlockContext context){
+		foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
+			if(peekSymtab(ccb.decl.getId,true) !is ccb.decl)
+				return true;
+		return false;
+	}
+	final bool componentConstBlockConsumedDuringBorrow(ConstBlockContext context){
+		foreach(ccb;componentConstBlocks[context.numComponentConstBlocks..$])
+			if(peekSymtab(ccb.decl.getId,true) !is ccb.decl&&ccb.read.consumedDuringBorrow)
+				return true;
+		return false;
+	}
+	static struct TrackedTemporary{
+		Expression expr;
+		Dependency dep;
+		Identifier read; // for recordConstBlockedConsumption
+		TrackedTemporary dup(){
+			return TrackedTemporary(expr,dep.dup);
 		}
-		static struct ConstBlockContext{
-			private MapX!(Declaration,Identifier[]) constBlock;
-			private size_t numTrackedTemporaries;
-			private size_t numComponentConstBlocks;
-		}
-		final ConstBlockContext saveConst(){
-			MapX!(Declaration,Identifier[]) constBlock;
-			foreach(decl,ref prop;declProps.props){
-				auto r=prop.constBlock;
-				if(r.length) constBlock[decl]=r;
+	}
+	final bool trackTemporary(Expression expr){
+		//imported!"util.io".writeln("TRACKING: ",expr," ",expr.loc);
+		import ast.semantic_:getDependency;
+		auto implicitDup=expr.implicitDup;
+		expr.implicitDup=false;
+		auto dep=getDependency(expr,this);
+		expr.implicitDup=implicitDup;
+		if(dep.isTop) return false;
+		trackedTemporaries~=TrackedTemporary(expr,dep);
+		if(auto id=cast(Identifier)expr){
+			if(id.implicitDup&&id.meaning) {
+				recordImplicitDup(id);
 			}
-			return ConstBlockContext(constBlock,trackedTemporaries.length,componentConstBlocks.length);
 		}
-		private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType)in{
-			assert(decl&&constBlock);
-		}do{
-			if(constBlock is parent&&!(!constBlock.type||constBlock.type.isClassical())) return; // TODO: would be nice if we would not need this, can happen e.g. in consumeArray
-			if(auto lu=lastUses.get(decl,true)){
-				if(lu.isConsumption()){
-					if(constBlock.meaning){
-						if(dependencyTracked(constBlock.meaning)&&!getDependency(constBlock.meaning).isTop){ // TODO: make this condition unnecessary?
-							if(lu.kind==LastUse.Kind.consumption){
-								lastUses.synthesizedForget(constBlock.meaning,null,this,parent);
-							}
+		return true;
+	}
+	void pinLastUse(Declaration decl){
+		lastUses.pin(decl,true);
+	}
+	private struct TypeConstBlockEntry{
+		Declaration decl;
+	}
+	private TypeConstBlockEntry[] typeConstBlockLog;
+	private static void releaseTypeConstBlockEntry(TypeConstBlockEntry entry){
+		auto decl=entry.decl;
+		assert(decl.typeConstBlockDepth>0);
+		if(--decl.typeConstBlockDepth==0) decl.typeConstBlocker=null;
+	}
+	final void recordTypeConstBlock(Declaration decl)in{
+		assert(!!decl);
+	}do{
+		typeConstBlockLog~=TypeConstBlockEntry(decl);
+		decl.typeConstBlockDepth++;
+	}
+	final size_t saveTypeConstBlocks(){
+		return typeConstBlockLog.length;
+	}
+	final void releaseTypeConstBlocks(size_t save,bool doRelease)in{
+		assert(save<=typeConstBlockLog.length);
+	}do{
+		foreach_reverse(i;save..typeConstBlockLog.length){
+			auto entry=typeConstBlockLog[i];
+			if(doRelease) releaseTypeConstBlockEntry(entry);
+		}
+		typeConstBlockLog.length=save;
+	}
+	final void filterTypeConstBlocks(size_t save,Expression type)in{
+		assert(save<=typeConstBlockLog.length);
+	}do{
+		filterTypeConstBlocks(save,(Declaration decl){
+			if(!type) return false;
+			foreach(id;type.freeIdentifiers){
+				if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
+					return true;
+			}
+			return false;
+		});
+	}
+	final void filterTypeConstBlocks(size_t save,bool delegate(Declaration) keep)in{
+		assert(save<=typeConstBlockLog.length);
+	}do{
+		size_t j=save;
+		foreach(i;save..typeConstBlockLog.length){
+			auto entry=typeConstBlockLog[i];
+			if(keep(entry.decl)) typeConstBlockLog[j++]=entry;
+			else releaseTypeConstBlockEntry(entry);
+		}
+		typeConstBlockLog.length=j;
+	}
+	final void recordConstBlockedConsumption(Identifier read,Identifier use)in{
+		assert(read.meaning&&read is isConst(read.meaning));
+		assert(read.scope_);
+	}do{
+		if(read.meaning.isSemError()) return;
+		import ast.semantic_:getDependency;
+		auto dep=getDependency(read,read.scope_); // can already be top, will cause an error later
+		read.scope_.trackedTemporaries~=TrackedTemporary(use,dep,read);
+	}
+	final void recordImplicitDup(Identifier id)in{
+		assert(!!id);
+		assert(id.implicitDup);
+		assert(!id.constLookup);
+		assert(!!id.meaning);
+		assert(id.scope_ is this);
+	}do{
+		if(!id.meaning.isToplevelDeclaration()){
+			if(isConsumable(id)) lastUses.implicitDup(id);
+		}
+	}
+
+	final bool checkImplicitDupCancel(Identifier id)in{
+		assert(id&&id.meaning);
+	}do{
+		return checkDeclarationCancel(id.meaning,id);
+	}
+	final bool checkDeclarationCancel(Declaration decl,Identifier use)in{
+		assert(!!decl);
+	}do{
+		if(use&&use.isSemError()) return false;
+		bool ok=true;
+		if(auto declProp=declProps.tryGet(decl)){
+			bool seen=false;
+			DeadDecl[] failures;
+			foreach(access;declProp.accesses){
+				if((!use||use.scope_!is this||seen)&&access !is use){
+					if(ok&&use){
+						if(auto cd=recordConsumption(decl,use))
+							failures~=cd;
+					}
+					ok=false;
+					if(use) use.setSemForceError();
+					decl.setSemForceError();
+					access.setSemForceError();
+					import ast.semantic_:undefinedIdentifierError;
+					undefinedIdentifierError(access,failures,this);
+				}
+				if(use&&access is use) seen=true;
+			}
+			// TODO: can we have `use.sstate != SemState.error` here?
+		}
+		return ok;
+	}
+
+	final bool cancelImplicitDup(Identifier id)in{
+		assert(!!id.implicitDup);
+		assert(!!id.meaning);
+		assert(!id.constLookup);
+	}do{
+		bool ok=true;
+		if(!checkConsumable(id)){
+			ok=false;
+			id.setSemForceError();
+			id.meaning.setSemForceError();
+		}
+		lastUses.cancelImplicitDup(id.meaning); // TOOD: what if this fails?
+		return ok;
+	}
+	final void pushTrackedTemporaryDependencies(Declaration decl){
+		foreach(ref tt;trackedTemporaries){
+			if(tt.dep.isTop) continue;
+			this.pushUp(tt.dep,decl);
+			if(!tt.dep.isTop) continue;
+			if(auto id=cast(Identifier)tt.expr){
+				if(!tt.read){
+					if(id.implicitDup&&id.meaning){ // implicit dup no longer recomputable
+						if(!cancelImplicitDup(id)){
+							decl.setSemForceError();
 						}
 					}
-					return;
 				}
-				if(lu.kind==LastUse.Kind.implicitDup) return;
 			}
-			if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
-				lastUses.constUse(constBlock,parent,isStatement,inType);
 		}
-		final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
-			Identifier[] lookupSnapshot(Declaration decl){
-				for(auto d=decl; d; d=d.splitFrom){
-					if(auto r=context.constBlock.get(d,null)) return r;
-				}
-				return null;
-			}
-			Declaration lookupCurrent(Declaration decl){
-				if(declProps.tryGet(decl)) return decl;
-				foreach(d,ref prop;declProps.props){
-					for(auto s=d.splitFrom; s; s=s.splitFrom){
-						if(s is decl) return d;
+	}
+	final bool checkTrackedTemporaries(TrackedTemporary[] trackedTemporaries,Expression parent){
+		//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
+		bool success=true;
+		foreach(ref tt;trackedTemporaries){
+			if(!tt.dep.isTop) continue; // nothing to do for recomputable temporaries
+			if(auto id=cast(Identifier)tt.expr){
+				if(tt.read){ // non-recomputable const-blocked consumption
+					if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
+						success=false;
+						assert(tt.read.meaning);
+						blockConst(tt.read.meaning,tt.read); // TODO: why needed?
+						if(tt.read.scope_.checkConsumable(id,tt.read.meaning))
+							assert(tt.read.meaning.isSemError);
+						id.setSemForceError();
+						id.meaning.setSemForceError();
+						parent.setSemForceError();
 					}
 				}
-				return null;
 			}
-			foreach(decl,ref prop;declProps.props){
-				auto nconstBlock=lookupSnapshot(decl);
-				if(prop.constBlock.length&&prop.constBlock!=nconstBlock)
-					recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
-				prop.constBlock=nconstBlock;
-			}
-			foreach(decl,constBlock;context.constBlock){
-				auto current=lookupCurrent(decl);
-				if(!current) continue; // declaration was consumed/removed entirely
-				auto prop=declProps.tryGet(current);
-				assert(prop&&prop.constBlock==constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
-			}
-			auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
-			trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
-			componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
-			return success;
 		}
-		final bool resetConst(ref Expression parent,bool isStatement,bool inType){
-			foreach(decl,ref prop;declProps.props){
-				if(prop.constBlock.length){
-					recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
-					prop.constBlock=[];
+		foreach(ref tt;trackedTemporaries){
+			//imported!"util.io".writeln("CHECKING TRACKED TEMPORARY: ",tt);
+			if(!tt.dep.isTop) continue;
+			if(auto id=cast(Identifier)tt.expr){
+				if(id.isSemError()) parent.setSemForceError();
+				continue;
+			}
+			success=false;
+			import ast.semantic_:nonLiftedError;
+			nonLiftedError(tt.expr,this);
+			tt.expr.setSemError();
+			parent.setSemForceError();
+		}
+		return success;
+	}
+	final Identifier isConst(Declaration decl){
+		foreach(ref prop;nestedDeclProp(decl)){
+			auto r=prop.constBlock;
+			if(r.length) return r[$-1];
+		}
+		return null;
+	}
+	final void inheritConstBlocks(Declaration prev,Declaration new_){ // new_ replaces prev, so it inherits prev's active const blocks
+		foreach(ref props;&nestedDeclProps){
+			bool done=false;
+			for(auto d=prev;d&&!done;d=d.splitFrom)
+				if(auto prop=props.tryGet(d))
+					if(prop.constBlock.length){
+						if(!props.tryGet(new_)) props.set(new_,DeclProp.default_());
+						props.tryGet(new_).constBlock~=prop.constBlock;
+						done=true;
+					}
+		}
+	}
+	static struct ConstBlockContext{
+		private MapX!(Declaration,Identifier[]) constBlock;
+		private size_t numTrackedTemporaries;
+		private size_t numComponentConstBlocks;
+	}
+	final ConstBlockContext saveConst(){
+		MapX!(Declaration,Identifier[]) constBlock;
+		foreach(decl,ref prop;declProps.props){
+			auto r=prop.constBlock;
+			if(r.length) constBlock[decl]=r;
+		}
+		return ConstBlockContext(constBlock,trackedTemporaries.length,componentConstBlocks.length);
+	}
+	private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType)in{
+		assert(decl&&constBlock);
+	}do{
+		if(constBlock is parent&&!(!constBlock.type||constBlock.type.isClassical())) return; // TODO: would be nice if we would not need this, can happen e.g. in consumeArray
+		if(auto lu=lastUses.get(decl,true)){
+			if(lu.isConsumption()){
+				if(constBlock.meaning){
+					if(dependencyTracked(constBlock.meaning)&&!getDependency(constBlock.meaning).isTop){ // TODO: make this condition unnecessary?
+						if(lu.kind==LastUse.Kind.consumption){
+							lastUses.synthesizedForget(constBlock.meaning,null,this,parent);
+						}
+					}
 				}
+				return;
 			}
-			auto success=checkTrackedTemporaries(trackedTemporaries,parent);
-			trackedTemporaries=[];
-			componentConstBlocks=[];
-			return success;
+			if(lu.kind==LastUse.Kind.implicitDup) return;
 		}
-		final void resetLocalComponentReplacements(){
-			foreach(decl,ref prop;declProps.props)
-				prop.componentReplacements=[];
-		}
-		final DeclProp.ComponentReplacement[] localComponentReplacements(){
-			typeof(return) r;
-			foreach(decl,ref prop;declProps.props)
-				r~=prop.componentReplacements;
-			return r;
-		}
-		final DeclProp.ComponentReplacement[][] localComponentReplacementsByDecl(){
-			Declaration[] decls;
-			typeof(return) r;
-			foreach(decl,ref prop;declProps.props){
-				if(!prop.componentReplacements.length) continue;
-				decls~=decl;
-				r~=prop.componentReplacements;
-			}
-			sort!"a[0].getName<b[0].getName"(zip(decls,r));
-			return r;
-		}
-		DeclProp.ComponentReplacement*[] allComponentReplacements(){ // TODO: get rid of this?
-			typeof(return) r=[];
-			foreach(ref props;&nestedDeclProps)
-				foreach(decl,ref prop;props.props)
-					r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
-			return r;
-		}
-		final DeclProp.ComponentReplacement*[] componentReplacements(Declaration decl){ // TODO: get rid of this?
-			typeof(return) r=[];
-			foreach(ref prop;nestedDeclProp(decl))
-				r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
-			return r;
-		}
-		final DeclProp.ComponentReplacement* blockingComponentReplacement(Declaration decl){
-			for(auto d=decl;d;d=d.splitFrom){
-				auto blocking=componentReplacements(d).find!(crepl=>crepl.blocksAggregate);
-				if(!blocking.empty) return blocking.front;
+		if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
+			lastUses.constUse(constBlock,parent,isStatement,inType);
+	}
+	final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
+		Identifier[] lookupSnapshot(Declaration decl){
+			for(auto d=decl; d; d=d.splitFrom){
+				if(auto r=context.constBlock.get(d,null)) return r;
 			}
 			return null;
 		}
-		final bool blockedRedefinitionError(Declaration newDecl,Declaration oldDecl){
-			auto blocking=blockingComponentReplacement(oldDecl);
-			if(!blocking) return false;
-			if(!oldDecl.isSemError()&&!newDecl.isSemError()){
-				redefinitionError(newDecl,oldDecl);
-				note("replaced component is here",blocking.location.loc);
+		Declaration lookupCurrent(Declaration decl){
+			if(declProps.tryGet(decl)) return decl;
+			foreach(d,ref prop;declProps.props){
+				for(auto s=d.splitFrom; s; s=s.splitFrom){
+					if(s is decl) return d;
+				}
 			}
-			newDecl.setSemError();
-			return true;
+			return null;
 		}
-		static struct ComponentReplacementContext{
-			private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
-			bool empty(){ return !componentReplacements.length; }
+		foreach(decl,ref prop;declProps.props){
+			auto nconstBlock=lookupSnapshot(decl);
+			if(prop.constBlock.length&&prop.constBlock!=nconstBlock)
+				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+			prop.constBlock=nconstBlock;
 		}
-		final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
-			MapX!(Declaration,DeclProp.ComponentReplacement[]) r;
-			foreach(decl,ref prop;declProps.props){
-				r[decl]=prop.componentReplacements;
-				prop.componentReplacements=[];
+		foreach(decl,constBlock;context.constBlock){
+			auto current=lookupCurrent(decl);
+			if(!current) continue; // declaration was consumed/removed entirely
+			auto prop=declProps.tryGet(current);
+			assert(prop&&prop.constBlock==constBlock,text(prop is null," ",prop?prop.constBlock:null," ",constBlock));
+		}
+		auto success=checkTrackedTemporaries(trackedTemporaries[context.numTrackedTemporaries..$],parent);
+		trackedTemporaries=trackedTemporaries[0..context.numTrackedTemporaries];
+		componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
+		return success;
+	}
+	final bool resetConst(ref Expression parent,bool isStatement,bool inType){
+		foreach(decl,ref prop;declProps.props){
+			if(prop.constBlock.length){
+				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+				prop.constBlock=[];
 			}
-			return typeof(return)(r);
 		}
-		final void isolateComponentReplacements(){ // TODO: this is a bit hacky
-			foreach(decl,ref prop;declProps.props)
-				prop.componentReplacements=prop.componentReplacements.dup;
+		auto success=checkTrackedTemporaries(trackedTemporaries,parent);
+		trackedTemporaries=[];
+		componentConstBlocks=[];
+		return success;
+	}
+	final void resetLocalComponentReplacements(){
+		foreach(decl,ref prop;declProps.props)
+			prop.componentReplacements=[];
+	}
+	final DeclProp.ComponentReplacement[] localComponentReplacements(){
+		typeof(return) r;
+		foreach(decl,ref prop;declProps.props)
+			r~=prop.componentReplacements;
+		return r;
+	}
+	final DeclProp.ComponentReplacement[][] localComponentReplacementsByDecl(){
+		Declaration[] decls;
+		typeof(return) r;
+		foreach(decl,ref prop;declProps.props){
+			if(!prop.componentReplacements.length) continue;
+			decls~=decl;
+			r~=prop.componentReplacements;
 		}
-		final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
-			foreach(decl,crepls;previous.componentReplacements)
-				updateDeclProps(decl).componentReplacements=crepls;
+		sort!"a[0].getName<b[0].getName"(zip(decls,r));
+		return r;
+	}
+	DeclProp.ComponentReplacement*[] allComponentReplacements(){ // TODO: get rid of this?
+		typeof(return) r=[];
+		foreach(ref props;&nestedDeclProps)
+			foreach(decl,ref prop;props.props)
+				r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
+		return r;
+	}
+	final DeclProp.ComponentReplacement*[] componentReplacements(Declaration decl){ // TODO: get rid of this?
+		typeof(return) r=[];
+		foreach(ref prop;nestedDeclProp(decl))
+			r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
+		return r;
+	}
+	final DeclProp.ComponentReplacement* blockingComponentReplacement(Declaration decl){
+		for(auto d=decl;d;d=d.splitFrom){
+			auto blocking=componentReplacements(d).find!(crepl=>crepl.blocksAggregate);
+			if(!blocking.empty) return blocking.front;
 		}
-	}else{
-		struct DeclProps{ }
-		struct ConstBlockContext{ }
-		final DeclProps saveDeclProps(){ return DeclProps.init; }
-		final void resetDeclProps(DeclProps previous){ }
-		final Identifier isConst(Declaration decl){ return null; }
-		final ConstBlockContext saveConst(){ return ConstBlockContext.init; }
-		final void resetConst(ConstBlockContext previous){ }
-		final void resetConst(){ }
-		final void resetComponentReplacement(){ }
+		return null;
+	}
+	final bool blockedRedefinitionError(Declaration newDecl,Declaration oldDecl){
+		auto blocking=blockingComponentReplacement(oldDecl);
+		if(!blocking) return false;
+		if(!oldDecl.isSemError()&&!newDecl.isSemError()){
+			redefinitionError(newDecl,oldDecl);
+			note("replaced component is here",blocking.location.loc);
+		}
+		newDecl.setSemError();
+		return true;
+	}
+	static struct ComponentReplacementContext{
+		private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
+		bool empty(){ return !componentReplacements.length; }
+	}
+	final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
+		MapX!(Declaration,DeclProp.ComponentReplacement[]) r;
+		foreach(decl,ref prop;declProps.props){
+			r[decl]=prop.componentReplacements;
+			prop.componentReplacements=[];
+		}
+		return typeof(return)(r);
+	}
+	final void isolateComponentReplacements(){ // TODO: this is a bit hacky
+		foreach(decl,ref prop;declProps.props)
+			prop.componentReplacements=prop.componentReplacements.dup;
+	}
+	final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
+		foreach(decl,crepls;previous.componentReplacements)
+			updateDeclProps(decl).componentReplacements=crepls;
 	}
 	Q!(Declaration,Identifier)[] pendingConsumptions;
 	final ConsumedDecl recordConsumption(Declaration decl,Identifier use){
@@ -984,7 +964,7 @@ abstract class Scope{
 		if(decl.isPinned||typeConstBlocked(decl,this)) return false;
 		if(isConst(decl)){
 			if(!canRecompute(decl)) return false;
-			static if(language==silq) noteDependencyResolved(getDependency(decl));
+			noteDependencyResolved(getDependency(decl));
 		}
 		return true;
 	}
@@ -1069,11 +1049,9 @@ abstract class Scope{
 			foreach(sc;scopes)
 				sc.replaceDecl(splitFrom,splitInto);
 		}
-		if(language==silq){
-			if(dependencyTracked(splitFrom))
-				replaceDependencies(splitFrom,splitInto);
-			declProps.replaceDecl(splitFrom,splitInto);
-		}
+		if(dependencyTracked(splitFrom))
+			replaceDependencies(splitFrom,splitInto);
+		declProps.replaceDecl(splitFrom,splitInto);
 		foreach(ref oldDecl;forgottenVarsOnEntry){
 			if(oldDecl is splitFrom)
 				oldDecl=splitInto;
@@ -1099,13 +1077,11 @@ abstract class Scope{
 			symtabRemove(odecl);
 			if(odecl !is ndecl)
 				replaceDecl(odecl,ndecl);
-			static if(language==silq){
-				if(dependencyTracked(ndecl)){
-					auto prevConsumingUse=consumingUse;
-					consumingUse=use;
-					scope(exit) consumingUse=prevConsumingUse;
-					pushDependencies(ndecl,true);
-				}
+			if(dependencyTracked(ndecl)){
+				auto prevConsumingUse=consumingUse;
+				consumingUse=use;
+				scope(exit) consumingUse=prevConsumingUse;
+				pushDependencies(ndecl,true);
 			}
 			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
@@ -1116,18 +1092,17 @@ abstract class Scope{
 		}
 		return ndecl;
 	}
-	static if(language==silq){
-		private Declaration[] toRemove;
-		private TrackedTemporary[] trackedTemporaries;
-		final void pushUp(ref Dependency dependency,Declaration removed){
-			if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
-			dependency.replace(removed,dependencies.dependencies[removed]);
-		}
-		final void clearConsumed(){
-			foreach(removed;toRemove)
-				removeDependency(removed);
-			toRemove=[];
-		}
+	private Declaration[] toRemove;
+	private TrackedTemporary[] trackedTemporaries;
+	final void pushUp(ref Dependency dependency,Declaration removed){
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
+		dependency.replace(removed,dependencies.dependencies[removed]);
+	}
+	final void clearConsumed(){
+		foreach(removed;toRemove)
+			removeDependency(removed);
+		toRemove=[];
 	}
 
 	final Declaration symtabLookup(Identifier ident,bool rnsym,DeadDecl[]* failures){
@@ -1295,53 +1270,51 @@ abstract class Scope{
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
 		import ast.semantic_: unrealizable;
 		bool errors=false;
-		static if(language==silq){
-			foreach(_,d;rnsymtab.dup){
-				if(cast(DeadDecl)d) continue;
-				if(d.isSemError()) continue;
-				if(rnsymtab.get(d.getId,null) !is d) continue;
-				//if(d.scope_ !is this && !d.isLinear()) continue;
-				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
-				if(d.scope_.getFunction() !is getFunction()) continue;
-				//d=split(d,null);
-				//assert(d.scope_ is this);
-				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
-					d.setSemForceError();
-					continue;
-				}
-				if(!canForgetAppend(loc,d)){
-					if(!d.isSemError()){
-						bool done=false;
-						if(!canSplit(d)){
-							if(auto read=isConst(d)){
-								error(format("cannot forget `const` variable `%s`",d), d.loc);
-								note("variable was made `const` here", read.loc);
-								errors=true;
-								done=true;
-							}else continue; // TODO: catch this early
-						}
-						if(!done) done=lastUses.betterUnforgettableError(d,this);
-						if(!done){
-							if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
-							else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+		foreach(_,d;rnsymtab.dup){
+			if(cast(DeadDecl)d) continue;
+			if(d.isSemError()) continue;
+			if(rnsymtab.get(d.getId,null) !is d) continue;
+			//if(d.scope_ !is this && !d.isLinear()) continue;
+			//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
+			if(d.scope_.getFunction() !is getFunction()) continue;
+			//d=split(d,null);
+			//assert(d.scope_ is this);
+			if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
+				d.setSemForceError();
+				continue;
+			}
+			if(!canForgetAppend(loc,d)){
+				if(!d.isSemError()){
+					bool done=false;
+					if(!canSplit(d)){
+						if(auto read=isConst(d)){
+							error(format("cannot forget `const` variable `%s`",d), d.loc);
+							note("variable was made `const` here", read.loc);
 							errors=true;
 							done=true;
-						}
-						d.setSemForceError();
-					}else symtabRemove(d);
-					static if(is(typeof(loc):Expression)) loc.setSemForceError();
-				}else{
-					Identifier use=null;
-					if(isConst(d)){
-						use=new Identifier(d.getName);
-						use.constLookup=false;
-						static if(is(T==Scope)) use.loc=d.loc;
-						else use.loc=loc.loc;
-						use.sstate=SemState.completed;
+						}else continue; // TODO: catch this early
 					}
-					consume(d,use);
-					clearConsumed();
+					if(!done) done=lastUses.betterUnforgettableError(d,this);
+					if(!done){
+						if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+						else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+						errors=true;
+						done=true;
+					}
+					d.setSemForceError();
+				}else symtabRemove(d);
+				static if(is(typeof(loc):Expression)) loc.setSemForceError();
+			}else{
+				Identifier use=null;
+				if(isConst(d)){
+					use=new Identifier(d.getName);
+					use.constLookup=false;
+					static if(is(T==Scope)) use.loc=d.loc;
+					else use.loc=loc.loc;
+					use.sstate=SemState.completed;
 				}
+				consume(d,use);
+				clearConsumed();
 			}
 		}
 		return errors;
@@ -1353,8 +1326,7 @@ abstract class Scope{
 
 	bool diverges=false;
 	final bool closeUnreachable(Scope mergeScope){
-		static if(language==silq)
-			clearConsumed();
+		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
 		diverges=true;
@@ -1363,281 +1335,282 @@ abstract class Scope{
 			if(d.isLinear()||d.scope_ is this){
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
-				static if(language==silq){
-					clearConsumed();
-				}
+				clearConsumed();
 			}else symtabRemove(d);
 		}
-		static if(language==silq)
-			if(mergeScope)
-				mergeScope.mergeDeclProps(this.declProps,this.componentConstBlocks);
+		if(mergeScope)
+			mergeScope.mergeDeclProps(this.declProps,this.componentConstBlocks);
 		return false;
 	}
 
-	static if(language==silq){
-		// TODO: clean up
-		private DummyWitnessContext[] dummyWitnessContexts_; // populated on the root scope only
-		final ref DummyWitnessContext[] dummyWitnessContexts(){
-			if(auto p=parentScope()) return p.dummyWitnessContexts;
-			return dummyWitnessContexts_;
+	// TODO: clean up
+	private DummyWitnessContext[] dummyWitnessContexts_; // populated on the root scope only
+	final ref DummyWitnessContext[] dummyWitnessContexts(){
+		if(auto p=parentScope()) return p.dummyWitnessContexts;
+		return dummyWitnessContexts_;
+	}
+	final void pushDummyWitnessContext(MapX!(Declaration,Declaration) dummies){
+		dummyWitnessContexts~=DummyWitnessContext(dummies);
+	}
+	final DummyWitnessContext popDummyWitnessContext()in{
+		assert(dummyWitnessContexts.length);
+	}do{
+		auto result=dummyWitnessContexts[$-1];
+		dummyWitnessContexts=dummyWitnessContexts[0..$-1];
+		return result;
+	}
+	final bool dummyWitnessActive(){ return dummyWitnessContexts.length!=0; }
+	final void noteDependencyResolved(Dependency dep){
+		if(dep.isTop||!dummyWitnessActive) return;
+		foreach(ref context;dummyWitnessContexts){
+			foreach(v,vprime;context.dummies)
+				if(vprime in dep.dependencies)
+					context.results[v]=v;
 		}
-		final void pushDummyWitnessContext(MapX!(Declaration,Declaration) dummies){
-			dummyWitnessContexts~=DummyWitnessContext(dummies);
+	}
+	final void noteDependencyConsumed(Declaration decl,Dependency dep){
+		if(!dummyWitnessActive) return;
+		foreach(ref context;dummyWitnessContexts)
+			if(decl !in context.consumedDeps)
+				context.consumedDeps[decl]=dep.dup;
+	}
+	final Dependency expandDependency(Dependency dep){
+		if(dep.isTop) return dep;
+		SetX!Declaration seen;
+		Declaration[] worklist;
+		foreach(x;dep.dependencies) worklist~=x;
+		while(worklist.length){
+			auto decl=worklist[$-1];
+			worklist=worklist[0..$-1];
+			if(decl in seen) continue;
+			seen.insert(decl);
+			if(!dependencyTracked(decl)) continue;
+			auto d=dependencies.dependencies[decl];
+			if(!d.isTop) foreach(x;d.dependencies) worklist~=x;
 		}
-		final DummyWitnessContext popDummyWitnessContext()in{
-			assert(dummyWitnessContexts.length);
-		}do{
-			auto result=dummyWitnessContexts[$-1];
-			dummyWitnessContexts=dummyWitnessContexts[0..$-1];
-			return result;
-		}
-		final bool dummyWitnessActive(){ return dummyWitnessContexts.length!=0; }
-		final void noteDependencyResolved(Dependency dep){
-			if(dep.isTop||!dummyWitnessActive) return;
-			foreach(ref context;dummyWitnessContexts){
-				foreach(v,vprime;context.dummies)
-					if(vprime in dep.dependencies)
-						context.results[v]=v;
+		auto all=Dependency(false);
+		foreach(x;seen) all.dependencies.insert(x);
+		return all;
+	}
+	final void noteReconstructed(Dependency dep){
+		if(dep.isTop||!dummyWitnessActive) return;
+		foreach(ref context;dummyWitnessContexts)
+			context.reconstructed~=dep.dup;
+	}
+	final void noteNestedLoopCarried(SetX!Id ids){
+		if(!dummyWitnessActive||!ids.length) return;
+		foreach(ref context;dummyWitnessContexts)
+			context.nestedLoopCarried~=ids;
+	}
+
+	auto controlDependency=Dependency(false,SetX!Declaration.init);
+	void addControlDependency(Dependency dep){
+		controlDependency.joinWith(dep);
+	}
+
+	static Dependency getDefaultDependency(Declaration decl){
+		return Dependency(!decl.isSemError()&&decl.isLinear);
+	}
+	void addDefaultDependency(Declaration decl)in{
+		static if(language==silq) assert(!dependencyTracked(decl));
+	}do{
+		addDependency(decl,getDefaultDependency(decl));
+		//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
+		//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
+		//imported!"util.io".writeln(dependencies.getIds());
+		//assert(decl.getName!="rrr");
+	}
+
+	void addDependency(Declaration decl, Dependency dep){
+		addDependencies([q(decl,dep)]);
+	}
+	void removeDependency(Declaration decl){
+		//imported!"util.io".writeln("REMOVING: ",decl," ",cast(void*)decl);
+		static int counter=0;
+		dependencies.dependencies.remove(decl);
+	}
+	void addDependencies(scope Q!(Declaration,Dependency)[] deps){
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		//imported!"util.io".writeln("ADDING: ",deps);
+		foreach(i,ref dep;deps){
+			assert(!!dep[0]);
+			substituteConsumed(dep[1],consumedDepLog);
+			if(dep[0] in dependencies.dependencies){
+				//writeln(dep[0]," ",toRemove," ",dependencies)
+				dep[1].joinWith(dependencies.dependencies[dep[0]]);
 			}
 		}
-		final void noteDependencyConsumed(Declaration decl,Dependency dep){
-			if(!dummyWitnessActive) return;
-			foreach(ref context;dummyWitnessContexts)
-				if(decl !in context.consumedDeps)
-					context.consumedDeps[decl]=dep.dup;
+		foreach(decl,dep;deps.map!(x=>x)){
+			assert(decl&&!cast(DeadDecl)decl);
+			dependencies.dependencies[decl]=dep;
 		}
-		final Dependency expandDependency(Dependency dep){
-			if(dep.isTop) return dep;
-			SetX!Declaration seen;
-			Declaration[] worklist;
-			foreach(x;dep.dependencies) worklist~=x;
-			while(worklist.length){
-				auto decl=worklist[$-1];
-				worklist=worklist[0..$-1];
-				if(decl in seen) continue;
-				seen.insert(decl);
-				if(!dependencyTracked(decl)) continue;
-				auto d=dependencies.dependencies[decl];
-				if(!d.isTop) foreach(x;d.dependencies) worklist~=x;
-			}
-			auto all=Dependency(false);
-			foreach(x;seen) all.dependencies.insert(x);
-			return all;
-		}
-		final void noteReconstructed(Dependency dep){
-			if(dep.isTop||!dummyWitnessActive) return;
-			foreach(ref context;dummyWitnessContexts)
-				context.reconstructed~=dep.dup;
-		}
-		final void noteNestedLoopCarried(SetX!Id ids){
-			if(!dummyWitnessActive||!ids.length) return;
-			foreach(ref context;dummyWitnessContexts)
-				context.nestedLoopCarried~=ids;
-		}
-
-		auto controlDependency=Dependency(false,SetX!Declaration.init);
-		void addControlDependency(Dependency dep){
-			controlDependency.joinWith(dep);
-		}
-
-		static Dependency getDefaultDependency(Declaration decl){
-			return Dependency(!decl.isSemError()&&decl.isLinear);
-		}
-		void addDefaultDependency(Declaration decl)in{
-			assert(!dependencyTracked(decl));
-		}do{
-			addDependency(decl,getDefaultDependency(decl));
-			//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
-			//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
-			//imported!"util.io".writeln(dependencies.getIds());
-			//assert(decl.getName!="rrr");
-		}
-
-		void addDependency(Declaration decl, Dependency dep){
-			addDependencies([q(decl,dep)]);
-		}
-		void removeDependency(Declaration decl){
-			//imported!"util.io".writeln("REMOVING: ",decl," ",cast(void*)decl);
-			static int counter=0;
-			dependencies.dependencies.remove(decl);
-		}
-		void addDependencies(scope Q!(Declaration,Dependency)[] deps){
-			//imported!"util.io".writeln("ADDING: ",deps);
-			foreach(i,ref dep;deps){
-				assert(!!dep[0]);
-				substituteConsumed(dep[1],consumedDepLog);
-				if(dep[0] in dependencies.dependencies){
-					//writeln(dep[0]," ",toRemove," ",dependencies)
-					dep[1].joinWith(dependencies.dependencies[dep[0]]);
+	}
+	final bool dependencyTracked(Declaration decl){
+		static if(language==psi) return true; // (in PSI, all data is classical: dependencies are not tracked)
+		return !!(decl in dependencies.dependencies);
+	}
+	final Dependency getDependency(Identifier id)in{
+		assert(id.isSemCompleted()||id.isSemError());
+		assert(!!id.meaning);
+	}do{
+		return getDependency(id.meaning);
+	}
+	final Dependency getDependency(Declaration decl,bool pushed=false)in{
+		assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl||cast(Parameter)decl,text(decl," ",decl.sstate));
+	}do{
+		static if(language==psi) return Dependency(false); // (in PSI, all data is classical: dependencies are not tracked)
+		if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+		return dependencies.dependencies[decl];
+	}
+	final void replaceDependencies(Declaration decl,Declaration rhs){
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		dependencies.replace(decl,rhs);
+	}
+	final void substituteDependency(Declaration decl,Dependency dep){
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		dependencies.substitute(decl,dep);
+		lastUses.substituteDependency(decl,dep);
+	}
+	MapSX!(Declaration,Dependency) consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
+	static void substituteConsumed(ref Dependency dep,ref MapSX!(Declaration,Dependency) consumedDepLog){
+		if(dep.isTop) return;
+		SetX!Declaration substituted; // stale sets can mention consumed declarations in cycles
+		for(bool changed=true;changed;){
+			changed=false;
+			foreach(m;dep.dependencies){
+				if(m in substituted) continue;
+				if(auto pd = consumedDepLog.getPtr(m)){
+					substituted[m]=[];
+					dep.replace(m,*pd);
+					changed=true;
+					break;
 				}
 			}
-			foreach(decl,dep;deps.map!(x=>x)){
-				assert(decl&&!cast(DeadDecl)decl);
-				dependencies.dependencies[decl]=dep;
-			}
+			if(dep.isTop) break;
 		}
-		final bool dependencyTracked(Declaration decl){
-			return !!(decl in dependencies.dependencies);
-		}
-		final Dependency getDependency(Identifier id)in{
-			assert(id.isSemCompleted()||id.isSemError());
-			assert(!!id.meaning);
-		}do{
-			return getDependency(id.meaning);
-		}
-		final Dependency getDependency(Declaration decl,bool pushed=false)in{
-			assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl||cast(Parameter)decl,text(decl," ",decl.sstate));
-		}do{
-			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-			return dependencies.dependencies[decl];
-		}
-		final void replaceDependencies(Declaration decl,Declaration rhs){
-			dependencies.replace(decl,rhs);
-		}
-		final void substituteDependency(Declaration decl,Dependency dep){
-			dependencies.substitute(decl,dep);
-			lastUses.substituteDependency(decl,dep);
-		}
-		MapSX!(Declaration,Dependency) consumedDepLog; // dependency each declaration consumed in this scope had at its consumption
-		static void substituteConsumed(ref Dependency dep,ref MapSX!(Declaration,Dependency) consumedDepLog){
-			if(dep.isTop) return;
-			SetX!Declaration substituted; // stale sets can mention consumed declarations in cycles
-			for(bool changed=true;changed;){
-				changed=false;
-				foreach(m;dep.dependencies){
-					if(m in substituted) continue;
-					if(auto pd = consumedDepLog.getPtr(m)){
-						substituted[m]=[];
-						dep.replace(m,*pd);
-						changed=true;
-						break;
-					}
-				}
-				if(dep.isTop) break;
-			}
-		}
-		Identifier consumingUse;
-		final void pushDependencies(Declaration decl,bool keep){
-			consumedDepLog[decl]=getDependency(decl).dup;
-			noteDependencyConsumed(decl,getDependency(decl));
-			if(getDependency(decl).isTop){
-				bool done=false;
-				do{ // TODO: improve
-					done=true;
-					foreach(ndecl;dependencies.dependencies.keys.array){
-						auto v=getDependency(ndecl);
-						//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
-						if(decl in v.dependencies){
-							if(auto lu=lastUses.get(ndecl,true)){
-								while(lu.forwardTo) lu=lu.forwardTo;
-								//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
-								if(lu.canCancelImplicitDup()){
-									if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
-										vd.outOfScopeCause=consumingUse;
-										if(!isConstLocal(vd)&&lu.kind==LastUse.Kind.constUse&&lu.prevImplicitDup)
-											vd.outOfScopeDup=lu.prevImplicitDup.use;
-									}
-									if(lu.cancelImplicitDup()){
-										assert(lu.isConsumption(),text(lu));
-										done=false;
-									}else{
-										// TODO
-									}
+	}
+	Identifier consumingUse;
+	final void pushDependencies(Declaration decl,bool keep){
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		consumedDepLog[decl]=getDependency(decl).dup;
+		noteDependencyConsumed(decl,getDependency(decl));
+		if(getDependency(decl).isTop){
+			bool done=false;
+			do{ // TODO: improve
+				done=true;
+				foreach(ndecl;dependencies.dependencies.keys.array){
+					auto v=getDependency(ndecl);
+					//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
+					if(decl in v.dependencies){
+						if(auto lu=lastUses.get(ndecl,true)){
+							while(lu.forwardTo) lu=lu.forwardTo;
+							//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
+							if(lu.canCancelImplicitDup()){
+								if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
+									vd.outOfScopeCause=consumingUse;
+									if(!isConstLocal(vd)&&lu.kind==LastUse.Kind.constUse&&lu.prevImplicitDup)
+										vd.outOfScopeDup=lu.prevImplicitDup.use;
+								}
+								if(lu.cancelImplicitDup()){
+									assert(lu.isConsumption(),text(lu));
+									done=false;
+								}else{
+									// TODO
 								}
 							}
 						}
 					}
-				}while(!done);
-			}
-			dependencies.pushUp(decl,keep);
-			if(keep) toRemove~=decl;
-			this.pushUp(controlDependency,decl);
-			pushTrackedTemporaryDependencies(decl);
+				}
+			}while(!done);
 		}
+		dependencies.pushUp(decl,keep);
+		if(keep) toRemove~=decl;
+		this.pushUp(controlDependency,decl);
+		pushTrackedTemporaryDependencies(decl);
+	}
 
-		bool canForget(Declaration decl,bool forceHere=false){
-			if(decl.isSemError()) return true;
-			import ast.semantic_:typeForDecl;
-			auto type=typeForDecl(decl);
-			if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
-			if(decl.isToplevelDeclaration()) return true;
-			assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
-			if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
-			return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
-		}
-		final bool canRecompute(Declaration decl){
-			if(decl.isSemError()) return false;
-			return canForget(decl,true);
-		}
+	bool canForget(Declaration decl,bool forceHere=false){
+		if(decl.isSemError()) return true;
+		import ast.semantic_:typeForDecl;
+		auto type=typeForDecl(decl);
+		if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
+		if(decl.isToplevelDeclaration()) return true;
+		assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
+		if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+		return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
+	}
+	final bool canRecompute(Declaration decl){
+		if(decl.isSemError()) return false;
+		return canForget(decl,true);
+	}
 
-		Declaration[] forgottenVarsOnEntry;
-		final Declaration forgetOnEntry(Declaration decl)in{
-			assert(canSplit(decl));
-		}do{
+	Declaration[] forgottenVarsOnEntry;
+	final Declaration forgetOnEntry(Declaration decl)in{
+		assert(canSplit(decl));
+	}do{
+		decl=split(decl,null);
+		forgottenVarsOnEntry~=decl;
+		return decl;
+	}
+	Declaration[] forgottenVars;
+	final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
+		//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
+	}do{
+		if(cast(DeadDecl)decl) return true;
+		static if(is(T==ReturnExp)) auto earlyReturn=cause;
+		else ReturnExp earlyReturn=null;
+		if(lastUses.canForget(decl,true,false,earlyReturn)){
+			lastUses.forget(decl,false,earlyReturn);
+			return true;
+		}
+		if(!canSplit(decl)) return false;
+		if(canForget(decl)){
 			decl=split(decl,null);
-			forgottenVarsOnEntry~=decl;
-			return decl;
+			assert(decl.scope_ is this);
+			cause.forgottenVars~=decl;
+			static if(is(T:Expression)) lastUses.synthesizedForget(decl,null,this,cause);
+			else lastUses.synthesizedForget(decl,null,this,null);
+			return true;
 		}
-		Declaration[] forgottenVars;
-		final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
-			//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
-		}do{
-			if(cast(DeadDecl)decl) return true;
-			static if(is(T==ReturnExp)) auto earlyReturn=cause;
-			else ReturnExp earlyReturn=null;
-			if(lastUses.canForget(decl,true,false,earlyReturn)){
-				lastUses.forget(decl,false,earlyReturn);
-				return true;
+		return false;
+	}
+	final bool canForgetAppend(Declaration decl){
+		return canForgetAppend(this,decl);
+	}
+	static if(language==silq)
+	final bool tryUncomputeTypeDependents(Declaration decl,Identifier use){
+		import ast.semantic_:liveTypeDependents,typeConstBlocked;
+		if(allowMerge) return false;
+		auto dependents=liveTypeDependents(decl,rnsymtab);
+		if(!dependents.length) return false;
+		foreach(d;dependents)
+			if(!lastUses.canForget(d,true,false))
+				return false;
+		EarlyForgottenDecl firstEFD=null;
+		foreach(d;dependents){
+			lastUses.forget(d,false);
+			auto ed=new EarlyForgottenDecl(d,decl,use);
+			if(!firstEFD) firstEFD=ed;
+			else ed.reportVia=firstEFD;
+			if(d.rename){
+				ed.rename=new Identifier(d.rename.id);
+				ed.rename.loc=d.rename.loc;
 			}
-			if(!canSplit(decl)) return false;
-			if(canForget(decl)){
-				decl=split(decl,null);
-				assert(decl.scope_ is this);
-				cause.forgottenVars~=decl;
-				static if(is(T:Expression)) lastUses.synthesizedForget(decl,null,this,cause);
-				else lastUses.synthesizedForget(decl,null,this,null);
-				return true;
+			ed.setSemCompleted();
+			if(auto dsc=d.scope_)
+				dsc.consume(d,null); // remove from the home scope, if still there
+			if(rnsymtab.get(d.getId,null) is d){
+				symtabRemove(d);
+				if(dependencyTracked(d))
+					pushDependencies(d,false);
 			}
-			return false;
+			ed.scope_=this;
+			if(canInsert(ed.name.id))
+				symtabInsert(ed);
 		}
-		final bool canForgetAppend(Declaration decl){
-			return canForgetAppend(this,decl);
-		}
-		static if(language==silq)
-		final bool tryUncomputeTypeDependents(Declaration decl,Identifier use){
-			import ast.semantic_:liveTypeDependents,typeConstBlocked;
-			if(allowMerge) return false;
-			auto dependents=liveTypeDependents(decl,rnsymtab);
-			if(!dependents.length) return false;
-			foreach(d;dependents)
-				if(!lastUses.canForget(d,true,false))
-					return false;
-			EarlyForgottenDecl firstEFD=null;
-			foreach(d;dependents){
-				lastUses.forget(d,false);
-				auto ed=new EarlyForgottenDecl(d,decl,use);
-				if(!firstEFD) firstEFD=ed;
-				else ed.reportVia=firstEFD;
-				if(d.rename){
-					ed.rename=new Identifier(d.rename.id);
-					ed.rename.loc=d.rename.loc;
-				}
-				ed.setSemCompleted();
-				if(auto dsc=d.scope_)
-					dsc.consume(d,null); // remove from the home scope, if still there
-				if(rnsymtab.get(d.getId,null) is d){
-					symtabRemove(d);
-					if(dependencyTracked(d))
-						pushDependencies(d,false);
-				}
-				ed.scope_=this;
-				if(canInsert(ed.name.id))
-					symtabInsert(ed);
-			}
-			auto result=!typeConstBlocked(decl,this);
-			if(result) decl.earlyForgotten=firstEFD;
-			return result;
-		}
+		auto result=!typeConstBlocked(decl,this);
+		if(result) decl.earlyForgotten=firstEFD;
+		return result;
 	}
 	Declaration[] mergedVars;
 	Declaration[] producedOuter;
@@ -1655,10 +1628,8 @@ abstract class Scope{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
 	}do{
-		static if(language==silq){
-			r.controlDependency.joinWith(controlDependency); // TODO: replace
-			r.dependencies=dependencies.dup;
-		}
+		r.controlDependency.joinWith(controlDependency); // TODO: replace
+		r.dependencies=dependencies.dup;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
 		if(!allowMerge) lastUses.prepareNesting(this);
@@ -1728,7 +1699,7 @@ abstract class Scope{
 		rnsymtab=scopes[0].rnsymtab.dup;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
 		MapX!(Declaration,Dependency) carryOverDependencies;
-		foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
+		static if(language==silq) foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
 		dependencies=scopes[0].dependencies.dup;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
@@ -1760,10 +1731,8 @@ abstract class Scope{
 						dm.mergedFrom~=osym;
 				if(sc.rnsymtab.get(osym.getId,null) is osym)
 					sc.symtabRemove(osym);
-				static if(language==silq){
-					if(sc.dependencyTracked(osym))
-						sc.pushDependencies(osym,false);
-				}
+				if(sc.dependencyTracked(osym))
+					sc.pushDependencies(osym,false);
 			}
 			void splitSym(){
 				auto nsym=scopes[0].split(sym,null);
@@ -1808,12 +1777,10 @@ abstract class Scope{
 			foreach(sc;scopes[1..$]){
 				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
-					static if(language==silq){
-						splitSym();
-						if(!scopes[0].canForgetAppend(sym)){
-							error(format("variable `%s` is not consumed", sym.getName), sym.loc);
-							errors=true;
-						}
+					splitSym();
+					if(!scopes[0].canForgetAppend(sym)){
+						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						errors=true;
 					}
 					removeSym();
 				}else{
@@ -1833,14 +1800,12 @@ abstract class Scope{
 							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
-								static if(language==silq){
-									splitSym(), sc.split(osym,null);
-									if(sym.isSemCompleted()&&osym.isSemCompleted()){
-										if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
-											error(format("variable `%s` is not consumed", sym.getName), sym.loc);
-											if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
-											errors=true;
-										}
+								splitSym(), sc.split(osym,null);
+								if(sym.isSemCompleted()&&osym.isSemCompleted()){
+									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
+										error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+										if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
+										errors=true;
 									}
 								}
 								removeSym();
@@ -1863,16 +1828,14 @@ abstract class Scope{
 						sc.mergeVar(osym,sym);
 						if(osym.loc.rep.ptr>sym.loc.rep.ptr) sym.loc=osym.loc; // TODO: this is a bit hacky
 						//imported!"util.io".writeln("MAKING MERGE: ",osym," ",sym," ",cast(void*)osym," ",cast(void*)sym);
-						static if(language==silq){
-							if(!sc.dependencyTracked(osym))
-								sc.addDefaultDependency(osym); // TODO: ideally can be removed
-							//sc.dependencies.replace(osym,sym); // reverse-inherit dependencies
-							auto dep=sc.getDependency(osym);
-							// dep.joinWith(sc.controlDependency); // TODO
-							dep.joinWith(nestedControlDependency);
-							sc.addDependency(sym,dep);
-							sc.pushDependencies(osym,false);
-						}
+						if(!sc.dependencyTracked(osym))
+							sc.addDefaultDependency(osym); // TODO: ideally can be removed
+						//sc.dependencies.replace(osym,sym); // reverse-inherit dependencies
+						auto dep=sc.getDependency(osym);
+						// dep.joinWith(sc.controlDependency); // TODO
+						dep.joinWith(nestedControlDependency);
+						sc.addDependency(sym,dep);
+						sc.pushDependencies(osym,false);
 					}
 					if(!cast(DeadDecl)sym){
 						if(auto mtype=typeForDecl(sym)){
@@ -1916,31 +1879,27 @@ abstract class Scope{
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						errors=true;
 					}
-					static if(language==silq){
-						if(sc.dependencyTracked(sym))
-							sc.pushDependencies(sym,false);
-					}
+					if(sc.dependencyTracked(sym))
+						sc.pushDependencies(sym,false);
 				}
 			}
 		}
-		static if(language==silq){
-			foreach(sc;scopes[1..$])
-				dependencies.joinWith(sc.dependencies);
-			foreach(sc;scopes){ // TODO: needed?
-				foreach(decl,ref dep;sc.consumedDepLog)
-					if(decl !in consumedDepLog)
-						consumedDepLog[decl]=dep;
-			}
-			foreach(k,ref v;dependencies.dependencies)
-				substituteConsumed(v,consumedDepLog);
-			foreach(k,v;dependencies.dependencies.dup){
-				if(k.getId !in rnsymtab)
-					if(dependencyTracked(k))
-						removeDependency(k);
-			}
-			foreach(sc;scopes){
-				mergeDeclProps(sc.declProps,sc.componentConstBlocks);
-			}
+		foreach(sc;scopes[1..$])
+			dependencies.joinWith(sc.dependencies);
+		foreach(sc;scopes){ // TODO: needed?
+			foreach(decl,ref dep;sc.consumedDepLog)
+				if(decl !in consumedDepLog)
+					consumedDepLog[decl]=dep;
+		}
+		foreach(k,ref v;dependencies.dependencies)
+			substituteConsumed(v,consumedDepLog);
+		foreach(k,v;dependencies.dependencies.dup){
+			if(k.getId !in rnsymtab)
+				if(dependencyTracked(k))
+					removeDependency(k);
+		}
+		foreach(sc;scopes){
+			mergeDeclProps(sc.declProps,sc.componentConstBlocks);
 		}
 		foreach(_,dm;deadMerges){
 			if(dm.mergedFrom.empty) continue;
@@ -1948,9 +1907,8 @@ abstract class Scope{
 				symtabInsert(dm.mergedFrom[0]);
 			}else symtabInsert(dm);
 		}
-		foreach(sc;scopes){
-			static if(language==silq) sc.dependencies.clear();
-		}
+		foreach(sc;scopes)
+			sc.dependencies.clear();
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(decl,ref dep;carryOverDependencies){
@@ -1958,10 +1916,9 @@ abstract class Scope{
 				dependencies.dependencies[decl]=dep;
 		}
 		lastUses.merge(isLoop,this,scopes);
-		static if(language==silq){ // TODO: needed?
-			foreach(k,ref v;dependencies.dependencies)
-				substituteConsumed(v,consumedDepLog);
-		}
+		// TODO: needed?
+		foreach(k,ref v;dependencies.dependencies)
+			substituteConsumed(v,consumedDepLog);
 		return errors;
 	}
 
@@ -2037,17 +1994,14 @@ abstract class Scope{
 	}
 
 	struct ScopeState{
-		static if(language==silq)
 		bool loopEntryCanForget(Id id){ // whether the variable was forgettable at loop entry
 			auto decl=rnsymtab.get(id,null);
 			if(!decl) return false;
 			return dependencies.canForget(decl);
 		}
 		bool opEquals(ref ScopeState rhs){
-			static if(language==silq){
-				if(!dependencies.matches(rhs.dependencies))
-					return false;
-			}
+			if(!dependencies.matches(rhs.dependencies))
+				return false;
 			import ast.semantic_: typeForDecl;
 			bool checkDecl(Declaration decl,Declaration rdecl){
 				if(!rdecl) return false;
@@ -2077,8 +2031,7 @@ abstract class Scope{
 		}
 		string toString(){
 			string r;
-			static if(language==silq)
-				r~=text("dependencies: ",dependencies,"\n");
+			r~=text("dependencies: ",dependencies,"\n");
 			import ast.semantic_: typeForDecl;
 			import std.array: join;
 			r~=text("{",symtab.values.map!text.join(", "),"}");
@@ -2148,17 +2101,15 @@ abstract class Scope{
 			auto current=loopScope.rnsymtab.get(split.getId,null);
 			return current&&current.isDerivedFrom(split);
 		}
-		static if(language==silq) Dependency dependencyOf(Declaration decl){
+		Dependency dependencyOf(Declaration decl){
 			if(decl !in dependencies.dependencies) return Dependency(true);
 			return dependencies.dependencies[decl].dup;
 		}
 	private:
-		static if(language==silq){
-			Dependencies dependencies;
-			DeclProps declProps;
-			Declaration[] toRemove;
-			TrackedTemporary[] trackedTemporaries;
-		}
+		Dependencies dependencies;
+		DeclProps declProps;
+		Declaration[] toRemove;
+		TrackedTemporary[] trackedTemporaries;
 		MapX!(Id,Declaration) symtab;
 		MapX!(Id,Declaration) rnsymtab;
 		MapX!(Declaration,LastUse) lastUses;
@@ -2170,25 +2121,17 @@ abstract class Scope{
 		MapX!(Id,Declaration) nsymtab=symtab.dup;
 		MapX!(Id,Declaration) nrnsymtab=rnsymtab.dup;
 		MapX!(Declaration,LastUse) nlastUses;
-		static if(language==silq){
-			DeclProps declProps;
-			TrackedTemporary[] trackedTemporaries;
-		}
+		DeclProps declProps;
+		TrackedTemporary[] trackedTemporaries;
 		Declaration[] prevCapturedDecls;
 		if(restoreable){
-			static if(language==silq){
-				declProps=saveDeclProps();
-				trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
-			}
+			declProps=saveDeclProps();
+			trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			nlastUses=lastUses.getSnapshot(this);
 			if(auto fd=getFunction())
 				prevCapturedDecls=fd.capturedDecls;
 		}
-		static if(language==silq){
-			auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
-		}else{
-			auto r=ScopeState(nsymtab,nrnsymtab,nlastUses,prevCaptures,restoreable);
-		}
+		auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		r.numMergedNestedScopes=mergedNestedScopes.length;
 		return r;
 	}
@@ -2226,12 +2169,10 @@ abstract class Scope{
 			foreach(id,ref decl;symtab){
 				auto splt=getSplit(decl);
 				if(splt !is decl){
-					static if(language==silq){
-						if(replace){
-							if(decl in state.dependencies.dependencies)
-								state.dependencies.replace(decl,splt);
-							state.declProps.replaceDecl(decl,splt);
-						}
+					if(replace){
+						if(decl in state.dependencies.dependencies)
+							state.dependencies.replace(decl,splt);
+						state.declProps.replaceDecl(decl,splt);
 					}
 					decl=splt;
 				}
@@ -2243,10 +2184,8 @@ abstract class Scope{
 
 	Declaration updateDecl(Declaration decl){
 		auto split=getSplit(decl,true);
-		static if(language==silq){
-			if(decl !is split)
-				replaceDecl(decl,split);
-		}
+		if(decl !is split)
+			replaceDecl(decl,split);
 		return split;
 	}
 
@@ -2264,11 +2203,9 @@ abstract class Scope{
 		assert(state.restoreable);
 	}do{
 		updateStateSnapshot(state);
-		static if(language==silq){
-			dependencies=state.dependencies;
-			resetDeclProps(state.declProps);
-			toRemove=state.toRemove;
-		}
+		dependencies=state.dependencies;
+		resetDeclProps(state.declProps);
+		toRemove=state.toRemove;
 		symtab.clear();
 		foreach(_,decl;state.symtab){
 			if(auto lu=state.lastUses.get(decl,null))
@@ -2421,10 +2358,8 @@ abstract class Scope{
 	}
 	LastUses lastUses;
 //private: // TODO
-	static if(language==silq){
-		Dependencies dependencies;
-		DeclProps declProps;
-	}
+	Dependencies dependencies;
+	DeclProps declProps;
 	MapX!(Id,Declaration) symtab;
 	MapX!(Id,Declaration) rnsymtab;
 }
@@ -2521,15 +2456,13 @@ class NestedScope: Scope{
 					propErr(ndecl,result);
 					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 					if(remove){ // TODO: can we get rid of this?
-						static if(language==silq){
-							if(parent.getFunction() is getFunction()){
-								if(dependencyTracked(odecl))
-									removeDependency(odecl);
-								//imported!"util.io".writeln("DEPS: ",dependencies);
-								//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)this);
-								addDependency(odecl,pdep.dup);
-								//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
-							}
+						if(parent.getFunction() is getFunction()){
+							if(dependencyTracked(odecl))
+								removeDependency(odecl);
+							//imported!"util.io".writeln("DEPS: ",dependencies);
+							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)this);
+							addDependency(odecl,pdep.dup);
+							//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
 						}
 						assert(odecl !is result);
 						replaceDecl(odecl,result);
@@ -2555,15 +2488,13 @@ class NestedScope: Scope{
 						if(sc.withTransTrial !is wtt)
 							continue; // trial analysis of a `with` transformation: its effects are rolled back, so do not propagate consumption into sibling scopes that do not belong to the trial
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
-						static if(language==silq){
-							if(parent.getFunction() is sc.getFunction()){
-								if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
-									sc.removeDependency(odecl);
-								//imported!"util.io".writeln("DEPS: ",sc.dependencies);
-								//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)sc);
-								sc.addDependency(odecl,pdep.dup);
-								//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
-							}
+						if(parent.getFunction() is sc.getFunction()){
+							if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
+								sc.removeDependency(odecl);
+							//imported!"util.io".writeln("DEPS: ",sc.dependencies);
+							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)sc);
+							sc.addDependency(odecl,pdep.dup);
+							//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
 						}
 						if(odecl !is cdecl)
 							sc.replaceDecl(odecl,cdecl);
@@ -2576,10 +2507,8 @@ class NestedScope: Scope{
 		}
 		if(!type&&remove){
 			symtabRemove(odecl);
-			static if(language==silq){
-				if(dependencyTracked(odecl))
-					pushDependencies(odecl,true);
-			}
+			if(dependencyTracked(odecl))
+				pushDependencies(odecl,true);
 			if(odecl !is result)
 				replaceDecl(odecl,result);
 			return result;
@@ -2593,13 +2522,11 @@ class NestedScope: Scope{
 	}
 
 	override Annotation restriction(ref FunctionDef reason){ return parent.restriction(reason); }
-	static if(language==silq){
-		override int outerDeclProps(scope int delegate(ref DeclProps) dg){
-			return parent.nestedDeclProps(dg);
-		}
-		override int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
-			return parent.nestedComponentConstBlocks(dg);
-		}
+	override int outerDeclProps(scope int delegate(ref DeclProps) dg){
+		return parent.nestedDeclProps(dg);
+	}
+	override int outerComponentConstBlocks(scope int delegate(ComponentConstBlock) dg){
+		return parent.nestedComponentConstBlocks(dg);
 	}
 
 	override bool isNestedIn(Scope rhs){ return rhs is this || parent.isNestedIn(rhs); }

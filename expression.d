@@ -96,7 +96,7 @@ abstract class Expression: Node{
 		Expression delegate(Expression, ref CopyArgs) mapExp;
 		void delegate(Expression,Expression) postCopy;
 	}
-	static if(language==silq) size_t erpId=0;
+	size_t erpId=0;
 	abstract Expression copyImpl(CopyArgs args);
 	final T copy(this T)(CopyArgs args=CopyArgs.init){
 		if(args.mapExp) if(auto r=cast(T)args.mapExp(this,args)) return r;
@@ -118,7 +118,7 @@ abstract class Expression: Node{
 		r.brackets=brackets;
 		r.byRef=byRef;
 		r.implicitDup=implicitDup;
-		static if(language==silq) r.erpId=erpId;
+		r.erpId=erpId;
 		if(args.postCopy) args.postCopy(this,r);
 		return r;
 	}
@@ -938,7 +938,7 @@ bool isEqual(Expression a,Expression b,EqualityContext* ctx){
 
 class Identifier: Expression{
 	Id id;
-	static if(language==silq) bool moved=false;
+	bool moved=false;
 	@property string name(){return id.str;}
 	@property auto ptr(){return id.ptr;}
 	@property auto length(){return id.length;}
@@ -989,7 +989,7 @@ class Identifier: Expression{
 				r.id=args.rename.nid;
 			}
 		}
-		static if(language==silq) r.moved=moved;
+		r.moved=moved;
 		r.isTemporary=isTemporary;
 		return r;
 	}
@@ -1610,7 +1610,7 @@ class CallExp: Expression{
 	}
 	override CallExp copyImpl(CopyArgs args){
 		auto r=new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical_);
-		static if(language==silq) r.checkReverse=checkReverse;
+		r.checkReverse=checkReverse;
 		return r;
 	}
 	mixin PrecedenceToString;
@@ -1832,9 +1832,7 @@ class CallExp: Expression{
 		return r;
 	}
 	// semantic information
-	static if(language==silq){
-		bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
-	}
+	bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 	Declaration newFunctionVar=null; // `once` → `spent` replacement
 }
 
@@ -2311,13 +2309,13 @@ class WithExp: Expression{
 class RepeatExp: Expression{
 	Expression num;
 	CompoundExp bdy;
-	static if(language==silq) bool noSplit=false;
+	bool noSplit=false;
 	this(Expression num, CompoundExp bdy){
 		this.num=num; this.bdy=bdy;
 	}
 	override RepeatExp copyImpl(CopyArgs args){
 		auto r=new RepeatExp(num.copy(args),bdy.copy(args));
-		static if(language==silq) r.noSplit=noSplit;
+		r.noSplit=noSplit;
 		return r;
 	}
 	override string toString(){ return _brk("repeat "~num.toString()~" "~bdy.toString()); }
@@ -2545,7 +2543,7 @@ class ForExp: Expression{
 	}
 	override ForExp copyImpl(CopyArgs args){
 		auto r=new ForExp(var?var.copy(args):null,pattern?pattern.copy(args):null,aggr.copy(args),bdy.copy(args));
-		static if(language==silq) r.noSplit=noSplit;
+		r.noSplit=noSplit;
 		if(args.preserveSemantic){
 			enforce(!fescope_&&!loopVar,"TODO");
 		}
@@ -2560,7 +2558,7 @@ class ForExp: Expression{
 
 	override bool isTotal(){ return aggr.isTotal()&&bdy.isTotal(); }
 
-	static if(language==silq) bool noSplit=false;
+	bool noSplit=false;
 	// semantic information
 	BlockScope fescope_;
 	VarDecl loopVar;
@@ -2586,14 +2584,14 @@ class ForExp: Expression{
 class WhileExp: Expression{
 	Expression cond;
 	CompoundExp bdy;
-	static if(language==silq) bool noSplit=false;
+	bool noSplit=false;
 	this(Expression cond,CompoundExp bdy){
 		this.cond=cond;
 		this.bdy=bdy;
 	}
 	override WhileExp copyImpl(CopyArgs args){
 		auto r=new WhileExp(cond.copy(args),bdy.copy(args));
-		static if(language==silq) r.noSplit=noSplit;
+		r.noSplit=noSplit;
 		return r;
 	}
 	override string toString(){ return _brk("while "~cond.toString()~bdy.toString()); }

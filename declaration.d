@@ -45,7 +45,7 @@ abstract class Declaration: Expression{
 	Declaration mergedInto=null;
 	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
-	static if(language==silq) SetX!Declaration definitionReads; // direct dependencies
+	SetX!Declaration definitionReads; // direct dependencies
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
 	Declaration canonicalSource_=null;
@@ -337,9 +337,9 @@ class FunctionDef: FixedPointDeclaration{
 
 	// inference mode
 	bool finalPassDone=false;
-	static if(language==silq) SetX!Id loweredConstIds; // for nested loop lowering
-	static if(language==silq) bool keepLoops=false;
-	static if(language==silq) int erpStage=0; // early-return elimination: 1: analyzing with loops kept, 2: rewritten
+	SetX!Id loweredConstIds; // for nested loop lowering
+	bool keepLoops=false;
+	int erpStage=0; // early-return elimination: 1: analyzing with loops kept, 2: rewritten
 	bool deferredSpecificityCheck=false;
 	void unseal()in{
 		assert(sealed);

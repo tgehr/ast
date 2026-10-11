@@ -3829,7 +3829,6 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	return result;
 }
 
-static if(language==silq){
 // Early-return elimination (ERP).
 // A function with loops that contain `return` statements is first analyzed with its loops kept (stage 1),
 // recording the variables in scope after each statement that contains such a loop and is followed by more code.
@@ -4339,7 +4338,6 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	ret.loc=s.loc;
 	tail=[ret];
 	return fd;
-}
 }
 // syntactic check whether a statement always ends in a `return`
 bool endsWithReturn(Expression e){

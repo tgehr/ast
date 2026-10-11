@@ -788,7 +788,6 @@ BuiltIn isBuiltInCall(CallExp ce){
 	return isBuiltIn(cast(Identifier)ce.e);
 }
 
-static if(language==silq)
 string isPrimitive(Expression e){
 	auto id = cast(Identifier)e;
 	if(!id) return null;
@@ -797,14 +796,12 @@ string isPrimitive(Expression e){
 	return isPrimitive(fd);
 }
 
-static if(language==silq)
 string isPrimitive(FunctionDef fd){
 	string name = fd.stringAttribute(Id.s!"extern");
 	if(!name.startsWith("primitive.")) return null;
 	return name["primitive.".length..$];
 }
 
-static if(language==silq)
 string isPrimitiveCall(Expression e){
 	auto ce=cast(CallExp)e;
 	if(!ce) return null;
@@ -1353,7 +1350,6 @@ FixedPointIterState startFixedPointIteration(Scope sc,ref StmFlags flags){
 	auto origStateSnapshot=sc.getStateSnapshot(true);
 	return FixedPointIterState(origStateSnapshot,flags,origStateSnapshot,flags,origStateSnapshot,flags);
 }
-static if(language==silq){
 struct DummyAnalysisData{
 	MapX!(Declaration,Declaration) dummies; // candidate -> dummy placeholder
 	bool contextPushed=false;
@@ -1473,7 +1469,6 @@ void restoreDummyDeps(Scope sc, ref DummyAnalysisData data){
 	foreach(decl,dummy;data.dummies)
 		sc.substituteDependency(dummy,Dependency(false));
 }
-}
 
 ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp fe){
 	auto sc=context.sc;
@@ -1513,7 +1508,6 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 
 // TODO: supertypes for define and assign?
 
-static if(language==silq){
 Declaration[] loopConstForgetCandidates(Scope sc,NestedScope bodyScope){
 	Declaration[] result;
 	foreach(_,decl;sc.rnsymtab){
@@ -1578,7 +1572,6 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 	foreach(decl;pinnedLoopMergeForgetCandidates(sc,loopScope,forgetScope)) anchor(decl);
 	return wrapper?wrapper:loopExp;
 }
-}
 // Common tail for one iteration of a loop (for/while/repeat).
 bool finalizeLoopIteration(
 	ref FixedPointIterState state,
@@ -1593,19 +1586,17 @@ bool finalizeLoopIteration(
 	propErr(bdy,loopExp);
 	auto returns=definitelyReturns(bdy);
 	auto bsc=bdy.blscope_;
-	static if(language==silq){
-		constForgets=loopConstForgetCandidates(sc,bsc);
-		if(sc.mergeLoop(returns,state.forgetScope,bsc)){
-			sc.note("possibly consumed in "~kind~" loop", loopExp.loc);
-			loopExp.setSemError();
-		}
-		if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
-			sc.error("variables potentially consumed multiple times in "~kind~" loop",loopExp.loc);
-			foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
-				sc.note(format("variable `%s`",decl.name),decl.loc);
-			loopExp.setSemError();
-		}
-	}else sc.mergeLoop(returns,state.forgetScope,bsc);
+	constForgets=loopConstForgetCandidates(sc,bsc);
+	if(sc.mergeLoop(returns,state.forgetScope,bsc)){
+		sc.note("possibly consumed in "~kind~" loop", loopExp.loc);
+		loopExp.setSemError();
+	}
+	if(state.forgetScope.forgottenVars.any!(d=>d.isLinear())){
+		sc.error("variables potentially consumed multiple times in "~kind~" loop",loopExp.loc);
+		foreach(decl;state.forgetScope.forgottenVars.filter!(d=>d.isLinear()))
+			sc.note(format("variable `%s`",decl.name),decl.loc);
+		loopExp.setSemError();
+	}
 	anyDeferredSpecificityCheck|=bsc.loopDeferredSpecificityCheck;
 	state.endIteration(sc,flags);
 	return returns;
@@ -1695,7 +1686,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
-	static if(language==silq) Declaration[] constForgets;
+	Declaration[] constForgets;
 	if(!fe.var){
 		fe.var=new Identifier(freshName());
 		fe.var.loc=fe.pattern?fe.pattern.loc:fe.loc;
@@ -1813,9 +1804,8 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	Expression result=fe;
 	if(fe.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(fe,state,sc,flags);
-	static if(language==silq)
-		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+	if(result.isSemCompleted())
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
@@ -1829,7 +1819,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	Expression ncond=null;
 	int numTries=-1;
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
-	static if(language==silq) Declaration[] constForgets;
+	Declaration[] constForgets;
 	// Setup the condition and body scope for one WhileExp iteration.
 	void setupWhileIter(BlockScope wesc,ref Expression ncond){
 		FunctionDef reason;
@@ -1875,9 +1865,8 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	Expression result=we;
 	if(we.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(we,state,sc,flags);
-	static if(language==silq)
-		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+	if(result.isSemCompleted())
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
@@ -1896,7 +1885,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	auto state=startFixedPointIteration(sc,flags);
 	int numTries=-1;
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
-	static if(language==silq) Declaration[] constForgets;
+	Declaration[] constForgets;
 	while(!converged){ // TODO: limit number of iterations?
 		state.beginIteration();
 		bdy=re.bdy.copy(cargs);
@@ -1920,9 +1909,8 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	Expression result=re;
 	if(re.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(re,state,sc,flags);
-	static if(language==silq)
-		if(result.isSemCompleted())
-			result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+	if(result.isSemCompleted())
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
 }
 
@@ -2060,7 +2048,6 @@ VarDecl varDeclSemantic(VarDecl vd,Scope sc){
 	return vd;
 }
 
-static if(language==silq){
 Dependency getDependencyImpl(Expression e,Scope sc){
 	auto result=Dependency(false);
 	if(e.type&&e.type.isClassical()) return result;
@@ -2147,6 +2134,7 @@ Dependency getDependencyImpl(VectorForExp vfe,Scope sc){
 }
 
 Dependency getDependency(Expression e,Scope sc){
+	static if(language==psi) return Dependency(false); // (in PSI, all data is classical: dependencies are not tracked)
 	return e.dispatchExp!(getDependencyImpl,getDependencyImpl)(sc);
 }
 
@@ -2256,7 +2244,6 @@ bool isLifted(Expression e,Scope sc){
 	if(auto id=cast(CallExp)e) return isLiftedImpl(id,sc);
 	if(auto le=cast(LetExp)e) return isLiftedImpl(le,sc);
 	return isLiftedImpl(e,sc);
-}
 }
 bool isLiftedBuiltIn(Expression e){ // TODO: implement in terms of dispatchExp?
 	if(e.implicitDup) return true;
@@ -3407,7 +3394,6 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 	return buildIndexReplacements(creplss,sc,flags,prologues,epilogues,loc);
 }
 
-static if(language==silq)
 bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
 	foreach(crepls;creplss){
 		assert(crepls.length);
@@ -4115,115 +4101,113 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		updateLhs();
 	}
 	auto e2orig=be.e2;
-	static if(language==silq) bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
-	static if(language==silq){
-		if(be.e2.isSemCompleted()&&sc.getFunction()){
-			//getIndexDependency(be.e1)
-			Dependency getIndexDependency(Expression e){
-				if(auto idx=cast(IndexExp)e){
-					auto dep=getIndexDependency(idx.e);
-					dep.joinWith(idx.a.getDependency(sc));
-					return dep;
-				}
-				return Dependency(false);
+	bool badUnpackLhs=false; // (to check that makeDeclaration will indeed produce an error)
+	if(be.e2.isSemCompleted()&&sc.getFunction()){
+		//getIndexDependency(be.e1)
+		Dependency getIndexDependency(Expression e){
+			if(auto idx=cast(IndexExp)e){
+				auto dep=getIndexDependency(idx.e);
+				dep.joinWith(idx.a.getDependency(sc));
+				return dep;
 			}
-			void addDependencies(Expression[] lhs,Expression[] rhs)in{
-				assert(lhs.length==rhs.length);
-			}do{
-				Q!(Declaration,Dependency)[] dependencies;
-				foreach(i;0..lhs.length){
-					if(auto id=getIdFromDefLhs(lhs[i])){
-						if(id.meaning&&id.type&&id.meaning.scope_ is sc){
-							auto dep=rhs[i].getDependency(sc);
+			return Dependency(false);
+		}
+		void addDependencies(Expression[] lhs,Expression[] rhs)in{
+			assert(lhs.length==rhs.length);
+		}do{
+			Q!(Declaration,Dependency)[] dependencies;
+			foreach(i;0..lhs.length){
+				if(auto id=getIdFromDefLhs(lhs[i])){
+					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
+						auto dep=rhs[i].getDependency(sc);
+						dep.joinWith(getIndexDependency(lhs[i]));
+						dependencies~=q(id.meaning,dep);
+						foreach(x;rhs[i].subexpressions)
+							if(auto rid=cast(Identifier)x)
+								if(rid.meaning&&(rid.constLookup||rid.implicitDup))
+									id.meaning.definitionReads.insert(rid.meaning);
+					}else badUnpackLhs=true;
+				}else badUnpackLhs=true;
+			}
+			sc.addDependencies(dependencies);
+		}
+		void addDependencyMulti(Expression[] lhs,Dependency dependency){
+			Q!(Declaration,Dependency)[] dependencies;
+			foreach(i;0..lhs.length){
+				if(auto id=getIdFromDefLhs(lhs[i])){
+					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
+						if(!id.type.isClassical()){
+							auto dep=dependency.dup;
 							dep.joinWith(getIndexDependency(lhs[i]));
 							dependencies~=q(id.meaning,dep);
-							foreach(x;rhs[i].subexpressions)
-								if(auto rid=cast(Identifier)x)
-									if(rid.meaning&&(rid.constLookup||rid.implicitDup))
-										id.meaning.definitionReads.insert(rid.meaning);
-						}else badUnpackLhs=true;
-					}else badUnpackLhs=true;
-				}
-				sc.addDependencies(dependencies);
-			}
-			void addDependencyMulti(Expression[] lhs,Dependency dependency){
-				Q!(Declaration,Dependency)[] dependencies;
-				foreach(i;0..lhs.length){
-					if(auto id=getIdFromDefLhs(lhs[i])){
-						if(id.meaning&&id.type&&id.meaning.scope_ is sc){
-							if(!id.type.isClassical()){
-								auto dep=dependency.dup;
-								dep.joinWith(getIndexDependency(lhs[i]));
-								dependencies~=q(id.meaning,dep);
-							}
-						}else badUnpackLhs=true;
-					}else badUnpackLhs=true;
-				}
-				sc.addDependencies(dependencies);
-			}
-			if(auto id=getIdFromDefLhs(be.e1)){
-				addDependencies([be.e1],[be.e2]);
-			}else if(auto tpl1=cast(TupleExp)be.e1){
-				bool ok=false;
-				if(auto tpl2=cast(TupleExp)be.e2){
-					if(tpl1.length==tpl2.length){
-						ok=true;
-						addDependencies(tpl1.e,tpl2.e);
-					}
-				}
-				if(!ok){
-					auto dep=be.e2.getDependency(sc);
-					addDependencyMulti(tpl1.e,dep);
-				}
-			}else if(auto ce=cast(CallExp)unwrap(be.e1)){
-				auto dep=Dependency(true);
-				Expression[] lhs;
-				if(auto ft=cast(FunTy)ce.e.type){
-					bool isQfree=ft.annotation>=Annotation.qfree;
-					if(isQfree) dep=ce.e.getDependency(sc);
-					void addArg(Expression arg,bool isConst){
-						if(!arg.isSemCompleted)
-							return;
-						if(!isConst){
-							lhs~=arg;
-							return;
 						}
-						if(isQfree) dep.joinWith(arg.getDependency(sc));
+					}else badUnpackLhs=true;
+				}else badUnpackLhs=true;
+			}
+			sc.addDependencies(dependencies);
+		}
+		if(auto id=getIdFromDefLhs(be.e1)){
+			addDependencies([be.e1],[be.e2]);
+		}else if(auto tpl1=cast(TupleExp)be.e1){
+			bool ok=false;
+			if(auto tpl2=cast(TupleExp)be.e2){
+				if(tpl1.length==tpl2.length){
+					ok=true;
+					addDependencies(tpl1.e,tpl2.e);
+				}
+			}
+			if(!ok){
+				auto dep=be.e2.getDependency(sc);
+				addDependencyMulti(tpl1.e,dep);
+			}
+		}else if(auto ce=cast(CallExp)unwrap(be.e1)){
+			auto dep=Dependency(true);
+			Expression[] lhs;
+			if(auto ft=cast(FunTy)ce.e.type){
+				bool isQfree=ft.annotation>=Annotation.qfree;
+				if(isQfree) dep=ce.e.getDependency(sc);
+				void addArg(Expression arg,bool isConst){
+					if(!arg.isSemCompleted)
+						return;
+					if(!isConst){
+						lhs~=arg;
+						return;
 					}
-					if(ft.isTuple){
-						bool defaultIsConst=ft.isSquare;
-						if(auto tpl=cast(TupleExp)ce.arg){
-							if(ft.nargs!=tpl.length)
-								defaultIsConst=ft.isConst.all;
-							foreach(i,arg;tpl.e){
-								auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
-								addArg(arg,isConst);
-							}
-						}else{
-							auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:defaultIsConst);
-							addArg(ce.arg,isConst);
+					if(isQfree) dep.joinWith(arg.getDependency(sc));
+				}
+				if(ft.isTuple){
+					bool defaultIsConst=ft.isSquare;
+					if(auto tpl=cast(TupleExp)ce.arg){
+						if(ft.nargs!=tpl.length)
+							defaultIsConst=ft.isConst.all;
+						foreach(i,arg;tpl.e){
+							auto isConst=(ft.nargs==tpl.e.length?ft.isConstForReverse[i]:defaultIsConst);
+							addArg(arg,isConst);
 						}
 					}else{
-						assert(ft.isConst.length==1);
-						addArg(ce.arg,ft.isConstForReverse[0]);
+						auto isConst=(ft.isConst.length?ft.isConstForReverse[0]:defaultIsConst);
+						addArg(ce.arg,isConst);
 					}
-					if(isQfree) dep.joinWith(be.e2.getDependency(sc));
-					addDependencyMulti(lhs,dep);
+				}else{
+					assert(ft.isConst.length==1);
+					addArg(ce.arg,ft.isConstForReverse[0]);
 				}
-			}else if(auto ce=cast(CatExp)be.e1){
-				Expression[] ids;
-				if(auto id=cast(Identifier)unwrap(ce.e1))
-					ids~=id;
-				if(auto id=cast(Identifier)unwrap(ce.e2))
-					ids~=id;
-				auto dep=be.e2.getDependency(sc);
-				addDependencyMulti(ids,dep);
-			}else badUnpackLhs=true;
-		}
-		if(sc.allowsLinear)
-			finishIndexReplacement(be,sc);
+				if(isQfree) dep.joinWith(be.e2.getDependency(sc));
+				addDependencyMulti(lhs,dep);
+			}
+		}else if(auto ce=cast(CatExp)be.e1){
+			Expression[] ids;
+			if(auto id=cast(Identifier)unwrap(ce.e1))
+				ids~=id;
+			if(auto id=cast(Identifier)unwrap(ce.e2))
+				ids~=id;
+			auto dep=be.e2.getDependency(sc);
+			addDependencyMulti(ids,dep);
+		}else badUnpackLhs=true;
 	}
-	static if(language==silq) if(badUnpackLhs) assert(!be||be.isSemError());
+	if(sc.allowsLinear)
+		finishIndexReplacement(be,sc);
+	if(badUnpackLhs) assert(!be||be.isSemError());
 	assert(success || be.isSemError());
 	auto tt=be.e2.type?be.e2.type.isTupleTy:null;
 	auto isBottom=be.e2.type&&isEmpty(be.e2.type);
@@ -4407,7 +4391,6 @@ bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope
 }
 
 
-static if(language==silq){
 struct ArrayConsumer{
 	Q!(Expression,Declaration,Dependency,SemState,Scope)[Id] consumed;
 	Q!(Id,Identifier)[] ids;
@@ -4547,7 +4530,6 @@ void finishIndexReplacement(Expression be,Scope sc,AAssignExp.Replacement[]* rep
 		if(auto id=getIdFromIndex(idx))
 			if(id.meaning&&id.meaning.rename)
 				id.id=id.meaning.rename.id;
-}
 }
 
 IndexExp getBaseIndex(IndexExp e){
@@ -5091,8 +5073,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		return statementSemantic(de,sc,flags);
 	}
 	CompoundExp[] prologues,epilogues;
-	static if(language==silq)
 	Expression tde=null;
+	static if(language==silq)
 	if(sc.allowsLinear){
 		if(cast(IndexExp)ae.e1&&!cast(Identifier)ae.e2){
 			auto tmp=temporaryIdentifier(ae.e2.loc);
@@ -5200,22 +5182,12 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}else assert(ae.isSemError());
 	}
 	if(ae.e2.type) checkCompat(ae.e1,ae.e2.type);
-	static if(language==silq){
-		enum Stage{
-			collectDeps,
-			consumeLhs,
-			defineVars,
-		}
-	}else{
-		enum Stage{
-			consumeLhs,
-			defineVars,
-		}
+	enum Stage{
+		collectDeps,
+		consumeLhs,
+		defineVars,
 	}
-	static if(language==silq){
-		MapX!(Declaration,Dependency) dependencies;
-		int curDependency;
-	}
+	MapX!(Declaration,Dependency) dependencies;
 	MapX!(Declaration,Declaration) consumed;
 	MapX!(Id,Declaration) defined;
 	void updateVars(Expression lhs,Expression rhs,Stage stage){
@@ -5234,29 +5206,25 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 					}
 					auto decl=id.meaning;
 					final switch(stage){
-						static if(language==silq){
-							case Stage.collectDeps:
-								auto dep=rhsdep.dup;
-								if(indexed){
-									dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
-									if(decl in dependencies) dep.joinWith(dependencies[decl]);
-								}
-								if(decl in dep.dependencies){
-									dep.remove(decl);
-									dep.joinWith(sc.getDependency(decl));
-								}
-								dependencies[decl]=dep;
-								break;
-						}
+						case Stage.collectDeps:
+							auto dep=rhsdep.dup;
+							if(indexed){
+								dep.joinWith(lhs.getDependency(sc)); // TODO: index-aware dependency tracking?
+								if(decl in dependencies) dep.joinWith(dependencies[decl]);
+							}
+							if(decl in dep.dependencies){
+								dep.remove(decl);
+								dep.joinWith(sc.getDependency(decl));
+							}
+							dependencies[decl]=dep;
+							break;
 						case Stage.consumeLhs:
 							if(decl !in consumed){
 								if(!indexed) id.constLookup=false;
 								if(decl.scope_ is sc){
 									sc.unconsume(decl);
-									static if(language==silq){
-										foreach(k,ref v;dependencies)
-											sc.pushUp(v,decl);
-									}
+									foreach(k,ref v;dependencies)
+										sc.pushUp(v,decl);
 									consumed[decl]=sc.consume(decl,id);
 								}else{
 									consumed[decl]=decl;
@@ -5277,11 +5245,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 									}
 								}
 								auto var=addVar(origId,ntype,lhs.loc,sc);
-								static if(language==silq){
-									if(var.scope_ is sc){
-										if(ntype.isClassical) sc.addDefaultDependency(var);
-										else sc.addDependency(var,ntype.isClassical?Dependency(false):dependencies[decl]);
-									}
+								if(var.scope_ is sc){
+									if(ntype.isClassical) sc.addDefaultDependency(var);
+									else sc.addDependency(var,ntype.isClassical?Dependency(false):dependencies[decl]);
 								}
 								defined[decl.getId]=var;
 								ae.replacements~=AssignExp.Replacement(consumed[decl],var);
@@ -5323,11 +5289,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}
 		return updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
 	}
-	static if(language==silq)
-		updateVars(ae.e1,ae.e2,Stage.collectDeps);
+	updateVars(ae.e1,ae.e2,Stage.collectDeps);
 	updateVars(ae.e1,ae.e2,Stage.consumeLhs);
-	static if(language==silq)
-		sc.clearConsumed();
+	sc.clearConsumed();
 	updateVars(ae.e1,ae.e2,Stage.defineVars);
 	ae.type=unit;
 	if(!ae.isSemError()){
@@ -5383,7 +5347,6 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 }do{
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
-	static if(language==silq)
 	Expression oe1=be.e1;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -5535,8 +5498,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		void consume(){
 			id.constLookup=false;
 			sc.consume(id.meaning,id);
-			static if(language==silq)
-				sc.clearConsumed();
+			sc.clearConsumed();
 		}
 		void define(Dependency dependency){
 			auto origId=id.meaning.name.id;
@@ -5552,18 +5514,12 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 				be.setSemError();
 			}
 		}
-		static if(language==silq){
-			bool ok=false;
-			auto dependency=sc.getDependency(id.meaning);
-			auto rhsDep=be.e2.getDependency(sc);
-			rhsDep.remove(id.meaning);
-			dependency.joinWith(rhsDep);
-			consume();
-			define(dependency);
-		}else{
-			consume();
-			define();
-		}
+		auto dependency=sc.getDependency(id.meaning);
+		auto rhsDep=be.e2.getDependency(sc);
+		rhsDep.remove(id.meaning);
+		dependency.joinWith(rhsDep);
+		consume();
+		define(dependency);
 	}
 	be.type=unit;
 	if(!be.isSemError()){
@@ -6835,30 +6791,28 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				}
 				if(auto nmeaning=sc.consume(meaning,id))
 					meaning=nmeaning;
-				static if(language==silq){
-					if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
-						id.scope_=sc;
-						id.byRef=true;
-						assert(!!meaning);
-						id.meaning=meaning;
-						id.type=id.typeFromMeaning;
-						if(!id.type||meaning.isSemError()){
-							if(!meaning.isSemError())
-								context.sc.error(format("cannot determine type for `%s`",id),id.loc);
-							id.setSemError();
-							return false;
-						}else id.setSemCompleted();
-						sc.lastUses.synthesizedForget(meaning,id,sc,fe);
-						return true;
-					}else{
-						if(!meaning.isSemError()){
-							sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
-							meaning.setSemForceError();
-						}
+				if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
+					id.scope_=sc;
+					id.byRef=true;
+					assert(!!meaning);
+					id.meaning=meaning;
+					id.type=id.typeFromMeaning;
+					if(!id.type||meaning.isSemError()){
+						if(!meaning.isSemError())
+							context.sc.error(format("cannot determine type for `%s`",id),id.loc);
 						id.setSemError();
 						return false;
+					}else id.setSemCompleted();
+					sc.lastUses.synthesizedForget(meaning,id,sc,fe);
+					return true;
+				}else{
+					if(!meaning.isSemError()){
+						sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
+						meaning.setSemForceError();
 					}
-				}else return true;
+					id.setSemError();
+					return false;
+				}
 			}else{
 				undefinedIdentifierError(id,failures,sc);
 				return false;
