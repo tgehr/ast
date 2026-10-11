@@ -5505,8 +5505,16 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			assert(!var);
 			var=addVar(origId,ce.type,be.loc,sc);
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
-			if(var.scope_ is sc)
+			if(var.scope_ is sc){
 				sc.addDependency(var,dependency);
+				static if(language==silq){
+					var.definitionReads.insert(id.meaning);
+					foreach(x;be.e2.subexpressions)
+						if(auto rid=cast(Identifier)x)
+							if(rid.meaning&&(rid.constLookup||rid.implicitDup))
+								var.definitionReads.insert(rid.meaning);
+				}
+			}
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
 			if(to&&(isFixedIntTy(to)||isℤmodTy(to))&&!joinTypes(from,to)){ // TODO: generalize?
 				sc.error(format("operator assign from type `%s` to type `%s` is disallowed",from,to),be.loc);

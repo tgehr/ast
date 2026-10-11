@@ -276,28 +276,55 @@ final class LastUse{
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
-					lu.updateDependenciesOnConsumptionLocal(); // (including forgets in nested scopes of the branches)
+					lu.updateDependenciesOnConsumptionLocal(true,parent.splitInto.length>1); // (including forgets in nested scopes of the branches)
 				}
 			}
 		}else updateDependenciesOnConsumptionLocal();
+	}
+	private static bool isClassicalDecl(Declaration d){ // (it depends on quantum values only through control)
+		import ast.semantic_:typeForDecl;
+		auto ty=typeForDecl(d);
+		return ty&&ty.isClassical();
 	}
 	private bool definedInScope(Declaration d){
 		import std.algorithm:all;
 		return d.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(scope_));
 	}
 	private bool readSplitAtDefinition(Declaration d){
-		import std.algorithm:any;
-		if(decl.splitSequence.any!(x=>x in d.definitionReads)) return true;
-		foreach(r;d.definitionReads) if(r.isSplitFrom(decl)) return true; // (a further split in a nested scope)
-		return false;
+		bool related(Declaration x){ return x is decl||x.isSplitFrom(decl)||decl.isSplitFrom(x); }
+		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
+		SetX!Declaration visited;
+		bool reads=false;
+		bool ok(Declaration x){
+			if(related(x)){ reads=true; return true; }
+			if(x in visited) return true;
+			visited.insert(x);
+			auto outer=!inScope(x)?x:x.splitFrom&&!inScope(x.splitFrom)?x.splitFrom:null;
+			if(outer){
+				static if(language==silq) if(auto osc=outer.scope_) if(osc.dependencyTracked(outer)){
+					auto dep=osc.getDependency(outer);
+					if(!dep.isTop) foreach(y;dep.dependencies) if(related(y)) return false;
+				}
+				return true;
+			}
+			if(x.splitFrom) return ok(x.splitFrom);
+			foreach(m;x.mergedFrom) if(!ok(m)) return false;
+			foreach(r;x.definitionReads) if(!ok(r)) return false;
+			return true;
+		}
+		return ok(d)&&reads;
 	}
-	private void updateDependenciesOnConsumptionLocal(bool descend=true){
+	private void updateDependenciesOnConsumptionLocal(bool descend=true,bool fromBranch=false){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
 		auto start=next;
 		if(splitFrom){
-			for(start=this;start&&start.prev&&start.prev.splitFrom;)
+			if(fromBranch){ // (all last uses in the branch, including those merged from nested scopes)
+				start=scope_.lastUses.lastLastUse;
+				while(start&&start.prev) start=start.prev;
+				if(!start) start=this;
+			}else for(start=this;start&&start.prev&&start.prev.splitFrom;)
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
 		SetX!LastUse visited;
@@ -320,7 +347,7 @@ final class LastUse{
 			visited.insert(lu);
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited) continue;
-			if(splitFrom&&!isConsumption()&&lu.decl&&definedInScope(lu.decl)&&readSplitAtDefinition(lu.decl)) continue;
+			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested) replaceVersions(lu.dep,decl,cdep);
 			else lu.dep.replace(decl,cdep);
