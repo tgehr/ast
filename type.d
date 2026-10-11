@@ -24,6 +24,8 @@ static if(language==silq){
 	enum Annotation{
 		none,
 		pure_,
+		mfree=pure_, // (for code shared with Silq)
+		qfree=pure_, // (for code shared with Silq)
 	}
 	enum deterministic=Annotation.pure_;
 	enum pure_=Annotation.pure_;
@@ -848,7 +850,10 @@ class StringTy: Type{
 
 StringTy stringTy(bool classical=true){
 	static if(language==silq) return memoize!((bool classical)=>new StringTy(classical))(classical);
-	else return memoize!(()=>new StringTy(true));
+	else{
+		static StringTy theStringTy;
+		return theStringTy?theStringTy:(theStringTy=new StringTy(true));
+	}
 }
 
 string captureAnnotationToString(CaptureAnnotation captureAnnotation){
@@ -1774,79 +1779,61 @@ bool hasFreeIdentifier(Expression self,Id name){
 }
 
 
-static if(language==silq){
-	private enum TypeType {
-		etype,
-		utype,
-		ctype,
-		qtype,
-		mtype,
-		badty,
-	}
-	private immutable TypeType[5][5] typeJoin = [
-		[TypeType.etype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
-		[TypeType.ctype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
-		[TypeType.ctype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
-		[TypeType.mtype, TypeType.qtype, TypeType.mtype, TypeType.qtype, TypeType.mtype],
-		[TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype],
-	];
-	private immutable TypeType[5][5] typeMeet = [
-		[TypeType.etype, TypeType.badty, TypeType.etype, TypeType.badty, TypeType.etype],
-		[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.utype, TypeType.utype],
-		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.utype, TypeType.ctype],
-		[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.qtype, TypeType.qtype],
-		[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
-	];
+// kinds (in PSI, all types are classical: `*` denotes `ctype` and `qtype` is not used)
+private enum TypeType {
+	etype,
+	utype,
+	ctype,
+	qtype,
+	mtype,
+	badty,
 }
+private immutable TypeType[5][5] typeJoin = [
+	[TypeType.etype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
+	[TypeType.ctype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+	[TypeType.ctype, TypeType.ctype, TypeType.ctype, TypeType.mtype, TypeType.mtype],
+	[TypeType.mtype, TypeType.qtype, TypeType.mtype, TypeType.qtype, TypeType.mtype],
+	[TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype, TypeType.mtype],
+];
+private immutable TypeType[5][5] typeMeet = [
+	[TypeType.etype, TypeType.badty, TypeType.etype, TypeType.badty, TypeType.etype],
+	[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.utype, TypeType.utype],
+	[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.utype, TypeType.ctype],
+	[TypeType.badty, TypeType.utype, TypeType.utype, TypeType.qtype, TypeType.qtype],
+	[TypeType.etype, TypeType.utype, TypeType.ctype, TypeType.qtype, TypeType.mtype],
+];
 
 class TypeTy: Type{
-	static if(language==silq){
-		private TypeType tyty;
-		private this(TypeType tyty){
-			assert(theTypeTys[tyty] is null, "types are singletons");
-			this.tyty = tyty;
-			// TODO: types capturing quantum values?
-			this.type=(tyty == TypeType.ctype ? this : ctypeTy());
-			setSemEvaluated();
+	private TypeType tyty;
+	private this(TypeType tyty){
+		assert(theTypeTys[tyty] is null, "types are singletons");
+		static if(language==psi) assert(tyty!=TypeType.mtype);
+		this.tyty = tyty;
+		// TODO: types capturing quantum values?
+		this.type=(tyty == TypeType.ctype ? this : ctypeTy());
+		setSemEvaluated();
+	}
+	override string toString(){
+		final switch(tyty) {
+			case TypeType.etype: return "etype";
+			case TypeType.utype: return "utype";
+			case TypeType.ctype: return language==psi?"*":"ctype";
+			case TypeType.qtype: return "qtype";
+			case TypeType.mtype: return "*";
+			case TypeType.badty: return "null";
 		}
-		override string toString(){
-			final switch(tyty) {
-				case TypeType.etype: return "etype";
-				case TypeType.utype: return "utype";
-				case TypeType.ctype: return "ctype";
-				case TypeType.qtype: return "qtype";
-				case TypeType.mtype: return "*";
-				case TypeType.badty: return "null";
-			}
-		}
-		override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
-			assert(r !is this);
-			auto ty=cast(TypeTy)r;
-			if(!ty) return false;
-			return typeJoin[this.tyty][ty.tyty] == ty.tyty;
-		}
-		override Expression combineTypesImpl(Expression r,bool meet){
-			assert(r !is this);
-			auto ty=cast(TypeTy)r;
-			if(!ty) return null;
-			return typeTyImpl(meet ? typeMeet[this.tyty][ty.tyty] : typeJoin[this.tyty][ty.tyty]);
-		}
-	} else {
-		private this() {
-			this.type=this;
-			super();
-		}
-		override string toString(){
-			return "*";
-		}
-		override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
-			assert(r !is this);
-			return false;
-		}
-		override Expression combineTypesImpl(Expression r,bool meet){
-			assert(r !is this);
-			return null;
-		}
+	}
+	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
+		assert(r !is this);
+		auto ty=cast(TypeTy)r;
+		if(!ty) return false;
+		return typeJoin[this.tyty][ty.tyty] == ty.tyty;
+	}
+	override Expression combineTypesImpl(Expression r,bool meet){
+		assert(r !is this);
+		auto ty=cast(TypeTy)r;
+		if(!ty) return null;
+		return typeTyImpl(meet ? typeMeet[this.tyty][ty.tyty] : typeJoin[this.tyty][ty.tyty]);
 	}
 	override TypeTy copyImpl(CopyArgs args){
 		return this;
@@ -1859,25 +1846,17 @@ class TypeTy: Type{
 }
 
 
-static if(language==silq){
-	private TypeTy[5] theTypeTys;
-	private TypeTy typeTyImpl(TypeType tyty) {
-		if(tyty==TypeType.badty) return null;
-		return theTypeTys[tyty] ? theTypeTys[tyty] : (theTypeTys[tyty] = new TypeTy(tyty));
-	}
-	TypeTy etypeTy(){ return typeTyImpl(TypeType.etype); }
-	TypeTy utypeTy(){ return typeTyImpl(TypeType.utype); }
-	TypeTy ctypeTy(){ return typeTyImpl(TypeType.ctype); }
-	TypeTy qtypeTy(){ return typeTyImpl(TypeType.qtype); }
-	TypeTy typeTy(){ return typeTyImpl(TypeType.mtype); }
-}else{
-	private TypeTy theTypeTy;
-	TypeTy typeTy(){ return theTypeTy?theTypeTy:(theTypeTy=new TypeTy()); }
-	alias etypeTy=typeTy;
-	alias utypeTy=typeTy;
-	alias ctypeTy=typeTy;
-	alias qtypeTy=typeTy;
+private TypeTy[5] theTypeTys;
+private TypeTy typeTyImpl(TypeType tyty) {
+	if(tyty==TypeType.badty) return null;
+	static if(language==psi) if(tyty==TypeType.mtype) tyty=TypeType.ctype; // (no quantum types in PSI: `*` is `ctype`, `qtype` is unused)
+	return theTypeTys[tyty] ? theTypeTys[tyty] : (theTypeTys[tyty] = new TypeTy(tyty));
 }
+TypeTy etypeTy(){ return typeTyImpl(TypeType.etype); }
+TypeTy utypeTy(){ return typeTyImpl(TypeType.utype); }
+TypeTy ctypeTy(){ return typeTyImpl(TypeType.ctype); }
+TypeTy qtypeTy(){ return typeTyImpl(TypeType.qtype); }
+TypeTy typeTy(){ return typeTyImpl(TypeType.mtype); }
 
 bool isTypeTy(Expression e){ return isSubtype(e,typeTy); }
 bool isType(Expression e){ return e&&isTypeTy(e.type); }
@@ -1913,8 +1892,7 @@ Expression typeOfBoolTy(bool classical){
 	return classical?ctypeTy:qtypeTy;
 }
 
-static if(language==silq)
-class QNumericTy: Type{
+class QNumericTy: Type{ // (only used in Silq)
 	this(){
 		this.type=ctypeTy;
 		setSemEvaluated();
@@ -1934,15 +1912,13 @@ class QNumericTy: Type{
 		return 0;
 	}
 }
-static if(language==silq){
-	private QNumericTy theQNumericTy;
-	QNumericTy qnumericTy(){ return theQNumericTy?theQNumericTy:(theQNumericTy=new QNumericTy()); }
-	bool isQNumericTy(Expression e){ return e==qnumericTy; }
-	bool isQNumeric(Expression e){ return e&&isQNumericTy(e.type); }
-}else{
-	bool isQNumericTy(Expression e){ return false; }
-	bool isQNumeric(Expression e){ return false; }
+private QNumericTy theQNumericTy;
+QNumericTy qnumericTy(){ return theQNumericTy?theQNumericTy:(theQNumericTy=new QNumericTy()); }
+bool isQNumericTy(Expression e){
+	static if(language==silq) return e==qnumericTy;
+	else return false;
 }
+bool isQNumeric(Expression e){ return e&&isQNumericTy(e.type); }
 
 Expression typeOfNumericTy(bool classical){
 	if(classical) return ctypeTy;

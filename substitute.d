@@ -274,6 +274,11 @@ static if(language==silq)
 private int stmtBoundVars(WithExp we,scope int delegate(Identifier) dg){
 	return 0; // names bound by a `with` block are local to the construct
 }
+static if(language==psi)
+private int stmtBoundVars(DatDecl dd,scope int delegate(Identifier) dg){
+	auto name=dd.rename?dd.rename:dd.name;
+	return name?dg(name):0;
+}
 private int stmtBoundVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
 	return 0;
 }
@@ -338,6 +343,13 @@ private int stmtFreeVars(WithExp we,scope int delegate(Identifier) dg){
 private int stmtFreeVars(DefineExp de,scope int delegate(Identifier) dg){
 	if(auto r=de.e2.freeVarsImpl(dg)) return r;
 	return defineLhsFreeVarsImpl(de.e1,dg);
+}
+static if(language==psi)
+private int stmtFreeVars(DatDecl dd,scope int delegate(Identifier) dg){
+	foreach(decl;dd.capturedDecls) // (captures are only known after semantic analysis)
+		foreach(id;dd.captures[decl])
+			if(auto r=dg(id)) return r;
+	return 0;
 }
 private int stmtFreeVarsDefault(Expression stmt,scope int delegate(Identifier) dg){
 	return stmt.freeVarsImpl(dg);
@@ -405,6 +417,9 @@ private void collectBoundNames(T)(T stmt,ref SetX!Id names)
 }
 static if(language==silq)
 private void collectBoundNames(WithExp we,ref SetX!Id names){
+}
+static if(language==psi)
+private void collectBoundNames(DatDecl dd,ref SetX!Id names){
 }
 private void collectBoundNamesDefault(Expression stmt,ref SetX!Id names){
 	if(auto le=cast(LetExp)stmt) foreach(x;le.s.s) collectBoundNamesImpl(x,names);
@@ -703,6 +718,10 @@ private Expression substStm(AAssignExp ae,ref BlockSubst ctx){
 	r.type=null;
 	r.sstate=SemState.initial;
 	return finishStatement(r,ae,ctx);
+}
+static if(language==psi)
+private Expression substStm(DatDecl dd,ref BlockSubst ctx){
+	return dd; // TODO: substitute into data type declarations?
 }
 private Expression substStmDefault(Expression stmt,ref BlockSubst ctx){
 	// expression-statements are substituted as lvalues
@@ -1280,6 +1299,10 @@ private void walkStmt(T)(T stmt,Expression twstmt,Scope fparent,MapSX!(Declarati
 	if(is(T==CallExp)||is(T==TypeAnnotationExp)||is(T==ReturnExp)||is(T==ForgetExp)||is(T==AssertExp)||is(T==ObserveExp)||is(T==CObserveExp)||is(T==DefineExp)||is(T:AAssignExp))
 {
 	// statements without nested blocks need no scope remapping
+}
+static if(language==psi)
+private void walkStmt(DatDecl dd,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
+	// TODO: remap the scopes of data type declarations?
 }
 private void walkStmtDefault(Expression stmt,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	if(auto le=cast(LetExp)stmt){

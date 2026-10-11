@@ -146,10 +146,12 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 		auto f=ce.e, ft=cast(ProductTy)f.type;
 		if(!ft) return false;
 		if(ce.isSquare!=ft.isSquare) return false;
-		if(ce.checkReverse&&!unchecked){
-			auto r=reverseCallRewriter(ft,ce.loc);
-			if(r.movedType.hasClassicalComponent()){
-				return false;
+		static if(language==silq){
+			if(ce.checkReverse&&!unchecked){
+				auto r=reverseCallRewriter(ft,ce.loc);
+				if(r.movedType.hasClassicalComponent()){
+					return false;
+				}
 			}
 		}
 		// if(!equal(ft.isConst,ft.isConstForReverse)) return false; // TODO: can we completely rewrite away isConstForReverse?

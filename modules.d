@@ -67,22 +67,25 @@ Scope getPreludeScope(ErrorHandler err, Location loc){
 	import ast.type;
 	if(preludeScope) return preludeScope;
 	preludeScope = new TopScope(".prelude",err);
-	foreach(name, value; [
+	Expression[string] builtinTypes=[
 		"𝔹": Bool(false),
 		"⊥": bottom(),
 		"𝟙": unit(),
 		"*": typeTy(),
-		"ctype": ctypeTy(),
-		"etype": etypeTy(),
-		"qtype": qtypeTy(),
-		"utype": utypeTy(),
-		"qnumeric": qnumericTy(),
 		"ℕ": ℕt(false),
 		"ℤ": ℤt(false),
 		"ℚ": ℚt(false),
 		"ℝ": ℝ(false),
 		"ℂ": ℂ(false),
-	]) {
+	];
+	static if(language==silq){
+		builtinTypes["ctype"]=ctypeTy();
+		builtinTypes["etype"]=etypeTy();
+		builtinTypes["qtype"]=qtypeTy();
+		builtinTypes["utype"]=utypeTy();
+		builtinTypes["qnumeric"]=qnumericTy();
+	}
+	foreach(name,value; builtinTypes){
 		auto id = new Identifier(name);
 		auto vd = new VarDecl(id);
 		id.meaning = vd;

@@ -3070,7 +3070,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				cc.e=mkId(Id.s!"dup");
 				cc.arg=mkId(temps[j]);
 				cc.isSquare=false;
-				cc.isClassical_=false;
+				static if(language==silq) cc.isClassical_=false;
 			}
 		}
 		return rename(c,names);

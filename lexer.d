@@ -171,16 +171,19 @@ string[2][] specialTokens =
 
 string[2][] compoundTokens = [];
 
-string[] keywords = ["dat","def","true","false","if","then","else","observe","assert","return","repeat","for","while","in","cobserve","import","Π","Pi","∏","cprod","as","coerce","pun","forget","typeof","_","wild","let"]~(language==psi?["pure"]:[])~(language==silq?["λ","lambda","quantum","const","moved","once","spent","lifted","qfree","mfree","classical","do","with"]:[]);
+string[] commonKeywords = ["dat","def","true","false","if","then","else","observe","assert","return","repeat","for","while","in","cobserve","import","Π","Pi","∏","cprod","as","coerce","pun","forget","typeof","_","wild","let"];
+string[] psiKeywords = ["pure"];
+string[] silqKeywords = ["λ","lambda","quantum","const","moved","once","spent","lifted","qfree","mfree","classical","do","with"];
 
+string[] keywords = commonKeywords~(language==psi?psiKeywords:[])~(language==silq?silqKeywords:[]);
 
-string[2][] tokens = specialTokens ~ complexTokens ~ simpleTokens ~ unicodeTokens ~ compoundTokens ~ keywordTokens();
+string[2][] tokens = specialTokens ~ complexTokens ~ simpleTokens ~ unicodeTokens ~ compoundTokens ~ keywordTokens(commonKeywords~psiKeywords~silqKeywords);
 }
 
 private{
-auto keywordTokens(){
+auto keywordTokens(immutable(string)[] allKeywords){
 	immutable(string[2])[] r;
-	foreach(i,kw;keywords){
+	foreach(i,kw;allKeywords){
 		if(kw=="∏") r~=[kw,"ucprod_"];
 		else r~=[kw,kw~"_"];
 	}

@@ -1392,7 +1392,7 @@ class IndexExp: Expression{ //e[a]
 	override IndexExp copyImpl(CopyArgs args){
 		auto r=new IndexExp(e.copy(args),a.copy(args));
 		r.isArraySyntax=isArraySyntax;
-		r.isClassical_=isClassical_;
+		static if(language==silq) r.isClassical_=isClassical_;
 		return r;
 	}
 	mixin PrecedenceToString;
@@ -1491,7 +1491,7 @@ class IndexExp: Expression{ //e[a]
 		if(ne is e && na is a) return this;
 		auto r=new IndexExp(ne,na);
 		r.isArraySyntax=isArraySyntax;
-		r.isClassical_=isClassical_;
+		static if(language==silq) r.isClassical_=isClassical_;
 		return r;
 	}
 

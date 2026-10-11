@@ -175,10 +175,11 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 			}).array;
 			assert(dsc.decl.isTuple||args.length==1);
 			auto ce = new CallExp(ctxty, dsc.decl.isTuple ? new TupleExp(args) : args[0], true, false);
-			ctxty = callSemantic(ce, ExpSemContext.forType(sc));
+			ctxty = expressionSemantic(ce, ExpSemContext.forType(sc));
 			assert(ctxty.isSemCompleted());
 			assert(isType(ctxty));
 		}
+		ctxty=ctxty.eval();
 		if(dsc.decl.name.name==fd.name.name){
 			assert(!fd.body_||!!fd.body_.blscope_);
 			fd.isConstructor=true;
@@ -201,13 +202,8 @@ void prepareFunctionDef(FunctionDef fd,Scope sc){
 			if(!fd.body_.s.length||!cast(ReturnExp)fd.body_.s[$-1]){
 				auto thisid=new Identifier(thisVar.getName);
 				thisid.loc=fd.loc;
-				thisid.scope_=fd.body_.blscope_;
-				thisid.meaning=thisVar;
-				thisid.type=ctxty;
-				thisid.setSemCompleted();
-				auto rete=new ReturnExp(thisid);
+				auto rete=new ReturnExp(thisid); // (analyzed together with the constructor body)
 				rete.loc=thisid.loc;
-				rete.setSemCompleted();
 				fd.body_.s~=rete;
 			}
 		}else{
@@ -528,6 +524,7 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 					expr=reanalyzePassiveFunction(fd);
 					continue;
 				}
+				static if(language==psi) finalizeRetNames(fd);
 			}
 			expr.setSemCompleted();
 		}
@@ -787,6 +784,10 @@ BuiltIn isBuiltInCall(CallExp ce){
 	if(!ce) return BuiltIn.none;
 	return isBuiltIn(cast(Identifier)ce.e);
 }
+bool isLhsBuiltInCall(CallExp ce){ // built-ins that can be called on the left-hand side of a definition
+	static if(language==silq) return !!util.among(isBuiltInCall(ce),BuiltIn.qabort,BuiltIn.dummy);
+	else return false;
+}
 
 string isPrimitive(Expression e){
 	auto id = cast(Identifier)e;
@@ -833,7 +834,9 @@ Expression getDistribution(Location loc,Scope sc){
 
 static if(language==psi)
 Expression distributionTy(Expression base,Scope sc){
-	return typeSemantic(new CallExp(getDistribution(base.loc,sc),base,true,true),sc);
+	auto ce=new CallExp(getDistribution(base.loc,sc),base,true,true);
+	ce.loc=base.loc;
+	return typeSemantic(expressionSemantic(ce,ExpSemContext.forType(sc)),sc);
 }
 
 Expression builtIn(Identifier id,Scope sc){
@@ -942,7 +945,10 @@ CompoundDecl compoundDeclSemantic(CompoundDecl cd,Scope sc){
 	auto asc=cd.ascope_;
 	if(!asc) asc=new AggregateScope(sc);
 	++asc.getDatDecl().semanticDepth;
-	scope(exit) if(--asc.getDatDecl().semanticDepth==0&&asc.close()) cd.setSemError(); // TODO: fix
+	scope(exit) if(--asc.getDatDecl().semanticDepth==0){
+		static if(language==silq) if(asc.close()) cd.setSemError(); // TODO: fix
+		// (in PSI, fields and methods remain accessible through the aggregate scope)
+	}
 	cd.ascope_=asc;
 	bool success=true; // dummy
 	foreach(ref e;cd.s) e=makeDeclaration(e,success,asc,false,false);
@@ -1959,6 +1965,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 }
 
 Expression statementSemanticImpl(ObserveExp oe,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==psi) inferImpure(sc);
 	oe.e=conditionSemantic(oe,oe.e,sc,InType.no);
 	propErr(oe.e,oe);
 	oe.type=isFalse(oe.e)?bottom:unit;
@@ -1966,6 +1973,7 @@ Expression statementSemanticImpl(ObserveExp oe,Scope sc,ref StmFlags flags,bool 
 }
 
 Expression statementSemanticImpl(CObserveExp oe,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==psi) inferImpure(sc);
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	oe.var=expressionSemantic(oe.var,context.nestConst);
 	oe.val=expressionSemantic(oe.val,context.nestConst);
@@ -4839,14 +4847,26 @@ Expression updatedType(Expression lhs,Expression rhsty,Expression baseTyOverride
 	if(cast(Identifier)lhs) return rhsty;
 	Identifier base;
 	Expression[] indices;
+	FieldExp field=null;
 	void collect(Expression e){
 		if(auto id=cast(Identifier)e){ base=id; return; }
+		if(auto fe=cast(FieldExp)e){
+			collect(fe.e);
+			field=fe;
+			indices=[];
+			return;
+		}
 		auto idx=cast(IndexExp)e;
 		assert(!!idx,text(lhs));
 		collect(idx.e);
 		indices~=idx.a;
 	}
 	collect(lhs);
+	if(field){ // fields are not updated strongly
+		auto ntype=updatedType(field.type,indices,rhsty);
+		if(!ntype||!isSubtype(ntype,field.type)) return null;
+		return baseTyOverride?baseTyOverride:base.type;
+	}
 	return updatedType(baseTyOverride?baseTyOverride:base.type,indices,rhsty);
 }
 
@@ -5070,6 +5090,25 @@ LetExp patternForgetLet(Expression b,Identifier[] vars){
 
 Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
+	static if(language==psi){ // e.g., `(a,(b,c))[1] = e` assigns `e` to `(b,c)`
+		Expression selectTupleComponents(Expression lhs){
+			if(auto idx=cast(IndexExp)lhs){
+				auto e=selectTupleComponents(idx.e);
+				if(auto tpl=cast(TupleExp)e){
+					if(auto lit=cast(LiteralExp)idx.a){
+						if(lit.lit.type==Tok!"0"&&lit.lit.str.length&&lit.lit.str.all!(c=>'0'<=c&&c<='9')){
+							auto i=lit.lit.str.to!size_t;
+							if(i<tpl.length) return tpl.e[i];
+						}
+					}
+				}
+			}else if(auto tpl=cast(TupleExp)lhs){
+				foreach(ref e;tpl.e) e=selectTupleComponents(e);
+			}
+			return lhs;
+		}
+		ae.e1=selectTupleComponents(ae.e1);
+	}
 	static if(language==silq)
 	if(sc.allowsLinear&&hasPatternLhs(ae.e1)){ // TODO: handle via `with` instead?
 		Identifier[] vars;
@@ -5144,6 +5183,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}else if(auto tpl=cast(TupleExp)lhs){
 			foreach(exp;tpl.e)
 				prepareLhs(exp);
+		}else if(auto tae=cast(TypeAnnotationExp)lhs){
+			prepareLhs(tae.e);
 		}
 	}
 	prepareLhs(ae.e1);
@@ -5163,7 +5204,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				ae.setSemError();
-			}else if(!!id.meaning){
+			}else if(!!id.meaning&&!(language==psi&&indexed)){ // (in PSI, indexed aggregates are updated, not forgotten)
 				assert(!id.constLookup);
 				sc.lastUses.synthesizedForget(id.meaning,id,sc,ae);
 			}
@@ -5266,7 +5307,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 							if(decl !in consumed){
 								if(!indexed) id.constLookup=false;
 								if(decl.scope_ is sc){
-									sc.unconsume(decl);
+									if(sc.rnsymtab.get(decl.getId,null) !is decl) // (indexed aggregates are not consumed by lookup)
+										sc.unconsume(decl);
 									foreach(k,ref v;dependencies)
 										sc.pushUp(v,decl);
 									consumed[decl]=sc.consume(decl,id);
@@ -5483,21 +5525,21 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		return be;
 	}
 	checkIndexReplacement(be,sc);
-	void checkULhs(Expression lhs){
+	void checkULhs(Expression lhs,bool indexed=false){
 		if(auto id=cast(Identifier)lhs){
 			bool isReversible=!!isInvertibleOpAssignExp(be);
 			if(!checkAssignable(id.meaning,id.loc,sc,isReversible)){
 				id.setSemForceError();
 				if(id.meaning) id.meaning.setSemForceError();
 				be.setSemError();
-			}else if(!isReversible){
+			}else if(!isReversible&&!(language==psi&&indexed)){ // (in PSI, indexed aggregates are updated, not forgotten)
 				assert(!!id.meaning&&!id.constLookup);
 				sc.lastUses.synthesizedForget(id.meaning,id,sc,be);
 			}
 		}else if(auto idx=cast(IndexExp)lhs){
-			checkULhs(idx.e);
+			checkULhs(idx.e,true);
 		}else if(auto fe=cast(FieldExp)lhs){
-			checkULhs(fe.e);
+			checkULhs(fe.e,true);
 		}else{
 		LbadAssgnmLhs:
 			sc.error(format("cannot update-assign to %s",lhs),be.e1.loc);
@@ -6010,7 +6052,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						if(ft.annotation==Annotation.none){
 							sc.error(format("cannot call function `%s` in `%s` context", ce.e, annotationToString(restriction)), ce.loc);
 						}else{
-							sc.error(format("cannot call `%s` function `%s` in `%s` context", ft.annotation, ce.e, annotationToString(restriction)), ce.loc);
+							sc.error(format("cannot call `%s` function `%s` in `%s` context", annotationToString(ft.annotation), ce.e, annotationToString(restriction)), ce.loc);
 						}
 						// TODO: inference trace
 						ce.setSemError();
@@ -6058,7 +6100,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}else static if(language==psi){
 					bool pure_=exp.isPure();
-					if(!isPure()){
+					if(!pure_){
 						reportImpure();
 						ce.setSemError();
 						error=true;
@@ -6112,7 +6154,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					static if(isRhs) enum msg="wrong number of arguments for function (%s instead of %s)";
 					else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
 					sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
-					tpl.setSemError();
+					tpl.setSemForceError(); // (the arguments may have been analyzed already)
 					error=true;
 				}
 				bool defaultIsConst=ft.isSquare;
@@ -6453,13 +6495,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			ce.e=nfun;
 			return callSemantic(ce,context);
 		}
-	}else if(isBuiltInCall(ce)==BuiltIn.qabort){
-		static if(!isRhs){
+	}else if(isLhsBuiltInCall(ce)){
+		static if(!isRhs&&language==silq){
+			if(isBuiltInCall(ce)==BuiltIn.dummy)
+				return qabortSemantic!(isPresemantic,T,"__dummy")(ce,context);
 			return qabortSemantic!isPresemantic(ce,context);
-		}else assert(0);
-	}else if(isBuiltInCall(ce)==BuiltIn.dummy){
-		static if(!isRhs){
-			return qabortSemantic!(isPresemantic,T,"__dummy")(ce,context);
 		}else assert(0);
 	}else{
 		sc.error(format("cannot call expression of type `%s`",fun.type),ce.loc);
@@ -6911,7 +6951,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		static if(language!=silq){
 			bool checkVar(Expression var){
 				if(cast(Identifier)var) return true;
-				if(te=cast(TupleExp)var) return tpl.e.all!checkVar;
+				if(auto tpl=cast(TupleExp)var) return tpl.e.all!checkVar;
 				return false;
 			}
 			if(!checkVar(fe.var)){
@@ -7816,7 +7856,7 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 		if(!fixed){
 			if(ft.annotation==Annotation.none)
 				sc.error(format("cannot evaluate vector comprehension in `%s` context",annotationToString(restriction)),vfe.loc);
-			else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",ft.annotation,annotationToString(restriction)),vfe.loc);
+			else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",annotationToString(ft.annotation),annotationToString(restriction)),vfe.loc);
 			vfe.setSemError();
 			return vfe;
 		}
@@ -7848,7 +7888,10 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	if(!tae.type) assert(tae.isSemError());
 	switch(isBuiltInCall(cast(CallExp)tae.e)){
 		static if(language==psi){
-			case BuiltIn.sampleFrom,BuiltIn.readCSV:
+			case BuiltIn.sampleFrom: // (the type annotation determines the type of the result)
+				tae.e.type=tae.type;
+				break;
+			case BuiltIn.readCSV:
 				if(tae.type==arrayTy(arrayTy(ℝ(true))))
 					tae.e.type=tae.type;
 				break;
@@ -8896,6 +8939,9 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 		if(expr&&!expr.isSemError()){
 			assert(!!expr.type);
 			expr.setSemCompleted();
+			if(auto id=cast(Identifier)expr) // (e.g., allows redefining variables that are moved on the right-hand side)
+				if(id.implicitDup&&id.meaning&&id.scope_ is sc&&!context.inType)
+					sc.recordImplicitDup(id);
 		}
 	}
 	return expr;
@@ -8926,6 +8972,7 @@ bool setFtype(FunctionDef fd,bool force){
 	auto captureAnnotation=fd.getCaptureAnnotation();
 	fd.ftype=productTy(pc,pn,pt,fd.ret?fd.ret:bottom,fd.isSquare,fd.isTuple,captureAnnotation,fd.annotation,!fd.context||fd.context.vtype==contextTy(true));
 	fd.seal();
+	static if(language==psi) 
 	if(fd.retNames.length!=fd.numReturns)
 		fd.retNames = new string[](fd.numReturns);
 	if(ftypeBefore!=fd.ftype){
@@ -9085,6 +9132,26 @@ void finalize()(FunctionDef fd){
 		resetFunctionDefsToUpdate(fd);
 	}
 }
+static if(language==psi)
+void finalizeRetNames(FunctionDef fd){ // make the names of the return values distinct from each other and from the parameters (idempotent)
+	foreach(ref n;fd.retNames){
+		if(n is null) n="r";
+		else n=n.stripRight('\'');
+	}
+	SetX!string vars;
+	foreach(p;fd.params) vars[p.getName]=[];
+	MapX!(string,int) counts1,counts2;
+	foreach(n;fd.retNames)
+		counts1[n] += 1;
+	foreach(ref n;fd.retNames){
+		if(counts1[n]>1){
+			counts2[n] += 1;
+			n~=lowNum(counts2[n]);
+		}
+		while(n in vars) n~="'";
+		vars[n]=[];
+	}
+}
 void notify(FunctionDef fd,FunctionDef ufd){
 	if(fd.numUpdatesPending==0) return; // already finalized
 	if(--fd.numUpdatesPending==0){
@@ -9102,6 +9169,7 @@ void notify(FunctionDef fd,FunctionDef ufd){
 			fd.ftypeFinal=true;
 			fd.inferringReturnType=false;
 			fd.inferAnnotation=false;
+			static if(language==psi) finalizeRetNames(fd);
 			finalize(fd);
 		}
 	}
@@ -9186,25 +9254,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.inferAnnotation=false;
 		fd.tainted=false;
 	}
-	if(fd.ftypeFinal){
-		foreach(ref n;fd.retNames){
-			if(n is null) n="r";
-			else n=n.stripRight('\'');
-		}
-		SetX!string vars;
-		foreach(p;fd.params) vars[p.getName]=[];
-		MapX!(string,int) counts1,counts2;
-		foreach(n;fd.retNames)
-			counts1[n] += 1;
-		foreach(ref n;fd.retNames){
-			if(counts1[n]>1){
-				counts2[n] += 1;
-				n~=lowNum(counts2[n]);
-			}
-			while(n in vars) n~="'";
-			vars[n]=[];
-		}
-	}
+	static if(language==psi) finalizeRetNames(fd); // (the return values of nested functions are named even if `fd.ftypeFinal` is never set)
 	auto dependents=fd.dependents;
 	auto numCapturesAfter=fd.capturedDecls.length;
 	static if(language==silq){
@@ -9449,12 +9499,14 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		if(util.among(r.stripRight('\''),"delta","sum","abs","log","lim","val","⊥","case","e","π","pi")) return null;
 		return r;
 	}
-	if(returns.length==fd.retNames.length){
-		foreach(i,e;returns)
-			if(auto n=getName(e)) fd.retNames[i]=n;
-	}else if(returns.length==1){
-		if(auto name=getName(returns[0]))
-			foreach(ref n;fd.retNames) n=name;
+	static if(language==psi){
+		if(returns.length==fd.retNames.length){
+			foreach(i,e;returns)
+				if(auto n=getName(e)) fd.retNames[i]=n;
+		}else if(returns.length==1){
+			if(auto name=getName(returns[0]))
+				foreach(ref n;fd.retNames) n=name;
+		}
 	}
 	static if(language==silq) erpRecordReturn(ret,sc);
 	return ret;
@@ -9558,7 +9610,7 @@ private bool definitelyReturnsImpl(WithExp we){
 	return definitelyReturns(we.bdy);
 }
 private bool definitelyReturnsImpl(T)(T e)
-	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,CObserveExp,ForgetExp,FunctionDef,CommaExp,DefineExp))||is(T:AAssignExp))
+	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,CObserveExp,ForgetExp,FunctionDef,DatDecl,CommaExp,DefineExp))||is(T:AAssignExp))
 {
 	return false;
 }
@@ -9597,7 +9649,7 @@ private ReturnExp mayReturnImpl(WithExp we){
 	return mayReturn(we.bdy);
 }
 private ReturnExp mayReturnImpl(T)(T e)
-	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,AssertExp,ObserveExp,CObserveExp,ForgetExp,FunctionDef,CommaExp,DefineExp))||is(T:AAssignExp))
+	if(isOneOf!(T,AliasSeq!(CallExp,TypeAnnotationExp,AssertExp,ObserveExp,CObserveExp,ForgetExp,FunctionDef,DatDecl,CommaExp,DefineExp))||is(T:AAssignExp))
 {
 	return null;
 }
@@ -9635,42 +9687,52 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 	VarMapping[] retVars;
 	DNVar[] paramVars;
 	DExpr newDist;
-	import util.hashtable;
-	HSet!(string,(a,b)=>a==b,a=>typeid(string).getHash(&a)) names;
-	try{
-		import sym.dparse;
-		auto parser=DParser(literal.get());
-		parser.skipWhitespace();
-		parser.expect('(');
-		for(bool seen=false;parser.cur()!=')';){
+	static struct Parsed{ DNVar[] retVars,paramVars; DExpr newDist; }
+	static Parsed[string] cache; // (the same literals are analyzed repeatedly)
+	if(auto parsed=literal.get() in cache){
+		foreach(orig;parsed.retVars)
+			retVars~=VarMapping(orig,dist?dist.getTmpVar("__tmp"~orig.name):null);
+		paramVars=parsed.paramVars;
+		newDist=parsed.newDist;
+	}else{
+		import util.hashtable;
+		HSet!(string,(a,b)=>a==b,a=>typeid(string).getHash(&a)) names;
+		try{
+			import sym.dparse;
+			auto parser=DParser(literal.get());
 			parser.skipWhitespace();
-			if(parser.cur()==';'){
-				seen=true;
-				parser.next();
-				continue;
+			parser.expect('(');
+			for(bool seen=false;parser.cur()!=')';){
+				parser.skipWhitespace();
+				if(parser.cur()==';'){
+					seen=true;
+					parser.next();
+					continue;
+				}
+				auto orig=cast(DNVar)parser.parseDVar();
+				if(!orig) throw new Exception("TODO");
+				if(orig.name in names){
+					err.error(text("multiple variables of name \"",orig.name,"\""),args[0].loc);
+					return SampleFromInfo(true);
+				}
+				if(!seen){
+					auto tmp=dist?dist.getTmpVar("__tmp"~orig.name):null; // TODO: this is a hack
+					retVars~=VarMapping(orig,tmp);
+				}else paramVars~=orig;
+				parser.skipWhitespace();
+				if(!";)"[seen..$].canFind(parser.cur())) parser.expect(',');
 			}
-			auto orig=cast(DNVar)parser.parseDVar();
-			if(!orig) throw new Exception("TODO");
-			if(orig.name in names){
-				err.error(text("multiple variables of name \"",orig.name,"\""),args[0].loc);
-				return SampleFromInfo(true);
-			}
-			if(!seen){
-				auto tmp=dist?dist.getTmpVar("__tmp"~orig.name):null; // TODO: this is a hack
-				retVars~=VarMapping(orig,tmp);
-			}else paramVars~=orig;
+			parser.next();
 			parser.skipWhitespace();
-			if(!";)"[seen..$].canFind(parser.cur())) parser.expect(',');
+			if(parser.cur()=='⇒') parser.next();
+			else{ parser.expect('='); parser.expect('>'); }
+			parser.skipWhitespace();
+			newDist=parser.parseDExpr();
+		}catch(Exception e){
+			err.error(e.msg,args[0].loc);
+			return SampleFromInfo(true);
 		}
-		parser.next();
-		parser.skipWhitespace();
-		if(parser.cur()=='⇒') parser.next();
-		else{ parser.expect('='); parser.expect('>'); }
-		parser.skipWhitespace();
-		newDist=parser.parseDExpr();
-	}catch(Exception e){
-		err.error(e.msg,args[0].loc);
-		return SampleFromInfo(true);
+		cache[literal.get()]=Parsed(retVars.map!(x=>x.orig).array,paramVars,newDist);
 	}
 	if(dist){
 		foreach(var;retVars){
@@ -9688,6 +9750,17 @@ SampleFromInfo analyzeSampleFrom(CallExp ce,ErrorHandler err,Distribution dist=n
 	return SampleFromInfo(false,retVars,paramVars,newDist);
 }
 
+void inferImpure(Scope sc){
+	FunctionDef reason=null;
+	sc.restriction(reason);
+	if(reason&&reason.inferAnnotation&&reason.annotation>Annotation.none){
+		if(reason.sealed) reason.unseal();
+		reason.annotation=Annotation.none;
+		reason.ftype=null;
+		setFtype(reason,true);
+	}
+}
+
 Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 	auto context=expSemContext(sc,ConstResult.yes,inType);
 	if(inType){
@@ -9695,6 +9768,7 @@ Expression handleSampleFrom(CallExp ce,Scope sc,InType inType){
 		ce.setSemError();
 		return ce;
 	}
+	inferImpure(sc);
 	auto info=analyzeSampleFrom(ce,sc.handler);
 	if(info.error){
 		ce.setSemError();

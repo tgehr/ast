@@ -425,7 +425,7 @@ abstract class Scope{
 		return &declProps.set(decl,DeclProp.default_());
 	}
 	final void recordAccess(Identifier id,Declaration meaning){
-		if(!meaning.isToplevelDeclaration()){
+		if(!meaning.isToplevelDeclaration()&&!meaning.isAggregateMember()){
 			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 			if(!id.constLookup&&!id.implicitDup)
 				lastUses.consumption(meaning,id,this); // TODO: ok?
@@ -1198,7 +1198,7 @@ abstract class Scope{
 	private Declaration postprocessLookup(Identifier id,Declaration meaning,Lookup kind){
 		//imported!"util.io".writeln("POSTPROCESSING: ",id.loc," ",meaning," ",kind);
 		static if(language==silq) enum performConsume=true;
-		else auto performConsume=id.byRef;
+		else auto performConsume=id.byRef&&!(meaning&&meaning.isAggregateMember()); // (fields are accessed through `this`)
 		auto typeofSuppressedCapture=id.typeofSuppressedCapture;
 		if(performConsume){
 			if(!meaning) return meaning;
@@ -2593,6 +2593,7 @@ class CapturingScope(T): NestedScope{
 			id.setSemError();
 		}+/
 		if(!meaning.scope_||!meaning.scope_.getFunction()) return null; // no need to capture global declarations
+		if(meaning.isAggregateMember()) return null; // (members are accessed through `this`)
 		if(id.isSemError()) return null;
 		//imported!"util.io".writeln("capturing ",meaning," into ",decl);
 		static if(is(T==FunctionDef)){

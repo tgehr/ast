@@ -59,6 +59,9 @@ abstract class Declaration: Expression{
 	bool isToplevelDeclaration(){
 		return scope_&&cast(TopScope)scope_;
 	}
+	bool isAggregateMember(){
+		return scope_&&cast(AggregateScope)scope_;
+	}
 
 	@property splitSequence(){
 		return recurrence!"a[n-1].splitFrom"(this).until!(d=>d is null);
@@ -230,7 +233,7 @@ class FunctionDef: FixedPointDeclaration{
 		copyIntrinsicFieldsFrom(fd);
 		ret=fd.ret;
 		hasReturn=fd.hasReturn;
-		retNames=fd.retNames;
+		static if(language==psi) retNames=fd.retNames;
 		context=fd.context;
 		thisVar=fd.thisVar;
 		isConstructor=fd.isConstructor;
@@ -245,7 +248,7 @@ class FunctionDef: FixedPointDeclaration{
 		if(args.preserveMeanings){
 			r.ret=ret;
 			r.hasReturn=hasReturn;
-			r.retNames=retNames;
+			static if(language==psi) r.retNames=retNames;
 			import ast.substitute: computeCapturesFromBody;
 			computeCapturesFromBody(r);
 		}
@@ -253,7 +256,7 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	override string toString(){
 		string d=isSquare?"[]":"()";
-		return "def "~(name?getName:"")~d[0]~join(map!(to!string)(params),",")~(isTuple&&params.length==1?",":"")~d[1]~(annotation?text(annotation):"")~(body_?body_.toStringFunctionDef():";");
+		return "def "~(name?getName:"")~d[0]~join(map!(to!string)(params),",")~(isTuple&&params.length==1?",":"")~d[1]~annotationToString(annotation)~(body_?body_.toStringFunctionDef():";");
 	}
 
 	override bool isCompound(){ return true; }
@@ -325,7 +328,7 @@ class FunctionDef: FixedPointDeclaration{
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined
 	bool hasReturn;
 	bool isConstructor;
-	string[] retNames;
+	static if(language==psi) string[] retNames;
 	MapSX!(Id,Expression) attributes;
 
 	void seal(){
@@ -532,7 +535,7 @@ class DatDecl: Declaration{
 		fd.ret=fd.ftype.cod;
 		assert(isType(fd.ret));
 		fd.hasReturn=true;
-		fd.retNames=["r"];
+		static if(language==psi) fd.retNames=["r"];
 		fd.setSemCompleted();
 		return fd;
 	}
