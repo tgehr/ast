@@ -1214,10 +1214,11 @@ abstract class Scope{
 					}
 				}
 			}
-			static if(language==silq)
-			if(kind==Lookup.constant&&!meaning.isPinned&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
-				blockConst(meaning,id);
 		}
+		static if(language==silq) enum blocksConst=true;
+		else auto blocksConst=!(meaning&&meaning.isAggregateMember()); // (fields are accessed through `this`)
+		if(blocksConst&&kind==Lookup.constant&&meaning&&!meaning.isPinned&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
+			blockConst(meaning,id);
 		if(kind!=Lookup.probing&&meaning&&!typeofSuppressedCapture){
 			recordAccess(id,meaning);
 		}

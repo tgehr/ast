@@ -2022,9 +2022,9 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 	e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
 	if(!e.type) e.type=unit;
 	e.setSemCompleted();
+	if(resetConst&&!sc.resetConst(e,true,InType.no))
+		e.setSemForceError();
 	static if(language==silq){
-		if(resetConst&&!sc.resetConst(e,true,InType.no))
-			e.setSemForceError();
 		sc.releaseTypeConstBlocks(typeConstBlockSave,resetConst);
 		sc.clearConsumed();
 	}
@@ -4786,9 +4786,8 @@ bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=fal
 			return true;
 		}
 	if(sc.isConst(decl)){
-		static if(language==silq)
-			if(allowRecomputable&&sc.canRecompute(decl)) // (const-blocked reads can be recomputed)
-				return true;
+		if(allowRecomputable&&sc.canRecompute(decl)) // (const-blocked reads can be recomputed)
+			return true;
 		return false;
 	}
 	return true;
@@ -5188,7 +5187,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}
 	}
 	prepareLhs(ae.e1);
-	ae.e1=expressionSemantic(ae.e1,context.nestConsumed);
+	ae.e1=expressionSemantic(ae.e1,context.nestLhs);
 	propErr(ae.e1,ae);
 	if(ae.e1.isSemError()){
 		sc.resetLocalComponentReplacements();
@@ -5506,7 +5505,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}
 		}
 		prepareLhs(be.e1);
-		be.e1=expressionSemantic(be.e1,context.nestConsumed);
+		be.e1=expressionSemantic(be.e1,context.nestLhs);
 		propErr(be.e1,be);
 		if(auto id=cast(Identifier)be.e1){
 			if(id.meaning){
@@ -6557,6 +6556,11 @@ auto nestConst(ref ExpSemContext context){
 }
 auto nestConsumed(ref ExpSemContext context){
 	return context.nest(ConstResult.no);
+}
+auto nestLhs(ref ExpSemContext context){ // (for the left-hand sides of assignments)
+	auto r=context.nestConsumed;
+	static if(language==psi) r.inConst=InConst.yes; // (last uses are recorded with the assignment)
+	return r;
 }
 auto nestIndexed(ref ExpSemContext context){
 	return context.nest(ConstResult.indexed);
@@ -7873,7 +7877,11 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 
 Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	auto sc=context.sc;
-	tae.e=expressionSemantic(tae.e,context);
+	static if(language==psi){ // (the last uses within `tae.e` are recorded with `tae`, as the annotation may determine the type of `tae.e`, e.g., for `sampleFrom`)
+		auto econtext=context;
+		econtext.inConst=InConst.yes;
+		tae.e=expressionSemantic(tae.e,econtext);
+	}else tae.e=expressionSemantic(tae.e,context);
 	propErr(tae.e,tae);
 	if(tae.e.type)
 		if(auto r=resolveWildcards(tae.t,tae.e.type)){
@@ -8931,18 +8939,23 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 			sc.error(format("instances of type `%s` not realizable (did you mean to use `%s`?)",expr.type,expr.type.getClassical()),expr.loc);
 			expr.setSemForceError();
 		}
-		if(!context.inConst&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&(!cast(ForgetExp)expr||!(cast(ForgetExp)expr).isStatement)){
-			if(!sc.resetConst(constSave,expr,false,context.inType))
-				expr.setSemForceError();
-		}
 	}else{
 		if(expr&&!expr.isSemError()){
 			assert(!!expr.type);
 			expr.setSemCompleted();
-			if(auto id=cast(Identifier)expr) // (e.g., allows redefining variables that are moved on the right-hand side)
+			if(auto id=cast(Identifier)expr){ // (e.g., allows redefining variables that are moved on the right-hand side)
 				if(id.implicitDup&&id.meaning&&id.scope_ is sc&&!context.inType)
 					sc.recordImplicitDup(id);
+			}else expr.constLookup=isConstLookup(expr,context);
 		}
+	}
+	auto isStatementForget=cast(ForgetExp)expr&&(cast(ForgetExp)expr).isStatement;
+	// const uses end at the enclosing non-const expression, which can forget variables after their last uses using `let`
+	static if(language==silq) auto endsConst=!context.inConst&&!cast(LiteralExp)expr||(!expr.type||expr.type.isClassical())&&!isStatementForget;
+	else auto endsConst=(!context.inConst||context.inType)&&!cast(LiteralExp)expr&&!isStatementForget; // (in PSI, all data is classical, but variables are still forgotten after their last uses)
+	if(endsConst){
+		if(!sc.resetConst(constSave,expr,false,context.inType))
+			expr.setSemForceError();
 	}
 	return expr;
 }
@@ -9478,6 +9491,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	else returns = [ret.e];
 	static string getName(Expression e){
 		string candidate(Expression e,bool allowNum=false){
+			if(auto le=cast(LetExp)e) if(auto fwd=le.isForward(true)) return candidate(fwd,allowNum); // (e.g., forgets after last uses)
 			if(auto id=cast(Identifier)e) return id.name;
 			if(auto fe=cast(FieldExp)e) return fe.f.name;
 			if(auto ie=cast(IndexExp)e){
