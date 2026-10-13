@@ -376,7 +376,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(ty.isClassical()) classical.insert(p[1].name.id);
 	}
 	struct StmInfo{
-		SetX!Id defs,uses,nonConst,consumed,strong;
+		SetX!Id defs,uses,nonConst,consumed,strong,fresh; // (`fresh`: defined by `:=`)
 		MapX!(Id,Expression) types;
 		bool nonQfree=false,isForget=false,effects=false;
 	}
@@ -391,7 +391,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			info.defs.insert(n);
 			info.strong.insert(n);
 		}
-		void addDefs(Expression lhs){
+		void addDefs(Expression lhs,bool fresh){
 			visitStm(lhs,(Expression x){
 				if(auto ie=cast(IndexExp)x){
 					Expression r=ie;
@@ -399,6 +399,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(auto id=cast(Identifier)r) strongDef(vname(id));
 				}else if(auto id=cast(Identifier)x) if(!id.constLookup){
 					strongDef(vname(id));
+					if(fresh) info.fresh.insert(vname(id));
 					targets.insert(id);
 					if(id.type) info.types[vname(id)]=id.type;
 				}
@@ -425,7 +426,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			if(auto fd=cast(FunctionDef)x) if(fd.name) strongDef(fd.name.id);
 			if(cast(AssertExp)x) info.effects=true;
-			if(auto de=cast(DefineExp)x) addDefs(de.e1);
+			if(auto de=cast(DefineExp)x) addDefs(de.e1,true);
 			else if(auto we=cast(WithExp)x){
 				visitStm(we.trans,(Expression y){
 					if(auto id=cast(Identifier)y)
@@ -436,7 +437,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				Expression lhs=ae.e1;
 				while(cast(IndexExp)lhs) lhs=(cast(IndexExp)lhs).e;
 				if(auto id=cast(Identifier)lhs) strongDef(vname(id));
-				else addDefs(ae.e1);
+				else addDefs(ae.e1,false);
 			}else if(auto ce=cast(CallExp)x){
 				if(auto ft=cast(FunTy)ce.e.type)
 					if(!ft.isSquare&&ft.annotation<Annotation.qfree) info.nonQfree=true;
@@ -1787,6 +1788,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach(l;logs) if(l.src==X&&l.var in *defs) return null;
 		}
 		Expression[] bdy;
+		SetX!Id bodyLocals; // (defined by earlier statements)
 		foreach(i,s;stms){
 			Expression[] nodes;
 			walkCond(s,false,(Expression x,bool c){ nodes~=x; });
@@ -2102,6 +2104,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					}
 					extended.remove(u);
 				}
+				foreach(d;ainfos[a].fresh){ // (classical variables that the loop body forgets explicitly)
+					auto ty=ainfos[a].types.get(d,null);
+					if(!ty||!ty.isClassical()||d !in isCarried&&d !in bodyLocals&&d !in topLocals&&!open.any!(f=>d in f.locals)) continue;
+					auto fe=new ForgetExp(mkId(d),null);
+					fe.loc=loc;
+					emit(fe);
+				}
 				foreach(dname;ainfos[a].defs){
 					outOfScope.remove(dname);
 					if(dname in isCarried||dname in topLocals||open.any!(f=>dname in f.locals)) continue;
@@ -2113,6 +2122,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			while(open.length) popFrame();
 			if(!ok||versionCopyFailed) return null;
 			bdy~=top;
+			foreach(d;topLocals) bodyLocals.insert(d);
 		}
 		if(readsLogs){
 			auto inc=new AddAssignExp(mkId(counter),LiteralExp.makeInteger(1));
