@@ -4285,6 +4285,16 @@ struct ERPReturn{
 }
 ERPReturn[size_t] erpReturns;
 SetX!Id[size_t] erpForgettableAtReturn; // quantum variables that can be forgotten before the returned expression is evaluated
+// For a long-running host (the language server): drop the early-return elimination state of
+// previous checks. `erpNextId` keeps counting, so ids stay unique among nodes that survive a check.
+void clearLoopLoweringState(){
+	erpJoins=null;
+	erpStage1Functions=null;
+	erpDivergingLoops=null;
+	erpConsumingGuards=null;
+	erpReturns=null;
+	erpForgettableAtReturn=null;
+}
 void erpBeforeReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)||!erpKey(ret)) return;
 	SetX!Id forgettable,seen;
