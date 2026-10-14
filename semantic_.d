@@ -3498,8 +3498,8 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
 	foreach(crepls;creplss){
 		assert(crepls.length);
-		Expression[] reads;
-		foreach(ref crepl;crepls){
+		auto reads=new Expression[](crepls.length); // (null for components without a write)
+		foreach(i,ref crepl;crepls){
 			if(!crepl.write) continue;
 			auto id=temporaryIdentifier(crepl.name,loc);
 			id.byRef=true;
@@ -3507,15 +3507,15 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 			idx.loc=crepl.write.loc;
 			auto read=new BinaryExp!(Tok!":=")(id,moveExp(idx));
 			read.loc=crepl.write.loc;
-			reads~=read;
+			reads[i]=read;
 		}
 		auto creplsCtx2=sc.moveLocalComponentReplacements(); // TODO: get rid of this
-		auto prologue=new CompoundExp(reads);
+		auto prologue=new CompoundExp(reads.filter!(read=>!!read).array);
 		prologue.loc=loc;
 		prologue=statementSemanticImpl(prologue,sc,flags,resetConst:false);
 		if(prologue.isSemError()){
 			foreach(i,ref crepl;crepls){
-				propErr(reads[i],crepl.write);
+				if(reads[i]) propErr(reads[i],crepl.write);
 			}
 		}else prologue.setSemCompleted();
 		prologues~=prologue;
@@ -3552,6 +3552,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 				}
 			}
 			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
+				if(!read) continue;
 				auto de=cast(DefineExp)read;
 				assert(!!de);
 				auto idx=cast(IndexExp)de.e2;
