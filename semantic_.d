@@ -2562,6 +2562,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 				}
 				if(!(ft.captureAnnotation==CaptureAnnotation.const_||ft.isClassical())){
 					sc.error("reversed function must be classical or cannot have `moved` captures",f.loc);
+					noteMovedCaptures(f,sc);
 					ok=false;
 				}
 				if(!ce.type&&ft.cod.hasAnyFreeVar(ft.names)){
@@ -5861,6 +5862,26 @@ Expression makeLambda(Parameter[] params,bool isTuple,bool isSquare,Annotation a
 	return le;
 }
 
+void noteMovedCaptures(Expression f,Scope sc){ // (if the definition of the function is known)
+	FunctionDef fd=null;
+	for(f=unwrap(f);f&&!fd;){
+		if(auto le=cast(LambdaExp)f) fd=le.fd;
+		auto id=cast(Identifier)f;
+		f=null;
+		if(!id) break;
+		auto meaning=id.meaning;
+		while(meaning&&meaning.splitFrom) meaning=meaning.splitFrom;
+		if(auto mfd=cast(FunctionDef)meaning) fd=mfd;
+		if(auto vd=cast(VarDecl)meaning) if(vd.initializer) f=unwrap(vd.initializer);
+	}
+	if(!fd||!fd.fscope_) return;
+	foreach(capture;fd.capturedDecls){
+		auto type=typeForDecl(capture);
+		if(!type||type.isClassical()||!fd.isConsumedCapture(capture)) continue;
+		sc.note(format("`%s` is moved into the function here",capture.getName),fd.captures[capture][0].loc);
+	}
+}
+
 Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClassical,Scope sc,bool check,bool simplify){
 	bool errors=false;
 	auto ft=cast(FunTy)f.type;
@@ -5905,6 +5926,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 	}
 	if(check && !(ft.captureAnnotation==CaptureAnnotation.const_||ft.isClassical())){
 		sc.error("reversed function must be classical or cannot have `moved` captures",f.loc);
+		noteMovedCaptures(f,sc);
 		f.setSemForceError();
 		errors=true;
 	}
