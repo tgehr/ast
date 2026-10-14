@@ -2591,6 +2591,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 	}
 	static if(!isPresemantic) if(!ok){
 		result.setSemForceError();
+		if(ce.newFunctionVar) ce.newFunctionVar.setSemForceError();
 		foreach(e;result.subexpressions()){
 			if(auto id=cast(Identifier)e){
 				if(!id.constLookup&&!id.implicitDup){
