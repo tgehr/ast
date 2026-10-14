@@ -1065,8 +1065,8 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 				if(!id.meaning||id.meaning.isToplevelDeclaration()) return null;
 				auto nid=new Identifier(id.name);
 				nid.loc=id.loc;
-				if(auto meaning=lookupMeaning(nid,Lookup.probing,sc,false,null)){
-					if(meaning!is id.meaning){
+				if(auto meaning=sc.peekSymtab(id.meaning.getId,true)){
+					if(meaning!is id.meaning&&!cast(DeadDecl)meaning){
 						nid.meaning=meaning;
 						nid.type=nid.typeFromMeaning;
 						nid.scope_=sc;
@@ -1199,7 +1199,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			assert(!!de,text(e," ",typeid(e)));
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(idx.byRef);
-			consumer.consumeArray(idx.copy(),expSemContext(sc,ConstResult.no,InType.no));
+			Expression.CopyArgs cargs={preserveSemantic:true};
+			consumer.consumeArray(idx.copy(cargs),expSemContext(sc,ConstResult.no,InType.no));
 		}
 		consumer.redefineArrays(with_,sc); // TODO: fix
 	}
