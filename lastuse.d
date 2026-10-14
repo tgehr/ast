@@ -108,6 +108,7 @@ final class LastUse{
 		r.splitSource=splitSource;
 		r.prev=prev;
 		r.next=next;
+		r.index=index;
 		return r;
 	}
 	enum Kind{
@@ -137,6 +138,7 @@ final class LastUse{
 	NestedScope[] nestedScopes;
 	NestedScope[] nestedAfter;
 	LastUse prev=null,next=null;
+	size_t index; // (in the order the last uses of the scope were added)
 
 	bool isConsumption(){
 		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;
@@ -830,6 +832,7 @@ struct LastUses{
 	MapX!(Declaration,LastUse) lastUses;
 	MapX!(Declaration,LastUse[]) retired;
 	LastUse lastLastUse;
+	size_t numAdded=0;
 	bool discarded=false;
 
 	LastUse nestingPoint;
@@ -948,6 +951,7 @@ struct LastUses{
 			lastUses.remove(lastUse.decl);
 			retire(prevLastUse); // TODO: needed?
 		}
+		lastUse.index=numAdded++;
 		lastUses[lastUse.decl]=lastUse;
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
@@ -1145,6 +1149,7 @@ struct LastUses{
 		foreach(d,lus;src.retired)
 			if(auto nd=mapDecl(d)) foreach(lu;lus) if(auto r=remap(lu)) retired[nd]~=r;
 		lastLastUse=remap(src.lastLastUse);
+		numAdded=src.numAdded;
 	}
 
 	LastUse get(Declaration decl,bool forceHere){
@@ -1255,7 +1260,9 @@ struct LastUses{
 		}
 		return nlastUses;
 	}
-	void restoreSnapshot(MapX!(Declaration,LastUse) snapshot,Scope sc){
+	void restoreSnapshot(MapX!(Declaration,LastUse) snapshot,size_t numAdded,Scope sc){
+		for(auto lu=lastLastUse;lu&&lu.index>=numAdded;lu=lu.prev)
+			lu.use=null; // (from the discarded analysis, cannot be consumed)
 		foreach(_,d;sc.rnsymtab){
 			if(auto nlu=lastUses.get(d,null)){
 				if(nlu.isConsumption()||nlu!is snapshot.get(d,null)){

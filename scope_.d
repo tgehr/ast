@@ -2126,6 +2126,7 @@ abstract class Scope{
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
 		size_t numMergedNestedScopes;
+		size_t numLastUses;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		MapX!(Id,Declaration) nsymtab=symtab.dup;
@@ -2143,6 +2144,7 @@ abstract class Scope{
 		}
 		auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		r.numMergedNestedScopes=mergedNestedScopes.length;
+		r.numLastUses=lastUses.numAdded;
 		return r;
 	}
 	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
@@ -2246,7 +2248,7 @@ abstract class Scope{
 			}
 			rnsymtab[decl.getId]=updateDecl(decl);
 		}
-		lastUses.restoreSnapshot(state.lastUses,this);
+		lastUses.restoreSnapshot(state.lastUses,state.numLastUses,this);
 		foreach(scopes;mergedNestedScopes[state.numMergedNestedScopes..$])
 			foreach(sc;scopes) sc.lastUses.discarded=true;
 		state=ScopeState.init;
