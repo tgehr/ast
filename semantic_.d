@@ -4911,18 +4911,19 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 	if(!meaning||meaning.isSemError()) return false;
 	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks,true))
 		return false;
-	auto vd=cast(VarDecl)meaning;
+	auto type=typeForDecl(meaning);
+	if(!type) return false;
 	static if(language==silq){
-		if(!isReversible&&!vd.vtype.isClassical()&&!sc.canRecompute(meaning)){
+		if(!isReversible&&!type.isClassical()&&!sc.canRecompute(meaning)){
 			sc.error(format("cannot assign to quantum variable `%s`",meaning.name), loc);
 			return false;
 		}
 	}
-	if(isTypeTy(vd.vtype)&&!isEmpty(vd.vtype)){
+	if(isTypeTy(type)&&!isEmpty(type)){
 		sc.error(format("cannot assign to type variable `%s`",meaning.name), loc);
 		return false;
 	}
-	for(auto csc=sc;csc !is meaning.scope_;csc=(cast(NestedScope)csc).parent){
+	for(auto csc=sc;csc !is meaning.scope_&&cast(NestedScope)csc;csc=(cast(NestedScope)csc).parent){
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
 			// TODO: method calls are also implicit assignments.
