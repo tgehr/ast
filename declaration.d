@@ -6,6 +6,28 @@ import astopt;
 import std.array, std.algorithm, std.range, std.conv, std.exception;
 import ast.lexer, ast.type, ast.expression, ast.scope_, util;
 
+// what the dependency of a declaration is formed from: `reads` and the dependencies of `consumes` when they were consumed
+struct DefinitionSources{
+	import util.tuple:Q=Tuple,q=tuple;
+	bool known=false;
+	SetX!Declaration reads;
+	Q!(Declaration,Dependency)[] consumes;
+	static DefinitionSources empty(){ return DefinitionSources(true); }
+	DefinitionSources dup(){ return DefinitionSources(known,reads.dup,consumes.map!(c=>q(c[0],c[1].dup)).array); }
+	void consume(Declaration decl,Dependency dep){
+		consumes~=q(decl,dep.dup);
+	}
+	void join(DefinitionSources rhs){
+		if(!known) return;
+		if(!rhs.known){
+			this=DefinitionSources.init;
+			return;
+		}
+		foreach(x;rhs.reads) reads.insert(x);
+		foreach(c;rhs.consumes) consume(c[0],c[1]);
+	}
+}
+
 abstract class Declaration: Expression{
 	Identifier name;
 	this(Identifier name){
@@ -45,7 +67,7 @@ abstract class Declaration: Expression{
 	Declaration mergedInto=null;
 	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
-	SetX!Declaration definitionReads; // direct dependencies
+	DefinitionSources definitionSources; // (what the dependency is formed from)
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
 	Declaration canonicalSource_=null;

@@ -2190,6 +2190,48 @@ Dependency getDependency(Expression e,Scope sc){
 	return e.dispatchExp!(getDependencyImpl,getDependencyImpl)(sc);
 }
 
+// what `getDependency(e,sc)` is formed from (see `DefinitionSources`)
+DefinitionSources getDependencySources(Expression e,Scope sc){
+	auto r=DefinitionSources.empty;
+	void add(Expression e){
+		if(!r.known||e.type&&e.type.isClassical()) return;
+		if(auto id=cast(Identifier)e){
+			if(!id.meaning) return;
+			auto decl=id.meaning;
+			while(decl&&decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!=sc.getFunction())
+				decl=decl.splitFrom;
+			if(!id.constLookup&&!id.implicitDup||id.byRef) r.consume(decl,sc.getDependency(decl));
+			else r.reads.insert(decl);
+			return;
+		}
+		if(auto le=cast(LambdaExp)e){
+			r.join(getFunctionDependencySources(le.fd,sc));
+			return;
+		}
+		if(auto ce=cast(CallExp)e){
+			if(auto ft=cast(ProductTy)ce.e.type) if(ft.annotation<Annotation.qfree) r=DefinitionSources.init;
+		}else if(auto le=cast(LetExp)e){
+			if(!le.isForward(true)&&!le.s.s.all!(s=>hasOnlyQfreeCalls(s))) r=DefinitionSources.init;
+		}else if(auto vfe=cast(VectorForExp)e){
+			if(vfe.fd) if(auto ft=cast(ProductTy)typeForDecl(vfe.fd)) if(ft.annotation<Annotation.qfree) r=DefinitionSources.init;
+		}
+		foreach(c;e.components) add(c);
+	}
+	add(e);
+	return r;
+}
+DefinitionSources getFunctionDependencySources(FunctionDef fd,Scope sc){ // (see `getFunctionDependency`)
+	auto r=DefinitionSources.empty;
+	foreach(decl;fd.capturedDecls){
+		if(decl.isSemError()||fd.captures[decl][0].isSemError()) continue;
+		auto type=typeForDecl(decl);
+		if(type&&type.isClassical()) continue;
+		if(fd.isConsumedCapture(decl)) r.consume(decl,sc.getDependency(decl));
+		else r.reads.insert(decl);
+	}
+	return r;
+}
+
 Dependency getFunctionDependency(FunctionDef fd,Scope sc,bool constOnly=false){
 	auto dep=Dependency();
 	foreach(decl;fd.capturedDecls){
@@ -2208,7 +2250,12 @@ void updateFunctionDependency(FunctionDef fd){
 	if(!sc) return;
 	if(fd.isToplevelDeclaration()) return;
 	if(sc.rnsymtab.get(fd.getId,null) !is fd) return;
+	auto tracked=sc.dependencyTracked(fd);
+	auto sources=fd.definitionSources;
 	sc.addDependency(fd,getFunctionDependency(fd,sc));
+	if(tracked) sources.join(getFunctionDependencySources(fd,sc));
+	else sources=getFunctionDependencySources(fd,sc);
+	fd.definitionSources=sources;
 }
 
 Identifier consumes(Expression e){
@@ -4164,27 +4211,44 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			}
 			return Dependency(false);
 		}
+		DefinitionSources getIndexSources(Expression e){
+			if(auto idx=cast(IndexExp)e){
+				auto r=getIndexSources(idx.e);
+				r.join(getDependencySources(idx.a,sc));
+				return r;
+			}
+			return DefinitionSources.empty;
+		}
+		void addDependenciesWithSources(Q!(Declaration,Dependency)[] dependencies,DefinitionSources[] sources){
+			auto tracked=dependencies.map!(d=>sc.dependencyTracked(d[0])).array;
+			sc.addDependencies(dependencies,true);
+			foreach(i,d;dependencies){
+				if(tracked[i]) d[0].definitionSources.join(sources[i]); // (replaced component)
+				else d[0].definitionSources=sources[i].dup;
+			}
+		}
 		void addDependencies(Expression[] lhs,Expression[] rhs)in{
 			assert(lhs.length==rhs.length);
 		}do{
 			Q!(Declaration,Dependency)[] dependencies;
+			DefinitionSources[] sources;
 			foreach(i;0..lhs.length){
 				if(auto id=getIdFromDefLhs(lhs[i])){
 					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
 						auto dep=rhs[i].getDependency(sc);
 						dep.joinWith(getIndexDependency(lhs[i]));
 						dependencies~=q(id.meaning,dep);
-						foreach(x;rhs[i].subexpressions)
-							if(auto rid=cast(Identifier)x)
-								if(rid.meaning&&(rid.constLookup||rid.implicitDup))
-									id.meaning.definitionReads.insert(rid.meaning);
+						auto src=getDependencySources(rhs[i],sc);
+						src.join(getIndexSources(lhs[i]));
+						sources~=src;
 					}else badUnpackLhs=true;
 				}else badUnpackLhs=true;
 			}
-			sc.addDependencies(dependencies);
+			addDependenciesWithSources(dependencies,sources);
 		}
-		void addDependencyMulti(Expression[] lhs,Dependency dependency){
+		void addDependencyMulti(Expression[] lhs,Dependency dependency,DefinitionSources dsources){
 			Q!(Declaration,Dependency)[] dependencies;
+			DefinitionSources[] sources;
 			foreach(i;0..lhs.length){
 				if(auto id=getIdFromDefLhs(lhs[i])){
 					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
@@ -4192,11 +4256,14 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 							auto dep=dependency.dup;
 							dep.joinWith(getIndexDependency(lhs[i]));
 							dependencies~=q(id.meaning,dep);
+							auto src=dsources.dup;
+							src.join(getIndexSources(lhs[i]));
+							sources~=src;
 						}
 					}else badUnpackLhs=true;
 				}else badUnpackLhs=true;
 			}
-			sc.addDependencies(dependencies);
+			addDependenciesWithSources(dependencies,sources);
 		}
 		if(auto id=getIdFromDefLhs(be.e1)){
 			addDependencies([be.e1],[be.e2]);
@@ -4210,14 +4277,18 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			}
 			if(!ok){
 				auto dep=be.e2.getDependency(sc);
-				addDependencyMulti(tpl1.e,dep);
+				addDependencyMulti(tpl1.e,dep,getDependencySources(be.e2,sc));
 			}
 		}else if(auto ce=cast(CallExp)unwrap(be.e1)){
 			auto dep=Dependency(true);
+			DefinitionSources sources;
 			Expression[] lhs;
 			if(auto ft=cast(FunTy)ce.e.type){
 				bool isQfree=ft.annotation>=Annotation.qfree;
-				if(isQfree) dep=ce.e.getDependency(sc);
+				if(isQfree){
+					dep=ce.e.getDependency(sc);
+					sources=getDependencySources(ce.e,sc);
+				}
 				void addArg(Expression arg,bool isConst){
 					if(!arg.isSemCompleted)
 						return;
@@ -4225,7 +4296,10 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 						lhs~=arg;
 						return;
 					}
-					if(isQfree) dep.joinWith(arg.getDependency(sc));
+					if(isQfree){
+						dep.joinWith(arg.getDependency(sc));
+						sources.join(getDependencySources(arg,sc));
+					}
 				}
 				if(ft.isTuple){
 					bool defaultIsConst=ft.isSquare;
@@ -4244,8 +4318,11 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 					assert(ft.isConst.length==1);
 					addArg(ce.arg,ft.isConstForReverse[0]);
 				}
-				if(isQfree) dep.joinWith(be.e2.getDependency(sc));
-				addDependencyMulti(lhs,dep);
+				if(isQfree){
+					dep.joinWith(be.e2.getDependency(sc));
+					sources.join(getDependencySources(be.e2,sc));
+				}
+				addDependencyMulti(lhs,dep,sources);
 			}
 		}else if(auto ce=cast(CatExp)be.e1){
 			Expression[] ids;
@@ -4254,7 +4331,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			if(auto id=cast(Identifier)unwrap(ce.e2))
 				ids~=id;
 			auto dep=be.e2.getDependency(sc);
-			addDependencyMulti(ids,dep);
+			addDependencyMulti(ids,dep,getDependencySources(be.e2,sc));
 		}else badUnpackLhs=true;
 	}
 	if(sc.allowsLinear)
@@ -4444,7 +4521,7 @@ bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope
 
 
 struct ArrayConsumer{
-	Q!(Expression,Declaration,Dependency,SemState,Scope)[Id] consumed;
+	Q!(Expression,Declaration,Dependency,SemState,Scope,DefinitionSources)[Id] consumed;
 	Q!(Id,Identifier)[] ids;
 	AAssignExp.Replacement[]* replacements;
 	void recordReplacementsInto(AAssignExp.Replacement[]* replacements){
@@ -4487,11 +4564,12 @@ struct ArrayConsumer{
 					return;
 			}
 			auto dep=getDependency(e.e,context.sc);
+			auto sources=getDependencySources(e.e,context.sc);
 			e.e.constLookup=true;
 			id=cast(Identifier)unwrap(e.e);
 			assert(!!id);
 			ids~=q(origId,id);
-			consumed[origId]=q(id.type,id.meaning,dep,e.e.sstate,id.scope_);
+			consumed[origId]=q(id.type,id.meaning,dep,e.e.sstate,id.scope_,sources);
 		}
 		doIt(e);
 	}
@@ -4502,9 +4580,10 @@ struct ArrayConsumer{
 				auto var=addVar(origId,id.type,parent.loc,sc);
 				static if(language==silq)
 					sc.inheritConstBlocks(id.meaning,var);
-				if(origId in consumed)
+				if(origId in consumed){
 					sc.addDependency(var,consumed[origId][2]);
-				else sc.addDefaultDependency(var);
+					var.definitionSources=consumed[origId][5].dup;
+				}else sc.addDefaultDependency(var);
 				added.insert(origId);
 				if(replacements) *replacements~=AAssignExp.Replacement(id.meaning,var);
 				sc.lastUses.definition(var,parent);
@@ -5585,20 +5664,14 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			sc.consume(id.meaning,id);
 			sc.clearConsumed();
 		}
-		void define(Dependency dependency){
+		void define(Dependency dependency,DefinitionSources sources){
 			auto origId=id.meaning.name.id;
 			assert(!var);
 			var=addVar(origId,ce.type,be.loc,sc);
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			if(var.scope_ is sc){
 				sc.addDependency(var,dependency);
-				static if(language==silq){
-					var.definitionReads.insert(id.meaning);
-					foreach(x;be.e2.subexpressions)
-						if(auto rid=cast(Identifier)x)
-							if(rid.meaning&&(rid.constLookup||rid.implicitDup))
-								var.definitionReads.insert(rid.meaning);
-				}
+				var.definitionSources=sources;
 			}
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
 			if(to&&(isFixedIntTy(to)||isℤmodTy(to))&&!joinTypes(from,to)){ // TODO: generalize?
@@ -5608,11 +5681,16 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}
 		}
 		auto dependency=sc.getDependency(id.meaning);
+		auto sources=getDependencySources(be.e2,sc);
+		if(sources.known){
+			sources.reads.remove(id.meaning);
+			sources.consume(id.meaning,dependency);
+		}
 		auto rhsDep=be.e2.getDependency(sc);
 		rhsDep.remove(id.meaning);
 		dependency.joinWith(rhsDep);
 		consume();
-		define(dependency);
+		define(dependency,sources);
 	}
 	be.type=unit;
 	if(!be.isSemError()){

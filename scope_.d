@@ -1430,7 +1430,7 @@ abstract class Scope{
 		static int counter=0;
 		dependencies.dependencies.remove(decl);
 	}
-	void addDependencies(scope Q!(Declaration,Dependency)[] deps){
+	void addDependencies(scope Q!(Declaration,Dependency)[] deps,bool sourcesTracked=false){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		//imported!"util.io".writeln("ADDING: ",deps);
 		foreach(i,ref dep;deps){
@@ -1439,6 +1439,7 @@ abstract class Scope{
 			if(dep[0] in dependencies.dependencies){
 				//writeln(dep[0]," ",toRemove," ",dependencies)
 				dep[1].joinWith(dependencies.dependencies[dep[0]]);
+				if(!sourcesTracked) dep[0].definitionSources=DefinitionSources.init;
 			}
 		}
 		foreach(decl,dep;deps.map!(x=>x)){
@@ -1819,6 +1820,10 @@ abstract class Scope{
 			if(symExists&&needMerge){
 				if(auto ntype=typeForDecl(sym)){
 					if(sym.scope_ is scopes[0]) promoteSym(ntype);
+					auto sources=DefinitionSources.empty;
+					if(nestedControlDependency.isTop) sources=DefinitionSources.init;
+					else foreach(d;nestedControlDependency.dependencies) sources.reads.insert(d);
+					scope(success) sym.definitionSources=sources;
 					foreach(sc;scopes){
 						assert(sym.getId in sc.rnsymtab);
 						auto osym=sc.rnsymtab[sym.getId];
@@ -1827,6 +1832,7 @@ abstract class Scope{
 							break;
 						}
 						sc.mergeVar(osym,sym);
+						if(sources.known) sources.consume(osym,sc.dependencyTracked(osym)?sc.getDependency(osym):Dependency(true));
 						if(osym.loc.rep.ptr>sym.loc.rep.ptr) sym.loc=osym.loc; // TODO: this is a bit hacky
 						//imported!"util.io".writeln("MAKING MERGE: ",osym," ",sym," ",cast(void*)osym," ",cast(void*)sym);
 						if(!sc.dependencyTracked(osym))

@@ -290,26 +290,41 @@ final class LastUse{
 		import std.algorithm:all;
 		return d.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(scope_));
 	}
-	private bool readSplitAtDefinition(Declaration d){
-		bool related(Declaration x){ return x is decl||x.isSplitFrom(decl)||decl.isSplitFrom(x); }
+	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
+		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
 		SetX!Declaration visited;
 		bool reads=false;
-		bool ok(Declaration x){
-			if(related(x)){ reads=true; return true; }
-			if(x in visited) return true;
-			visited.insert(x);
-			auto outer=!inScope(x)?x:x.splitFrom&&!inScope(x.splitFrom)?x.splitFrom:null;
-			if(outer){
-				static if(language==silq) if(auto osc=outer.scope_) if(osc.dependencyTracked(outer)){
-					auto dep=osc.getDependency(outer);
-					if(!dep.isTop) foreach(y;dep.dependencies) if(related(y)) return false;
-				}
+		bool present(Declaration x){ // (not consumed before the forget)
+			if(forgetDep.isTop) return false;
+			foreach(y;forgetDep.dependencies) if(version_(y,x)) return true;
+			return false;
+		}
+		bool isOuter(Declaration x){ // (a value from before the split, possibly split further)
+			for(;x;x=x.splitFrom) if(!inScope(x)) return true;
+			return false;
+		}
+		bool ok(Declaration x){ // (read by the definitions)
+			if(isClassicalDecl(x)) return true;
+			if(version_(x,decl)){
+				reads=true;
 				return true;
 			}
+			if(isOuter(x)) return present(x);
+			if(x in visited) return true;
+			visited.insert(x);
 			if(x.splitFrom) return ok(x.splitFrom);
-			foreach(m;x.mergedFrom) if(!ok(m)) return false;
-			foreach(r;x.definitionReads) if(!ok(r)) return false;
+			auto s=x.definitionSources;
+			if(!s.known) return false;
+			foreach(r;s.reads) if(!ok(r)) return false;
+			foreach(c;s.consumes){ // (re-created by undoing the definition)
+				if(isClassicalDecl(c[0])) continue;
+				if(version_(c[0],decl)) return false;
+				if(isOuter(c[0])){ // (its dependency has to be read instead)
+					if(c[1].isTop) return false;
+					foreach(y;c[1].dependencies) if(version_(y,decl)||!ok(y)) return false;
+				}else if(!ok(c[0])) return false;
+			}
 			return true;
 		}
 		return ok(d)&&reads;
@@ -347,7 +362,7 @@ final class LastUse{
 			visited.insert(lu);
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited) continue;
-			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl))) continue;
+			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested) replaceVersions(lu.dep,decl,cdep);
 			else lu.dep.replace(decl,cdep);
