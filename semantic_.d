@@ -5928,6 +5928,7 @@ Expression tryReverse(Identifier reverse,Expression f,bool isSquare,bool isClass
 		sc.error("reversed function must be classical or cannot have `moved` captures",f.loc);
 		noteMovedCaptures(f,sc);
 		f.setSemForceError();
+		if(auto id=cast(Identifier)unwrap(f)) if(id.meaning&&!id.meaning.isToplevelDeclaration()) id.meaning.setSemForceError(); // (not consumed by the reversal)
 		errors=true;
 	}
 	if(ft.cod.hasAnyFreeVar(ft.names)){
@@ -6041,6 +6042,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			return defineLhsSemantic!isPresemantic(e,context);
 		}else return expressionSemantic(e,context);
 	}
+	void argSemanticWithoutFunction(){ // (assumed to consume the argument, without further diagnostics: the uses are erroneous)
+		static if(!isPresemantic){
+			auto handler=context.sc.handler;
+			handler.suppress++;
+			scope(exit) handler.suppress--;
+			static if(isRhs) ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+			else ce.arg=defineLhsSemantic!isPresemantic(ce.arg,context.nest(ConstResult.no,bottom,null));
+			foreach(e;ce.arg.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
+		}
+	}
 	static if(language==silq&&isRhs) if(!ce.checkReverse&&!ce.isSquare) if(auto sce=cast(CallExp)ce.e){
 		if(sce.isSquare&&!sce.isSemCompleted()&&cast(Identifier)sce.e){
 			sce.e=expressionSemantic(sce.e,context.nestCalled);
@@ -6117,6 +6128,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	propErr(ce.e,ce);
 	if(!ce.e.type){
 		assert(ce.isSemError());
+		argSemanticWithoutFunction();
 		return ce;
 	}
 	auto sc=context.sc, constResult=context.constResult, inType=context.inType;
@@ -6604,6 +6616,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}else{
 		sc.error(format("cannot call expression of type `%s`",fun.type),ce.loc);
 		ce.setSemError();
+		argSemanticWithoutFunction();
 	}
 	return r;
 }

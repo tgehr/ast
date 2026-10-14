@@ -1230,6 +1230,7 @@ class Identifier: Expression{
 	bool consumedDuringBorrow=false;
 	bool lazyCapture=false;
 	bool typeofSuppressedCapture=false;
+	bool erroneousUse=false; // (in the argument of an erroneous call: consumption is not reported again)
 	Scope scope_;
 	static if(language==silq){
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)

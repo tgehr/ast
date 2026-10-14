@@ -622,6 +622,7 @@ class ConsumedDecl: DeadDecl{
 	static if(language==silq)
 	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
 		import std.format:format;
+		if(use.erroneousUse) return true;
 		if(!use.meaning) return false;
 		auto blocking=sc.blockingComponentReplacement(use.meaning);
 		if(!blocking) return false; // (consumed by a conversion whose result has components that are being replaced)

@@ -1705,6 +1705,10 @@ abstract class Scope{
 		dependencies=scopes[0].dependencies.dup;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
+		bool consumedByError(Id id){ // (by an erroneous expression in a branch: not reported again)
+			foreach(sc;scopes) if(auto cd=cast(ConsumedDecl)sc.rnsymtab.get(id,null)) if(cd.use.erroneousUse) return true;
+			return false;
+		}
 		MapSX!(Id,DeadMerge) deadMerges;
 		DeadMerge addDeadMerge(Declaration sym){
 			if(auto dm = deadMerges.getPtr(sym.name.id))
@@ -1780,7 +1784,7 @@ abstract class Scope{
 				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
 					splitSym();
-					if(!scopes[0].canForgetAppend(sym)){
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						errors=true;
 					}
@@ -1882,7 +1886,7 @@ abstract class Scope{
 				}
 				if(sym.getId !in rnsymtab){
 					sym=sc.split(sym,null);
-					if(!sc.canForgetAppend(sym)){
+					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						errors=true;
 					}
