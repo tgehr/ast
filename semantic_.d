@@ -1049,6 +1049,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
+	static if(language==silq) Identifier[] redefined; // (used by `condForget`)
 	static if(language==silq) // TODO: can we avoid doing this?
 	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
 		Expression[] nondeterministic;
@@ -1071,6 +1072,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 						nid.scope_=sc;
 						nid.constLookup=id.constLookup;
 						nid.setSemCompleted();
+						redefined~=nid;
 						return nid;
 					}
 				}
@@ -1088,6 +1090,12 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		}
 	}
 	ite.type=definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
+	static if(language==silq) if(redefined.length){ // (`condForget` is evaluated after the branches)
+		ite.setSemCompleted();
+		Expression r=ite;
+		foreach(id;redefined) sc.lastUses.constUse(id,r,true,false);
+		return r;
+	}
 	return ite;
 }
 

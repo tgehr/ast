@@ -2164,7 +2164,7 @@ class IteExp: Expression{
 	}
 	override IteExp copyImpl(CopyArgs args){
 		auto r=new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
-		r.condForget=condForget?condForget.copy(args):null;
+		if(args.preserveSemantic) r.condForget=condForget?condForget.copy(args):null;
 		return r;
 	}
 	override string toString(){
