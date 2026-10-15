@@ -473,6 +473,7 @@ final class LastUse{
 		assert(!!result);
 		scope_.unsplit(result);
 		assert(scope_.getSplit(decl) is result);
+		if(use&&use.meaning is decl) use.meaning=result; // TODO: this is a bit hacky
 		assert(!use||use.meaning is result);
 		void removeCopies(Scope sc){
 			foreach(nested;sc.activeNestedScopes){ // TODO: need to consider nested scopes at correct time
