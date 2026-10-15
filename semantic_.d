@@ -402,6 +402,17 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			return be;
 		}else if(auto ce=cast(CallExp)unwrap(be.e1)){
 			auto f=ce.e,ft=cast(ProductTy)f.type;
+			if(!ft&&f.isSemError()){
+				void declareUndefined(Expression e){
+					e=unwrap(e);
+					if(auto id=cast(Identifier)e){
+						if(!sc.lookup(id,false,true,Lookup.probing,null))
+							makeVar(id).setSemForceError();
+					}else if(auto tpl=cast(TupleExp)e) foreach(x;tpl.e) declareUndefined(x);
+				}
+				declareUndefined(ce.arg);
+				return be;
+			}
 			if(!ft||ft.isSquare!=ce.isSquare)
 				goto LbadDefLhs;
 			bool defaultIsConst=ft.isSquare;
@@ -1216,8 +1227,13 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			consumer.consumeArray(idx.copy(cargs),expSemContext(sc,ConstResult.no,InType.no));
 		}
 		consumer.redefineArrays(with_,sc); // TODO: fix
+		if(consumer.failed) with_.setSemForceError();
 	}
-	if(with_.itrans){
+	if(consumer.failed){
+		if(with_.itrans) foreach(id;with_.itrans.freeIdentifiers)
+			if(auto meaning=lookupMeaning(id,Lookup.probing,sc,false,null))
+				if(!meaning.isToplevelDeclaration()) meaning.setSemForceError();
+	}else if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
 			static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 			with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices);
@@ -3490,9 +3506,9 @@ Expression swapSemantic(DefineExp be,Scope sc){
 		ArrayConsumer consumer;
 		consumer.recordReplacementsInto(&be.replacements);
 		//imported!"util.io".writeln("!!! ",idx2[0]," ",idx2[0].sstate);
-		Expression.CopyArgs cargs={ preserveMeanings: true };
 		consumer.consumeArray(idx2[0].copy(),econtext);
 		consumer.redefineArrays(be,sc);
+		if(consumer.failed) be.setSemForceError();
 	}
 	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.type,be.e2));
 	propErr(be.e1,be);
@@ -4195,6 +4211,14 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			auto dcontext=defineLhsContext(context,be.e2.type,initializer);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
+		}else static if(language==silq) if(auto ce=cast(CallExp)unwrap(be.e1)){
+			auto handler=sc.handler;
+			handler.suppress++;
+			scope(exit) handler.suppress--;
+			if(!ce.e.isSemError()) ce.e=expressionSemantic(ce.e,context.nestConsumed);
+			ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+			foreach(e;ce.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
+			ce.setSemForceError();
 		}
 		makeDeclaration(be,success,sc,attemptLowering||be.isSemError(),false);
 	}
@@ -4569,6 +4593,7 @@ bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope
 
 struct ArrayConsumer{
 	Q!(Expression,Declaration,Dependency,SemState,Scope,DefinitionSources)[Id] consumed;
+	bool failed=false;
 	Q!(Id,Identifier)[] ids;
 	AAssignExp.Replacement[]* replacements;
 	void recordReplacementsInto(AAssignExp.Replacement[]* replacements){
@@ -4598,8 +4623,10 @@ struct ArrayConsumer{
 			}
 			if(id.meaning) id.id=id.meaning.name.id;
 			if(id.meaning){
-				if(!context.sc.checkConsumable(id,id.meaning,component))
+				if(!context.sc.checkConsumable(id,id.meaning,component)){
+					failed=true;
 					return;
+				}
 				if(auto nmeaning=context.sc.consume(id.meaning,id,component)){ // consume array
 					id.meaning=nmeaning;
 					id.constLookup=false; // TODO: this is a bit hacky
@@ -4607,8 +4634,10 @@ struct ArrayConsumer{
 				}
 			}else{
 				e.e=expressionSemantic(e.e,context.nestConsumed);
-				if(!e.e.isSemCompleted())
+				if(!e.e.isSemCompleted()||e.e.implicitDup){
+					failed=true;
 					return;
+				}
 			}
 			auto dep=getDependency(e.e,context.sc);
 			auto sources=getDependencySources(e.e,context.sc);
@@ -4701,6 +4730,7 @@ void finishIndexReplacement(Expression be,Scope sc,AAssignExp.Replacement[]* rep
 	foreach(theIndex;indicesToReplace)
 		consumer.consumeArray(theIndex,context);
 	consumer.redefineArrays(be,sc);
+	if(consumer.failed) be.setSemForceError();
 	foreach(theIndex;indicesToReplace)
 		if(!theIndex.isSemError())
 			theIndex.sstate = SemState.completed; // TODO
@@ -8502,8 +8532,10 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	auto sc=context.sc;
 	e1=expressionSemantic(e1,context.nestConst);
 	propErr(e1,e);
-	if(e.isSemError())
+	if(e.isSemError()){
+		e2=expressionSemantic(e2,context.nestConst);
 		return e;
+	}
 	if(name=="power"){
 		auto ne1=e1;
 		if(auto ne=asPreludeType(ne1,sc)) ne1=ne;
