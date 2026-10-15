@@ -2478,6 +2478,21 @@ class NestedScope: Scope{
 		return parent.inferenceMode;
 	}
 
+	private void splitIntoActiveNestedScopes(Declaration odecl,Declaration ndecl,Identifier use,IndexExp consumedComponent,bool splitting){ // (`ndecl` replaced `odecl` in this scope while it has active nested scopes)
+		foreach(nsc;activeNestedScopes){
+			Expression type;
+			if(auto cdecl=nsc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
+				if(getFunction() is nsc.getFunction()){
+					if(nsc.dependencyTracked(odecl))
+						nsc.removeDependency(odecl);
+					nsc.addDependency(odecl,getDependency(ndecl,true).dup);
+				}
+				if(odecl !is cdecl)
+					nsc.replaceDecl(odecl,cdecl);
+				nsc.splitIntoActiveNestedScopes(odecl,cdecl,use,consumedComponent,splitting);
+			}
+		}
+	}
 	override Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use,IndexExp consumedComponent=null,bool splitting=false)in{
 		assert(odecl is ndecl||!remove);
 	}do{
@@ -2547,6 +2562,7 @@ class NestedScope: Scope{
 						}
 						if(odecl !is cdecl)
 							sc.replaceDecl(odecl,cdecl);
+						sc.splitIntoActiveNestedScopes(odecl,cdecl,use,consumedComponent,splitting);
 					}
 				}
 			}else processCurrent();
