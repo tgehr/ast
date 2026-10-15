@@ -560,7 +560,7 @@ class Checker {
 	void implLhs(ast_exp.Identifier e) {
 		assert(!e.constLookup);
 		auto var = e.meaning;
-		assert(cast(ast_decl.VarDecl) var, "LHS of assignment not VarDecl");
+		assert(!!var, "LHS of assignment without declaration");
 		assert(e.type == typeForDecl(var), format("LHS identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, e.type, typeForDecl(var)));
 		defineVar(var, "LHS", e);
 	}
@@ -638,9 +638,10 @@ class Checker {
 
 		auto lhs = cast(ast_exp.Identifier) e.e1;
 		if(lhs) {
-			auto decl = cast(ast_decl.VarDecl) lhs.meaning;
-			assert(decl, "TODO: assignment LHS Identifier but not VarDecl");
-			assert(lhs.type == decl.vtype, format("LHS type %s != decl type %s", lhs.type, decl.vtype));
+			auto decl = lhs.meaning;
+			assert(!!decl, "assignment LHS Identifier without declaration");
+			auto declType = ast_sem.typeForDecl(decl);
+			assert(lhs.type == declType, format("LHS type %s != decl type %s", lhs.type, declType));
 			getVar(decl, false, "LHS", e);
 			strictScope = false;
 			defineVar(decl, "assignment LHS", e);
