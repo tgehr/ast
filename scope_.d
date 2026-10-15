@@ -425,6 +425,7 @@ abstract class Scope{
 		return &declProps.set(decl,DeclProp.default_());
 	}
 	final void recordAccess(Identifier id,Declaration meaning){
+		if(id.typeofSuppressedCapture) return;
 		if(!meaning.isToplevelDeclaration()&&!meaning.isAggregateMember()){
 			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
 			if(!id.constLookup&&!id.implicitDup)
@@ -625,7 +626,7 @@ abstract class Scope{
 		assert(!!id.meaning);
 		assert(id.scope_ is this);
 	}do{
-		if(!id.meaning.isToplevelDeclaration()){
+		if(!id.meaning.isToplevelDeclaration()&&!id.typeofSuppressedCapture){
 			if(isConsumable(id)) lastUses.implicitDup(id);
 		}
 	}
@@ -668,6 +669,7 @@ abstract class Scope{
 		assert(!!id.meaning);
 		assert(!id.constLookup);
 	}do{
+		if(id.typeofSuppressedCapture) return true;
 		bool ok=true;
 		if(!checkConsumable(id)){
 			ok=false;
@@ -1227,7 +1229,33 @@ abstract class Scope{
 
 	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,DeadDecl[]* failures){
 		auto meaning=lookupImpl(ident,rnsym,lookupImports,kind,this,failures);
+		if(typeofOperand&&meaning&&kind!=Lookup.probing) meaning=typeofOperandUse(ident,meaning,kind,failures);
 		return postprocessLookup(ident,meaning,kind);
+	}
+	private Declaration typeofOperandUse(Identifier ident,Declaration meaning,Lookup kind,DeadDecl[]* failures){ // (uses of values from outside the operand have no effect)
+		if(ident.typeofSuppressedCapture||meaning.isToplevelDeclaration()||!meaning.scope_) return meaning;
+		auto fsc=typeofFrame();
+		if(!fsc||!fsc.isNestedIn(meaning.scope_)) return meaning; // (declared within the operand)
+		ident.typeofSuppressedCapture=true;
+		static if(language==silq) if(!fsc.simulateTypeofConsumption(ident,meaning,kind,this,failures)) return null;
+		return meaning;
+	}
+	final Scope typeofFrame(){
+		for(auto sc=this;sc;sc=sc.parentScope())
+			if(sc.typeofConsumed.length) return sc;
+		return null;
+	}
+	static if(language==silq)
+	final bool simulateTypeofConsumption(Identifier ident,Declaration meaning,Lookup kind,Scope origin,DeadDecl[]* failures){
+		auto uses=typeofConsumed[$-1].get(meaning,null);
+		foreach(use;uses){
+			if(origin.isNestedIn(use[1])){ // (consumed earlier in this `typeof` operand)
+				if(failures) *failures~=new ConsumedDecl(meaning,use[0]);
+				return false;
+			}
+		}
+		if(kind==Lookup.consuming) typeofConsumed[$-1][meaning]=uses~q(ident,origin);
+		return true;
 	}
 	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		return lookupHereImpl(ident,rnsym,failures);
@@ -2314,7 +2342,7 @@ abstract class Scope{
 		}
 	}
 	uint typeofOperand=0; // block modifications while analyzing `typeof`
-	SetX!Declaration[] typeofConsumed; // simulate consumption while analyzing `typeof`
+	MapX!(Declaration,Q!(Identifier,Scope)[])[] typeofConsumed; // simulate consumption while analyzing `typeof`
 	static if(language==silq){ // support component replacement within `with` transformations
 		Scope withTransConsumption=null;
 		final Scope getWithTransConsumption(){
@@ -2443,6 +2471,7 @@ class NestedScope: Scope{
 	this(Scope parent){
 		this.parent=parent;
 		static if(language==silq) if(parent) withTransTrial=parent.getWithTransTrial(); // scopes created while a `with` transformation trial analysis is active belong to the trial (`parent` is null for a `TypeScope`)
+		if(parent) typeofOperand=parent.typeofOperand; // (scopes created within a `typeof` operand belong to it)
 	}
 	override Scope parentScope(){ return parent; }
 	override @property bool inferenceMode(){
@@ -2610,6 +2639,7 @@ class CapturingScope(T): NestedScope{
 	this(Scope parent,T decl){
 		super(parent);
 		this.decl=decl;
+		typeofOperand=0; // (a closure within a `typeof` operand captures as usual)
 	}
 	protected Declaration addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
 		if(kind==Lookup.probing) return null;
@@ -2798,16 +2828,9 @@ class CapturingScope(T): NestedScope{
 				if(!ident.typeofSuppressedCapture){
 					ident.typeofSuppressedCapture=true;
 					static if(language==silq)
-					if(kind==Lookup.consuming){
-						for(auto fsc=origin;fsc;fsc=fsc.parentScope()){
-							if(fsc.typeofConsumed.length){
-								if(pdecl in fsc.typeofConsumed[$-1])
-									return null; // consumed earlier in this `typeof` operand
-								fsc.typeofConsumed[$-1][pdecl]=[];
-								break;
-							}
-						}
-					}
+					if(auto fsc=origin.typeofFrame())
+						if(!fsc.simulateTypeofConsumption(ident,pdecl,kind,origin,failures))
+							return null;
 				}
 				return pdecl;
 			}
