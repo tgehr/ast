@@ -4630,7 +4630,7 @@ struct ArrayConsumer{
 				if(auto nmeaning=context.sc.consume(id.meaning,id,component)){ // consume array
 					id.meaning=nmeaning;
 					id.constLookup=false; // TODO: this is a bit hacky
-					context.sc.lastUses.consumption(nmeaning,id,context.sc);
+					context.sc.lastUses.consumption(nmeaning,id,context.sc,component);
 				}
 			}else{
 				e.e=expressionSemantic(e.e,context.nestConsumed);

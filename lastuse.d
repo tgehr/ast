@@ -109,6 +109,7 @@ final class LastUse{
 		r.prev=prev;
 		r.next=next;
 		r.index=index;
+		r.consumedComponent=consumedComponent;
 		return r;
 	}
 	enum Kind{
@@ -139,6 +140,7 @@ final class LastUse{
 	NestedScope[] nestedAfter;
 	LastUse prev=null,next=null;
 	size_t index; // (in the order the last uses of the scope were added)
+	IndexExp consumedComponent=null; // (a consumption allowed because this specific component is not borrowed)
 
 	bool isConsumption(){
 		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;
@@ -256,13 +258,14 @@ final class LastUse{
 			slu.markConsumed(null,false);
 		}
 	}
-	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false){
+	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false,IndexExp component=null){
 		if(!use) use=theUse;
+		if(!consumedComponent&&use is theUse) consumedComponent=component; // (consumed by the same use)
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
 		if(isConsumption()) return;
 		if(splitSource&&splitSource.splitFrom)
-			splitSource.splitFrom.markConsumed(theUse,false,true);
-		if(splitFrom) splitFrom.markConsumed(theUse,false,true);
+			splitSource.splitFrom.markConsumed(theUse,false,true,component);
+		if(splitFrom) splitFrom.markConsumed(theUse,false,true,component);
 		if(isForget){
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
@@ -417,6 +420,9 @@ final class LastUse{
 			}
 		}
 		if(nconstBlock) scope_.noteDependencyResolved(dep);
+		static if(language==silq)
+			if(nconstBlock&&consumedComponent&&scope_.componentConstBlocksAllow(decl,consumedComponent,use.loc))
+				nconstBlock=null;
 		if(nconstBlock&&dep.isTop){
 			if(!use){
 				scope_.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
@@ -958,7 +964,7 @@ struct LastUses{
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
-				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true);
+				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
 			lastUse.updateDependenciesOnConsumption();
 		}
 	}
@@ -1103,7 +1109,7 @@ struct LastUses{
 		//imported!"util.io".writeln("MADE: ",parent);
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
-	void consumption(Declaration decl,Identifier use,Scope sc)in{
+	void consumption(Declaration decl,Identifier use,Scope sc,IndexExp consumedComponent=null)in{
 		assert(decl in lastUses||decl.isSemError(),text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
 		assert(!!sc);
 		if(use){
@@ -1114,7 +1120,9 @@ struct LastUses{
 		}
 	}do{
 		//imported!"util.io".writeln("CONSUMPTION: ",decl," ",use);
-		add(new LastUse(LastUse.Kind.consumption,sc,decl,use,null));
+		auto lu=new LastUse(LastUse.Kind.consumption,sc,decl,use,null);
+		lu.consumedComponent=consumedComponent;
+		add(lu);
 	}
 	void capture(Declaration decl,Identifier use,Scope sc,Declaration parent){
 		add(new LastUse(LastUse.Kind.capture,sc,decl,use,parent));
