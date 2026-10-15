@@ -315,7 +315,8 @@ final class LastUse{
 				reads=true;
 				return true;
 			}
-			if(isOuter(x)) return present(x);
+			if(present(x)) return true; // (read at the forget, its definition is not undone)
+			if(isOuter(x)) return false;
 			if(x in visited) return true;
 			visited.insert(x);
 			if(x.splitFrom) return ok(x.splitFrom);
