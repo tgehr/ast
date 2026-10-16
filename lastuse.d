@@ -272,8 +272,16 @@ final class LastUse{
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
+		recordPinnedVars();
 		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(); // (consumed in a nested scope)
 		else updateDependenciesOnConsumptionLocal(!fromNested);
+	}
+	Id[] pinnedVars; // (variables whose last use could not be cancelled when this consumption happened)
+	private void recordPinnedVars(){
+		foreach(d,lu;scope_.lastUses.lastUses){
+			while(lu.forwardTo) lu=lu.forwardTo;
+			if(lu.kind==Kind.constPinned&&!(lu.use&&lu.use.implicitDup)) pinnedVars~=d.getId;
+		}
 	}
 	private bool isBranchSplit(){
 		return decl.splitFrom&&decl.splitFrom.splitInto.length>1&&decl.splitFrom.splitInto.canFind(decl);
@@ -421,7 +429,7 @@ final class LastUse{
 					if(id==lu.decl.getId||!prev.scope_.isNestedIn(lu.scope_)||!hasVersion(prev.dep,lu.decl)) continue;
 					auto ndep=prev.dep.dup;
 					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
-					if(ndep.isTop&&prev.use&&prev.use.implicitDup&&prev.canCancelImplicitDup()&&id !in outOfScope)
+					if(ndep.isTop&&prev.use&&prev.use.implicitDup&&prev.canCancelImplicitDup()&&id !in outOfScope&&!lu.pinnedVars.canFind(id))
 						outOfScope[id]=q(prev,lu);
 				}
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
@@ -1021,6 +1029,7 @@ struct LastUses{
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
+			lastUse.recordPinnedVars();
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
 				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
 			lastUse.updateDependenciesOnConsumption();
