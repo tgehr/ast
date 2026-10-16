@@ -314,7 +314,12 @@ final class LastUse{
 			for(;x;x=x.splitFrom) if(!inScope(x)) return true;
 			return false;
 		}
+		static Declaration current(Declaration x){ // (a merged version from an earlier fixed-point iteration of a loop stands for the one its splits were moved to, see `fixLoopSplitMergeGraph`)
+			while(x.splitInto.length&&x.splitInto[0].splitFrom&&x.splitInto[0].splitFrom !is x) x=x.splitInto[0].splitFrom;
+			return x;
+		}
 		bool ok(Declaration x){ // (read by the definitions)
+			x=current(x);
 			if(isClassicalDecl(x)) return true;
 			if(version_(x,decl)){
 				reads=true;
@@ -330,8 +335,8 @@ final class LastUse{
 			foreach(r;s.reads) if(!ok(r)) return false;
 			foreach(c;s.consumes){ // (re-created by undoing the definition)
 				if(isClassicalDecl(c[0])) continue;
-				if(version_(c[0],decl)) return false;
-				if(isOuter(c[0])){ // (its dependency has to be read instead)
+				if(version_(current(c[0]),decl)) return false;
+				if(isOuter(current(c[0]))){ // (its dependency has to be read instead)
 					if(c[1].isTop) return false;
 					foreach(y;c[1].dependencies) if(version_(y,decl)||!ok(y)) return false;
 				}else if(!ok(c[0])) return false;
