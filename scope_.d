@@ -667,6 +667,37 @@ abstract class Scope{
 			}
 			// TODO: can we have `use.sstate != SemState.error` here?
 		}
+		static if(language==silq) if(ok&&use&&use.scope_ is this) ok=checkDeclarationCancelOuter(decl,use);
+		return ok;
+	}
+	static if(language==silq)
+	private bool checkDeclarationCancelOuter(Declaration decl,Identifier use){ // (accesses after the enclosing branches were analyzed before the cancellation)
+		bool ok=true;
+		DeadDecl[] failures;
+		for(auto inner=cast(NestedScope)this;inner;inner=cast(NestedScope)inner.parent){
+			auto outer=inner.parent;
+			if(!outer||outer.getFunction() !is getFunction()) break;
+			DeclProp* prop=null;
+			for(auto d=decl;d&&!prop;d=d.splitFrom) prop=outer.declProps.tryGet(d);
+			if(!prop) continue;
+			auto siblings=inner.getSiblingScopes();
+			bool seen=false;
+			foreach(access;prop.accesses){
+				if(access is use){
+					seen=true;
+					continue;
+				}
+				if(!seen||!access.scope_||access.scope_.isNestedIn(inner)) continue;
+				if(siblings.any!(sib=>sib !is inner&&access.scope_.isNestedIn(sib))) continue; // (on another path)
+				if(ok) if(auto cd=recordConsumption(decl,use)) failures~=cd;
+				ok=false;
+				use.setSemForceError();
+				decl.setSemForceError();
+				access.setSemForceError();
+				import ast.semantic_:undefinedIdentifierError;
+				undefinedIdentifierError(access,failures,outer);
+			}
+		}
 		return ok;
 	}
 
