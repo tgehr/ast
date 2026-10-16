@@ -674,9 +674,29 @@ abstract class Scope{
 	private bool checkDeclarationCancelOuter(Declaration decl,Identifier use){ // (accesses after the enclosing branches were analyzed before the cancellation)
 		bool ok=true;
 		DeadDecl[] failures;
+		void reportLater(Identifier access,Scope sc){
+			if(ok) if(auto cd=recordConsumption(decl,use)) failures~=cd;
+			ok=false;
+			use.setSemForceError();
+			decl.setSemForceError();
+			access.setSemForceError();
+			import ast.semantic_:undefinedIdentifierError;
+			undefinedIdentifierError(access,failures,sc);
+		}
+		static Declaration origin(Declaration d){ while(d.splitFrom) d=d.splitFrom; return d; }
+		void visitActive(Scope sc){ // (accesses in nested scopes after the use that are still being analyzed)
+			foreach(nsc;sc.activeNestedScopes){
+				foreach(d,ref nprop;nsc.declProps.props){
+					if(origin(d) !is origin(decl)) continue;
+					foreach(access;nprop.accesses) if(!access.isSemError()) reportLater(access,nsc);
+				}
+				visitActive(nsc);
+			}
+		}
 		for(auto inner=cast(NestedScope)this;inner;inner=cast(NestedScope)inner.parent){
 			auto outer=inner.parent;
 			if(!outer||outer.getFunction() !is getFunction()) break;
+			if(!outer.activeNestedScopes.canFind(inner)) visitActive(outer);
 			DeclProp* prop=null;
 			for(auto d=decl;d&&!prop;d=d.splitFrom) prop=outer.declProps.tryGet(d);
 			if(!prop) continue;
@@ -689,13 +709,7 @@ abstract class Scope{
 				}
 				if(!seen||!access.scope_||access.scope_.isNestedIn(inner)) continue;
 				if(siblings.any!(sib=>sib !is inner&&access.scope_.isNestedIn(sib))) continue; // (on another path)
-				if(ok) if(auto cd=recordConsumption(decl,use)) failures~=cd;
-				ok=false;
-				use.setSemForceError();
-				decl.setSemForceError();
-				access.setSemForceError();
-				import ast.semantic_:undefinedIdentifierError;
-				undefinedIdentifierError(access,failures,outer);
+				reportLater(access,outer);
 			}
 		}
 		return ok;

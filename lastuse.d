@@ -551,6 +551,8 @@ final class LastUse{
 			}
 		}
 		removeCopies(scope_);
+		for(auto inner=cast(NestedScope)scope_;inner&&inner !is decl.scope_;inner=cast(NestedScope)inner.parent)
+			if(!inner.parent.activeNestedScopes.canFind(inner)) removeCopies(inner.parent); // (nested scopes after `inner` that are still being analyzed)
 		markConsumed(use,isForget);
 		return ok;
 	}
@@ -851,6 +853,10 @@ final class LastUse{
 				if(!(use&&use.implicitDup)) return false;
 				use.implicitDup=false;
 				auto ok=scope_.checkImplicitDupCancel(use);
+				if(!ok){ // (used afterwards, already reported)
+					use.implicitDup=true;
+					return false;
+				}
 				//imported!"util.io".writeln("CONSUMING: ",this," ",use.loc," ",constBlock," ",dep);
 				ok&=consume(false);
 				if(isBranchSplit()) updateDependenciesOnConsumption(); // (as for a consumption recorded in this branch)
