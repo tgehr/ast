@@ -551,7 +551,7 @@ final class LastUse{
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
-				nested.checkDeclarationCancel(result,use);
+				nested.checkDeclarationCancel(copy?copy:result,use);
 				removeCopies(nested);
 			}
 		}

@@ -2577,6 +2577,9 @@ class NestedScope: Scope{
 				symtabRemove(odecl);
 				if(dependencyTracked(odecl)){
 					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
+					auto prevConsumingUse=consumingUse;
+					consumingUse=use;
+					scope(exit) consumingUse=prevConsumingUse;
 					pushDependencies(odecl,true,splitting?null:use);
 				}
 				// TODO: backtrace forgets and last usages
