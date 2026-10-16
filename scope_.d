@@ -11,6 +11,8 @@ import util, util.hashtable: HashMap;
 struct Dependency{
 	bool isTop;
 	SetX!Declaration dependencies;
+	Declaration lostVar; // (if `isTop`: a consumed value it depended on, if known)
+	Identifier lostAt; // (where `lostVar` was consumed)
 	void joinWith(Dependency rhs){
 		if(isTop) return;
 		if(rhs.isTop){
@@ -23,9 +25,13 @@ struct Dependency{
 	void remove(Declaration decl){
 		dependencies.remove(decl);
 	}
-	void replace(Declaration decl, Dependency rhs){
+	void replace(Declaration decl, Dependency rhs, Identifier consumedAt=null){
 		if(decl !in dependencies) return;
 		dependencies.remove(decl);
+		if(rhs.isTop&&!rhs.lostVar&&consumedAt){
+			rhs.lostVar=decl;
+			rhs.lostAt=consumedAt;
+		}
 		joinWith(rhs);
 	}
 	void replace(Declaration decl,Declaration ndecl){
@@ -35,7 +41,7 @@ struct Dependency{
 		}
 	}
 	Dependency dup(){
-		return Dependency(isTop, dependencies.dup);
+		return Dependency(isTop, dependencies.dup, lostVar, lostAt);
 	}
 	private Q!(bool,SetX!Id) getIds(){
 		SetX!Id result;
@@ -64,13 +70,13 @@ struct Dependencies{
 			}
 		}
 	}
-	void pushUp(Declaration removed, bool keep)in{
+	void pushUp(Declaration removed, bool keep, Identifier consumedAt=null)in{
 		assert(removed in dependencies,text(removed," ",removed.loc," ",dependencies));
 	}do{
 		Dependency x=dependencies[removed];
 		if(!keep) dependencies.remove(removed);
 		foreach(k,ref v;dependencies){
-			v.replace(removed, x);
+			v.replace(removed, x, consumedAt);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
 		}
@@ -1083,7 +1089,7 @@ abstract class Scope{
 				auto prevConsumingUse=consumingUse;
 				consumingUse=use;
 				scope(exit) consumingUse=prevConsumingUse;
-				pushDependencies(ndecl,true);
+				pushDependencies(ndecl,true,splitting?null:use);
 			}
 			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
@@ -1327,6 +1333,7 @@ abstract class Scope{
 					if(!done){
 						if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
 						else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+						explainUnforgettable(d);
 						errors=true;
 						done=true;
 					}
@@ -1520,7 +1527,7 @@ abstract class Scope{
 		}
 	}
 	Identifier consumingUse;
-	final void pushDependencies(Declaration decl,bool keep){
+	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
 		noteDependencyConsumed(decl,getDependency(decl));
@@ -1553,7 +1560,7 @@ abstract class Scope{
 				}
 			}while(!done);
 		}
-		dependencies.pushUp(decl,keep);
+		dependencies.pushUp(decl,keep,consumedAt);
 		if(keep) toRemove~=decl;
 		this.pushUp(controlDependency,decl);
 		pushTrackedTemporaryDependencies(decl);
@@ -1606,6 +1613,18 @@ abstract class Scope{
 	}
 	final bool canForgetAppend(Declaration decl){
 		return canForgetAppend(this,decl);
+	}
+	final void explainUnknownDependency(Declaration decl,Dependency dep){
+		if(!dep.isTop||!dep.lostVar||!dep.lostAt||dep.lostVar.getId==decl.getId) return;
+		note(format("`%s` depends on `%s`, which is consumed here",decl.getName,dep.lostVar.getName),dep.lostAt.loc);
+		if(dep.lostAt.sstate==SemState.started) dep.lostAt.setSemError(); // (being looked up: no additional note that the lookup caused the error)
+	}
+	final void explainUnforgettable(Declaration decl){
+		if(auto lu=lastUses.get(decl,true)){
+			while(lu.forwardTo) lu=lu.forwardTo;
+			if(lu.dep.isTop&&lu.dep.lostVar) return explainUnknownDependency(decl,lu.dep);
+		}
+		if(dependencyTracked(decl)) explainUnknownDependency(decl,getDependency(decl));
 	}
 	static if(language==silq)
 	final bool tryUncomputeTypeDependents(Declaration decl,Identifier use){
@@ -1818,6 +1837,7 @@ abstract class Scope{
 					splitSym();
 					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						scopes[0].explainUnforgettable(sym);
 						errors=true;
 					}
 					removeSym();
@@ -1840,9 +1860,12 @@ abstract class Scope{
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								splitSym(), sc.split(osym,null);
 								if(sym.isSemCompleted()&&osym.isSemCompleted()){
-									if(!scopes[0].canForgetAppend(sym)|!sc.canForgetAppend(osym)){
+									auto symOk=scopes[0].canForgetAppend(sym),osymOk=sc.canForgetAppend(osym);
+									if(!symOk||!osymOk){
 										error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
+										else if(!symOk) scopes[0].explainUnforgettable(sym);
+										else sc.explainUnforgettable(osym);
 										errors=true;
 									}
 								}
@@ -1920,6 +1943,7 @@ abstract class Scope{
 					sym=sc.split(sym,null);
 					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						sc.explainUnforgettable(sym);
 						errors=true;
 					}
 					if(sc.dependencyTracked(sym))
@@ -2508,7 +2532,7 @@ class NestedScope: Scope{
 				symtabRemove(odecl);
 				if(dependencyTracked(odecl)){
 					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
-					pushDependencies(odecl,true);
+					pushDependencies(odecl,true,splitting?null:use);
 				}
 				// TODO: backtrace forgets and last usages
 				if(auto added=addVariable(ndecl,type,true)){
@@ -2573,7 +2597,7 @@ class NestedScope: Scope{
 		if(!type&&remove){
 			symtabRemove(odecl);
 			if(dependencyTracked(odecl))
-				pushDependencies(odecl,true);
+				pushDependencies(odecl,true,splitting?null:use);
 			if(odecl !is result)
 				replaceDecl(odecl,result);
 			return result;

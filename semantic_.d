@@ -7113,6 +7113,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				}else{
 					if(!meaning.isSemError()){
 						sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
+						sc.explainUnforgettable(meaning);
 						meaning.setSemForceError();
 					}
 					id.setSemError();

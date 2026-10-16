@@ -285,7 +285,7 @@ final class LastUse{
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
-					lu.updateDependenciesOnConsumptionLocal(true,parent.splitInto.length>1); // (including forgets in nested scopes of the branches)
+					lu.updateDependenciesOnConsumptionLocal(true,parent.splitInto.length>1,this); // (including forgets in nested scopes of the branches)
 				}
 			}
 		}else updateDependenciesOnConsumptionLocal();
@@ -339,10 +339,15 @@ final class LastUse{
 		}
 		return ok(d)&&reads;
 	}
-	private void updateDependenciesOnConsumptionLocal(bool descend=true,bool fromBranch=false){
+	private void updateDependenciesOnConsumptionLocal(bool descend=true,bool fromBranch=false,LastUse consumption=null){
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
+		if(!consumption) consumption=this;
+		if(cdep.isTop&&!cdep.lostVar&&consumption.use){
+			cdep.lostVar=consumption.decl;
+			cdep.lostAt=consumption.use;
+		}
 		auto start=next;
 		if(splitFrom){
 			if(fromBranch){ // (all last uses in the branch, including those merged from nested scopes)
@@ -353,11 +358,11 @@ final class LastUse{
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
 		SetX!LastUse visited;
-		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by){
+		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by,Identifier consumedAt=null){
 			if(dep.isTop) return;
 			Declaration[] xs;
 			foreach(x;dep.dependencies) if(x is d||x.isSplitFrom(d)||d.isSplitFrom(x)) xs~=x;
-			foreach(x;xs) dep.replace(x,by);
+			foreach(x;xs) dep.replace(x,by,consumedAt);
 		}
 		void walk(LastUse start,Dependency cdep,bool nested){
 		for(auto lu=start;lu;lu=lu.next){
@@ -380,8 +385,8 @@ final class LastUse{
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
-				if(nested) replaceVersions(cdep,lu.decl,lu.dep);
-				else cdep.replace(lu.decl,lu.dep);
+				if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
+				else cdep.replace(lu.decl,lu.dep,lu.use);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
 					lu.checkConsumable();
@@ -390,14 +395,17 @@ final class LastUse{
 					if(lu.kind==Kind.synthesizedForget){
 						if(lu.use&&lu.use.scope_&&cast(ForgetExp)lu.parent){
 							lu.scope_.error(format("cannot synthesize forget expression for `%s`",lu.use),lu.use.loc);
+							lu.scope_.explainUnknownDependency(lu.decl,lu.dep);
 						}else if(lu.use && lu.use.isSemError()){
 							// already reported
 						}else if(lu.decl.scope_){
 							auto d=lu.decl,sc=lu.decl.scope_;
-							if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+							if(!lu.use&&!lu.parent&&d.splitFrom) sc.error(format("%s `%s` is not consumed",d.kind,d.getName),d.loc); // (forgotten in a branch)
+							else if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
 							else sc.error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
 							if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
 							else if(lu.use) sc.note("cannot be forgotten after its last use here",lu.use.loc);
+							sc.explainUnknownDependency(d,lu.dep);
 						}else if(lu.use && lu.use.scope_){
 							lu.scope_.error(format("cannot synthesize forget expression for `%s`",lu.use),lu.use.loc);
 						}
