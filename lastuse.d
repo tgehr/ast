@@ -272,16 +272,40 @@ final class LastUse{
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
-		recordPinnedVars();
+		recordCancelable();
 		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(); // (consumed in a nested scope)
 		else updateDependenciesOnConsumptionLocal(!fromNested);
 	}
-	Id[] pinnedVars; // (variables whose last use could not be cancelled when this consumption happened)
-	private void recordPinnedVars(){
-		foreach(d,lu;scope_.lastUses.lastUses){
-			while(lu.forwardTo) lu=lu.forwardTo;
-			if(lu.kind==Kind.constPinned&&!(lu.use&&lu.use.implicitDup)) pinnedVars~=d.getId;
+	Q!(LastUse,Dependency)[] cancelable; // (last uses that could have been cancelled when this consumption happened, with their dependencies at that time)
+	private void recordCancelable(){ // (only those that depend on `decl` indirectly, the others are cancelled directly)
+		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
+		Declaration[] reached=[decl];
+		LastUse[] indirect;
+		for(bool changed=true;changed;){
+			changed=false;
+			foreach(d,lu;scope_.lastUses.lastUses){
+				while(lu.forwardTo) lu=lu.forwardTo;
+				if(lu is this||lu.dep.isTop||reached.canFind(d)) continue;
+				bool viaReached=false,direct=false;
+				foreach(x;lu.dep.dependencies){
+					if(reached.any!(y=>version_(x,y))) viaReached=true;
+					if(version_(x,decl)) direct=true;
+				}
+				if(!viaReached) continue;
+				if(!direct) indirect~=lu;
+				reached~=d;
+				changed=true;
+			}
 		}
+		foreach(lu;indirect) if(lu.canCancelImplicitDup()) cancelable~=q(lu,lu.dep.dup);
+	}
+	private static Identifier cancelUse(LastUse lu){ // (where `lu` goes out of scope if cancelled)
+		if(lu.use) return lu.use;
+		if(lu.constConsume) return cancelUse(lu.constConsume);
+		foreach(nsc;lu.nestedScopes)
+			if(auto nlu=nsc.lastUses.get(versionIn(lu.decl,nsc),true))
+				if(auto r=cancelUse(nlu)) return r;
+		return null;
 	}
 	private bool isBranchSplit(){
 		return decl.splitFrom&&decl.splitFrom.splitInto.length>1&&decl.splitFrom.splitInto.canFind(decl);
@@ -383,8 +407,13 @@ final class LastUse{
 			foreach(x;dep.dependencies) if(x is d||x.isSplitFrom(d)||d.isSplitFrom(x)) return true;
 			return false;
 		}
-		MapX!(Id,LastUse[]) touched; // (the latest visited last uses (on each path) of each variable whose dependency now goes through `decl`)
-		MapX!(Id,Q!(LastUse,LastUse)) outOfScope; // (the implicit `dup` and the consumption after which a variable goes out of scope)
+		MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope; // (where a variable goes out of scope, the implicit `dup` before that, the consumption that causes it, the scopes of later uses and of going out of scope, and the version that goes out of scope)
+		static bool onOtherPath(Scope a,Scope b){ // (in different branches of the same conditional)
+			for(auto x=cast(NestedScope)a;x;x=cast(NestedScope)x.parent)
+				for(auto y=cast(NestedScope)b;y;y=cast(NestedScope)y.parent)
+					if(x.parent is y.parent) return x !is y&&x.getSiblingScopes().canFind(y);
+			return false;
+		}
 		void walk(LastUse start,Dependency cdep,bool nested){
 		for(auto lu=start;lu;lu=lu.next){
 			scope(success) if(descend) foreach(nsc;lu.nestedAfter){
@@ -397,13 +426,12 @@ final class LastUse{
 			if(lu is this) continue;
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
-				auto oos=outOfScope.get(lu.decl.getId,Q!(LastUse,LastUse).init);
-				auto dup_=oos[0],cause=oos[1];
-				if(dup_&&lu.scope_.isNestedIn(cause.scope_)){ // (used after it went out of scope)
+				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
+				if(oos[2]&&lu.scope_.isNestedIn(oos[3])&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5]))){ // (used after it went out of scope)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
 					lu.decl.setSemForceError();
-					undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,dup_.use,cause.use)],lu.scope_);
+					undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,oos[0],oos[2],oos[1])],lu.scope_);
 					outOfScope.remove(lu.decl.getId);
 				}
 			}
@@ -412,26 +440,25 @@ final class LastUse{
 				if(lu.kind!=Kind.synthesizedForget||lu.use is lu.splitFrom.use) continue; // (a forget in the branch itself is checked here)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			auto viaDecl=hasVersion(lu.dep,decl);
 			if(nested) replaceVersions(lu.dep,decl,cdep);
 			else lu.dep.replace(decl,cdep);
-			if(lu.decl){
-				auto prevs=touched.get(lu.decl.getId,null).filter!(e=>!e.scope_.isNestedIn(lu.scope_)&&!lu.scope_.isNestedIn(e.scope_)).array; // (not superseded)
-				if(viaDecl) prevs~=lu;
-				touched[lu.decl.getId]=prevs;
-			}
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
+				if(lu.use) foreach(c;lu.cancelable){ // (a last use that would have been cancelled here if the dependency through `decl` had been known)
+					auto prev=c[0],id=prev.decl.getId;
+					if(id==lu.decl.getId||id in outOfScope||!hasVersion(c[1],decl)) continue;
+					auto ndep=c[1].dup;
+					replaceVersions(ndep,decl,cdep);
+					if(!hasVersion(ndep,lu.decl)) continue;
+					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
+					if(!ndep.isTop) continue;
+					auto at=cancelUse(prev);
+					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
+					outOfScope[id]=q(at?at:lu.use,dupUse,lu.use,lu.scope_,prev.scope_,prev.decl);
+				}
 				if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
 				else cdep.replace(lu.decl,lu.dep,lu.use);
-				if(lu.use) foreach(id,prevs;touched) foreach(prev;prevs){ // (an implicit `dup` that would have been cancelled here if the dependency through `decl` had been known)
-					if(id==lu.decl.getId||!prev.scope_.isNestedIn(lu.scope_)||!hasVersion(prev.dep,lu.decl)) continue;
-					auto ndep=prev.dep.dup;
-					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
-					if(ndep.isTop&&prev.use&&prev.use.implicitDup&&prev.canCancelImplicitDup()&&id !in outOfScope&&!lu.pinnedVars.canFind(id))
-						outOfScope[id]=q(prev,lu);
-				}
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
 					lu.checkConsumable();
@@ -460,6 +487,7 @@ final class LastUse{
 					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup){
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
 						if(auto vd=cast(VarDecl)lu.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=lu.dep.lostAt;
+						if(lu.dep.lostAt&&lu.decl.getId !in outOfScope) outOfScope[lu.decl.getId]=q(lu.use,Identifier.init,lu.dep.lostAt,scope_,lu.scope_,lu.decl); // (the `dup` would not have been implicit if the dependency through `decl` had been known)
 						lu.cancelImplicitDup();
 					}
 				}
@@ -1029,7 +1057,7 @@ struct LastUses{
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()){
-			lastUse.recordPinnedVars();
+			lastUse.recordCancelable();
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
 				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
 			lastUse.updateDependenciesOnConsumption();
