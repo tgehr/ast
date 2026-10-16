@@ -1840,7 +1840,7 @@ abstract class Scope{
 				auto nsym=scopes[0].split(sym,null);
 				if(nsym is sym) return;
 				pushUp(nestedControlDependency,sym); // TODO: needed?
-				symtabRemove(sym);
+				if(rnsymtab.get(sym.getId,null) is sym) symtabRemove(sym); // (otherwise already consumed by the split, after an error in another branch)
 				symtabInsert(nsym);
 				sym=nsym;
 			}
@@ -1985,6 +1985,10 @@ abstract class Scope{
 					continue;
 				}
 				if(sym.getId !in rnsymtab){
+					if(sym.scope_ !is sc&&sym.isSemError()){ // (not split into `sc` after an error in another branch)
+						sc.symtabRemove(sym);
+						continue;
+					}
 					sym=sc.split(sym,null);
 					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
