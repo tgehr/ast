@@ -436,8 +436,10 @@ final class LastUse{
 				}
 			}
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
-			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited)
-				if(lu.kind!=Kind.synthesizedForget||lu.use is lu.splitFrom.use) continue; // (a forget in the branch itself is checked here)
+			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this){
+				if(lu.kind==Kind.synthesizedForget&&lu.use&&lu.use is lu.splitFrom.use) continue; // (forgotten before the branch, checked there)
+				if(lu.splitFrom !in visited&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
+			}
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested) replaceVersions(lu.dep,decl,cdep);
