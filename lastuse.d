@@ -271,7 +271,11 @@ final class LastUse{
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
-		updateDependenciesOnConsumptionLocal(!fromNested);
+		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(); // (consumed in a nested scope)
+		else updateDependenciesOnConsumptionLocal(!fromNested);
+	}
+	private bool isBranchSplit(){
+		return decl.splitFrom&&decl.splitFrom.splitInto.length>1&&decl.splitFrom.splitInto.canFind(decl);
 	}
 	private void updateDependenciesOnConsumption(){
 		//imported!"util.io".writeln("UPDATING ALL: ",this);
@@ -808,6 +812,7 @@ final class LastUse{
 				auto ok=scope_.checkImplicitDupCancel(use);
 				//imported!"util.io".writeln("CONSUMING: ",this," ",use.loc," ",constBlock," ",dep);
 				ok&=consume(false);
+				if(isBranchSplit()) updateDependenciesOnConsumption(); // (as for a consumption recorded in this branch)
 				return ok;
 			case constUse:
 				if(constConsume&&constConsume.canCancelImplicitDup()){
