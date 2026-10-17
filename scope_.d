@@ -2353,8 +2353,10 @@ abstract class Scope{
 		foreach(_,decl;state.rnsymtab){
 			if(auto lu=state.lastUses.get(decl,null)){
 				if(lu.isConsumption()&&!forWithTransTrial){
-					if(!toRemove.canFind(lu.decl)) // TODO: make more efficient
+					if(!toRemove.canFind(lu.decl)){ // TODO: make more efficient
 						toRemove~=lu.decl;
+						if(dependencyTracked(lu.decl)) pushDependencies(lu.decl,true); // (consumed after the snapshot was taken)
+					}
 					recordConsumption(lu.decl,lu.use);
 					continue;
 				}
@@ -2362,8 +2364,10 @@ abstract class Scope{
 			static if(language==silq) if(!forWithTransTrial){
 				if(auto lu=lastUses.lastUses.get(decl,null)){
 					if(lu.isConsumption()&&(forgottenBeforeEarlyReturn(decl)||consumedOutside(decl))){
-						if(!toRemove.canFind(lu.decl))
+						if(!toRemove.canFind(lu.decl)){
 							toRemove~=lu.decl;
+							if(dependencyTracked(lu.decl)) pushDependencies(lu.decl,true);
+						}
 						recordConsumption(lu.decl,lu.use);
 						continue;
 					}
