@@ -1042,8 +1042,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		enum restriction_=Annotation.none;
 	}
 	// initialize scopes, to allow captures to be inserted
-	static if(language==silq) auto restrictionCause=quantumControl?ite:null;
-	else enum Expression restrictionCause=null;
+	auto restrictionCause=RestrictionCause(quantumControl?ite:null);
 	if(!ite.then.blscope_) ite.then.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	if(!ite.othw){
 		ite.othw=New!CompoundExp((Expression[]).init);
@@ -1175,7 +1174,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	}
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=sc;
-	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: with_);
+	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=null;
 	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
@@ -1238,7 +1237,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	}else if(with_.itrans){
 		if(!with_.itrans.isSemFinal()){
 			static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
-			with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: with_);
+			with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		}
 	}else if(with_.trans.isSemCompleted()){
@@ -1247,7 +1246,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		with_.itrans.loc=with_.trans.loc;
 		static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 		auto nerrors=sc.handler.nerrors;
-		with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: with_);
+		with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
 		if(with_.itrans.isSemError()&&sc.handler.nerrors!=nerrors){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
@@ -1371,8 +1370,8 @@ struct FixedPointIterState{
 	}
 	BlockScope makeScopes(Scope sc){
 		auto restriction_=prevFlags&StmFlags.quantumReturn?Annotation.mfree:Annotation.none;
-		static if(language==silq) auto restrictionCause=restriction_&&prevBdy?findQuantumReturn(prevBdy,false,false):null;
-		else enum Expression restrictionCause=null;
+		auto restrictionCause=restriction_&&prevBdy?findQuantumReturn(prevBdy,false):RestrictionCause.init;
+		restrictionCause.laterIterations=true;
 		forgetScope=new BlockScope(sc,restriction_,restrictionCause);
 		loopScope=new BlockScope(sc,restriction_,restrictionCause);
 		loopScope.isLoopBody=true;
@@ -2078,7 +2077,7 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 	return e;
 }
 
-CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,ref StmFlags flags,Expression control,Dependency controlDependency,Annotation restriction_,Expression restrictionCause=null)in{
+CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,ref StmFlags flags,Expression control,Dependency controlDependency,Annotation restriction_,RestrictionCause restrictionCause=RestrictionCause.init)in{
 	//assert(!ce.blscope_);
 }do{
 	static if(language==silq){
@@ -2091,7 +2090,7 @@ CompoundExp controlledCompoundExpSemantic(CompoundExp ce,Scope sc,ref StmFlags f
 	return compoundExpSemantic(ce,sc,flags,restriction_,restrictionCause:restrictionCause);
 }
 
-CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, Annotation restriction_=Annotation.none, bool blscope=true, bool resetConst=true, Expression restrictionCause=null){
+CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, Annotation restriction_=Annotation.none, bool blscope=true, bool resetConst=true, RestrictionCause restrictionCause=RestrictionCause.init){
 	static if(language==silq){
 		if(flags&StmFlags.quantumReturn) restriction_=max(Annotation.mfree,restriction_);
 	}
@@ -2518,8 +2517,8 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 		enum restriction_=Annotation.none;
 	}
 	// initialize both scopes first, to allow captures to be inserted
-	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, quantumControl?ite:null);
-	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, quantumControl?ite:null);
+	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
+	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	ite.then=branchBlockSemanticLhs(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
@@ -3811,7 +3810,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			foreach(i,s;chain) s.withTransTrial=withTransTrials[i];
 			trial.active=false;
 		}
-		trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true,restrictionCause:with_);
+		trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true,restrictionCause:RestrictionCause(with_));
 	}
 	sc.withTransConsumption=null;
 	if(trans.blscope_) sc.merge(false,trans.blscope_);
@@ -6139,47 +6138,63 @@ bool satisfyRestriction(Scope sc,Annotation annotation,out Annotation restrictio
 	}
 }
 
-/// first `return` in `e` that is executed under quantum control (with `lenient`, falls back to any `return`)
-ReturnExp findQuantumReturn(Expression e,bool quantumControl=false,bool lenient=true){
-	static ReturnExp find(Expression e,bool quantumControl){
-		if(!e) return null;
-		if(auto re=cast(ReturnExp)e) return quantumControl?re:null;
+/// first `return` in `e` that is executed under quantum control, with the innermost quantum `if` controlling it
+/// (with `lenient`, falls back to any `return`)
+RestrictionCause findQuantumReturn(Expression e,bool lenient=true){
+	static RestrictionCause find(Expression e,Expression control,bool quantumControl){
+		if(!e) return RestrictionCause.init;
+		if(auto re=cast(ReturnExp)e) return quantumControl?RestrictionCause(re,control):RestrictionCause.init;
 		if(auto ce=cast(CompoundExp)e){
-			foreach(s;ce.s) if(auto r=find(s,quantumControl)) return r;
-			return null;
+			foreach(s;ce.s) if(auto r=find(s,control,quantumControl)) return r;
+			return RestrictionCause.init;
 		}
 		if(auto ite=cast(IteExp)e){
-			static if(language==silq) auto qc=quantumControl||ite.cond.type&&!ite.cond.type.isClassical();
-			else auto qc=quantumControl;
-			if(auto r=find(ite.then,qc)) return r;
-			return find(ite.othw,qc);
+			static if(language==silq) bool quantumCond=ite.cond.type&&!ite.cond.type.isClassical();
+			else enum quantumCond=false;
+			if(quantumCond) control=ite;
+			if(auto r=find(ite.then,control,quantumControl||quantumCond)) return r;
+			return find(ite.othw,control,quantumControl||quantumCond);
 		}
-		if(auto fe=cast(ForExp)e) return find(fe.bdy,quantumControl);
-		if(auto we=cast(WhileExp)e) return find(we.bdy,quantumControl);
-		if(auto re=cast(RepeatExp)e) return find(re.bdy,quantumControl);
-		if(auto we=cast(WithExp)e) return find(we.bdy,quantumControl);
-		return null;
+		if(auto fe=cast(ForExp)e) return find(fe.bdy,control,quantumControl);
+		if(auto we=cast(WhileExp)e) return find(we.bdy,control,quantumControl);
+		if(auto re=cast(RepeatExp)e) return find(re.bdy,control,quantumControl);
+		if(auto we=cast(WithExp)e) return find(we.bdy,control,quantumControl);
+		return RestrictionCause.init;
 	}
-	if(auto r=find(e,quantumControl)) return r;
-	return lenient?find(e,true):null;
+	if(auto r=find(e,null,false)) return r;
+	return lenient?find(e,null,true):RestrictionCause.init;
 }
 
-/// explains why `sc` imposes a restriction of at least `annotation`
-void explainRestriction(Scope sc,Annotation annotation){
-	auto cause=sc.restrictionCause(annotation);
+/// describes a violation of `restriction` imposed by `cause`, e.g., "function call under quantum control must be `mfree`"
+string restrictionViolation(RestrictionCause cause,Annotation restriction,string what,string action){
+	auto ann=annotationToString(restriction);
+	if(cast(IteExp)cause.cause||cast(ALogicExp)cause.cause||cast(ReturnExp)cause.cause)
+		return format("%s under quantum control must be `%s`",what,ann);
+	if(cast(WithExp)cause.cause)
+		return format("%s in `with` transformation must be `%s`",what,ann);
+	if(cast(FunctionDef)cause.cause)
+		return format("cannot %s within `%s` function",action,ann);
+	return format("cannot %s in `%s` context",action,ann);
+}
+
+/// explains why a restriction of at least `annotation` is imposed by `cause`
+void explainRestriction(Scope sc,RestrictionCause cause,Annotation annotation){
 	if(!cause) return;
-	if(auto fd=cast(FunctionDef)cause){
+	if(auto fd=cast(FunctionDef)cause.cause){
 		if(fd.annotationLoc.rep.length)
 			sc.note(format("%s is annotated `%s`",fd.name?format("`%s`",fd.getName):"function",fd.annotationLoc.rep),fd.annotationLoc);
-	}else if(auto pt=cast(ProductTy)cause){
+	}else if(auto pt=cast(ProductTy)cause.cause){
 		sc.note(format("function type is annotated `%s`",annotationToString(pt.annotation)),pt.loc);
-	}else if(auto ite=cast(IteExp)cause){
+	}else if(auto ite=cast(IteExp)cause.cause){
 		sc.note("quantum control introduced here",ite.cond.loc);
-	}else if(auto le=cast(ALogicExp)cause){
+	}else if(auto le=cast(ALogicExp)cause.cause){
 		sc.note("quantum control introduced here",le.e1.loc);
-	}else if(auto re=cast(ReturnExp)cause){
-		sc.note("code after this quantum-controlled `return` is under quantum control",re.loc);
-	}else if(auto we=cast(WithExp)cause){
+	}else if(auto re=cast(ReturnExp)cause.cause){
+		if(cause.laterIterations) sc.note("loop iterations after this quantum-controlled `return` are under quantum control",re.loc);
+		else sc.note("code after this quantum-controlled `return` is under quantum control",re.loc);
+		if(auto ite=cast(IteExp)cause.control)
+			sc.note("`return` is controlled by this quantum condition",ite.cond.loc);
+	}else if(auto we=cast(WithExp)cause.cause){
 		sc.note(format("transformation of `with` statement must be `%s` (it is reversed)",annotationToString(annotation)),we.trans.loc);
 	}
 }
@@ -6358,12 +6373,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				auto restriction=Annotation.none;
 				if(sc&&!satisfyRestriction(sc,ft.annotation,restriction,ce)){
-					if(ft.annotation==Annotation.none){
-						sc.error(format("cannot call function `%s` in `%s` context", ce.e, annotationToString(restriction)), ce.loc);
-					}else{
-						sc.error(format("cannot call `%s` function `%s` in `%s` context", annotationToString(ft.annotation), ce.e, annotationToString(restriction)), ce.loc);
-					}
-					explainRestriction(sc,restriction);
+					auto cause=sc.restrictionCause(restriction);
+					auto action=ft.annotation==Annotation.none?format("call function `%s`",ce.e):format("call `%s` function `%s`",annotationToString(ft.annotation),ce.e);
+					sc.error(restrictionViolation(cause,restriction,"function call",action),ce.loc);
+					explainRestriction(sc,cause,restriction);
 					explainAnnotation(sc,ce.e,restriction);
 					ce.setSemError();
 				}
@@ -6947,8 +6960,8 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		enum restriction_=Annotation.none;
 	}
 	// initialize both scopes first, to allow captures to be inserted
-	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, quantumControl?ite:null);
-	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, quantumControl?ite:null);
+	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
+	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	ite.then=branchBlockSemantic(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
@@ -8164,10 +8177,10 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	}
 	Annotation restriction;
 	if(!satisfyRestriction(sc,ft.annotation,restriction,vfe)){
-		if(ft.annotation==Annotation.none)
-			sc.error(format("cannot evaluate vector comprehension in `%s` context",annotationToString(restriction)),vfe.loc);
-		else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",annotationToString(ft.annotation),annotationToString(restriction)),vfe.loc);
-		explainRestriction(sc,restriction);
+		auto cause=sc.restrictionCause(restriction);
+		auto action=ft.annotation==Annotation.none?"evaluate vector comprehension":format("evaluate `%s` vector comprehension",annotationToString(ft.annotation));
+		sc.error(restrictionViolation(cause,restriction,"vector comprehension",action),vfe.loc);
+		explainRestriction(sc,cause,restriction);
 		explainAnnotation(sc,vfe.fd,"vector comprehension",restriction);
 		vfe.setSemError();
 		return vfe;
@@ -8704,8 +8717,8 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 		enum restriction_=Annotation.none;
 	}
 	// initialize scopes, to allow captures to be inserted
-	e.blscope_=new BlockScope(sc,restriction_,quantumControl?e:null);
-	e.forgetScope=new BlockScope(sc,restriction_,quantumControl?e:null);
+	e.blscope_=new BlockScope(sc,restriction_,RestrictionCause(quantumControl?e:null));
+	e.forgetScope=new BlockScope(sc,restriction_,RestrictionCause(quantumControl?e:null));
 	e2=branchSemantic(e2,expSemContext(e.blscope_,ConstResult.yes,inType),quantumControl);
 	static if(language==silq) e.blscope_.clearConsumed();
 	propErr(e1,e);

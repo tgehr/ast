@@ -2093,8 +2093,8 @@ abstract class Scope{
 		return Annotation.none;
 	}
 	/// innermost construct that imposes a restriction of at least `annotation` (for diagnostics)
-	Expression restrictionCause(Annotation annotation){
-		return null;
+	RestrictionCause restrictionCause(Annotation annotation){
+		return RestrictionCause.init;
 	}
 
 	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost,bool consumedClassical=false){
@@ -2517,6 +2517,13 @@ abstract class Scope{
 	MapX!(Id,Declaration) rnsymtab;
 }
 
+struct RestrictionCause{
+	Expression cause; // e.g., quantum `if`, quantum-controlled `return`, `with`, annotated function
+	Expression control; // (quantum `if` controlling a `return`)
+	bool laterIterations; // (restriction applies to loop iterations after the one containing the `return`)
+	bool opCast(T:bool)(){ return !!cause; }
+}
+
 class TopScope: Scope{
 	private ErrorHandler handler_;
 	override @property ErrorHandler handler(){ return handler_; }
@@ -2695,7 +2702,7 @@ class NestedScope: Scope{
 	}
 
 	override Annotation restriction(ref FunctionDef reason){ return parent.restriction(reason); }
-	override Expression restrictionCause(Annotation annotation){ return parent.restrictionCause(annotation); }
+	override RestrictionCause restrictionCause(Annotation annotation){ return parent.restrictionCause(annotation); }
 	override int outerDeclProps(scope int delegate(ref DeclProps) dg){
 		return parent.nestedDeclProps(dg);
 	}
@@ -2748,8 +2755,8 @@ class RawProductScope: NestedScope{
 	override Annotation restriction(ref FunctionDef reason){
 		return annotation;
 	}
-	override Expression restrictionCause(Annotation annotation){
-		return this.annotation>=annotation?productTy:null;
+	override RestrictionCause restrictionCause(Annotation annotation){
+		return RestrictionCause(this.annotation>=annotation?productTy:null);
 	}
 	void forceClose(){}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
@@ -2981,8 +2988,8 @@ class FunctionScope: CapturingScope!FunctionDef{
 		reason=fd;
 		return fd.annotation;
 	}
-	override Expression restrictionCause(Annotation annotation){
-		return fd.annotation>=annotation?fd:null;
+	override RestrictionCause restrictionCause(Annotation annotation){
+		return RestrictionCause(fd.annotation>=annotation?fd:null);
 	}
 	void forceClose(){}
 	override FunctionDef getFunction(){ return fd; }
@@ -3003,14 +3010,14 @@ class DataScope: CapturingScope!DatDecl{
 	override DatDecl getDatDecl(){ return decl; }
 }
 class BlockScope: NestedScope{
-	this(Scope parent,Annotation restriction_=Annotation.none,Expression restrictionCause_=null){
+	this(Scope parent,Annotation restriction_=Annotation.none,RestrictionCause restrictionCause_=RestrictionCause.init){
 		super(parent);
 		if(parent&&parent.allowsLinear()) parent.nest(this);
 		this.restriction_=restriction_;
 		this.restrictionCause_=restrictionCause_;
 	}
 	Annotation restriction_;
-	Expression restrictionCause_; // e.g., quantum `if`, quantum-controlled `return`, `with`
+	RestrictionCause restrictionCause_;
 	bool isLoopBody=false;
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
@@ -3028,7 +3035,7 @@ class BlockScope: NestedScope{
 		}
 		return restriction_;
 	}
-	override Expression restrictionCause(Annotation annotation){
+	override RestrictionCause restrictionCause(Annotation annotation){
 		if(restrictionCause_&&restriction_>=annotation) return restrictionCause_;
 		return super.restrictionCause(annotation);
 	}
@@ -3046,9 +3053,9 @@ class TypeScope: BlockScope{
 		if(origin) return origin.restriction(reason);
 		return restriction_;
 	}
-	override Expression restrictionCause(Annotation annotation){
+	override RestrictionCause restrictionCause(Annotation annotation){
 		if(origin) return origin.restrictionCause(annotation);
-		return null;
+		return RestrictionCause.init;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
