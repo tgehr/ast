@@ -265,10 +265,18 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	override FunctionDef copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
+		if(args.preserveMeanings&&fscope_&&!(args.boundIn&&fscope_.isNestedIn(args.boundIn))) args.boundIn=fscope_; // (the copy declares its own parameters and locals)
 		auto r=new FunctionDef(copyNameImpl(args),params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
 		r.copyIntrinsicFieldsFrom(this);
 		if(args.preserveMeanings){
-			r.ret=ret;
+			bool mentionsBound(Expression e){
+				import ast.type: freeIdentifiers;
+				foreach(id;e.freeIdentifiers)
+					if(id.meaning&&id.meaning.scope_&&id.meaning.scope_.isNestedIn(args.boundIn))
+						return true;
+				return false;
+			}
+			if(!ret||!args.boundIn||!mentionsBound(ret)) r.ret=ret; // (otherwise recomputed)
 			r.hasReturn=hasReturn;
 			static if(language==psi) r.retNames=retNames;
 			import ast.substitute: computeCapturesFromBody;

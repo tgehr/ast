@@ -85,6 +85,7 @@ abstract class Expression: Node{
 	struct CopyArgs{
 		bool preserveSemantic=false;
 		bool preserveMeanings=false;
+		Scope boundIn; // (with `preserveMeanings`, meanings declared within this scope are not preserved)
 		struct Rename{
 			Declaration decl;
 			Id nid;
@@ -975,7 +976,7 @@ class Identifier: Expression{
 			}
 			if(args.mapScope) r.scope_=args.mapScope(r.scope_);
 		}else{
-			if(args.preserveMeanings){
+			if(args.preserveMeanings&&!(args.boundIn&&meaning&&meaning.scope_&&meaning.scope_.isNestedIn(args.boundIn))){
 				r.meaning=meaning;
 				r.scope_=scope_; // TODO: make unnecessary
 			}

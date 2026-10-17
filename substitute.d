@@ -1036,6 +1036,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 
 	Scope mapScope(Scope s){ return s is null?null:smap.get(s,s); }
 	Expression delegate(Expression) rescopeCopy;
+	Expression delegate(Expression) shareTy; // (evaluated types are shared unless they mention declarations of the twin)
 	Declaration mapDecl(Declaration d){
 		if(!d) return null;
 		if(d is fd) return r;
@@ -1058,8 +1059,8 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			if(d.rename&&!fromChain) nd.rename=new Identifier(d.rename.id);
 			dmap[d]=nd;
 			nd.scope_=mapScope(d.scope_);
-			nd.vtype=vd.vtype?(vd.vtype.isSemEvaluated()?vd.vtype:rescopeCopy(useSubstitute(vd.vtype,bctx))):null;
-			nd.dtype=vd.dtype?(vd.dtype.isSemEvaluated()?vd.dtype:rescopeCopy(useSubstitute(vd.dtype,bctx))):null;
+			nd.vtype=vd.vtype?(vd.vtype.isSemEvaluated()?shareTy(vd.vtype):rescopeCopy(useSubstitute(vd.vtype,bctx))):null;
+			nd.dtype=vd.dtype?(vd.dtype.isSemEvaluated()?shareTy(vd.dtype):rescopeCopy(useSubstitute(vd.dtype,bctx))):null;
 			return nd;
 		}
 		if(auto pe=bctx.subst.getPtr(d.getId)){
@@ -1096,26 +1097,39 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		}
 	}
 	rescopeCopy=(Expression e){ return e?e.copy(cargs):null; };
+	shareTy=(Expression e){
+		if(!e) return null;
+		if(!e.isSemEvaluated()) return rescopeCopy(e);
+		MapSX!(Id,Expression) subst;
+		import ast.type: freeIdentifiers;
+		foreach(id;e.freeIdentifiers){
+			if(!id.meaning||id.id in subst) continue;
+			auto nd=mapDecl(id.meaning);
+			if(!nd||nd is id.meaning) continue;
+			subst[id.id]=rescopeCopy(id);
+		}
+		return subst.length?e.substitute(subst):e;
+	};
 	void fixup(Expression r,Expression e){
 		r.loc=e.loc;
 		r.sstate=e.sstate;
-		r.type=e.type?(e.type.isSemEvaluated()?e.type:e.type.copy(cargs)):null;
+		r.type=e.type?(e.type.isSemEvaluated()?shareTy(e.type):e.type.copy(cargs)):null;
 		r.constLookup=e.constLookup;
 		r.brackets=e.brackets;
 		r.byRef=e.byRef;
 		r.implicitDup=e.implicitDup;
 	}
 	Expression mapExp(Expression e,ref Expression.CopyArgs args){
-		if(cast(Type)e&&e.isSemEvaluated()) return e; // (shared, as for the types of expressions)
+		if(cast(Type)e&&e.isSemEvaluated()) return shareTy(e); // (as for the types of expressions)
 		if(auto nfd=cast(FunctionDef)e){
 			nfd.scope_=mapScope(nfd.scope_);
 			if(nfd.fscope_&&nfd.fscope_.parent) nfd.fscope_.parent=mapScope(nfd.fscope_.parent);
 			foreach(np;nfd.params){
-				if(np.dtype) np.dtype=np.dtype.isSemEvaluated()?np.dtype:rescopeCopy(np.dtype);
-				if(np.vtype) np.vtype=np.vtype.isSemEvaluated()?np.vtype:rescopeCopy(np.vtype);
+				if(np.dtype) np.dtype=shareTy(np.dtype);
+				if(np.vtype) np.vtype=shareTy(np.vtype);
 			}
-			if(nfd.rret) nfd.rret=nfd.rret.isSemEvaluated()?nfd.rret:rescopeCopy(nfd.rret);
-			if(nfd.ret) nfd.ret=nfd.ret.isSemEvaluated()?nfd.ret:rescopeCopy(nfd.ret);
+			if(nfd.rret) nfd.rret=shareTy(nfd.rret);
+			if(nfd.ret) nfd.ret=shareTy(nfd.ret);
 			if(nfd.body_) nfd.body_=cast(CompoundExp)rescopeCopy(nfd.body_);
 			computeCapturesFromBody(nfd);
 			return nfd;
@@ -1196,7 +1210,6 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	auto bparent=cast(Scope)r.fscope_;
 	if(r.body_.blscope_) bparent=mapScopeTree(fd.body_.blscope_,r.body_.blscope_,r.fscope_);
 	walkStmts(fd.body_.s,r.body_.s,bparent,&dmap,&mapScopeTree);
-	Expression shareTy(Expression e){ return e?(e.isSemEvaluated()?e:rescopeCopy(e)):null; }
 	r.body_=cast(CompoundExp)rescopeCopy(r.body_);
 	if(r.rret) r.rret=shareTy(r.rret);
 	if(r.ret) r.ret=shareTy(r.ret);
