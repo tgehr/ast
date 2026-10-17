@@ -4026,8 +4026,8 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	foreach(p;constParams) if(p[3]) fd.loweredConstIds.insert(p[0]);
 	fd.attributes[Id.s!"silq-loop"] = LiteralExp.makeString(lowerf(T.stringof[0..$-"Exp".length]));
 	fd.annotation=pure_;
-	visitStm(loop.bdy,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.annotation=min(fd.annotation,ft.annotation); });
-	static if(is(T==WhileExp)) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.annotation=min(fd.annotation,ft.annotation); });
+	visitStm(loop.bdy,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
+	static if(is(T==WhileExp)) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
 	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){

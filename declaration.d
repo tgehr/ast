@@ -235,6 +235,12 @@ class FunctionDef: FixedPointDeclaration{
 	bool isSquare=false;
 	auto annotation=Annotation.none;
 	bool inferAnnotation=false;
+	Location annotationLoc; // (explicit annotation)
+	Expression[Annotation.max+1] weakenedBy; // weakenedBy[a]: why inferred annotation is below `a`
+	void weakenAnnotation(Annotation annotation,Expression cause){
+		foreach(a;annotation+1..this.annotation+1) if(!weakenedBy[a]) weakenedBy[a]=cause;
+		this.annotation=min(this.annotation,annotation);
+	}
 	Expression rret;
 	CompoundExp body_;
 	this(Identifier name, Parameter[] params, bool isTuple, Expression rret, CompoundExp body_)in{
@@ -247,6 +253,8 @@ class FunctionDef: FixedPointDeclaration{
 		isSquare=fd.isSquare;
 		annotation=fd.annotation;
 		inferAnnotation=fd.inferAnnotation;
+		annotationLoc=fd.annotationLoc;
+		weakenedBy=fd.weakenedBy;
 		attributes=fd.attributes.dup;
 	}
 	alias copyAnalyzedFieldsFrom=Declaration.copyAnalyzedFieldsFrom;

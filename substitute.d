@@ -933,7 +933,7 @@ CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 				ts.forgottenVarsOnEntry=nfve;
 				ts.mergedVars=nmv;
 			}else{
-				auto nsc=new BlockScope(null,ce.blscope_.restriction_);
+				auto nsc=new BlockScope(null,ce.blscope_.restriction_,ce.blscope_.restrictionCause_);
 				nsc.parent=ce.blscope_.parent;
 				nsc.forgottenVars=nfv;
 				nsc.forgottenVarsOnEntry=nfve;
@@ -1187,7 +1187,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			ns=ts;
 		}else{
 			assert(bs,"rescopeTwin: expected BlockScope");
-			ns=new BlockScope(parent,bs.restriction_);
+			ns=new BlockScope(parent,bs.restriction_,bs.restrictionCause_);
 			ns.isLoopBody=bs.isLoopBody;
 		}
 		smap[s]=ns;

@@ -976,6 +976,7 @@ struct Parser{
 		paramLoc=paramLoc.to(ptok.loc);
 		auto annotation=Annotation.none;
 		bool inferAnnotation=true;
+		Location annotationLoc;
 		bool isLifted=false;
 		MapSX!(Id,Expression) attributes;
 		while(ttype==Tok!"@"){
@@ -1005,14 +1006,17 @@ struct Parser{
 		static if(language==silq){
 			if(ttype==Tok!"lifted"||ttype==Tok!"qfree"){
 				isLifted=ttype==Tok!"lifted";
+				annotationLoc=tok.loc;
 				nextToken();
 				annotation=Annotation.qfree;
 				inferAnnotation=false;
 			}else if(ttype==Tok!"mfree"){
+				annotationLoc=tok.loc;
 				nextToken();
 				annotation=Annotation.mfree;
 				inferAnnotation=false;
 			}else if(ttype==Tok!"wild"){
+				annotationLoc=tok.loc;
 				nextToken();
 				annotation=Annotation.none;
 				inferAnnotation=false;
@@ -1020,6 +1024,7 @@ struct Parser{
 			if(isLifted) liftParameters(params[0],paramLoc);
 		}else static if(language==psi){
 			if(ttype==Tok!"pure"){
+				annotationLoc=tok.loc;
 				nextToken();
 				annotation=Annotation.pure_;
 				inferAnnotation=false;
@@ -1062,6 +1067,7 @@ struct Parser{
 		if(inferAnnotation) annotation=pure_;
 		res.annotation=annotation;
 		res.inferAnnotation=inferAnnotation;
+		res.annotationLoc=annotationLoc;
 		res.attributes=attributes;
 		return res;
 	}

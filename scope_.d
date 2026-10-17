@@ -2092,6 +2092,10 @@ abstract class Scope{
 	Annotation restriction(ref FunctionDef reason){
 		return Annotation.none;
 	}
+	/// innermost construct that imposes a restriction of at least `annotation` (for diagnostics)
+	Expression restrictionCause(Annotation annotation){
+		return null;
+	}
 
 	private bool insertCapture(Identifier id,Declaration meaning,Scope outermost,bool consumedClassical=false){
 		if(!meaning) return false;
@@ -2691,6 +2695,7 @@ class NestedScope: Scope{
 	}
 
 	override Annotation restriction(ref FunctionDef reason){ return parent.restriction(reason); }
+	override Expression restrictionCause(Annotation annotation){ return parent.restrictionCause(annotation); }
 	override int outerDeclProps(scope int delegate(ref DeclProps) dg){
 		return parent.nestedDeclProps(dg);
 	}
@@ -2734,12 +2739,17 @@ class NestedScope: Scope{
 
 class RawProductScope: NestedScope{
 	Annotation annotation;
-	this(Scope parent,Annotation annotation){
+	Expression productTy;
+	this(Scope parent,Annotation annotation,Expression productTy=null){
 		super(parent);
 		this.annotation=annotation;
+		this.productTy=productTy;
 	}
 	override Annotation restriction(ref FunctionDef reason){
 		return annotation;
+	}
+	override Expression restrictionCause(Annotation annotation){
+		return this.annotation>=annotation?productTy:null;
 	}
 	void forceClose(){}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
@@ -2971,6 +2981,9 @@ class FunctionScope: CapturingScope!FunctionDef{
 		reason=fd;
 		return fd.annotation;
 	}
+	override Expression restrictionCause(Annotation annotation){
+		return fd.annotation>=annotation?fd:null;
+	}
 	void forceClose(){}
 	override FunctionDef getFunction(){ return fd; }
 	override @property bool inferenceMode(){
@@ -2990,12 +3003,14 @@ class DataScope: CapturingScope!DatDecl{
 	override DatDecl getDatDecl(){ return decl; }
 }
 class BlockScope: NestedScope{
-	this(Scope parent,Annotation restriction_=Annotation.none){
+	this(Scope parent,Annotation restriction_=Annotation.none,Expression restrictionCause_=null){
 		super(parent);
 		if(parent&&parent.allowsLinear()) parent.nest(this);
 		this.restriction_=restriction_;
+		this.restrictionCause_=restrictionCause_;
 	}
 	Annotation restriction_;
+	Expression restrictionCause_; // e.g., quantum `if`, quantum-controlled `return`, `with`
 	bool isLoopBody=false;
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
@@ -3013,6 +3028,10 @@ class BlockScope: NestedScope{
 		}
 		return restriction_;
 	}
+	override Expression restrictionCause(Annotation annotation){
+		if(restrictionCause_&&restriction_>=annotation) return restrictionCause_;
+		return super.restrictionCause(annotation);
+	}
 }
 
 class TypeScope: BlockScope{
@@ -3026,6 +3045,10 @@ class TypeScope: BlockScope{
 	override Annotation restriction(ref FunctionDef reason){
 		if(origin) return origin.restriction(reason);
 		return restriction_;
+	}
+	override Expression restrictionCause(Annotation annotation){
+		if(origin) return origin.restrictionCause(annotation);
+		return null;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
