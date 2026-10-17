@@ -1024,6 +1024,14 @@ struct LastUses{
 					keep=true;
 				}
 			}
+			bool keepForwardTo=false;
+			if(auto fw=prevLastUse.forwardTo){ // (an implicit `dup` before nesting is kept the same way)
+				while(fw.forwardTo) fw=fw.forwardTo;
+				if(fw.kind==LastUse.Kind.constPinned&&fw.use&&fw.use.implicitDup){
+					if(!lastUse.prevImplicitDup) lastUse.prevImplicitDup=fw;
+					keepForwardTo=true;
+				}
+			}
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
 				if(lastUse.kind!=LastUse.Kind.lazySplitSink)
@@ -1035,7 +1043,7 @@ struct LastUses{
 				lastUse.splitSource=prevLastUse.splitSource;
 			}
 			if(!keep){
-				if(prevLastUse.forwardTo){
+				if(prevLastUse.forwardTo&&!keepForwardTo){
 					assert(prevLastUse.forwardTo !is lastLastUse);
 					prevLastUse.forwardTo.remove();
 				}
