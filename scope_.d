@@ -1318,10 +1318,17 @@ abstract class Scope{
 		return lookupHereImpl(ident,rnsym,failures);
 	}
 	Identifier getRenamed(Identifier cname){
+		auto name=cname.id;
+		bool takenByConsumed(){ // (by a consumed variable with a different name that was renamed to `cname`)
+			for(Scope sc=this;sc;sc=sc.parentScope())
+				if(auto dd=cast(DeadDecl)sc.peekSymtab(cname.id,true))
+					if(dd.name.id!=name) return true;
+			return false;
+		}
 		for(;;){ // TODO: quite hacky
 			auto d=lookup(cname,true,true,Lookup.probing,null);
 			import ast.semantic_: isBuiltIn;
-			if(!d&&!isBuiltIn(cname)) break;
+			if(!d&&!isBuiltIn(cname)&&!takenByConsumed()) break;
 			auto loc=cname.loc;
 			cname=new Identifier(cname.id.apos);
 			cname.loc=loc;
