@@ -1984,6 +1984,7 @@ abstract class Scope{
 		}
 		foreach(sc;scopes){
 			foreach(sym;sc.rnsymtab.dup){
+				if(sc.rnsymtab.get(sym.getId,null) !is sym) continue; // (consumed when pushing the dependencies of another variable)
 				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))){
 					// TODO: why needed?
 					sym.scope_=this;
