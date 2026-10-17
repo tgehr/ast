@@ -1106,6 +1106,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		r.implicitDup=e.implicitDup;
 	}
 	Expression mapExp(Expression e,ref Expression.CopyArgs args){
+		if(cast(Type)e&&e.isSemEvaluated()) return e; // (shared, as for the types of expressions)
 		if(auto nfd=cast(FunctionDef)e){
 			nfd.scope_=mapScope(nfd.scope_);
 			if(nfd.fscope_&&nfd.fscope_.parent) nfd.fscope_.parent=mapScope(nfd.fscope_.parent);
