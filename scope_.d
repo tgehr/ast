@@ -834,8 +834,10 @@ abstract class Scope{
 			}
 			if(lu.kind==LastUse.Kind.implicitDup) return;
 		}
-		if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration())
+		if(constBlock.scope_&&constBlock.meaning&&!constBlock.meaning.isToplevelDeclaration()){
+			if(constBlock.meaning.isSemError()&&!constBlock.scope_.dependencyTracked(constBlock.meaning)) return; // (replaced after an error)
 			lastUses.constUse(constBlock,parent,isStatement,inType);
+		}
 	}
 	final bool resetConst(ConstBlockContext context,ref Expression parent,bool isStatement,bool inType){
 		Identifier[] lookupSnapshot(Declaration decl){
