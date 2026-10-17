@@ -6117,6 +6117,19 @@ Expression qabortSemantic(bool isPresemantic,T,string name="__qabort")(CallExp c
 	return ce;
 }
 
+bool satisfyRestriction(Scope sc,Annotation annotation,out Annotation restriction){
+	for(;;){ // weakening an annotation may expose another restriction
+		FunctionDef reason=null;
+		restriction=sc.restriction(reason);
+		if(annotation>=restriction) return true;
+		if(!reason||!reason.inferAnnotation||annotation>=reason.annotation) return false;
+		if(reason.sealed) reason.unseal();
+		reason.annotation=min(reason.annotation,annotation);
+		reason.ftype=null;
+		setFtype(reason,true);
+	}
+}
+
 Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
 	enum isRhs=is(T==ExpSemContext);
 	static if(!isRhs){
@@ -6239,27 +6252,15 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}
 					}
 				}
-				FunctionDef reason=null;
 				auto restriction=Annotation.none;
-				if(sc) restriction=sc.restriction(reason);
-				if(sc&&ft.annotation<restriction){
-					bool fixed=false;
-					if(reason&&reason.inferAnnotation&&ft.annotation<reason.annotation){
-						if(reason.sealed) reason.unseal();
-						reason.annotation=min(reason.annotation,ft.annotation);
-						reason.ftype=null;
-						setFtype(reason,true);
-						fixed=true;
+				if(sc&&!satisfyRestriction(sc,ft.annotation,restriction)){
+					if(ft.annotation==Annotation.none){
+						sc.error(format("cannot call function `%s` in `%s` context", ce.e, annotationToString(restriction)), ce.loc);
+					}else{
+						sc.error(format("cannot call `%s` function `%s` in `%s` context", annotationToString(ft.annotation), ce.e, annotationToString(restriction)), ce.loc);
 					}
-					if(!fixed){
-						if(ft.annotation==Annotation.none){
-							sc.error(format("cannot call function `%s` in `%s` context", ce.e, annotationToString(restriction)), ce.loc);
-						}else{
-							sc.error(format("cannot call `%s` function `%s` in `%s` context", annotationToString(ft.annotation), ce.e, annotationToString(restriction)), ce.loc);
-						}
-						// TODO: inference trace
-						ce.setSemError();
-					}
+					// TODO: inference trace
+					ce.setSemError();
 				}
 				static if(language==silq && isRhs){
 					if((isType(ce)||isQNumeric(ce))&&ce.isClassical_)
@@ -8056,24 +8057,13 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 		vfe.setSemError();
 		return vfe;
 	}
-	FunctionDef reason=null;
-	auto restriction=sc.restriction(reason);
-	if(ft.annotation<restriction){
-		bool fixed=false;
-		if(reason&&reason.inferAnnotation&&ft.annotation<reason.annotation){
-			if(reason.sealed) reason.unseal();
-			reason.annotation=min(reason.annotation,ft.annotation);
-			reason.ftype=null;
-			setFtype(reason,true);
-			fixed=true;
-		}
-		if(!fixed){
-			if(ft.annotation==Annotation.none)
-				sc.error(format("cannot evaluate vector comprehension in `%s` context",annotationToString(restriction)),vfe.loc);
-			else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",annotationToString(ft.annotation),annotationToString(restriction)),vfe.loc);
-			vfe.setSemError();
-			return vfe;
-		}
+	Annotation restriction;
+	if(!satisfyRestriction(sc,ft.annotation,restriction)){
+		if(ft.annotation==Annotation.none)
+			sc.error(format("cannot evaluate vector comprehension in `%s` context",annotationToString(restriction)),vfe.loc);
+		else sc.error(format("cannot evaluate `%s` vector comprehension in `%s` context",annotationToString(ft.annotation),annotationToString(restriction)),vfe.loc);
+		vfe.setSemError();
+		return vfe;
 	}
 	if(vfe.len) vfe.len=vfe.len.eval();
 	vfe.type=vfe.len?vectorTy(ft.cod,vfe.len):arrayTy(ft.cod);
