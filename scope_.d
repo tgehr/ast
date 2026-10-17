@@ -647,10 +647,14 @@ abstract class Scope{
 	}do{
 		if(use&&use.isSemError()) return false;
 		bool ok=true;
-		if(auto declProp=declProps.tryGet(decl)){
+		Identifier[] accesses; // TODO: use ranges?
+		if(auto declProp=declProps.tryGet(decl)) accesses=declProp.accesses;
+		if(use&&use.scope_ !is this) // (all accesses here are after `use`, also those of versions split from `decl` in nested scopes)
+			foreach(d,ref prop;declProps.props) if(d !is decl&&d.isDerivedFrom(decl)) accesses~=prop.accesses;
+		if(accesses.length){
 			bool seen=false;
 			DeadDecl[] failures;
-			foreach(access;declProp.accesses){
+			foreach(access;accesses){
 				if((!use||use.scope_!is this||seen)&&access !is use){
 					if(ok&&use){
 						if(auto cd=recordConsumption(decl,use))
