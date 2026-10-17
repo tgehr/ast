@@ -85,7 +85,12 @@ abstract class Expression: Node{
 	struct CopyArgs{
 		bool preserveSemantic=false;
 		bool preserveMeanings=false;
-		Scope boundIn; // (with `preserveMeanings`, meanings declared within this scope are not preserved)
+		Declaration[] boundFunctions; // (with `preserveMeanings`, meanings declared within (versions of) these functions are not preserved)
+		bool isBound(Declaration d){
+			if(!d||!d.scope_) return false;
+			auto f=d.scope_.getFunction();
+			return f&&boundFunctions.canFind(f.canonicalSource);
+		}
 		struct Rename{
 			Declaration decl;
 			Id nid;
@@ -976,7 +981,7 @@ class Identifier: Expression{
 			}
 			if(args.mapScope) r.scope_=args.mapScope(r.scope_);
 		}else{
-			if(args.preserveMeanings&&!(args.boundIn&&meaning&&meaning.scope_&&meaning.scope_.isNestedIn(args.boundIn))){
+			if(args.preserveMeanings&&!args.isBound(meaning)){
 				r.meaning=meaning;
 				r.scope_=scope_; // TODO: make unnecessary
 			}
@@ -2795,7 +2800,8 @@ class LambdaExp: Expression{
 		import ast.substitute:substituteFunctionDefExp;
 		auto nfd=cast(FunctionDef)substituteFunctionDefExp(fd,subst,false,tt);
 		if(nfd is fd) return this;
-		auto r=new LambdaExp(orig,nfd);
+		Expression.CopyArgs cargs={preserveMeanings: true};
+		auto r=new LambdaExp(nfd.copy(cargs),nfd); // (copies are made from the substituted definition)
 		r.loc=loc;
 		return r;
 	}
@@ -2822,13 +2828,20 @@ class LetExp: Expression{
 		this.e=e;
 	}
 	override LetExp copyImpl(CopyArgs args){
+		FunctionDef[] copiedDefs; // (including nested ones, whose captures may mention bound declarations)
+		if(args.preserveMeanings){
+			auto prevPostCopy=args.postCopy;
+			args.postCopy=(Expression src,Expression cpy){
+				if(prevPostCopy) prevPostCopy(src,cpy);
+				if(auto cfd=cast(FunctionDef)cpy) copiedDefs~=cfd;
+			};
+		}
 		auto ns=s.copy(args), ne=e.copy(args);
 		if(args.preserveMeanings){
 			MapSX!(Declaration,Declaration) bound;
-			FunctionDef[] defs;
 			void pair(Expression src,Expression cpy){
 				if(auto sfd=cast(FunctionDef)src){
-					if(auto cfd=cast(FunctionDef)cpy){ bound[sfd]=cfd; defs~=cfd; }
+					if(auto cfd=cast(FunctionDef)cpy) bound[sfd]=cfd;
 					return;
 				}
 				if(auto svd=cast(VarDecl)src){
@@ -2854,7 +2867,7 @@ class LetExp: Expression{
 				import ast.substitute: statementFreeVarsImpl, computeCapturesFromBody;
 				foreach(stmt;ns.s) statementFreeVarsImpl(stmt,&rebind);
 				ne.freeVarsImpl(&rebind);
-				foreach(fd;defs) computeCapturesFromBody(fd);
+				foreach(fd;copiedDefs) computeCapturesFromBody(fd);
 			}
 		}
 		return new LetExp(ns,ne);

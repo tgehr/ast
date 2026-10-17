@@ -265,18 +265,35 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	override FunctionDef copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
-		if(args.preserveMeanings&&fscope_&&!(args.boundIn&&fscope_.isNestedIn(args.boundIn))) args.boundIn=fscope_; // (the copy declares its own parameters and locals)
+		Identifier[] selfReferences; // (recursive references refer to the copy)
+		FunctionDef[] nestedDefs;
+		if(args.preserveMeanings){
+			args.boundFunctions~=canonicalSource; // (the copy declares its own parameters and locals)
+			auto prevPostCopy=args.postCopy;
+			args.postCopy=(Expression src,Expression cpy){
+				if(prevPostCopy) prevPostCopy(src,cpy);
+				if(auto id=cast(Identifier)cpy)
+					if(id.meaning&&(id.meaning is this||id.meaning.isSplitFrom(this)))
+						selfReferences~=id;
+				if(auto nfd=cast(FunctionDef)cpy) nestedDefs~=nfd;
+			};
+		}
 		auto r=new FunctionDef(copyNameImpl(args),params.map!(p=>p.copy(args)).array,isTuple,rret?rret.copy(args):null,body_?body_.copy(args):null);
 		r.copyIntrinsicFieldsFrom(this);
+		foreach(id;selfReferences) id.meaning=r;
+		if(selfReferences.length){
+			import ast.substitute: computeCapturesFromBody;
+			foreach(nfd;nestedDefs) computeCapturesFromBody(nfd);
+		}
 		if(args.preserveMeanings){
 			bool mentionsBound(Expression e){
 				import ast.type: freeIdentifiers;
 				foreach(id;e.freeIdentifiers)
-					if(id.meaning&&id.meaning.scope_&&id.meaning.scope_.isNestedIn(args.boundIn))
+					if(args.isBound(id.meaning))
 						return true;
 				return false;
 			}
-			if(!ret||!args.boundIn||!mentionsBound(ret)) r.ret=ret; // (otherwise recomputed)
+			if(!ret||!mentionsBound(ret)) r.ret=ret; // (otherwise recomputed)
 			r.hasReturn=hasReturn;
 			static if(language==psi) r.retNames=retNames;
 			import ast.substitute: computeCapturesFromBody;

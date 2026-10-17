@@ -850,6 +850,16 @@ private Expression substStm(ReturnExp re,ref BlockSubst ctx){
 }
 private Expression substStm(ForgetExp fe,ref BlockSubst ctx){
 	auto nvar=substituteLValue(fe.var,ctx);
+	void keepMoved(Expression ovar,Expression nvar){ // (forgotten variables are consumed, not implicitly duplicated)
+		if(ovar is nvar) return;
+		if(auto oid=cast(Identifier)ovar){
+			if(auto nid=cast(Identifier)nvar) if(!oid.implicitDup) nid.implicitDup=false;
+		}else if(auto otpl=cast(TupleExp)ovar){
+			if(auto ntpl=cast(TupleExp)nvar)
+				foreach(i,x;otpl.e) if(i<ntpl.e.length) keepMoved(x,ntpl.e[i]);
+		}
+	}
+	keepMoved(fe.var,nvar);
 	auto nval=fe.val?useSubstitute(fe.val,ctx):null;
 	if(nvar is fe.var&&nval is fe.val) return fe;
 	auto r=new ForgetExp(nvar,nval);
@@ -1044,19 +1054,15 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		if(!cast(FunctionDef)d&&d.scope_&&d.scope_.isNestedIn(fd.fscope_)){
 			auto vd=cast(VarDecl)d;
 			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
-			auto nid=d.name?d.name.id:Id();
-			bool fromChain=false;
+			auto nid=d.name?d.getId:Id(); // (as for the twin's parameters, renamed names become names)
 			for(Declaration a=d;;){
 				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null);
 				if(!nxt) break;
-				if(auto p=dmap.getPtr(nxt)){ if((*p).name){ nid=(*p).name.id; fromChain=true; } break; }
+				if(auto p=dmap.getPtr(nxt)){ if((*p).name) nid=(*p).getId; break; } // (names inherited via the split/merge lineage track the twin's own renaming)
 				a=nxt;
 			}
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
 			nd.copyAnalyzedFieldsFrom(d);
-			// names inherited via the split/merge lineage already track the
-			// twin's own renaming; otherwise keep the template's rename
-			if(d.rename&&!fromChain) nd.rename=new Identifier(d.rename.id);
 			dmap[d]=nd;
 			nd.scope_=mapScope(d.scope_);
 			nd.vtype=vd.vtype?(vd.vtype.isSemEvaluated()?shareTy(vd.vtype):rescopeCopy(useSubstitute(vd.vtype,bctx))):null;
@@ -1135,7 +1141,9 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			return nfd;
 		}
 		if(auto le=cast(LambdaExp)e){
-			auto r=new LambdaExp(le.orig,cast(FunctionDef)mapExp(le.fd,args));
+			auto nfd=cast(FunctionDef)mapExp(le.fd,args);
+			Expression.CopyArgs targs={preserveMeanings: true};
+			auto r=new LambdaExp(nfd.copy(targs),nfd); // (copies are made from the twin's definition)
 			fixup(r,le);
 			return r;
 		}
