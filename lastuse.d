@@ -1080,6 +1080,7 @@ struct LastUses{
 	void definition(Declaration decl,Expression defExp)in{
 		assert(!!decl.scope_);
 	}do{
+		if(decl.isSemError()&&decl.scope_.rnsymtab.get(decl.getId,null) !is decl) return; // (not declared)
 		Identifier use=null;
 		add(new LastUse(LastUse.Kind.definition,decl.scope_,decl,use,defExp));
 	}
