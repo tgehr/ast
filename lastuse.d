@@ -307,6 +307,15 @@ final class LastUse{
 				if(auto r=cancelUse(nlu)) return r;
 		return null;
 	}
+	private bool forgottenOutside(){ // (by the same forget in an enclosing scope)
+		if(!use) return false;
+		for(auto lu=this;;){
+			while(lu.forwardTo) lu=lu.forwardTo;
+			if(!lu.splitFrom) return false;
+			lu=lu.splitFrom;
+			if(lu.isConsumption()&&lu.use is use) return true;
+		}
+	}
 	private bool isBranchSplit(){
 		return decl.splitFrom&&decl.splitFrom.splitInto.length>1&&decl.splitFrom.splitInto.canFind(decl);
 	}
@@ -436,10 +445,8 @@ final class LastUse{
 				}
 			}
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
-			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this){
-				if(lu.kind==Kind.synthesizedForget&&lu.use&&lu.use is lu.splitFrom.use) continue; // (forgotten before the branch, checked there)
-				if(lu.splitFrom !in visited&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
-			}
+			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
+			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested) replaceVersions(lu.dep,decl,cdep);
