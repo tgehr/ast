@@ -277,7 +277,10 @@ final class LastUse{
 		else updateDependenciesOnConsumptionLocal(!fromNested);
 	}
 	Q!(LastUse,Dependency)[] cancelable; // (last uses that could have been cancelled when this consumption happened, with their dependencies at that time)
+	bool cancelableRecorded=false;
 	private void recordCancelable(){ // (only those that depend on `decl` indirectly, the others are cancelled directly)
+		if(cancelableRecorded) return; // (an implicit `dup` that is cancelled later consumes at the time of the `dup`)
+		cancelableRecorded=true;
 		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		Declaration[] reached=[decl];
 		LastUse[] indirect;
@@ -1067,8 +1070,8 @@ struct LastUses{
 		lastUses[lastUse.decl]=lastUse;
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
+		if(lastUse.isConsumption()||lastUse.use&&lastUse.use.implicitDup) lastUse.recordCancelable();
 		if(lastUse.isConsumption()){
-			lastUse.recordCancelable();
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
 				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
 			lastUse.updateDependenciesOnConsumption();
