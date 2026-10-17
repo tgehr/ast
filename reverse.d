@@ -1503,7 +1503,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
 		propErr(then,res);
-		propErr(othw,res);
+		if(othw) propErr(othw,res);
 		return res;
 	}
 	if(auto we=cast(WithExp)e){
