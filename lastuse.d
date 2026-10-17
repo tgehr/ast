@@ -1010,26 +1010,20 @@ struct LastUses{
 		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;
-			if(lastUse.kind==LastUse.Kind.constUse&&prevLastUse.kind==LastUse.kind.lazyMerge){
+			auto prev=prevLastUse; // (the last use that a `lazySplitSink` stands for)
+			while(prev.forwardTo) prev=prev.forwardTo;
+			if(lastUse.kind==LastUse.Kind.constUse&&prev.kind==LastUse.kind.lazyMerge){
 				//imported!"util.io".writeln("ATTACHING CONSTCONSUME: ",lastUse);
-				lastUse.constConsume=prevLastUse;
+				lastUse.constConsume=prev;
 				keep=true;
 			}
-			if(prevLastUse.prevImplicitDup){
-				lastUse.prevImplicitDup=prevLastUse.prevImplicitDup;
+			if(prev.prevImplicitDup){
+				lastUse.prevImplicitDup=prev.prevImplicitDup;
 			}
-			if(prevLastUse.kind==LastUse.Kind.constPinned){
-				if(prevLastUse.use&&prevLastUse.use.implicitDup){
-					lastUse.prevImplicitDup=prevLastUse;
+			if(prev.kind==LastUse.Kind.constPinned){
+				if(prev.use&&prev.use.implicitDup){
+					lastUse.prevImplicitDup=prev;
 					keep=true;
-				}
-			}
-			bool keepForwardTo=false;
-			if(auto fw=prevLastUse.forwardTo){ // (an implicit `dup` before nesting is kept the same way)
-				while(fw.forwardTo) fw=fw.forwardTo;
-				if(fw.kind==LastUse.Kind.constPinned&&fw.use&&fw.use.implicitDup){
-					if(!lastUse.prevImplicitDup) lastUse.prevImplicitDup=fw;
-					keepForwardTo=true;
 				}
 			}
 			if(prevLastUse.splitFrom){
@@ -1043,7 +1037,7 @@ struct LastUses{
 				lastUse.splitSource=prevLastUse.splitSource;
 			}
 			if(!keep){
-				if(prevLastUse.forwardTo&&!keepForwardTo){
+				if(prevLastUse.forwardTo){
 					assert(prevLastUse.forwardTo !is lastLastUse);
 					prevLastUse.forwardTo.remove();
 				}
