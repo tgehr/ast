@@ -1968,6 +1968,16 @@ abstract class Scope{
 				if(symExists) producedOuter~=sym;
 			}
 		}
+		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged)
+			changed=false;
+			foreach(sym;rnsymtab.dup){
+				if(cast(DeadDecl)sym||!scopes.any!(sc=>!!cast(DeadDecl)sc.rnsymtab.get(sym.getId,null))) continue;
+				addDeadMerge(sym);
+				symtabRemove(sym);
+				if(dependencyTracked(sym)) pushDependencies(sym,false);
+				changed=true;
+			}
+		}
 		foreach(sc;scopes){
 			foreach(sym;sc.rnsymtab.dup){
 				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))){
