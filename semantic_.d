@@ -4973,12 +4973,24 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 	return false;
 }
 
+Expression typeForDeclAnalyzing(Declaration meaning){ // (analyzes a top-level definition referenced before it is defined)
+	auto type=typeForDecl(meaning);
+	if(!type) if(auto vd=cast(VarDecl)meaning) if(vd.definition){
+		toplevelSemantic(vd.definition,vd.scope_);
+		type=typeForDecl(meaning);
+	}
+	return type;
+}
+
 bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible,bool allowComponentConstBlocks=false){
 	if(!meaning||meaning.isSemError()) return false;
 	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks,true))
 		return false;
-	auto type=typeForDecl(meaning);
-	if(!type) return false;
+	auto type=typeForDeclAnalyzing(meaning);
+	if(!type){
+		sc.error("invalid forward reference",loc);
+		return false;
+	}
 	static if(language==silq){
 		if(!isReversible&&!type.isClassical()&&!sc.canRecompute(meaning)){
 			sc.error(format("cannot assign to quantum variable `%s`",meaning.name), loc);
@@ -5667,13 +5679,19 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}
 			id.byRef=true;
 			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc,false,null);
+			if(id.meaning) typeForDeclAnalyzing(id.meaning);
 			if(id.meaning){
 				id.meaning=sc.split(id.meaning,id);
 				id.id=id.meaning.getId;
 				id.type=id.typeFromMeaning;
 				id.scope_=sc;
 				propErr(id.meaning, id);
-				id.setSemCompleted();
+				if(!id.type&&!id.isSemError()){
+					sc.error("invalid forward reference",id.loc);
+					id.setSemError();
+					be.setSemError();
+				}
+				if(!id.isSemError()) id.setSemCompleted();
 				id.constLookup=false;
 			}
 			semanticDone=true;
