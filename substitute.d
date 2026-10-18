@@ -1044,14 +1044,20 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	smap[fd.fscope_]=r.fscope_;
 	Expression.CopyArgs cargs={preserveSemantic:true};
 
+	Scope[] twinned=[fd.fscope_]; // (function scopes whose declarations are twinned)
+	bool inTwinned(Scope s){
+		foreach(t;twinned) if(s is t||t&&s.isNestedIn(t)) return true;
+		return false;
+	}
 	Scope mapScope(Scope s){ return s is null?null:smap.get(s,s); }
+	Scope delegate(Scope,Scope,Scope) mapScopeTreeDg;
 	Expression delegate(Expression) rescopeCopy;
 	Expression delegate(Expression) shareTy; // (evaluated types are shared unless they mention declarations of the twin)
 	Declaration mapDecl(Declaration d){
 		if(!d) return null;
 		if(d is fd) return r;
 		if(auto p=dmap.getPtr(d)) return *p;
-		if(!cast(FunctionDef)d&&d.scope_&&d.scope_.isNestedIn(fd.fscope_)){
+		if(!cast(FunctionDef)d&&d.scope_&&inTwinned(d.scope_)){
 			auto vd=cast(VarDecl)d;
 			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
 			auto nid=d.name?d.getId:Id(); // (as for the twin's parameters, renamed names become names)
@@ -1127,16 +1133,42 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	}
 	Expression mapExp(Expression e,ref Expression.CopyArgs args){
 		if(cast(Type)e&&e.isSemEvaluated()) return shareTy(e); // (as for the types of expressions)
-		if(auto nfd=cast(FunctionDef)e){
-			nfd.scope_=mapScope(nfd.scope_);
-			if(nfd.fscope_&&nfd.fscope_.parent) nfd.fscope_.parent=mapScope(nfd.fscope_.parent);
-			foreach(np;nfd.params){
-				if(np.dtype) np.dtype=shareTy(np.dtype);
-				if(np.vtype) np.vtype=shareTy(np.vtype);
+		if(auto ofd=cast(FunctionDef)e){ // (a twin of its own: the nested definition may be shared with the template)
+			if(auto p=dmap.getPtr(ofd)) if(*p !is ofd) return *p;
+			Parameter[] nparams;
+			foreach(p;ofd.params){
+				auto np=new Parameter(p.isConst,p.name?new Identifier(p.getId):null,null); // (as for the twin's parameters, renamed names become names)
+				np.copyAnalyzedFieldsFrom(p);
+				if(p.name) np.name.loc=p.name.loc;
+				dmap[p]=np;
+				nparams~=np;
 			}
-			if(nfd.rret) nfd.rret=shareTy(nfd.rret);
-			if(nfd.ret) nfd.ret=shareTy(nfd.ret);
-			if(nfd.body_) nfd.body_=cast(CompoundExp)rescopeCopy(nfd.body_);
+			auto nfd=new FunctionDef(ofd.name?new Identifier(ofd.getId):null,nparams,ofd.isTuple,null,null);
+			if(ofd.name) nfd.name.loc=ofd.name.loc;
+			nfd.copyAnalyzedFieldsFrom(ofd);
+			foreach(k,ref v;dmap) if(v is ofd) v=nfd;
+			dmap[ofd]=nfd;
+			nfd.scope_=mapScope(ofd.scope_);
+			if(ofd.fscope_){
+				nfd.fscope_=new FunctionScope(mapScope(ofd.fscope_.parent),nfd);
+				smap[ofd.fscope_]=nfd.fscope_;
+				twinned~=ofd.fscope_;
+			}
+			foreach(i,np;nparams){
+				auto p=ofd.params[i];
+				np.scope_=nfd.fscope_?nfd.fscope_:p.scope_;
+				np.dtype=shareTy(p.dtype);
+				np.vtype=shareTy(p.vtype);
+			}
+			nfd.rret=shareTy(ofd.rret);
+			nfd.ret=shareTy(ofd.ret);
+			if(ofd.ftype) nfd.ftype=cast(FunTy)shareTy(ofd.ftype);
+			if(ofd.body_){
+				auto bparent=cast(Scope)nfd.fscope_;
+				if(ofd.body_.blscope_) bparent=mapScopeTreeDg(ofd.body_.blscope_,ofd.body_.blscope_,nfd.fscope_);
+				walkStmts(ofd.body_.s,ofd.body_.s,bparent,&dmap,mapScopeTreeDg);
+				nfd.body_=cast(CompoundExp)rescopeCopy(ofd.body_);
+			}
 			computeCapturesFromBody(nfd);
 			return nfd;
 		}
@@ -1212,6 +1244,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		}
 		return ns;
 	}
+	mapScopeTreeDg=&mapScopeTree;
 	cargs.mapDecl=&mapDecl; cargs.postCopy=&fixAssignFields;
 	cargs.mapScope=&mapScope;
 	cargs.mapExp=&mapExp;
@@ -1250,10 +1283,10 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	// fragments against them)
 	MapSX!(ast.lastuse.LastUses*,Scope) luOwner;
 	foreach(ts,ns;smap)
-		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_)))
+		if(inTwinned(ts))
 			luOwner[&ts.lastUses]=ns;
 	foreach(ts,ns;smap){
-		if(ts is fd.fscope_||(fd.fscope_&&ts.isNestedIn(fd.fscope_))){
+		if(inTwinned(ts)){
 			ns.lastUses.remapFrom(ts.lastUses,&mapDecl,&mapScope);
 			if(auto p=ts.lastUses.parent)
 				if(auto owner=luOwner.getPtr(p)) ns.lastUses.parent=&(*owner).lastUses;
