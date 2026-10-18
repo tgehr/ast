@@ -51,7 +51,7 @@ enum LowerDefineFlags{
 Expression knownLength(Expression e,bool ignoreType){ // TODO: version that returns bool
 	Expression res;
 	scope(exit) if(res) res.loc=e.loc;
-	if(auto let=cast(LetExp)e) if(auto fwd=let.isForward(false)) return fwd;
+	if(auto let=cast(LetExp)e) if(auto fwd=let.isForward(false)) return knownLength(fwd,ignoreType);
 	if(auto vec=cast(VectorExp)e) return res=constantExp(vec.e.length);
 	if(auto tpl=cast(TupleExp)e) return res=constantExp(tpl.e.length);
 	if(auto cat=cast(CatExp)e){
@@ -507,7 +507,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		Expression[] stmts=[];
 		auto ne1=ce.e1,ne2=ce.e2;
 		auto ue1=unwrap(ne1),ue2=unwrap(ne2);
-		auto valid1=cast(Identifier)ue1,valid2=cast(Identifier)ue2;
+		auto valid1=cast(Identifier)ue1&&(noImplicitDup||!ue1.implicitDup),valid2=cast(Identifier)ue2&&(noImplicitDup||!ue2.implicitDup); // (consistent with `validDefLhs`)
 		if(!valid1){
 			auto tmpe1=new Identifier(freshName);
 			tmpe1.loc=ce.e1.loc;

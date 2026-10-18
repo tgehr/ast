@@ -2921,7 +2921,7 @@ class CapturingScope(T): NestedScope{
 		if(!id.lazyCapture){
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
 			bool consumedClassical=false;
-			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&meaning.name.id in decl.consumingCaptures) consumed=consumedClassical=true;
+			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&(meaning.name.id in decl.consumingCaptures||id.moved)) consumed=consumedClassical=true;
 			if(!id.isSemError){
 				if(consumed) meaning=parent.split(meaning,id);
 				decl.addCapture(meaning,id);

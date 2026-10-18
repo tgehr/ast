@@ -999,6 +999,11 @@ Expression statementSemanticImpl(CallExp ce,Scope sc,ref StmFlags flags,bool res
 			ce.setSemCompleted();
 			return ce;
 		}
+		if(r !is ce&&!r.isSemError()&&isBuiltInCall(ce)==BuiltIn.move){ // (`move(x);` is like `x;`)
+			sc.error("not supported at this location",ce.loc);
+			ce.setSemForceError();
+			return ce;
+		}
 	}
 	if(r is ce.arg&&r.isSemCompleted()&&isEmpty(r.type)){ // (the argument diverges, so the function is not called)
 		ce.type=r.type;
@@ -1955,12 +1960,13 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 		});
 	state.fixSplitMergeGraph(sc);
 	auto fcond=we.cond.copy(cargs);
+	static if(language==silq) auto numLastUses=sc.lastUses.numAdded;
 	fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
 	propErr(fcond,we);
 	static if(language==silq){
 		import ast.type:freeIdentifiers;
 		foreach(id;fcond.freeIdentifiers) // (`fcond` is not kept: its uses cannot be consumed later)
-			if(id.meaning) if(auto lu=sc.lastUses.get(id.meaning,true)) if(lu.use is id) lu.pin();
+			if(id.meaning) if(auto lu=sc.lastUses.get(id.meaning,true)) if(lu.use is id||lu.index>=numLastUses) lu.pin(); // (e.g., merged from a `let` in `fcond`)
 	}
 	if(ncond) we.cond=ncond;
 	if(bdy) we.bdy=bdy;
@@ -2906,7 +2912,7 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		}
 		return false;
 	}
-	if(!checkReplaceable(idx)){
+	if(!checkReplaceable(idx)||idx.isSemError()){ // (e.g., the index is not `qfree`)
 		idx.setSemError();
 		return idx;
 	}
@@ -5379,6 +5385,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}
 		auto oe1=ae.e1.copy();
 		prepareIndexReplacements(oe1,sc,flags,prologues,epilogues,ae.loc);
+		propErr(oe1,ae.e1); // (e.g., invalid index for component replacement)
 	}
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	propErr(ae.e2,ae);
@@ -5650,9 +5657,10 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	if(sc.allowsLinear){
 		oe1=be.e1.copy();
 		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc);
+		propErr(be.e1,oe1); // (e.g., invalid index for component replacement)
 	}
 	static if(language==silq)
-	if(!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
+	if(!oe1.isSemError()&&!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
 		auto tmp=temporaryIdentifier(be.e1.loc);
 		auto de=new DefineExp(tmp,be.e1.copy());
 		de.loc=be.e1.loc;
