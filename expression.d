@@ -2222,7 +2222,7 @@ class IteExp: Expression{
 	}
 	override Expression getClassical(){
 		static if(language==silq){
-			assert(isType(this)&&cond.type&&cond.type.isClassical());
+			assert((isType(this)||isQNumeric(this))&&cond.type&&cond.type.isClassical());
 			if(auto r=super.getClassical()) return r;
 			assert(then&&then.s.length==1);
 			auto nthen=new CompoundExp([then.s[0].getClassical()]);

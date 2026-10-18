@@ -1951,6 +1951,11 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	auto fcond=we.cond.copy(cargs);
 	fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
 	propErr(fcond,we);
+	static if(language==silq){
+		import ast.type:freeIdentifiers;
+		foreach(id;fcond.freeIdentifiers) // (`fcond` is not kept: its uses cannot be consumed later)
+			if(id.meaning) if(auto lu=sc.lastUses.get(id.meaning,true)) if(lu.use is id) lu.pin();
+	}
 	if(ncond) we.cond=ncond;
 	if(bdy) we.bdy=bdy;
 	we.type=isTrue(we.cond)?bottom:unit;
