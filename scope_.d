@@ -1554,7 +1554,11 @@ abstract class Scope{
 		assert(decl.isSemCompleted()||decl.isSemError()||cast(FunctionDef)decl||cast(Parameter)decl,text(decl," ",decl.sstate));
 	}do{
 		static if(language==psi) return Dependency(false); // (in PSI, all data is classical: dependencies are not tracked)
-		if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+		if(!dependencyTracked(decl)){
+			auto cur=rnsymtab.get(decl.getId,null);
+			if(cur&&cur !is decl&&!cast(DeadDecl)cur) return getDefaultDependency(decl);
+			addDefaultDependency(decl); // TODO: ideally can be removed
+		}
 		return dependencies.dependencies[decl];
 	}
 	final void replaceDependencies(Declaration decl,Declaration rhs){

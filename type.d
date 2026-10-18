@@ -1011,7 +1011,7 @@ class ProductTy: Type{
 			return paramKind;
 		}
 		string r;
-		if(cod && !cod.hasAnyFreeVar(names)){
+		if(cod && !cod.hasAnyFreeVar(names) && params.all!(p=>p.vtype||p.dtype)){
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
 				auto paramKind=getParamKind(const_);
@@ -1019,7 +1019,7 @@ class ProductTy: Type{
 				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
 				return paramKind~a.toString();
 			}
-			d=params.empty?dom.toString():params.map!((p){
+			d=params.empty?(dom?dom.toString():"𝟙"):params.map!((p){
 				auto paramKind=getParamKind(p.isConst);
 				auto pty = p.vtype ? p.vtype : p.dtype;
 				auto ptup = pty.isTupleTy();
@@ -1037,7 +1037,7 @@ class ProductTy: Type{
 			args=params.map!((p){
 				auto paramKind=getParamKind(p.isConst);
 				auto pty = p.vtype ? p.vtype : p.dtype;
-				return paramKind~(p.name ? p.name.toString() : "_")~":"~pty.toString();
+				return paramKind~(p.name ? p.name.toString() : "_")~(pty ? ":"~pty.toString() : "");
 			}).join(",");
 			if(isTuple&&params.length==1){
 				args~=",";
