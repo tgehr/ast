@@ -6730,6 +6730,17 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	Expression r=ce;
 	if(auto ft=cast(FunTy)fun.type){
 		r=checkFunCall(ft);
+		static if(!isPresemantic){
+			if(r&&r.type&&isTypeTy(r.type)){
+				if(auto id=cast(Identifier)ce.e){
+					if(id.meaning&&isInPrelude(id.meaning)){
+						if(id.name=="ℤstar"&&isZero(ce.arg.eval())){
+							specificityErrorOrDefer(sc,"argument of `ℤstar` cannot be `0`",ce.arg.loc,ce);
+						}
+					}
+				}
+			}
+		}
 		if(r !is ce) ce=null;
 	}else if(auto at=isRhs?isDataTyId(fun):null){
 		auto decl=at.decl;
