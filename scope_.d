@@ -1498,8 +1498,10 @@ abstract class Scope{
 	}
 
 	auto controlDependency=Dependency(false,SetX!Declaration.init);
+	bool quantumControlled=false;
 	void addControlDependency(Dependency dep){
 		controlDependency.joinWith(dep);
+		quantumControlled=true;
 	}
 
 	static Dependency getDefaultDependency(Declaration decl){
@@ -1740,6 +1742,7 @@ abstract class Scope{
 		assert(r.parent is this);
 	}do{
 		r.controlDependency.joinWith(controlDependency); // TODO: replace
+		r.quantumControlled|=quantumControlled;
 		r.dependencies=dependencies.dup;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;

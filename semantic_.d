@@ -139,7 +139,7 @@ void declareParameters(P)(Expression parent,bool isSquare,P[] params,Scope sc)if
 				propErr(p,parent);
 			}
 		}
-		sc.addDefaultDependency(p);
+		if(p.scope_||!p.name) sc.addDefaultDependency(p); // (not for a redefinition)
 		if(p.scope_) sc.lastUses.definition(p,null);
 		previous.insert(p);
 	}
@@ -4152,9 +4152,22 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		CallExp[] initializers;
 		unwrapConstLocals(be.e1,&be.e2,constIds,checkLiftedIds,initializers);
 		if(constIds.length){
+			auto previous=constIds.map!(id=>sc.peekSymtab(id.id,false)).array;
 			Expression r=defineSemantic(be,sc,flags,resetConst);
+			if(auto ce=cast(CompoundExp)r) if(!ce.blscope_&&ce.s.length!=1){ // (`be` was lowered)
+				auto s=new CompoundExp([r]);
+				s.loc=r.loc;
+				s.type=r.type;
+				if(r.isSemError()) s.setSemError();
+				else s.setSemCompleted();
+				r=s;
+			}
 			foreach(i,id;constIds){
 				auto vd=cast(VarDecl)id.meaning;
+				if(vd&&!vd.scope_){ // (`be` was lowered, the variable was declared by a copy of `id`)
+					auto decl=sc.peekSymtab(id.id,false);
+					vd=decl !is previous[i]?cast(VarDecl)decl:null;
+				}
 				if(!vd||vd.isSemError()) continue;
 				vd.isConst_=true;
 				if(!vd.vtype||vd.vtype.isClassical()) continue;
@@ -6702,6 +6715,14 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				return !!ce.type;
 			}else{
+				auto targs=cast(TupleExp)ce.arg;
+				bool separate=ft.isTuple&&targs&&targs.length==ft.nargs;
+				foreach(i;0..separate?ft.nargs:1){
+					auto arg=separate?targs.e[i]:ce.arg;
+					if(!arg.type||isSubtype(arg.type,separate?ft.argTy(i):ft.dom)) continue;
+					if(!sc.inferenceMode||(separate?ft.isConstForReverse[i]:ft.isConstForReverse.all)) return false;
+					markDeferredSpecificityCheck(sc); // (the type of a `moved` argument can be speculative)
+				}
 				if(!ce.type&&fullyAnalyzed(ce.arg)&&ft.isConstForReverse.all)
 					ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
 				if(!ce.type){
@@ -9764,7 +9785,6 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	static if(language==silq) erpBeforeReturn(ret,sc);
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
-	static if(language==silq) auto bottom=Dependency(); // variable is a workaround for DMD regression
 
 	bool widenReturnType(Expression type){
 		if(fd.ret&&isSubtype(type,fd.ret))
@@ -9790,7 +9810,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 		return false;
 	}
-	static if(language==silq) bool quantumControlled=sc.controlDependency!=bottom||!!(flags&StmFlags.quantumReturn);
+	static if(language==silq) bool quantumControlled=sc.quantumControlled||!!(flags&StmFlags.quantumReturn);
 	if(fd.inferringReturnType){
 		determineType(ret.e,context,(ty){
 			static if(language==silq){

@@ -4317,8 +4317,7 @@ void erpBeforeReturn(ReturnExp ret,Scope sc){
 void erpRecordReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)) return;
 	ERPReturn r;
-	auto none=Dependency(); // (variable: comparison takes a `ref`)
-	r.quantum=sc.controlDependency!=none;
+	r.quantum=sc.quantumControlled;
 	if(ret.e) visitStm(ret.e,(Expression x){
 		if(auto id=cast(Identifier)x)
 			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup)
