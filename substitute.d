@@ -1050,6 +1050,15 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		return false;
 	}
 	Scope mapScope(Scope s){ return s is null?null:smap.get(s,s); }
+	Scope mapScopeOfDecl(Scope s){ // (e.g. the scope of the zero-iterations path of a loop is not part of the syntax tree)
+		if(auto p=smap.getPtr(s)) return *p;
+		auto bs=cast(BlockScope)s;
+		if(!bs||!inTwinned(bs)) return s;
+		auto ns=new BlockScope(mapScopeOfDecl(bs.parent),bs.restriction_,bs.restrictionCause_);
+		ns.isLoopBody=bs.isLoopBody;
+		smap[s]=ns;
+		return ns;
+	}
 	Scope delegate(Scope,Scope,Scope) mapScopeTreeDg;
 	Expression delegate(Expression) rescopeCopy;
 	Expression delegate(Expression) shareTy; // (evaluated types are shared unless they mention declarations of the twin)
@@ -1070,7 +1079,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
 			nd.copyAnalyzedFieldsFrom(d);
 			dmap[d]=nd;
-			nd.scope_=mapScope(d.scope_);
+			nd.scope_=mapScopeOfDecl(d.scope_);
 			nd.vtype=vd.vtype?(vd.vtype.isSemEvaluated()?shareTy(vd.vtype):rescopeCopy(useSubstitute(vd.vtype,bctx))):null;
 			nd.dtype=vd.dtype?(vd.dtype.isSemEvaluated()?shareTy(vd.dtype):rescopeCopy(useSubstitute(vd.dtype,bctx))):null;
 			return nd;
@@ -1085,10 +1094,15 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		}
 		return d;
 	}
+	Scope[] blocks; // (enclosing blocks of the expression being copied)
+	FunctionDef[] nestedTwins;
+	static struct FunctionUse{ Identifier id; Scope block; }
+	FunctionUse[] functionUses;
 	// the generic BinaryExp copy drops checker-computed fields
 	void fixAssignFields(Expression e,Expression r){
 		import std.algorithm: map, endsWith;
 		import std.array: array;
+		if(auto rid=cast(Identifier)r) if(cast(FunctionDef)rid.meaning&&blocks.length) functionUses~=FunctionUse(rid,blocks[$-1]);
 		if(r.type&&r.type is e.type&&e.type.isSemEvaluated()) r.type=shareTy(e.type);
 		if(auto sae=cast(AAssignExp)e){
 			auto rae=cast(AAssignExp)r;
@@ -1174,8 +1188,20 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 				walkStmts(ofd.body_.s,ofd.body_.s,bparent,&dmap,mapScopeTreeDg);
 				nfd.body_=cast(CompoundExp)rescopeCopy(ofd.body_);
 			}
-			computeCapturesFromBody(nfd);
+			nestedTwins~=nfd;
 			return nfd;
+		}
+		if(auto ce=cast(CompoundExp)e){
+			if(!ce.blscope_) return null;
+			blocks~=ce.blscope_;
+			scope(exit) blocks=blocks[0..$-1];
+			Expression[] ns;
+			foreach(x;ce.s) ns~=x.copy(args);
+			auto r=new CompoundExp(ns);
+			r.blscope_=cast(BlockScope)mapScope(ce.blscope_);
+			r.erpId=ce.erpId;
+			fixup(r,ce);
+			return r;
 		}
 		if(auto le=cast(LambdaExp)e){
 			auto nfd=cast(FunctionDef)mapExp(le.fd,args);
@@ -1287,6 +1313,21 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			}
 		}
 	}
+	// uses of a nested function substituted by name refer to its maximally split version
+	foreach(use;functionUses){
+		auto id=use.id,block=mapScope(use.block);
+		for(bool found=true;found;){
+			found=false;
+			foreach(sd;id.meaning.splitInto){
+				if(sd.scope_&&block.isNestedIn(sd.scope_)){
+					id.meaning=sd;
+					found=true;
+					break;
+				}
+			}
+		}
+	}
+	foreach_reverse(nfd;nestedTwins) computeCapturesFromBody(nfd);
 	// give twin scopes their own last-use state (hqir re-analyzes lowered
 	// fragments against them)
 	MapSX!(ast.lastuse.LastUses*,Scope) luOwner;
