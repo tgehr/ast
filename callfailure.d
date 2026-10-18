@@ -292,9 +292,62 @@ bool literalAnnotatable(Expression e,Expression type){
 	return false;
 }
 
+/// whether `a` and `b` are known to be equal (`1`), known to differ (`0`), or neither (`-1`)
+int compareValues(Expression a,Expression b){
+	if(a==b) return 1;
+	auto eq=new EqExp(a,b);
+	eq.loc=a.loc;
+	eq.type=Bool(true);
+	eq.setSemCompleted();
+	auto r=eq.eval();
+	if(r==LiteralExp.makeBoolean(1)) return 1;
+	if(r==LiteralExp.makeBoolean(0)) return 0;
+	return -1;
+}
+
+/// sizes of `from` and `to` if both are vectors with compatible elements or both are fixed-size integers of the same kind
+bool getSizes(Expression from,Expression to,out Expression fromSize,out Expression toSize,out string what){
+	if(auto fv=cast(VectorTy)from) if(auto tv=cast(VectorTy)to){
+		if(!isSubtype(fv.next,tv.next)) return false;
+		fromSize=fv.num, toSize=tv.num, what="length";
+		return true;
+	}
+	auto ff=isFixedIntTy(from), tf=isFixedIntTy(to);
+	if(ff&&tf&&ff.isSigned==tf.isSigned&&(ff.isClassical||!tf.isClassical)){
+		fromSize=ff.bits, toSize=tf.bits, what="bit width";
+		return true;
+	}
+	return false;
+}
+
+/// whether integer `v` is in the range of fixed-size integer type `fit` (if the range is known)
+bool fitsInto(ℤ v,FixedIntTy fit,out ℤ lo,out ℤ hi){
+	auto b=fit.bits.eval().asIntegerConstant();
+	if(!b||b.get<0||b.get>1024) return true;
+	auto m=ℤ(1)<<b.get.to!size_t;
+	lo=fit.isSigned?-(m/2):ℤ(0), hi=(fit.isSigned?m/2:m)-1;
+	return lo<=v&&v<=hi;
+}
+
 /// explains why value `e` (if known) of type `from` at `loc` cannot be used where type `to` is expected
-void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Location loc,bool suggestConversions=true,int depth=0){
+/// (`concrete`: whether `to` does not depend on unknown parameters, so sizes can be compared and conversions suggested)
+void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Location loc,bool concrete=true,int depth=0){
 	if(!from||!to||depth>4) return;
+	if(e&&!e.type) e=null;
+	Expression fromSize,toSize;
+	string what;
+	if(concrete&&getSizes(from,to,fromSize,toSize,what)){ // (vectors and fixed-size integers)
+		auto equal=compareValues(fromSize,toSize);
+		if(equal==0){
+			sc.note(format("%s `%s` differs from expected %s `%s`",what,display(fromSize),what,display(toSize)),loc);
+			return;
+		}
+		if(equal==-1) sc.note(format("%s `%s` is not known to be equal to `%s`",what,display(fromSize),display(toSize)),loc);
+	}
+	if(auto ff=isFixedIntTy(from)) if(auto tf=isFixedIntTy(to)) if(ff.isSigned!=tf.isSigned){
+		static string signedness(FixedIntTy fit){ return fit.isSigned?"a signed":"an unsigned"; }
+		sc.note(format("argument is %s integer, but %s integer is expected",signedness(ff),signedness(tf)),loc);
+	}
 	if(auto ftpl=from.isTupleTy()) if(auto ttpl=to.isTupleTy()){
 		if(ftpl.length!=ttpl.length){
 			sc.note(format("tuple has %s elements, but %s %s expected",ftpl.length,ttpl.length,ttpl.length==1?"is":"are"),loc);
@@ -307,11 +360,10 @@ void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Locatio
 			auto ei=tpl?tpl.e[i]:null;
 			auto li=ei?ei.loc:loc;
 			sc.note(format("element at index %s has type `%s`, but `%s` is expected",i,ftpl[i],ttpl[i]),li);
-			explainMismatch(sc,ei,ftpl[i],ttpl[i],li,suggestConversions,depth+1);
+			explainMismatch(sc,ei,ftpl[i],ttpl[i],li,concrete,depth+1);
 		}
 		return;
 	}
-	if(e&&!e.type) e=null;
 	if(e&&isType(e)&&!isTypeTy(to)){
 		sc.note(format("`%s` is a type, not a value",sourceText(e)),loc);
 		return;
@@ -320,6 +372,7 @@ void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Locatio
 		explainFunctionMismatch(sc,e,ffun,tfun,loc);
 		return;
 	}
+	if(explainElementMismatch(sc,from,to,loc)) return;
 	if(e&&e.type.isClassical()){ // (constants that do not have the expected type)
 		auto integral=isNumericTy(to)==NumericType.Bool||isNumericTy(to)==NumericType.ℕt||isNumericTy(to)==NumericType.ℤt||isFixedIntTy(to);
 		if(auto v=classicalIntConstant(e)){
@@ -329,6 +382,11 @@ void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Locatio
 			}
 			if(isNumericTy(to)==NumericType.Bool&&v.get!=0&&v.get!=1){
 				sc.note(format("`%s` is not a boolean value (`0` or `1`)",v.get),loc);
+				return;
+			}
+			ℤ lo,hi;
+			if(auto fit=isFixedIntTy(to)) if(!fitsInto(v.get,fit,lo,hi)){
+				sc.note(format("`%s` is out of range for `%s` (from `%s` to `%s`)",v.get,to,lo,hi),loc);
 				return;
 			}
 		}else if(integral&&isLiteral(e)&&isNumericTy(e.type)>NumericType.ℤt){
@@ -342,7 +400,8 @@ void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Locatio
 			return;
 		}
 	}
-	if(!suggestConversions||!e) return;
+	if(e&&explainArithmetic(sc,e,to,loc)) return;
+	if(!concrete||!e) return;
 	if(literalAnnotatable(e,to))
 		sc.note(format("did you mean to write `%s:%s`?",operandText(e),to),loc);
 	else if(typeExplicitConversion(from,to,TypeAnnotationType.conversion))
@@ -351,11 +410,59 @@ void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Locatio
 		sc.note(format("(unsafe type coercion possible, use `%s coerce %s`)",operandText(e),to),loc);
 }
 
+/// explains a mismatch between a single element and a vector or fixed-size integer of such elements
+bool explainElementMismatch(Scope sc,Expression from,Expression to,Location loc){
+	if(auto fv=cast(VectorTy)from) if(isSubtype(fv.next,to)){
+		sc.note(format("argument is a vector of `%s`, but a single `%s` is expected",fv.next,to),loc);
+		return true;
+	}
+	if(auto fa=cast(ArrayTy)from) if(isSubtype(fa.next,to)){
+		sc.note(format("argument is an array of `%s`, but a single `%s` is expected",fa.next,to),loc);
+		return true;
+	}
+	if(auto ff=isFixedIntTy(from)) if(isSubtype(Bool(ff.isClassical),to)){
+		sc.note(format("argument is an integer with `%s` bits, but a single `%s` is expected",display(ff.bits),to),loc);
+		return true;
+	}
+	if(auto tv=cast(VectorTy)to) if(isSubtype(from,tv.next)){
+		sc.note(format("a vector of `%s` is expected, but a single `%s` was provided",tv.next,from),loc);
+		return true;
+	}
+	if(auto ta=cast(ArrayTy)to) if(isSubtype(from,ta.next)){
+		sc.note(format("an array of `%s` is expected, but a single `%s` was provided",ta.next,from),loc);
+		return true;
+	}
+	return false;
+}
+
+/// explains common pitfalls with integer arithmetic, e.g., `n/2` or `n-1` passed for a natural number
+bool explainArithmetic(Scope sc,Expression e,Expression to,Location loc){
+	static NumericType classicalNumericTy(Expression t){ return t&&t.isClassical()?isNumericTy(t):NumericType.none; }
+	static bool isNatural(Expression t){ auto n=classicalNumericTy(t); return n==NumericType.Bool||n==NumericType.ℕt; }
+	static bool isIntegral(Expression t){ return isNatural(t)||classicalNumericTy(t)==NumericType.ℤt; }
+	auto ue=unwrap(e);
+	if(auto de=cast(DivExp)ue){
+		if(!isIntegral(de.e1.type)||!isIntegral(de.e2.type)) return false;
+		auto rty=isNatural(de.e1.type)&&isNatural(de.e2.type)?ℕt(true):ℤt(true);
+		if(!isSubtype(rty,to)) return false;
+		sc.note(format("`/` is rational division, use `%s div %s` for integer division",operandText(de.e1),operandText(de.e2)),loc);
+		return true;
+	}
+	if(auto se=cast(SubExp)ue){
+		if(!isNatural(se.e1.type)||!isNatural(se.e2.type)||!isSubtype(ℕt(true),to)) return false;
+		sc.note(format("subtracting natural numbers yields an integer, use `%s sub %s` for natural subtraction (checked to be non-negative)",operandText(se.e1),operandText(se.e2)),loc);
+		return true;
+	}
+	return false;
+}
+
 /// explains why function `e` (if known) of type `from` cannot be used where a function of type `to` is expected
 void explainFunctionMismatch(Scope sc,Expression e,ProductTy from,ProductTy to,Location loc){
 	if(from.isSquare!=to.isSquare){
 		static string brackets(bool isSquare){ return isSquare?"square brackets":"parentheses"; }
 		sc.note(format("function takes arguments in %s, but a function taking arguments in %s is expected",brackets(from.isSquare),brackets(to.isSquare)),loc);
+		if(e&&from.isSquare&&cast(ProductTy)from.cod)
+			sc.note(format("perhaps provide its square-bracket arguments: `%s[…]`",operandText(e)),loc);
 		return;
 	}
 	if(from.nargs!=to.nargs){
@@ -370,6 +477,12 @@ void explainFunctionMismatch(Scope sc,Expression e,ProductTy from,ProductTy to,L
 	static if(language==silq){
 		if(to.isClassical_&&!from.isClassical_)
 			sc.note("a classical function is required, but this function is quantum",loc);
+		foreach(i;0..from.nargs){ // (see `ProductTy.isConstCompatible`)
+			if(from.isConst[i]==to.isConst[i]||from.argTy(i).isClassical()||to.argTy(i).isClassical()) continue;
+			auto which=from.nargs==1?"its argument":format("its argument at index %s",i);
+			if(from.isConst[i]) sc.note(format("function takes %s as `const`, but a function consuming it is expected",which),loc);
+			else sc.note(format("function consumes %s, but a function taking it as `const` is expected",which),loc);
+		}
 	}
 	if(from.cod.hasAnyFreeVar(from.names)||to.cod.hasAnyFreeVar(to.names)) return;
 	foreach(i;0..from.nargs){
@@ -462,7 +575,14 @@ bool explainInferenceFailure(CallExp ce,ProductTy ft,ProductTy cod,Scope sc,stri
 					sc.note(format("`%s` must be a classical type, but `%s` is quantum",displayName(k),aty),argLoc(i));
 			}
 		}
-		explainMismatch(sc,aexps[i],aty,pty,argLoc(i),!pty.hasAnyFreeVar(names));
+		Expression asize,psize;
+		string what;
+		if(getSizes(aty,pty,asize,psize,what)&&psize.hasAnyFreeVar(names)){ // (unification only solves simple equations)
+			auto unknowns=iota(names.length).filter!(k=>psize.hasFreeVar(names[k])).map!(k=>format("`%s`",displayName(k))).join(", ");
+			sc.note(format("cannot determine %s such that %s `%s` equals `%s`",unknowns,what,display(psize),display(asize)),argLoc(i));
+			auto callee=calleeText(ce);
+			sc.note(format("square-bracket arguments can be provided explicitly: `%s[…](…)`",callee?callee:operandText(ce.e)),ce.loc);
+		}else explainMismatch(sc,aexps[i],aty,pty,argLoc(i),!pty.hasAnyFreeVar(names));
 		if(showDecls(roundDecls)) sc.note(format("%s declared here",describeParam(cod,roundDecls,i)),roundDecls[i].loc);
 		return true;
 	}
