@@ -11,8 +11,8 @@ import ast.expression,ast.type,ast.declaration,ast.scope_;
 bool canAddForget(Expression e){
 	if(auto le=cast(LetExp)e)
 		return !!le.isForward(true);
-	if(auto ce=cast(CompoundExp)e)
-		return !ce.blscope_;
+	if(auto ce=cast(CompoundExp)e) // (`[stmt]` or `[stmt, forget(...)]`)
+		return !ce.blscope_&&(ce.s.length==1||ce.s.length==2&&cast(ForgetExp)ce.s[1]&&!(cast(ForgetExp)ce.s[1]).val);
 	return false;
 }
 
@@ -1209,7 +1209,7 @@ struct LastUses{
 		if(!inType&&depOk){
 			if(isStatement){
 				auto ce=cast(CompoundExp)parent;
-				if(!ce||ce.blscope_){
+				if(!ce||!canAddForget(ce)){
 					import ast.semantic_:definitelyReturns;
 					if(!definitelyReturns(parent)){
 						auto s=new CompoundExp([parent]);

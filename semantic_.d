@@ -7108,7 +7108,9 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 		return generalLetExpSemantic(le,context);
 	auto de=cast(DefineExp)le.s.s[0];
 	assert(!!de);
-	de.e2=expressionSemantic(de.e2,context);
+	auto ncontext=context;
+	ncontext.inConst=InConst.yes; // (const uses end at `le`, which can forget variables after their last uses)
+	de.e2=expressionSemantic(de.e2,ncontext);
 	auto dId=cast(Identifier)de.e1;
 	assert(!!dId);
 	dId.scope_=context.sc;
@@ -9822,7 +9824,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			static if(language==silq){
 				if(ty.hasClassicalComponent()&&quantumControlled){
 					if(auto qty=ty.getQuantum())
-						ty=qty;
+						if(!isQNumeric(qty)) ty=qty;
 				}
 			}
 			//imported!"util.io".writeln("WIDENING: ",fd," ",fd.ftype," ",ty);
