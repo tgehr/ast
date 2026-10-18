@@ -11,6 +11,7 @@ import ast.declaration,ast.error,ast.reverse,util;
 import ast.lowerings;
 import ast.looplowering;
 import ast.modules: importModule, getPreludeScope, isInPrelude;
+import ast.callfailure;
 
 private int freshNameCounter=0;
 Id freshName(){ // TODO: improve mechanism for generating temporaries
@@ -6221,13 +6222,13 @@ string describeCallee(Expression callee){
 	return format("`%s`",callee);
 }
 
-/// explains why the inferred annotation of `fd` is below `annotation`, following the call path
-void explainAnnotation(Scope sc,FunctionDef fd,string description,Annotation annotation){
+/// explains why the inferred annotation of `fd` is below `annotation`, following the call path (returns whether any note was given)
+bool explainAnnotation(Scope sc,FunctionDef fd,string description,Annotation annotation){
 	FunctionDef[] visited;
 	while(fd&&fd.annotation<annotation&&!visited.canFind(fd)){
 		visited~=fd;
 		auto cause=fd.weakenedBy[annotation];
-		if(!cause) return;
+		if(!cause) break;
 		auto ann=annotationToString(annotation);
 		if(auto ce=cast(CallExp)cause){
 			sc.note(format("%s is not `%s` because it calls %s",description,ann,describeCallee(ce.e)),ce.loc);
@@ -6239,12 +6240,13 @@ void explainAnnotation(Scope sc,FunctionDef fd,string description,Annotation ann
 			description="vector comprehension";
 		}else{
 			sc.note(format("%s is not `%s` because of this",description,ann),cause.loc);
-			return;
+			break;
 		}
 	}
+	return visited.length&&visited[0].weakenedBy[annotation];
 }
-void explainAnnotation(Scope sc,Expression callee,Annotation annotation){
-	explainAnnotation(sc,calleeFunctionDef(callee),describeCallee(callee),annotation);
+bool explainAnnotation(Scope sc,Expression callee,Annotation annotation){
+	return explainAnnotation(sc,calleeFunctionDef(callee),describeCallee(callee),annotation);
 }
 
 Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T==ExpSemContext)&&!isPresemantic||is(T==DefineLhsContext)){
@@ -6394,7 +6396,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
-		bool error=false;
+		bool error=false, explained=false;
 		void checkArg(size_t i,ref Expression exp)in{
 			assert(exp.isSemFinal(),text(exp));
 		}do{
@@ -6473,11 +6475,9 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		if(ft.isTuple){
 			if(auto tpl=cast(TupleExp)ce.arg){
 				void wrongNumberOfArgs(){
-					static if(isRhs) enum msg="wrong number of arguments for function (%s instead of %s)";
-					else enum msg="wrong number of arguments for reversed function call (%s instead of %s)";
-					sc.error(format(msg,tpl.length,ft.nargs),ce.loc);
+					explainArgumentCount(ce,ft,tpl.length,sc);
 					tpl.setSemForceError(); // (the arguments may have been analyzed already)
-					error=true;
+					error=explained=true;
 				}
 				bool defaultIsConst=ft.isSquare;
 				if(ft.nargs!=tpl.length){
@@ -6565,7 +6565,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.arg=argSemantic(ce.arg,ncontext);
 				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
-					sc.error("cannot match single tuple to function with mixed `const` and consumed parameters",ce.loc);
+					auto ttpl=ce.arg.type?ce.arg.type.isTupleTy():null;
+					if(ce.arg.type&&(!ttpl||ttpl.length!=ft.nargs)){ // (not a tuple of arguments)
+						explainArgumentCount(ce,ft,1,sc,ttpl?ttpl.length:size_t.max);
+						explained=true;
+					}else sc.error("cannot match single tuple to function with mixed `const` and consumed parameters",ce.loc);
 					ce.setSemError();
 					error=true;
 				}
@@ -6588,7 +6592,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			static if(isRhs) checkArg(0,ce.arg);
 		}
 		propErr(ce.arg,ce);
-		if(error){
+		if(error&&!explained){
 			if(auto fid=cast(Identifier)fun){
 				if(auto fd=cast(FunctionDef)fid.meaning){
 					sc.note(format("`%s` declared here",fd.name),fd.loc);
@@ -6604,19 +6608,23 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.setSemError();
 			}
 		}
-		bool tryCall(){
-			if(!ce.isSquare && ft.isSquare){
-				auto nft=ft;
-				if(auto id=cast(Identifier)fun){
-					if(auto decl=cast(DatDecl)id.meaning){
-						if(auto constructor=decl.constructor){
-							if(auto cty=cast(FunTy)typeForDecl(constructor)){
-								assert(isTypeTy(ft.cod));
-								nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.captureAnnotation,ft.annotation,true);
-							}
+		FunTy inferenceType(){ // (type used to infer omitted square-bracket arguments)
+			auto nft=ft;
+			if(auto id=cast(Identifier)fun){
+				if(auto decl=cast(DatDecl)id.meaning){
+					if(auto constructor=decl.constructor){
+						if(auto cty=cast(FunTy)typeForDecl(constructor)){
+							assert(isTypeTy(ft.cod));
+							nft=productTy(ft.isConst,ft.names,ft.dom,cty,ft.isSquare,ft.isTuple,ft.captureAnnotation,ft.annotation,true);
 						}
 					}
 				}
+			}
+			return nft;
+		}
+		bool tryCall(){
+			if(!ce.isSquare && ft.isSquare){
+				auto nft=inferenceType();
 				if(auto codft=cast(ProductTy)nft.cod){
 					if(codft.isSquare) return false;
 					bool canMatch=isRhs||!isPresemantic&&codft.isConstForReverse.all;
@@ -6719,10 +6727,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				ce.e=ne;
 				return callSemantic(ce,context);
 			}
-			if(!aty) aty=ce.arg;
-			if(ce.isSquare!=ft.isSquare)
-				sc.error(text("function of type `",ft,"` cannot be called with arguments `",ce.isSquare?"[":"",aty,ce.isSquare?"]":"","`"),ce.loc);
-			else sc.error(format("expected argument types `%s`, but `%s` was provided",ft.dom,aty),ce.loc);
+			explainCallFailure(ce,ft,ft.isSquare&&!ce.isSquare?inferenceType():null,sc);
 			ce.setSemError();
 		}
 		return ce;
@@ -6838,7 +6843,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			return qabortSemantic!isPresemantic(ce,context);
 		}else assert(0);
 	}else{
-		sc.error(format("cannot call expression of type `%s`",fun.type),ce.loc);
+		explainNotCallable(ce,sc);
 		ce.setSemError();
 		argSemanticWithoutFunction();
 	}

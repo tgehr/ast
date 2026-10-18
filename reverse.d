@@ -5,6 +5,7 @@ import astopt;
 
 import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
+import ast.callfailure: explainArgumentCount;
 import util.tuple:Q=Tuple,q=tuple;
 import util: SetX;
 
@@ -683,6 +684,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 		if(!unchecked&&!needWrapper&&ft.annotation<Annotation.mfree){
 			sc.error("reversed function must be `mfree`",ce.e.loc);
+			explainAnnotation(sc,ce.e,Annotation.mfree);
 			return error();
 		}
 		if(!unchecked&&!needWrapper&&!ft.isClassical){
@@ -727,7 +729,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				newarg=new TupleExp([constMovedArgs[0],orhs]);
 				newarg.loc=constMovedArgs[0].loc.to(orhs.loc);
 			}else{
-				sc.error(format("wrong number of arguments to reversed function call (%s instead of %s)",tpl.length,ft.nargs),ce.loc);
+				explainArgumentCount(ce,ft,tpl.length,sc);
 				return error();
 			}
 		}else{
