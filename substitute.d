@@ -1089,6 +1089,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	void fixAssignFields(Expression e,Expression r){
 		import std.algorithm: map, endsWith;
 		import std.array: array;
+		if(r.type&&r.type is e.type&&e.type.isSemEvaluated()) r.type=shareTy(e.type);
 		if(auto sae=cast(AAssignExp)e){
 			auto rae=cast(AAssignExp)r;
 			if(sae.replacements.length)
@@ -1117,7 +1118,11 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		foreach(id;e.freeIdentifiers){
 			if(!id.meaning||id.id in subst) continue;
 			auto nd=mapDecl(id.meaning);
-			if(!nd||nd is id.meaning) continue;
+			if(nd is id.meaning) continue;
+			if(!nd){ // (substituted away)
+				if(auto pe=bctx.subst.getPtr(id.meaning.getId)) subst[id.id]=*pe;
+				continue;
+			}
 			subst[id.id]=rescopeCopy(id);
 		}
 		return subst.length?e.substitute(subst):e;
@@ -1212,7 +1217,10 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		return null;
 	}
 	Scope mapScopeTree(Scope s,Scope twincarried,Scope parent){
-		if(auto p=smap.getPtr(s)) return *p;
+		if(auto p=smap.getPtr(s)){ // (e.g. the scope of a `for` loop is also the scope of its body)
+			if(twincarried&&twincarried !in smap) smap[twincarried]=*p;
+			return *p;
+		}
 		auto bs=cast(BlockScope)s;
 		BlockScope ns;
 		if(auto ts=cast(TypeScope)twincarried){

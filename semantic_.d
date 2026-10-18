@@ -9361,7 +9361,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 		return true;
 	}
 	if(auto fd=cast(FunctionDef)meaning){
-		if(!fd.ftypeFinal){
+		if(!fd.ftypeFinal&&!(fd.isSemCompleted()&&fd.numUpdatesPending==0)){ // (a completed function without pending updates does not notify its dependents)
 			auto cfd=sc.getFunction();
 			if(!cfd&&fd.sstate==SemState.passive&&!fd.tainted&&fd.numUpdatesPending==0)
 				return true;
