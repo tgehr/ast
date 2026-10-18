@@ -1839,7 +1839,7 @@ class CallExp: Expression{
 		else r=new CallExp(ne,narg,isSquare,isClassical_);
 		// TODO: partially evaluate arbitrary functions
 		if(type.isClassical() || constLookup) {
-			if(auto sub=r.isDup()) return sub.eval(); // TODO: ok?
+			if(auto sub=r.isDup()) if(isSubtype(sub.type,type)) return sub.eval(); // TODO: ok?
 		}
 		return r;
 	}

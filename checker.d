@@ -778,7 +778,7 @@ class Checker {
 		assert(e.e.constLookup, "TODO: non-lifted indexing");
 		visExpr(e.e);
 		visExpr(e.a);
-		auto expectedType = ast_sem.indexType(e.e.type, e.a);
+		auto expectedType = ast_ty.isEmpty(e.e.type) ? ast_ty.bottom : ast_sem.indexType(e.e.type, e.a); // (indexing an aggregate that diverges)
 		if(e.isClassical_ && expectedType) expectedType = ast_ty.getClassicalTy(expectedType);
 		assert(e.type == expectedType, format("index type mismatch: %s has type %s, indexed with %s results in %s instead of %s at %s", e.e, e.e.type, e.a, expectedType, e.type, e.loc));
 	}
@@ -1071,6 +1071,15 @@ class Checker {
 			auto owner = this;
 			while(!owner.vars.getPtr(callExpr.newFunctionVar.getId) && owner.scopeFree) owner = owner.parent;
 			owner.defineVar(callExpr.newFunctionVar, "`spent` function definition", callExpr);
+		}
+
+		if(!isReversed && ast_ty.isEmpty(argExpr.type)) {
+			// the argument diverges, so the function is not called
+			auto args = [argExpr];
+			if(auto argTuple = cast(ast_exp.TupleExp) argExpr) args = argTuple.e;
+			foreach(arg; args) if(arg.constLookup) visExpr(arg); // (may borrow variables consumed by other arguments)
+			foreach(arg; args) if(!arg.constLookup) visExpr(arg);
+			return;
 		}
 
 		bool isTuple;

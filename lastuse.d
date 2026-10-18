@@ -49,7 +49,15 @@ Identifier addForget(Expression e,Declaration decl,Scope sc){
 		propErr(decl,id);
 		id.setSemCompleted();
 		auto tpl=cast(TupleExp)fe.var;
-		assert(!!tpl);
+		if(!tpl){ // (`forget` in the source, e.g., `let{ x:=e; forget(y); } in x`)
+			tpl=new TupleExp([fe.var]);
+			tpl.loc=fe.var.loc;
+			tpl.constLookup=false;
+			tpl.type=fe.var.type?tupleTy([fe.var.type]):null;
+			if(fe.var.isSemError()||!tpl.type) tpl.setSemForceError();
+			else tpl.setSemCompleted();
+			fe.var=tpl;
+		}
 		tpl.e~=id;
 		if(id.type&&tpl.type){
 			tpl.type=tupleTy(tpl.e.map!(e=>e.type).array); // TODO: avoid quadratic scaling

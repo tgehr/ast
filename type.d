@@ -166,7 +166,7 @@ bool isSubtype(Expression lhs,Expression rhs,EqualityContext* ctx=null){
 	assert(lhs.isSemEvaluated());
 	assert(rhs.isSemEvaluated());
 	if(lhs is rhs) return true;
-	if(lhs.isClassical()&&!rhs.isClassical()) {
+	if(lhs.isClassical()&&!rhs.isClassical()&&!isEmpty(lhs)) { // (empty types are classical, but may have quantum components)
 		rhs = rhs.getClassical();
 		if(!rhs) return false;
 		if(lhs is rhs) return true;
@@ -509,6 +509,7 @@ class TupleTy: Type,ITupleTy{
 	override Type substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		auto ntypes=types.dup;
 		foreach(ref t;ntypes) t=t.substitute(subst,tt);
+		if(iota(types.length).all!(i => ntypes[i] is types[i])) return this;
 		return tupleTy(ntypes);
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){

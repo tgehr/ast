@@ -610,6 +610,7 @@ Expression analyzeToplevel(ToplevelDefinition td,DefineExp expr,Scope sc){
 		if(td.sstate==SemState.started) td.sstate=SemState.passive;
 	}
 	td.result=defineOrAssignSemantic(expr,sc,flags);
+	foreach(vd;td.vars) propErr(td.result,vd); // (also for variables nested in patterns)
 	if(td.numUpdatesPending==0) finalizeToplevel(td);
 	return td.result;
 }
@@ -998,6 +999,11 @@ Expression statementSemanticImpl(CallExp ce,Scope sc,ref StmFlags flags,bool res
 			ce.setSemCompleted();
 			return ce;
 		}
+	}
+	if(r is ce.arg&&r.isSemCompleted()&&isEmpty(r.type)){ // (the argument diverges, so the function is not called)
+		ce.type=r.type;
+		ce.setSemCompleted();
+		return ce;
 	}
 	return r;
 }
@@ -4331,7 +4337,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			DefinitionSources[] sources;
 			foreach(i;0..lhs.length){
 				if(auto id=getIdFromDefLhs(lhs[i])){
-					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
+					if(id.meaning&&id.type&&id.meaning.scope_ is sc&&sc.rnsymtab.get(id.meaning.getId,null) is id.meaning){ // (not for component replacements removed after an error)
 						auto dep=rhs[i].getDependency(sc);
 						dep.joinWith(getIndexDependency(lhs[i]));
 						dependencies~=q(id.meaning,dep);
@@ -4348,7 +4354,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			DefinitionSources[] sources;
 			foreach(i;0..lhs.length){
 				if(auto id=getIdFromDefLhs(lhs[i])){
-					if(id.meaning&&id.type&&id.meaning.scope_ is sc){
+					if(id.meaning&&id.type&&id.meaning.scope_ is sc&&sc.rnsymtab.get(id.meaning.getId,null) is id.meaning){ // (not for component replacements removed after an error)
 						if(!id.type.isClassical()){
 							auto dep=dependency.dup;
 							dep.joinWith(getIndexDependency(lhs[i]));
@@ -6760,7 +6766,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		}
 		if(!tryCall()){
 			auto aty=ce.arg.type;
-			if(isEmpty(aty)) return ce.arg;
+			static if(isRhs) if(isEmpty(aty)) return ce.arg;
 			if(ft.isSquare&&!ce.isSquare&&isEmpty(ft.cod)){
 				auto lit=LiteralExp.makeBoolean(false);
 				lit.loc=ce.e.loc;
@@ -9364,7 +9370,7 @@ bool setFtype(FunctionDef fd,bool force){
 			return false;
 		}
 		pc~=p.isConst;
-		pn~=p.getId;
+		pn~=p.scope_||!p.name?p.getId:Id(); // (not for a redefinition)
 		pty~=p.vtype;
 	}
 	assert(fd.isTuple||pty.length==1);

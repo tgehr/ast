@@ -1668,6 +1668,7 @@ abstract class Scope{
 		if(canForget(decl)){
 			decl=split(decl,null);
 			assert(decl.scope_ is this);
+			if(cause.forgottenVars.canFind(decl)) return true; // (e.g., `const` locals are forgotten before merging)
 			cause.forgottenVars~=decl;
 			static if(is(T:Expression)) lastUses.synthesizedForget(decl,null,this,cause);
 			else lastUses.synthesizedForget(decl,null,this,null);
