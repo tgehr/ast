@@ -597,7 +597,11 @@ class Checker {
 		visLhs(e.e);
 		visExpr(e.t);
 		visType(e.type);
-		expectConvertible(e.e, e.type, e.annotationType);
+		// (the assigned value is converted from the annotated type, a reversed call can also classicalize it)
+		auto to = e.e.type;
+		if(cast(ast_exp.CallExp) ast_sem.unwrap(e.e))
+			if(auto qto = to.getQuantum()) to = qto;
+		expectConvertible(e, e.type, to, e.annotationType);
 	}
 
 	void implLhs(ast_exp.IndexExp e) {
@@ -679,6 +683,8 @@ class Checker {
 
 		if(auto init=e.getInitializer()) {
 			visExprOnce(init);
+			if(!e.constLookup&&!e.implicitDup&&e.meaning&&vars.get(e.meaning.getId,null) is e.meaning)
+				getVar(e.meaning,false,"identifier",e); // (e.g., a type that is returned)
 			return;
 		}
 
@@ -1282,10 +1288,14 @@ class Checker {
 	}
 
 	void expectConvertible(ast_exp.Expression e, ast_exp.Expression ty, ast_ty.TypeAnnotationType annotationType) {
+		expectConvertible(e, e.type, ty, annotationType);
+	}
+
+	void expectConvertible(ast_exp.Expression e, ast_exp.Expression from, ast_exp.Expression to, ast_ty.TypeAnnotationType annotationType) {
 		import ast.conversion;
-		auto conv = typeExplicitConversion!true(e.type, ty, annotationType);
+		auto conv = typeExplicitConversion!true(from, to, annotationType);
 		// check witness generation
-		assert(conv, format("ERROR: Expected %s of type %s to be convertible to type %s", e, e.type, ty));
+		assert(conv, format("ERROR: Expected %s of type %s to be convertible to type %s", e, from, to));
 		visConv(conv);
 	}
 

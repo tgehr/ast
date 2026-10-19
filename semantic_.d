@@ -1041,12 +1041,19 @@ CompoundExp statementSemanticImpl(CompoundExp ce,Scope sc,ref StmFlags flags,boo
 
 static if(language==silq)
 void collectNondeterministicSubexpressions(Expression e,ref Expression[] result){
-	if(e.type&&e.type.isClassical()&&!e.isDeterministic()){
+	if(e.type&&e.type.isClassical()&&e.type!=unit&&!e.isDeterministic()){ // (statements are evaluated for their effects)
 		result~=e; // non-determinism is upward-closed, so there is no need to descend further
 		return;
 	}
 	if(cast(FunctionDef)e||cast(LambdaExp)e) return; // body is not evaluated here
 	foreach(c;e.components) collectNondeterministicSubexpressions(c,result);
+}
+static if(language==silq)
+bool hasLetScope(Expression e){
+	if(auto le=cast(LetExp)e) if(le.s.blscope_) return true;
+	if(cast(FunctionDef)e||cast(LambdaExp)e) return false;
+	foreach(c;e.components) if(hasLetScope(c)) return true;
+	return false;
 }
 
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
@@ -1099,30 +1106,40 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		collectNondeterministicSubexpressions(ite.cond,nondeterministic);
 		IdMapSX!(Expression,bool) sharedNodes;
 		foreach(e;nondeterministic) sharedNodes[e]=true;
-		Expression.CopyArgs cargs={preserveSemantic:true};
-		cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
-			// nondeterministic subexpressions are shared with the entry condition;
-			// hqir.d reuses the values recorded at entry instead of re-evaluating them
-			if(e in sharedNodes) return e;
-			if(auto id=cast(Identifier)e){
-				if(!id.meaning||id.meaning.isToplevelDeclaration()) return null;
-				auto nid=new Identifier(id.name);
-				nid.loc=id.loc;
-				if(auto meaning=sc.peekSymtab(id.meaning.getId,true)){
-					if(meaning!is id.meaning&&!cast(DeadDecl)meaning){
-						nid.meaning=meaning;
-						nid.type=nid.typeFromMeaning;
-						nid.scope_=sc;
-						nid.constLookup=id.constLookup;
-						nid.setSemCompleted();
-						redefined~=nid;
-						return nid;
+		if(hasLetScope(ite.cond)){ // (the local declarations and scopes of a `let` expression cannot be shared with the entry condition)
+			Expression.CopyArgs cargs;
+			cargs.mapExp=(Expression e,ref Expression.CopyArgs args)=>e in sharedNodes?e:null;
+			auto condForget=ite.cond.copy(cargs);
+			condForget=expressionSemantic(condForget,expSemContext(sc,ConstResult.yes,InType.no));
+			sc.clearConsumed();
+			propErr(condForget,ite);
+			ite.condForget=condForget;
+		}else{
+			Expression.CopyArgs cargs={preserveSemantic:true};
+			cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+				// nondeterministic subexpressions are shared with the entry condition;
+				// hqir.d reuses the values recorded at entry instead of re-evaluating them
+				if(e in sharedNodes) return e;
+				if(auto id=cast(Identifier)e){
+					if(!id.meaning||id.meaning.isToplevelDeclaration()) return null;
+					auto nid=new Identifier(id.name);
+					nid.loc=id.loc;
+					if(auto meaning=sc.peekSymtab(id.meaning.getId,true)){
+						if(meaning!is id.meaning&&!cast(DeadDecl)meaning){
+							nid.meaning=meaning;
+							nid.type=nid.typeFromMeaning;
+							nid.scope_=sc;
+							nid.constLookup=id.constLookup;
+							nid.setSemCompleted();
+							redefined~=nid;
+							return nid;
+						}
 					}
 				}
-			}
-			return null;
-		};
-		ite.condForget=ite.cond.copy(cargs);
+				return null;
+			};
+			ite.condForget=ite.cond.copy(cargs);
+		}
 	}
 	static if(language==silq) if(trackGuard&&!guardDeps.isTop){
 		foreach(decl;guardDeps.dependencies){
@@ -1258,7 +1275,15 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			auto idx=cast(IndexExp)unwrap(de.e2);
 			assert(idx.byRef);
 			Expression.CopyArgs cargs={preserveSemantic:true};
-			consumer.consumeArray(idx.copy(cargs),expSemContext(sc,ConstResult.no,InType.no));
+			auto nidx=idx.copy(cargs);
+			static if(language==silq) if(auto id=getIdFromIndex(nidx)) if(id.meaning){ // (e.g., the body may have split and merged the aggregate)
+				auto current=sc.peekSymtab(id.meaning.getId,true);
+				if(current&&current!is id.meaning&&!cast(DeadDecl)current&&current.isDerivedFrom(id.meaning)){
+					id.meaning=current;
+					id.type=id.typeFromMeaning;
+				}
+			}
+			consumer.consumeArray(nidx,expSemContext(sc,ConstResult.no,InType.no));
 		}
 		consumer.redefineArrays(with_,sc); // TODO: fix
 		if(consumer.failed) with_.setSemForceError();
@@ -3913,6 +3938,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			if(!splitFrom) continue;
 			splitFrom.splitInto=splitFrom.splitInto.filter!(d=>d !is split).array;
 			s.replaceDecl(split,splitFrom);
+			foreach(t;chain[0..i]) t.replaceDecl(split,splitFrom); // (nested scopes may refer to the split)
 		}
 		s.consumedOuter=consumedOuters[i];
 		s.splitVars=splitVars[i];
@@ -4768,7 +4794,7 @@ struct ArrayConsumer{
 				}else sc.addDefaultDependency(var);
 				added.insert(origId);
 				if(replacements) *replacements~=AAssignExp.Replacement(id.meaning,var);
-				sc.lastUses.definition(var,parent);
+				if(var.scope_) sc.lastUses.definition(var,parent);
 			}
 		}
 	}
@@ -7234,7 +7260,16 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	StmFlags flags;
+	static if(language==silq){
+		Scope.OuterConstRead[] outerConstReads;
+		auto reblockConst=context.inConst&&!inType;
+		if(reblockConst){
+			if(!le.s.blscope_) le.s.blscope_=new BlockScope(sc);
+			le.s.blscope_.outerConstReads=&outerConstReads;
+		}
+	}
 	le.s=compoundExpSemantic(le.s,sc,flags);
+	static if(language==silq) if(reblockConst) le.s.blscope_.outerConstReads=null;
 	propErr(le.s,le);
 	if(auto ret=mayReturn(le.s)){
 		sc.error("cannot return from within `let` expression",ret.loc);
@@ -7280,6 +7315,27 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	if(bsc&&sc.merge(false,bsc)){
 		sc.note("at the end of `let` expression",le.loc);
 		le.setSemError();
+	}
+	static if(language==silq) if(bsc&&reblockConst){ // (as in other `const` subexpressions, const reads of outer variables within the statements last until the end of the enclosing statement)
+		bool isCurrent(Declaration decl){
+			for(Scope s=sc;s;s=s.parentScope()){
+				if(auto d=s.peekSymtab(decl.getId,true)) return d is decl;
+				if(s is decl.scope_) return false;
+			}
+			return false;
+		}
+		foreach(r;outerConstReads){
+			auto decl=r.decl;
+			while(decl&&decl.scope_&&decl.scope_.isNestedIn(bsc)) decl=decl.splitFrom;
+			if(!decl||decl.isToplevelDeclaration()||!isCurrent(decl)) continue;
+			Expression.CopyArgs cargs={preserveSemantic: true};
+			auto nread=r.read.copy(cargs);
+			nread.scope_=sc;
+			nread.meaning=decl;
+			sc.blockConst(decl,nread);
+			sc.recordAccess(nread,decl);
+			if(r.component) sc.recordComponentConstBlock(decl,nread,r.component);
+		}
 	}
 	if(!le.isSemError()) le.setSemCompleted();
 	return le;
@@ -7795,7 +7851,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			if(meaning) cid.meaning=sc.split(meaning,cid);
 		}
 	}
-	idx.e=expressionSemantic(idx.e,context.nestIndexed);
+	auto direct=cast(Identifier)unwrap(idx.e)||cast(IndexExp)unwrap(idx.e); // (e.g., an element of a concatenation is not indexed in its operands)
+	idx.e=expressionSemantic(idx.e,direct?context.nestIndexed:context.nestConst);
 	propErr(idx.e,idx);
 	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
 	if(!ne){

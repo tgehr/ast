@@ -184,7 +184,7 @@ abstract class Scope{
 			if(fd.isConsumedCapture(capture)) continue;
 			import ast.semantic_:typeForDecl;
 			auto type=typeForDecl(capture);
-			if(type&&type.isClassical()&&ids.any!(id=>!id.constLookup)){
+			if(type&&type.isClassical()&&ids.any!(id=>!id.constLookup)&&!capture.isConst()){ // (a `const` variable is not consumed by a capture)
 				fd.consumingCaptures.insert(decl.name.id);
 				fd.captureReanalysis=true;
 				for(auto efd=fd.scope_.getFunction();efd&&capture.scope_&&!capture.scope_.isNestedIn(efd.fscope_);efd=efd.scope_.getFunction()){
@@ -857,8 +857,10 @@ abstract class Scope{
 		}
 		foreach(decl,ref prop;declProps.props){
 			auto nconstBlock=lookupSnapshot(decl);
-			if(prop.constBlock.length&&prop.constBlock!=nconstBlock)
+			if(prop.constBlock.length&&prop.constBlock!=nconstBlock){
+				recordOuterConstReads(decl,prop.constBlock.filter!(read=>!nconstBlock.canFind(read)));
 				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+			}
 			prop.constBlock=nconstBlock;
 		}
 		foreach(decl,constBlock;context.constBlock){
@@ -872,9 +874,24 @@ abstract class Scope{
 		componentConstBlocks=componentConstBlocks[0..context.numComponentConstBlocks];
 		return success;
 	}
+	static struct OuterConstRead{
+		Declaration decl;
+		Identifier read;
+		IndexExp component;
+	}
+	OuterConstRead[]* outerConstReads=null; // (const reads of outer variables that are reset, e.g., within a `let` expression in a `const` position)
+	private void recordOuterConstReads(R)(Declaration decl,R reads){
+		if(!outerConstReads||decl.scope_&&decl.scope_.isNestedIn(this)&&!decl.splitFrom) return;
+		foreach(read;reads){
+			IndexExp component=null;
+			foreach(ccb;componentConstBlocks) if(ccb.read is read) component=ccb.component;
+			*outerConstReads~=OuterConstRead(decl,read,component);
+		}
+	}
 	final bool resetConst(ref Expression parent,bool isStatement,bool inType){
 		foreach(decl,ref prop;declProps.props){
 			if(prop.constBlock.length){
+				recordOuterConstReads(decl,prop.constBlock);
 				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
 				prop.constBlock=[];
 			}
@@ -2830,7 +2847,7 @@ class CapturingScope(T): NestedScope{
 							else origin.note("captures cannot be modified on a path leading to a recursive call",id.loc);
 						}
 						recapture.setSemError();
-					}
+					}else if(recapture.meaning.isSemError()) recapture.setSemError(); // (e.g., the capture was redefined erroneously)
 					recapture.type=recapture.typeFromMeaning;
 					assert(recapture.type||recapture.isSemError());
 					if(!recapture.isSemError()){

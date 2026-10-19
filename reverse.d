@@ -436,7 +436,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		}
 	}
 	if(defer&&!cast(ForgetExp)olhs){
-		return res=new DefineExp(olhs,orhs);
+		return res=new DefineExp(olhs.copy(),rhs); // (keeps implicit duplications of analyzed statements)
 	}
 	bool classicalReverse=false;
 	static if(language==silq&&!(flags&LowerDefineFlags.reverseMode)) classicalReverse=isClassicalReverseCall(olhs,orhs);
@@ -1519,7 +1519,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked,noImplicitDup,defer);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		auto hoist=hoistClassical||ce.blscope_; // (classical locals of a nested block are recomputed in its reversal)
+		auto hoist=hoistClassical||ce.blscope_&&!ce.isSemError(); // (classical locals of a nested block are recomputed in its reversal)
 		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer));
 		res.loc=ce.loc;
 		foreach(s;res.s) propErr(s,res);
