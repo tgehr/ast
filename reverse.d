@@ -424,8 +424,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		return res;
 	}
 	static if(reverseMode){
-		if(!noImplicitDup&&cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical())
+		if(!noImplicitDup&&cast(Identifier)olhs&&olhs.type&&olhs.type.isClassical()){
 			lhs.implicitDup=true;
+			(cast(Identifier)lhs).moved=false; // (the classical value is checked, it remains available)
+		}
 	}
 	static if(language==silq){
 		if(auto le=cast(LetExp)olhs){
@@ -1517,7 +1519,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked,noImplicitDup,defer);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoistClassical,defer));
+		auto hoist=hoistClassical||ce.blscope_; // (classical locals of a nested block are recomputed in its reversal)
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer));
 		res.loc=ce.loc;
 		foreach(s;res.s) propErr(s,res);
 		static if(language==silq){
@@ -1674,7 +1677,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		}
 		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer);
 		assert(!!bdy);
-		auto res=new ForExp(fe.var.copy(),fe.pattern?fe.pattern.copy():null,aggrRev,bdy);
+		auto res=new ForExp(fe.var?fe.var.copy():null,fe.pattern?fe.pattern.copy():null,aggrRev,bdy);
 		res.loc=fe.loc;
 		propErr(bdy,res);
 		return res;

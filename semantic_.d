@@ -1190,18 +1190,23 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			with_.setSemForceError();
 		}
 	}
+	static if(language==silq){
+		SetX!Id outerNames; // (variables declared before the transformation, which it may redefine)
+		for(Scope osc=sc;osc&&!cast(TopScope)osc;osc=osc.parentScope())
+			foreach(_,d;osc.rnsymtab) if(!cast(DeadDecl)d&&d.name) outerNames.insert(d.name.id);
+	}
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=sc;
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=null;
-	Id[] constLocals; // (`const` locals of the transformation are scoped to the whole `with`)
+	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
 	if(auto bsc=with_.trans.blscope_){
 		static if(language==silq) foreach(_,d;bsc.rnsymtab){
-			if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
+			if(cast(DeadDecl)d||d.isSemError()||!cast(VarDecl)d||cast(Parameter)d) continue;
 			auto origin=d;
 			while(origin.splitFrom) origin=origin.splitFrom;
-			if(origin.scope_&&origin.scope_.isNestedIn(bsc)) constLocals~=d.getId;
+			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)) transLocals~=q(d.getId,isConstLocal(d));
 		}
 		bsc.keepConstLocals=true;
 		sc.merge(false,bsc);
@@ -1281,9 +1286,14 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		}
 		propErr(with_.itrans,with_);
 	}
-	static if(language==silq) foreach(id;constLocals){
-		auto d=sc.rnsymtab.get(id,null);
-		if(!d||cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
+	static if(language==silq) foreach(local;transLocals){
+		auto d=sc.rnsymtab.get(local[0],null);
+		if(!d||cast(DeadDecl)d||d.isSemError()) continue;
+		if(!local[1]){ // (e.g., only implicitly duplicated by the inverse)
+			if(sc.lastUses.canForget(d,true,false)) sc.lastUses.forget(d,false);
+			continue;
+		}
+		if(!isConstLocal(d)) continue;
 		if(!sc.canForgetAppend(d)){
 			if(!sc.lastUses.betterUnforgettableError(d,sc))
 				sc.error(format("`const` variable `%s` cannot be forgotten at the end of its scope",d.getName),d.loc);
@@ -1860,8 +1870,10 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	}
 	if(fe.pattern){
 		auto varId=sourceVar.copy();
-		varId.moved=true;
-		auto pde=new DefineExp(fe.pattern,varId);
+		Expression value=varId;
+		if(sourceVar is fe.var) value=dupExp(varId,varId.loc,context); // (the loop variable remains available, e.g., for reversal)
+		else varId.moved=true;
+		auto pde=new DefineExp(fe.pattern,value);
 		pde.loc=fe.pattern.loc;
 		prologue~=pde;
 		fe.pattern=null;
@@ -2751,7 +2763,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 							vd.vtype=nt;
 							context.sc.updateType(vd);
 						}else{
-							context.sc.error(format("incompatible types `%s` and `%s` for variable `%s`",vd.vtype,context.type),id.loc);
+							context.sc.error(format("incompatible types `%s` and `%s` for variable `%s`",vd.vtype,context.type,id.name),id.loc);
 							id.setSemError();
 						}
 					}else{
