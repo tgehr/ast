@@ -3311,8 +3311,15 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 			}
 		}else if(context.type&&!isSubtype(context.type,ce.type)){
 			if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){ // TODO: ok?
-				sc.error(format("incompatible types for split: `%s` vs `%s",ce.type,context.type),ce.loc);
+				sc.error(format("incompatible types for split: `%s` vs `%s`",ce.type,context.type),ce.loc);
 				ce.setSemError();
+			}else foreach(i,e;[ce.e1,ce.e2]){ // (parts are converted to the types of the defined locations)
+				auto ntype=i?ntype2:ntype1,u=unwrap(e);
+				if(!ntype||!e.type||!(cast(Identifier)u||cast(IndexExp)u||cast(SliceExp)u)) continue;
+				if(!typeExplicitConversion(ntype,e.type,TypeAnnotationType.coercion)){
+					sc.error(format("incompatible types for split: `%s` vs `%s`",e.type,ntype),e.loc);
+					ce.setSemError();
+				}
 			}
 		}
 	}
@@ -3812,6 +3819,8 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	Scope.ScopeState[] states;
 	foreach(s;chain) states~=s.getStateSnapshot(true);
 	foreach(s;chain) s.isolateComponentReplacements();
+	Q!(Declaration,SemState)[] localDecls; // (errors are suppressed in the trial analysis: it must not leave declarations erroneous)
+	foreach(s;chain) if(!cast(TopScope)s) foreach(_,decl;s.rnsymtab) localDecls~=q(decl,decl.sstate);
 	sc.withTransConsumption=sc;
 	auto handler=sc.handler;
 	handler.suppress++;
@@ -3853,6 +3862,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	}
 	foreach_reverse(i,s;chain)
 		s.restoreStateSnapshot(states[i],forWithTransTrial:true);
+	foreach(d;localDecls) if(d[0].isSemError()&&d[1]!=SemState.error) d[0].sstate=d[1];
 	if(preCrepls.length){
 		SetX!Expression preWrites;
 		foreach(crepl;preCrepls)

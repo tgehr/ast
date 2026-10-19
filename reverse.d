@@ -1401,6 +1401,7 @@ Expression[] mergeCompound(Expression[] s){
 		if(auto ce=cast(CommaExp)e){
 			r~=mergeCompound([ce.e1]);
 			r~=mergeCompound([ce.e2]);
+			continue;
 		}
 		if(auto ite=cast(IteExp)e){
 			assert(!!ite.then);

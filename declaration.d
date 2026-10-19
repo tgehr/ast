@@ -586,6 +586,7 @@ class DatDecl: Declaration{
 		foreach(fparam; fparams) {
 			fparam.scope_ = fd.fscope_;
 		}
+		foreach(pid; ids) pid.scope_ = fd.fscope_;
 		fd.context=this.context;
 		fd.ret=fd.ftype.cod;
 		assert(isType(fd.ret));
