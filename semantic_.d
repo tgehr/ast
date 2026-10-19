@@ -2260,6 +2260,14 @@ Dependency getDependencyImpl(LetExp le,Scope sc){ // TODO: fix
 		result.isTop=true;
 		return result;
 	}
+	if(auto bsc=le.s.blscope_) if(auto id=cast(Identifier)le.e){ // (the result is a local of the `let`)
+		auto decl=id.meaning;
+		if(decl&&decl.scope_&&decl.scope_.isNestedIn(bsc)&&sc.consumedDepLog.getPtr(decl)){
+			result.dependencies.insert(decl);
+			Scope.substituteConsumed(result,sc.consumedDepLog);
+			return result;
+		}
+	}
 	foreach(c;le.components)
 		result.joinWith(getDependency(c,sc));
 	if(le.s.blscope_) Scope.substituteConsumed(result,sc.consumedDepLog); // (the `let`'s locals are replaced by what they depended on)
@@ -7855,7 +7863,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 						assert(creplDecl is rid.meaning);
 						if(indexReplacementAliasError(crepl,idx,sc,inType,context.constResult)){
 							static if(language==silq)
-								if(auto trial=sc.getWithTransTrial()) if(crepl.name in trial.liftedComponents) trial.rereadComponents.insert(crepl.name);
+								if(auto trial=sc.getWithTransTrial()) if(crepl.name in trial.liftedComponents)
+									if(!crepl.write.type||crepl.write.type.isClassical()||guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)) // (a quantum component that may alias is not duplicated instead)
+										trial.rereadComponents.insert(crepl.name);
 							idx.setSemError();
 							break;
 						}

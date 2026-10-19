@@ -574,23 +574,41 @@ Expression getLowering(VectorForExp vfe,ExpSemContext context){
 	auto r=expressionSemantic(tae,context);
 	return r;
 }
-Expression getLowering(AndThenExp ae,ExpSemContext context){
-	auto false_=LiteralExp.makeBoolean(false);
-	false_.loc=ae.loc;
-	false_.sstate=SemState.initial;
-	auto ne2=ae.e2;
+private Expression logicLowering(ALogicExp e,bool isOr,ExpSemContext context){ // `a&&b` is `if a then b else false`, `a||b` is `if a then true else b`
+	auto value=LiteralExp.makeBoolean(isOr);
+	value.loc=e.loc;
+	value.sstate=SemState.initial;
+	auto ne2=e.e2;
 	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context);
 	else ne2=ne2.copy();
-	return expressionSemantic(new IteExp(ae.e1,toCompound(ne2),toCompound(false_)),context);
+	auto shortCircuit=toCompound(value),evaluated=toCompound(ne2);
+	auto ite=isOr?new IteExp(e.e1,shortCircuit,evaluated):new IteExp(e.e1,evaluated,shortCircuit);
+	ite.loc=e.loc;
+	if(!e.blscope_||!e.forgetScope) return expressionSemantic(ite,context);
+	// (the branches are the scopes the right operand was analyzed in, e.g., it may consume variables)
+	auto quantumControl=e.e1.type&&!e.e1.type.isClassical();
+	shortCircuit.blscope_=e.forgetScope;
+	evaluated.blscope_=e.blscope_;
+	foreach(branch;[ite.then,ite.othw]){
+		branch.s[0]=branchSemantic(branch.s[0],expSemContext(branch.blscope_,context.constResult,context.inType),quantumControl);
+		branch.type=branch.s[0].type;
+		propErr(branch.s[0],branch);
+		propErr(branch,ite);
+		if(!branch.isSemError()) branch.setSemCompleted();
+	}
+	if(!ite.isSemError()){
+		ite.type=e.e1.type&&isEmpty(e.e1.type)?bottom:joinTypes(ite.then.type,ite.othw.type);
+		if(!ite.type) ite.setSemError();
+	}
+	ite.constLookup=context.constResult!=ConstResult.no;
+	if(!ite.isSemError()) ite.setSemCompleted();
+	return ite;
+}
+Expression getLowering(AndThenExp ae,ExpSemContext context){
+	return logicLowering(ae,false,context);
 }
 Expression getLowering(OrElseExp oe,ExpSemContext context){
-	auto true_=LiteralExp.makeBoolean(true);
-	true_.loc=oe.loc;
-	true_.sstate=SemState.initial;
-	auto ne2=oe.e2;
-	if(!cast(AssertExp)ne2) ne2=dupExp(ne2,ne2.loc,context);
-	else ne2=ne2.copy();
-	return expressionSemantic(new IteExp(oe.e1,toCompound(true_),toCompound(ne2)),context);
+	return logicLowering(oe,true,context);
 }
 
 Expression getLowering(OrExp oe,ExpSemContext context){ return makeFunctionCall(OB.mul,"__or",oe,[oe.e1,oe.e2],oe.loc,context); }

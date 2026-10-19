@@ -1758,7 +1758,7 @@ class CallExp: Expression{
 	override Expression getClassical(){
 		assert(isSemEvaluated());
 		static if(language==silq){
-			assert(isType(this), format("call not a type: %s", this));
+			assert(isType(this)||isQNumeric(this), format("call not a type: %s", this));
 			if(auto r=super.getClassical()) return r;
 			auto r=new CallExp(e,arg,isSquare,true);
 			r.type=getClassicalTy(type);
@@ -1769,7 +1769,7 @@ class CallExp: Expression{
 	override Expression getQuantum(){
 		assert(isSemEvaluated());
 		static if(language==silq){
-			assert(isType(this), format("call not a type: %s", this));
+			assert(isType(this)||isQNumeric(this), format("call not a type: %s", this));
 			if(isFixedIntTy(this)||isℤmodTy(this)){ // TODO: generalize
 				auto r=new CallExp(e,arg,isSquare,false);
 				r.type=qtypeTy;
