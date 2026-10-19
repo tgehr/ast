@@ -2846,6 +2846,27 @@ class LetExp: Expression{
 		auto ns=s.copy(args), ne=e.copy(args);
 		if(args.preserveMeanings){
 			MapSX!(Declaration,Declaration) bound;
+			void unbindDefined(Expression src,Expression cpy){ // (the copy defines its own variables)
+				if(auto id=cast(Identifier)src){
+					if(auto id2=cast(Identifier)cpy){
+						if(!id.constLookup&&!id.implicitDup&&cast(VarDecl)id.meaning){
+							bound[id.meaning]=null;
+							id2.meaning=null;
+							id2.scope_=null;
+						}
+					}
+					return;
+				}
+				if(auto tpl=cast(TupleExp)src){
+					if(auto tpl2=cast(TupleExp)cpy)
+						foreach(i,x;tpl.e) if(i<tpl2.e.length) unbindDefined(x,tpl2.e[i]);
+					return;
+				}
+				if(auto tae=cast(TypeAnnotationExp)src){
+					if(auto tae2=cast(TypeAnnotationExp)cpy) unbindDefined(tae.e,tae2.e);
+					return;
+				}
+			}
 			void pair(Expression src,Expression cpy){
 				if(auto sfd=cast(FunctionDef)src){
 					if(auto cfd=cast(FunctionDef)cpy) bound[sfd]=cfd;
@@ -2864,11 +2885,18 @@ class LetExp: Expression{
 						foreach(i,x;ce.s) if(i<ce2.s.length) pair(x,ce2.s[i]);
 					return;
 				}
+				if(auto de=cast(DefineExp)src){
+					if(auto de2=cast(DefineExp)cpy) unbindDefined(de.e1,de2.e1);
+					return;
+				}
 			}
 			foreach(i,stmt;s.s) if(i<ns.s.length) pair(stmt,ns.s[i]);
 			if(bound.length){
 				int rebind(Identifier id){
-					if(auto p = bound.getPtr(id.meaning)) id.meaning=*p;
+					if(auto p = bound.getPtr(id.meaning)){
+						id.meaning=*p;
+						if(!*p) id.scope_=null;
+					}
 					return 0;
 				}
 				import ast.substitute: statementFreeVarsImpl, computeCapturesFromBody;

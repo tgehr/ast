@@ -2430,9 +2430,11 @@ bool isLiftedImpl(CallExp ce,Scope sc){
 			return false;
 		}
 	}
-	foreach(c;ce.components)
+	foreach(c;ce.components){
+		if(c is ce.e&&c.type&&c.type.isClassical()) continue; // (e.g., the function of a lowered operator)
 		if(!isLifted(c,sc))
 			return false;
+	}
 	return true;
 }
 
