@@ -14,7 +14,7 @@ static import util;
 
 mixin template ForeignSyntax(){
 	import std.format: format;
-	import ast.foreignsyntax: adjacent, snippet, isAssignmentOperator, isStatement, isStatementStart, cannotStartOperand, conditionalSuggestion;
+	import ast.foreignsyntax: adjacent, snippet, silqType, definitionSuggestion, isAssignmentOperator, isStatement, isStatementStart, cannotStartOperand, conditionalSuggestion;
 
 	int foreignSyntaxDisabled=0; // (while parsing speculatively whether code is valid Silq syntax)
 
@@ -81,7 +81,8 @@ mixin template ForeignSyntax(){
 	Expression parseCStyleParameterType(ref Identifier name){
 		auto type=name;
 		name=parseIdentifier();
-		auto note=snippet(name)?format("use `%s: %s`",name.name,type.name):"use `x: T` for a parameter `x` of type `T`";
+		auto ty=silqType(type.name);
+		auto note=snippet(name)?format("use `%s: %s`",name.name,ty?ty:type.name):"use `x: T` for a parameter `x` of type `T`";
 		pitfall("parameter types are written after the parameter name",type.loc.to(name.loc),note,type.loc.to(name.loc));
 		return type;
 	}
@@ -303,7 +304,7 @@ mixin template ForeignSyntax(){
 			return parseFunctionDef(false);
 		}
 		bool isAssignment=ttype==Tok!"i"&&name=="set"; // e.g., `set x += 1` from Q#
-		bool isDefinition=ttype!=Tok!"i"||!!util.among(name,"var","val","mut","mutable","auto","local","my","dim","use","int","uint","float","double","bool","boolean","char","string","long","short","unsigned","qubit","Qubit");
+		bool isDefinition=ttype!=Tok!"i"||util.among(name,"var","val","mut","mutable","auto","local","my","dim","use","bool","char","string")||silqType(name);
 		if(!isDefinition&&!isAssignment) return null;
 		int skip=1;
 		if(next.type==Tok!"i"&&next.name=="mut"){ // e.g., `let mut x = 3` from Rust
@@ -320,8 +321,7 @@ mixin template ForeignSyntax(){
 		auto e=parseExpression(0,true,true);
 		string suggestion;
 		if(isAssignment) suggestion=snippet(e);
-		else if(auto ae=cast(AssignExp)e) suggestion=snippet(ae.e1)&&snippet(ae.e2)?format("%s := %s",snippet(ae.e1),snippet(ae.e2)):null;
-		else if(cast(DefineExp)e) suggestion=snippet(e);
+		else if(auto be=cast(ABinaryExp)e) if(cast(AssignExp)be||cast(DefineExp)be) suggestion=definitionSuggestion(be.e1,be.e2,silqType(name));
 		auto note=isAssignment?"assign variables without `set`":"define variables with `:=`";
 		if(suggestion.length) note=format("%s: `%s`",note,suggestion);
 		pitfall(format("unexpected `%s`",name),kw.loc,note,e.loc);
@@ -525,6 +525,55 @@ string conditionalSuggestion(Expression cond,Expression then,Expression othw){
 	auto r=format("if %s then %s else %s",snippet(cond),snippet(then),snippet(othw));
 	if(r.length>60) return "use `if c then a else b` for a conditional expression";
 	return format("use `%s` for a conditional expression",r);
+}
+
+/// the Silq type for a type named `name` in other languages, e.g., `!ℤ` for `int` and `𝔹` for `qubit`, or `null`
+/// (not for names that are also Silq types, e.g., `bool`, which is `𝔹`)
+string silqType(string name){
+	import std.algorithm: startsWith, endsWith;
+	switch(name){
+		case "int","long","short","integer","Integer","Long","BigInt","bigint": return "!ℤ";
+		case "uint","unsigned","usize","size_t","natural","Natural": return "!ℕ";
+		case "float","double","Float","Double","f32","f64","float32","float64","number","Number": return "!ℝ";
+		case "boolean","Boolean": return "!𝔹";
+		case "qubit","Qubit","QUBIT","Qbit","qbit": return "𝔹";
+		default: break;
+	}
+	auto n=name; // sized integers, e.g., `int32`, `int32_t`, `uint8`, `i32` or `u8`
+	if(n.endsWith("_t")) n=n[0..$-2];
+	bool unsigned=false;
+	if(n.startsWith("uint")) unsigned=true, n=n[4..$];
+	else if(n.startsWith("int")) n=n[3..$];
+	else if(n.startsWith("u")) unsigned=true, n=n[1..$];
+	else if(n.startsWith("i")) n=n[1..$];
+	else return null;
+	if(!util.among(n,"8","16","32","64","128","256")) return null;
+	return (unsigned?"!uint[":"!int[")~n~"]";
+}
+
+/// suggestion for a definition of `lhs` with value `rhs`, e.g., `x := 3` for `var x = 3`, or `q := 0:𝔹` for `qubit q = 0`,
+/// where `type` is the Silq type for the keyword (e.g., `𝔹` for `qubit`), if any (`null` if there is no suitable suggestion)
+string definitionSuggestion(Expression lhs,Expression rhs,string type){
+	string var;
+	if(auto tae=cast(TypeAnnotationExp)lhs){ // e.g., `let x: int = 3`
+		auto id=cast(Identifier)tae.t;
+		auto ty=id?silqType(id.name):null;
+		if(!snippet(tae.e)||!snippet(tae.t)) return null;
+		var=snippet(tae.e);
+		if(ty||!type) type=ty?ty:snippet(tae.t);
+	}else var=snippet(lhs);
+	if(!var||!snippet(rhs)) return null;
+	string value=snippet(rhs);
+	static bool isQubit(Expression e){ auto id=cast(Identifier)e; return id&&silqType(id.name)=="𝔹"; }
+	if(auto ce=cast(CallExp)rhs) if(isQubit(ce.e)&&!ce.isSquare) return format("%s := 0:𝔹",var); // e.g., `use q = Qubit();` from Q#
+	if(auto idx=cast(IndexExp)rhs) if(isQubit(idx.e)){ // e.g., `use q = Qubit[n];` from Q#
+		auto n=snippet(idx.a);
+		if(n.length>=2&&n[0]=='['&&n[$-1]==']') n=n[1..$-1]; // (the location of the index includes the brackets)
+		return n.length?format("%s := vector(%s, 0:𝔹)",var,n):null;
+	}
+	if(type&&(type=="𝔹"||type.canFind('['))) return format("%s := %s:%s",var,value,type); // (otherwise, the type of the value is likely suitable)
+	if(type&&cast(TypeAnnotationExp)lhs) return format("%s: %s := %s",var,type,value);
+	return format("%s := %s",var,value);
 }
 
 /// source code of `e` for a suggestion, or `null` if it is not suitable, e.g., missing because of a parse error, or long
