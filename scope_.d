@@ -2133,6 +2133,17 @@ abstract class Scope{
 
 	protected bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){ return true; }
 
+	protected void captureTypeDependencyImpl(Identifier id,Declaration meaning,Scope origin){}
+	final void captureTypeDependencies(Expression type){ // (e.g., the type of a `typeof` operand, whose uses of outer variables do not capture)
+		foreach(free;type.freeVars){
+			auto meaning=free.meaning;
+			if(!meaning||!meaning.scope_||meaning.isToplevelDeclaration()||!isNestedIn(meaning.scope_)) continue;
+			Scope[] chain;
+			for(Scope s=this;s&&s !is meaning.scope_;s=s.parentScope()) chain~=s;
+			foreach_reverse(s;chain) s.captureTypeDependencyImpl(free,meaning,this);
+		}
+	}
+
 	abstract FunctionDef getFunction();
 	abstract DatDecl getDatDecl();
 	final int all(T)(int delegate(T) dg){
@@ -2804,6 +2815,9 @@ class CapturingScope(T): NestedScope{
 		super(parent);
 		this.decl=decl;
 		typeofOperand=0; // (a closure within a `typeof` operand captures as usual)
+	}
+	protected override void captureTypeDependencyImpl(Identifier id,Declaration meaning,Scope origin){
+		if(!typeofOperand) addCapture(id,meaning,Lookup.constant,origin);
 	}
 	protected Declaration addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
 		if(kind==Lookup.probing) return null;

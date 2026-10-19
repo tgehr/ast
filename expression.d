@@ -3033,6 +3033,19 @@ class LetExp: Expression{
 		return cur.length?e.substitute(cur):e.eval();
 	}
 	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
+	override Expression getClassical(){
+		if(auto r=super.getClassical()) return r;
+		static if(language==silq){
+			assert(isType(this)||isQNumeric(this), format("let not a type: `%s`", this));
+			auto ne=e.eval().getClassical();
+			if(!ne) return null;
+			auto r=new LetExp(s,ne);
+			r.loc=loc;
+			r.type=getClassicalTy(type);
+			r.setSemEvaluated();
+			return r;
+		}else return this;
+	}
 
 	// semantic information
 	bool forgetPatternVars=false;
@@ -3384,9 +3397,14 @@ class ForgetExp: Expression{
 	override string toString(){ return _brk("forget("~var.toString()~(val?"="~val.toString():"")~")"); }
 
 	override Expression evalImpl(){
+		if(!val) return this;
 		auto nval=val.eval();
 		if(nval is val) return this;
 		return new ForgetExp(var,nval);
+	}
+	override Annotation getAnnotation(){ // (forgetting a classical value has no effect)
+		if(!var.type||!var.type.isClassical()) return Annotation.none;
+		return val?min(pure_,val.getAnnotation()):pure_;
 	}
 	mixin VariableFree; // TODO
 	override int componentsImpl(scope int delegate(Expression) dg){

@@ -1106,7 +1106,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		collectNondeterministicSubexpressions(ite.cond,nondeterministic);
 		IdMapSX!(Expression,bool) sharedNodes;
 		foreach(e;nondeterministic) sharedNodes[e]=true;
-		if(hasLetScope(ite.cond)){ // (the local declarations and scopes of a `let` expression cannot be shared with the entry condition)
+		void reanalyzeCondForget(){
 			Expression.CopyArgs cargs;
 			cargs.mapExp=(Expression e,ref Expression.CopyArgs args)=>e in sharedNodes?e:null;
 			auto condForget=ite.cond.copy(cargs);
@@ -1114,7 +1114,11 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 			sc.clearConsumed();
 			propErr(condForget,ite);
 			ite.condForget=condForget;
+		}
+		if(hasLetScope(ite.cond)){ // (the local declarations and scopes of a `let` expression cannot be shared with the entry condition)
+			reanalyzeCondForget();
 		}else{
+			bool typeChanged=false;
 			Expression.CopyArgs cargs={preserveSemantic:true};
 			cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
 				// nondeterministic subexpressions are shared with the entry condition;
@@ -1126,6 +1130,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 					nid.loc=id.loc;
 					if(auto meaning=sc.peekSymtab(id.meaning.getId,true)){
 						if(meaning!is id.meaning&&!cast(DeadDecl)meaning){
+							if(typeForDecl(meaning)!=typeForDecl(id.meaning)) typeChanged=true;
 							nid.meaning=meaning;
 							nid.type=nid.typeFromMeaning;
 							nid.scope_=sc;
@@ -1139,6 +1144,10 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 				return null;
 			};
 			ite.condForget=ite.cond.copy(cargs);
+			if(typeChanged){ // (e.g., the branches made a component of a borrowed aggregate quantum, so types within the copy would be stale)
+				redefined=[];
+				reanalyzeCondForget();
+			}
 		}
 	}
 	static if(language==silq) if(trackGuard&&!guardDeps.isTop){
@@ -3696,6 +3705,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 			MapX!(Declaration,Declaration) replacements;
 			void replaceMeaning(Expression e){
 				if(auto id=cast(Identifier)e){
+					if(!id.meaning) return; // (e.g., an unnested component replacement is analyzed when it is written back)
 					auto prev=id.meaning;
 					auto new_=replacements.get(prev,prev);
 					id.meaning=new_;
@@ -3705,6 +3715,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 					return;
 				}
 				if(auto idx=cast(IndexExp)e){
+					if(auto rid=getIdFromIndex(idx)) if(!rid.meaning) return;
 					replaceMeaning(idx.e);
 					propErr(idx.e,e);
 					propErr(idx.a,e);
@@ -7598,7 +7609,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		}else if(sc&&!id.isSemError()) sc.recordAccess(id,id.meaning);
 		if(!id.meaning){
 			if(auto r=builtIn(id,sc)){
-				if(context.constResult!=ConstResult.called&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show")){
+				if(context.constResult!=ConstResult.called&&util.among(id.name,"Expectation","Marginal","sampleFrom","__query","__show","__qabort","__dummy","move")){
 					sc.error("special operator must be called directly",id.loc);
 					id.setSemForceError();
 					return id;
@@ -9241,6 +9252,11 @@ Expression expressionSemanticImpl(WildcardExp we,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
+	auto r=typeofOperandSemantic(ty,context);
+	if(r !is ty) context.sc.captureTypeDependencies(r); // (as if the resulting type was written explicitly)
+	return r;
+}
+private Expression typeofOperandSemantic(TypeofExp ty,ExpSemContext context){
 	auto sc=context.sc;
 	auto scopeState=sc.getStateSnapshot(true);
 	scope(exit) sc.restoreStateSnapshot(scopeState);

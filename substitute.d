@@ -64,6 +64,12 @@ Expression transitionToType(Expression e,Scope target){
 		if(rs){
 			auto ts=tt.mapScope(rs);
 			twin.scope_=ts;
+			if(auto prev=ts.peekSymtab(twin.getId,true)){ // (e.g., the twins of a variable and of its redefinition)
+				if(!cast(DeadDecl)prev){
+					if(rs.peekSymtab(orig.getId,true) !is orig) continue;
+					ts.symtabRemove(prev);
+				}
+			}
 			ts.symtabInsert(twin);
 			if(auto fdt=cast(FunctionDef)twin)
 				if(fdt.fscope_){ if(!ts.origin) ts.origin=rs; fdt.fscope_.parent=ts; }
@@ -541,6 +547,7 @@ private Expression substLhs(Identifier id,ref BlockSubst ctx){
 		nv.setConstLookup(id.constLookup);
 		nv.byRef=id.byRef;
 		ctx.changed=true;
+		if(id.classical) if(auto c=nv.eval().getClassical()) return c; // (e.g., the classical version of a type in the result of a `let` expression)
 		return nv;
 	}
 	return id;
@@ -900,7 +907,7 @@ CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 			void walk(Expression stmt){
 				if(auto de=cast(DefineExp)stmt){
 					defineLhsBoundVarsImpl(de.e1,(id){
-						if(id.meaning&&!id.meaning.splitFrom) r~=id.meaning;
+						if(id.meaning&&!id.meaning.splitFrom&&!cast(DeadDecl)ce.blscope_.peekSymtab(id.meaning.getId,true)) r~=id.meaning; // (e.g., variables explicitly forgotten within the block are not forgotten again)
 						return 0;
 					});
 					return;
