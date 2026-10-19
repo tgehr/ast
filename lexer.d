@@ -908,6 +908,14 @@ private:
 					res[0].name = s[0..p-s];
 					res[0].type=isKeyword(res[0].name);
 					break;
+				case '#':{ // (e.g., a comment in Python: then the rest of the line is skipped)
+					auto q=begin;
+					while(q>source.code.ptr&&(q[-1]==' '||q[-1]=='\t')) q--;
+					if(!(q==source.code.ptr||q[-1]=='\n'||q[-1]=='\r'||among(*p,' ','\t','!','\n','\r','\0'))) goto default; // (likely not a comment)
+					errors~=tokError("unsupported character '#'",begin[0..1]);
+					while(((*p!='\n') & (*p!='\r')) & ((*p!=0) & (*p!=0x1A))) mixin(skipUnicodeCont);
+					continue;
+				}
 				default:
 					p--; invCharSeq(); p++;
 					continue;

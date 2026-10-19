@@ -176,6 +176,8 @@ class VarDecl: Declaration{
 	Expression vtype;
 	Expression initializer;
 	DefineExp definition;
+	Expression typeSource; // (for diagnostics) the loop or assignment that determines the type of the variable, e.g., `x = n/2`
+	bool explicitType; // (for diagnostics) whether the type of the variable is annotated in its definition, e.g., `q:=1/2:!ℚ`
 	Identifier outOfScopeCause;
 	bool replaceType;
 	Identifier outOfScopeDup;

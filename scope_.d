@@ -2547,6 +2547,7 @@ class TopScope: Scope{
 		// TODO: store a location for better error messages
 		// TODO: allow symbol lookup by full path
 	}
+	final Scope[] importedScopes(){ return imports; }
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=super.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)) return decl;
 		if(lookupImports){

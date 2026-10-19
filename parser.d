@@ -7,6 +7,7 @@ import std.array, std.typetuple, std.algorithm, std.conv;
 import std.traits: EnumMembers;
 import util.tuple: Q=Tuple,q=tuple;
 import util: MapX, MapSX;
+import ast.foreignsyntax: ForeignSyntax;
 import ast.lexer, ast.error, ast.expression, ast.type, ast.declaration, util;
 // (re-purposed D parser, a little bit messy for now.)
 
@@ -225,6 +226,7 @@ struct Parser{
 	Code code;
 	ErrorHandler handler;
 	int muteerr=0;
+	int mutedErrors=0; // (number of errors during speculative parses)
 	bool displayExpectErr = true;
 	this(Code code, ErrorHandler handler){
 		this.code = code;
@@ -242,21 +244,26 @@ struct Parser{
 		if(!code.errors.length || muteerr) return;
 		while(code.errors.length&&code.errors[0].loc.rep.ptr<tok.loc.rep.ptr){
 			// a lexer error amidst expect errors is likely to be uninteresting
-			if(displayExpectErr) handler.error(code.errors[0].str,code.errors[0].loc);
+			if(displayExpectErr){
+				handler.error(code.errors[0].str,code.errors[0].loc);
+				noteLexerError(code.errors[0]);
+			}
 			code.errors.popFront();
 		}
 	}
 	void error(string err, Location loc=Location.init){
-		if(muteerr) return; // speculative parse
+		if(muteerr){ mutedErrors++; return; } // speculative parse
 		if(code.errors.length&&code.errors[0].loc.rep.ptr==loc.rep.ptr) return; // don't re-report lexer errors
 		if(!loc.line) loc=tok.loc;
 		handler.error(err,loc);
 	}
-	static struct SavedState{ Anchor anchor; bool displayExpectErr; }
-	auto saveState(){muteerr++; return SavedState(code.pushAnchor(),displayExpectErr);} // saves the state and mutes all error messages until the state is restored
+	mixin ForeignSyntax; // (diagnostics for syntax from other languages)
+	static struct SavedState{ Anchor anchor; bool displayExpectErr; int mutedErrors; }
+	auto saveState(){muteerr++; return SavedState(code.pushAnchor(),displayExpectErr,mutedErrors);} // saves the state and mutes all error messages until the state is restored
 	void restoreState(SavedState state){
 		muteerr--; code.popAnchor(state.anchor);
 		displayExpectErr=state.displayExpectErr;
+		mutedErrors=state.mutedErrors;
 		ttype=tok.type;
 	}
 	void commitState(SavedState state){
@@ -319,11 +326,14 @@ struct Parser{
 		auto tt=peek().type;
 		if(tt!=Tok!"i"&&tt==type){
 			error("stray \""~tok.toString()~"\" in program",tok.loc);
+			noteStrayToken(); // e.g., `1j` from Python
 			nextToken(); nextToken();
 			return;
 		}
-		if(rd||ttype==Tok!"__error") error("expected \""~TokenTypeToString(type)~"\"",loc);
-		else error("found \"" ~ tok.toString() ~ "\" when expecting \"" ~ TokenTypeToString(type) ~"\"",loc);
+		if(rd||ttype==Tok!"__error"){
+			error("expected \""~TokenTypeToString(type)~"\"",loc);
+			if(rd) noteCommentedOperation(loc); // e.g., `n // 2` from Python
+		}else error("found \"" ~ tok.toString() ~ "\" when expecting \"" ~ TokenTypeToString(type) ~"\"",loc);
 		if(type!=Tok!";" && type!=Tok!"}"){
 			while(ttype != Tok!";" && ttype != Tok!"}" && ttype != Tok!"EOF") nextToken();
 			if(ttype == Tok!";") nextToken();
@@ -372,7 +382,8 @@ struct Parser{
 		if(ttype==Tok!":"){
 			nextToken();
 			t=parseType();
-		}
+		}else if(isCStyleParameter()) t=parseCStyleParameterType(i); // e.g., `int x` from C
+		skipDefaultValue(i); // e.g., `n=3` from Python
 		return res=New!Parameter(isConst,i,t);
 	}
 
@@ -532,7 +543,12 @@ struct Parser{
 		mixin(SetLoc!Expression);
 		Token t; // DMD 2.072.1: hoisted to satisfy buggy deprecation code
 		switch(ttype){
-			case Tok!"i": return parseIdentifier();
+			case Tok!"i":
+				if(isPrefixNot()) return res=parsePrefixNot(); // e.g., `not a` from Python
+				return parseIdentifier();
+			case Tok!"++",Tok!"--":
+				if(isPrefixIncrement()) return res=parsePrefixIncrement(); // e.g., `++x` from C
+				goto default;
 			case Tok!"*",Tok!"⊥",Tok!"⊤":{
 				res=New!Identifier(TokenTypeToString(ttype));
 				nextToken();
@@ -722,6 +738,7 @@ struct Parser{
 			case Tok!"[":
 				auto iloc=tok.loc;
 				nextToken();
+				if(isPythonSlice()) return res=parsePythonSlice(left,iloc); // e.g., `x[:3]`
 				if(ttype==Tok!"]"){
 					iloc=iloc.to(tok.loc);
 					auto empty=New!TupleExp(Expression[].init);
@@ -752,7 +769,7 @@ struct Parser{
 					nextToken();
 					auto f=parseIdentifier();
 					r=new FieldExp(r,f);
-					r.loc=loc.to(tok.loc);
+					r.loc=loc.to(ptok.loc);
 				}
 				return r;
 			case Tok!":",Tok!"as",Tok!"coerce",Tok!"pun":{
@@ -814,7 +831,12 @@ struct Parser{
 				nextToken();
 				auto right=parseExpression(rbp!(Tok!"=="),false);
 				return res=New!(BinaryExp!(Tok!"="))(left,right);
-			case Tok!"*": goto case Tok!"·";
+			case Tok!"*":
+				if(isPythonPower()) return res=parsePythonPower(left); // e.g., `2**3`
+				goto case Tok!"·";
+			case Tok!"?":
+				if(isTernary()) return res=parseTernary(left); // e.g., `c ? a : b` from C
+				goto default;
 			case Tok!"*=",Tok!"·=": goto case Tok!"·←";
 			case Tok!"<=": goto case Tok!"≤";
 			case Tok!"!<=": goto case Tok!"!≤";
@@ -939,6 +961,7 @@ struct Parser{
 			try left = led(left,statement); catch(PEE err){error(err.msg);}
 			if(rbp<arrLbp[ttype]) goto loop;
 		}
+		if(isPythonConditional()) left=parsePythonConditional(left); // e.g., `a if c else b`
 		return left;
 	}
 	T parseCompoundExp(T=CompoundExp)(){
@@ -946,7 +969,8 @@ struct Parser{
 		expect(Tok!"{");
 		auto s=appender!(Expression[])();
 		while(ttype!=Tok!"}" && ttype!=Tok!"EOF"){
-			auto e=parseExpression(0,true,true);
+			auto e=tryParseForeignStatement(); // e.g., `var x = 3;`
+			if(!e) e=parseExpression(0,true,true);
 			s.put(e);
 			if(!e.isCompound()&&ttype!=Tok!"}"||ttype==Tok!";")
 			   expect(Tok!";");
@@ -960,11 +984,12 @@ struct Parser{
 		expect(Tok!"}");
 		return res=New!T(s.data);
 	}
-	FunctionDef parseFunctionDef(bool lambda=false,bool semicolon=!lambda)(){
+	FunctionDef parseFunctionDef(bool lambda=false,bool semicolon=!lambda)(bool expectDef=true){
 		mixin(SetLoc!FunctionDef);
 		static if(!lambda){
-			expect(Tok!"def");
+			if(expectDef) expect(Tok!"def"); // (not for `fn f(x){ … }`, see `tryParseForeignStatement`)
 			auto name=parseIdentifier();
+			skipAngleBracketParameters(name); // e.g., `def f<T>(x: T)` from C++ or Rust
 		}else Identifier name=null; // TODO
 		bool isSquare=false;
 		auto paramLoc=tok.loc;
@@ -1031,10 +1056,12 @@ struct Parser{
 			}
 		}
 		Expression ret=null;
+		static if(!lambda) skipPythonFunctionBodyColon(name,paramLoc); // e.g., `def f(x):`
 		if(ttype==Tok!":"){
 			nextToken();
 			ret=parseType();
 		}
+		static if(!lambda) skipArrowReturnType(params[0]); // e.g., `def f(x) -> 𝔹`
 		CompoundExp body_;
 		if(ttype==Tok!";"){
 			nextToken();
@@ -1170,10 +1197,11 @@ struct Parser{
 		}
 		return parseExpression();
 	}
-	IteExp parseIte(){
+	IteExp parseIte(bool foreignKeyword=false){
 		mixin(SetLoc!IteExp);
-		expect(Tok!"if");
-		auto cond=parseCondition();
+		if(foreignKeyword) nextToken(); // (e.g., `elif`, see `parseElif`)
+		else expect(Tok!"if");
+		auto cond=isPythonBlockHeader()?parsePythonBlockHeader("if"):parseCondition(); // e.g., `if c:`
 		CompoundExp then,othw=null;
 		if(ttype==Tok!"then"){
 			nextToken();
@@ -1188,12 +1216,13 @@ struct Parser{
 			then=parseCompoundExp();
 			if(ttype == Tok!"else"){
 				nextToken();
+				skipPythonElseColon(); // e.g., `else:`
 				if(ttype==Tok!"if"){
 					Expression o=parseIte();
 					othw=New!CompoundExp([o]);
 					othw.loc=o.loc;
 				}else othw=parseCompoundExp();
-			}
+			}else if(isElif()) othw=parseElif(); // e.g., `elif c { … }` from Python
 		}
 		return res=New!IteExp(cond,then,othw);
 	}
@@ -1232,14 +1261,16 @@ struct Parser{
 	WhileExp parseWhile(){
 		mixin(SetLoc!WhileExp);
 		expect(Tok!"while");
-		auto num=parseCondition();
+		auto num=isPythonBlockHeader()?parsePythonBlockHeader("while"):parseCondition(); // e.g., `while c:`
 		auto bdy=parseCompoundExp();
 		return res=New!WhileExp(num,bdy);
 	}
 
 	ForExp parseForNoBody(){
 		mixin(SetLoc!ForExp);
+		auto pythonHeader=isPythonForHeader(); // e.g., `for i in range(n):`
 		expect(Tok!"for");
+		if(isCStyleFor()) return res=parseCStyleFor(begin); // e.g., `for(i:=0;i<n;i+=1)`
 		auto pattern=parseExpression();
 		Identifier var=null;
 		if(auto id=cast(Identifier)pattern){
@@ -1247,6 +1278,7 @@ struct Parser{
 			pattern=null;
 		}
 		expect(Tok!"in");
+		if(pythonHeader) return res=parsePythonForHeader(var,pattern);
 		bool leftExclusive=false,rightExclusive=false;
 		bool hasLeft=false;
 		Expression first=null;
@@ -1304,6 +1336,7 @@ struct Parser{
 	AssertExp parseAssert(){
 		mixin(SetLoc!AssertExp);
 		expect(Tok!"assert");
+		if(isUnparenthesizedAssert()) return res=parseUnparenthesizedAssert(); // e.g., `assert x == 1` from Python
 		expect(Tok!"(");
 		auto exp=parseExpression();
 		expect(Tok!")");
@@ -1380,7 +1413,8 @@ Expression[] parseSource(Source source, ErrorHandler handler){
 	auto p=Parser(lex(source),handler);
 	auto s=appender!(Expression[])();
 	while(p.ttype!=Tok!"EOF"){
-		auto e=p.parseExpression();
+		auto e=p.tryParseForeignStatement(); // e.g., `fn main(){ … }`
+		if(!e) e=p.parseExpression();
 		if(!e.isCompound()) p.expect(Tok!";");
 		s.put(e);
 	}
