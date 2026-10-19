@@ -544,7 +544,7 @@ class TupleTy: Type,ITupleTy{
 			if(auto rvec=cast(VectorTy)r)
 				rarr=arrayTy(rvec.next);
 			if(rtup&&!meet){
-				if(auto next=chain(ltup.types,ltup.types).fold!((a,b)=>combineTypes(a,b,meet))(cast(Expression)bottom))
+				if(auto next=chain(ltup.types,iota(rtup.length).map!(i=>rtup[i])).fold!((a,b)=>combineTypes(a,b,meet))(cast(Expression)bottom))
 					rarr=arrayTy(next);
 			}
 		}

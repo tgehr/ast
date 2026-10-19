@@ -1021,7 +1021,7 @@ class Identifier: Expression{
 	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
 		if(id !in subst) return this;
 		if(tt&&tt.localRoot&&meaning&&meaning.scope_&&meaning.scope_.isNestedIn(tt.localRoot)&&!cast(FunctionDef)meaning) return this;
-		assert(constLookup || implicitDup, format("consume in eval() expression: %s", this));
+		assert(constLookup || implicitDup || type&&type.isClassical(), format("consume in eval() expression: %s", this)); // (a classical value can be consumed by each use)
 		auto result=subst[id];
 		assert(result.isSemCompleted());
 		static if(language==silq){
@@ -2287,7 +2287,7 @@ class WithExp: Expression{
 	}
 	override WithExp copyImpl(CopyArgs args){
 		auto r=new WithExp(trans.copy(args),bdy.copy(args),isIndices);
-		if(isIndices&&itrans) r.itrans=itrans.copy(args);
+		if(itrans&&(isIndices||args.preserveSemantic)) r.itrans=itrans.copy(args); // (e.g., a function in a type is copied with its analyzed body)
 		return r;
 	}
 	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()~(itrans?" /+"~itrans.toString()~"+/":"")); }
@@ -2295,10 +2295,18 @@ class WithExp: Expression{
 	override bool isCompound(){ return true; }
 
 	override Expression evalImpl(){ return this; }
+	override Annotation getAnnotation(){
+		if(!itrans) return Annotation.none;
+		return min(trans.getAnnotation(),bdy.getAnnotation(),itrans.getAnnotation());
+	}
 	mixin VariableFree; // TODO
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(trans)) return r;
 		return dg(bdy);
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){ // (e.g., within a function that is part of a type)
+		auto r=cast(WithExp)rhs;
+		return r&&isIndices==r.isIndices&&isEqual(trans,r.trans,&ctx)&&isEqual(bdy,r.bdy,&ctx);
 	}
 	// semantic information
 	CompoundExp itrans; // inverse transform
@@ -2631,6 +2639,7 @@ class CompoundExp: Expression{
 	override CompoundExp copyImpl(CopyArgs args){
 		auto r=new CompoundExp(s.map!(e=>e.copy(args)).array);
 		if(args.mapScope) r.blscope_=cast(BlockScope)args.mapScope(blscope_);
+		static if(language==silq) if(args.preserveSemantic) r.loweredFrom=loweredFrom;
 		return r;
 	}
 
@@ -2663,6 +2672,7 @@ class CompoundExp: Expression{
 
 	// semantic information
 	BlockScope blscope_;
+	static if(language==silq) Expression loweredFrom; // (the analyzed loop that this block lowers, see `lowerLoop`)
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(x;s) if(auto r=x.freeVarsImpl(dg)) return r;
@@ -2984,53 +2994,123 @@ class LetExp: Expression{
 	}
 	override Expression evalImpl(){
 		if(auto fwd=isForward()) return fwd;
-		Expression[] flat;
-		bool flatten(Expression[] ss){
-			foreach(x;ss){
-				if(auto ce=cast(CompoundExp)x){
-					if(ce.blscope_) return false;
-					if(!flatten(ce.s)) return false;
-					continue;
-				}
-				flat~=x;
-			}
-			return true;
-		}
-		if(!flatten(s.s)) return this;
-		alias stmts=flat;
-		foreach(stmt;stmts){
-			auto de=cast(DefineExp)stmt;
-			if(!de) return this;
-			if(!cast(Identifier)de.e1) return this;
-			if(!de.e2.type||!de.e2.type.isClassical()) return this;
-			if(de.e2.getAnnotation()<pure_) return this;
-			if(!de.e2.isSemCompleted()||de.e2.isSemError()) return this;
-		}
+		// (classical definitions are substituted by name: a use whose name is bound must refer to a declaration of the
+		// `let`, as the name refers to an enclosing declaration again once the binding is consumed)
+		SetX!Declaration letDecls;
 		SetX!Id bound;
-		foreach(stmt;stmts) bound[(cast(Identifier)(cast(DefineExp)stmt).e1).id]=[];
+		void collect(Expression[] ss){
+			void lhs(Expression x){
+				if(auto tpl=cast(TupleExp)x){
+					foreach(y;tpl.e) lhs(y);
+					return;
+				}
+				if(auto id=cast(Identifier)x){
+					if(id.meaning) letDecls.insert(id.meaning);
+					bound.insert(id.id);
+				}
+			}
+			foreach(x;ss){
+				if(auto ce=cast(CompoundExp)x) collect(ce.s);
+				else if(auto de=cast(DefineExp)x) lhs(de.e1);
+				else static if(language==silq) if(auto we=cast(WithExp)x){
+					collect(we.trans.s);
+					collect(we.bdy.s);
+					if(we.itrans) collect(we.itrans.s);
+				}
+			}
+		}
+		collect(s.s);
 		if(type){
 			bool bad=false;
 			type.freeVarsImpl((id){ if(id.id in bound){ bad=true; return 1; } return 0; });
 			if(bad) return this;
 		}
-		bool okUses(Expression x){
+		MapSX!(Id,Expression) cur;
+		bool isLetDecl(Declaration d){
+			if(d in letDecls) return true;
+			if(d.splitFrom&&isLetDecl(d.splitFrom)) return true;
+			return d.mergedFrom.length&&d.mergedFrom.all!(m=>isLetDecl(m)); // (e.g., defined in the body of a `with`)
+		}
+		bool refersToLet(Expression x){
 			bool ok=true;
 			x.freeVarsImpl((id){
-				if(id.id in bound&&!(id.constLookup||id.implicitDup)){ ok=false; return 1; }
+				if(id.id in cur&&!(id.meaning&&isLetDecl(id.meaning))){ ok=false; return 1; }
 				return 0;
 			});
 			return ok;
 		}
-		foreach(stmt;stmts) if(!okUses((cast(DefineExp)stmt).e2)) return this;
-		if(!okUses(e)) return this;
-		MapSX!(Id,Expression) cur;
-		foreach(stmt;stmts){
-			auto de=cast(DefineExp)stmt;
-			auto id=cast(Identifier)de.e1;
-			auto rhs=cur.length?de.e2.substitute(cur):de.e2.eval();
-			cur[id.id]=rhs;
+		bool run(Expression[] ss){
+			foreach(x;ss){
+				if(auto ce=cast(CompoundExp)x){
+					if(ce.blscope_||!run(ce.s)) return false;
+					continue;
+				}
+				if(auto de=cast(DefineExp)x){
+					if(!de.e2.type||!de.e2.type.isClassical()) return false;
+					if(de.e2.getAnnotation()<pure_) return false;
+					if(!de.e2.isSemCompleted()||de.e2.isSemError()) return false;
+					if(!refersToLet(de.e2)) return false;
+					auto rhs=cur.length?de.e2.substitute(cur):de.e2.eval();
+					if(auto id=cast(Identifier)de.e1){
+						cur[id.id]=rhs;
+						continue;
+					}
+					auto tpl=cast(TupleExp)de.e1,val=cast(TupleExp)rhs;
+					if(!tpl||!val||tpl.length!=val.length) return false;
+					foreach(i,y;tpl.e){
+						auto id=cast(Identifier)y;
+						if(!id) return false;
+						cur[id.id]=val.e[i];
+					}
+					continue;
+				}
+				if(auto fe=cast(ForgetExp)x){ // (forgetting a classical variable does not affect values)
+					bool forget(Expression y){
+						if(auto tpl=cast(TupleExp)y) return tpl.e.all!forget;
+						auto id=cast(Identifier)y;
+						if(!id||id.id !in cur||!id.meaning||!isLetDecl(id.meaning)) return false;
+						cur.remove(id.id);
+						return true;
+					}
+					if(!fe.var.type||!fe.var.type.isClassical()||!forget(fe.var)) return false;
+					continue;
+				}
+				static if(language==silq) if(auto we=cast(WithExp)x){ // (the inverse of the transformation restores the variables it changes)
+					if(we.isIndices) return false;
+					auto before=cur.dup;
+					SetX!Id changed;
+					bool ok=true;
+					void names(Expression[] ts){
+						void add(Expression y){
+							if(auto tpl=cast(TupleExp)y){
+								foreach(z;tpl.e) add(z);
+								return;
+							}
+							if(auto id=cast(Identifier)y) changed.insert(id.id);
+							else ok=false;
+						}
+						foreach(t;ts){
+							if(auto ce=cast(CompoundExp)t) names(ce.s);
+							else if(auto de=cast(DefineExp)t) add(de.e1);
+							else if(auto fe=cast(ForgetExp)t) add(fe.var);
+						}
+					}
+					names(we.trans.s);
+					if(!ok||!run(we.trans.s)||!run(we.bdy.s)) return false;
+					foreach(n;changed){
+						if(auto v=before.getPtr(n)) cur[n]=*v;
+						else cur.remove(n);
+					}
+					continue;
+				}
+				return false;
+			}
+			return true;
 		}
-		return cur.length?e.substitute(cur):e.eval();
+		if(!run(s.s)||!refersToLet(e)) return this;
+		auto r=cur.length?e.substitute(cur):e.eval();
+		if(type&&r.type&&!isSubtype(r.type,type)) return this;
+		return r;
 	}
 	override Annotation getAnnotation(){ return min(s.getAnnotation(),e.getAnnotation()); }
 	override Expression getClassical(){

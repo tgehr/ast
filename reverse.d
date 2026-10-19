@@ -1343,7 +1343,10 @@ ComputationClass classifyExpression(Expression e){
 ComputationClass classifyStatement(Expression e){
 	with(ComputationClass){
 		if(auto ce=cast(CallExp)e) return ComputationClass.quantum; // ok?
-		if(auto ce=cast(CompoundExp)e) assert(0);
+		if(auto ce=cast(CompoundExp)e){
+			static if(language==silq) if(ce.loweredFrom) return classifyStatement(ce.loweredFrom);
+			assert(0);
+		}
 		if(auto ite=cast(IteExp)e){
 			if(!ite.cond.type.isClassical()) return ComputationClass.quantum;
 			//return chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement.reduce!join(classical); // ???
@@ -1426,6 +1429,11 @@ Expression[] mergeCompound(Expression[] s){
 	Expression[] r;
 	foreach(e;s){
 		if(auto ce=cast(CompoundExp)e){
+			static if(language==silq) if(ce.loweredFrom){ // (a lowered loop is reversed as the loop)
+				mergeCompound([ce.loweredFrom]);
+				r~=ce;
+				continue;
+			}
 			assert(!ce.blscope_);
 			r~=mergeCompound(ce.s);
 			continue;
@@ -1519,6 +1527,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked,noImplicitDup,defer);
 	}
 	if(auto ce=cast(CompoundExp)e){
+		static if(language==silq) if(ce.loweredFrom) return reverseStatement(ce.loweredFrom,sc,unchecked,noImplicitDup,hoistClassical,defer);
 		auto hoist=hoistClassical||ce.blscope_&&!ce.isSemError(); // (classical locals of a nested block are recomputed in its reversal)
 		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer));
 		res.loc=ce.loc;

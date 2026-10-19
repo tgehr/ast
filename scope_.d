@@ -1654,7 +1654,11 @@ abstract class Scope{
 		if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 		if(decl.isToplevelDeclaration()) return true;
 		assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
-		if(!dependencyTracked(decl)) addDefaultDependency(decl); // TODO: ideally can be removed
+		if(!dependencyTracked(decl)){
+			if(decl.scope_&&decl.scope_.getFunction() !is getFunction()) // (a declaration of an enclosing function is tracked through its capture)
+				return !forceHere&&lastUses.canForget(decl,true,false)||!getDefaultDependency(decl).isTop;
+			addDefaultDependency(decl); // TODO: ideally can be removed
+		}
 		return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
 	}
 	final bool canRecompute(Declaration decl){
@@ -1677,7 +1681,15 @@ abstract class Scope{
 		if(cast(DeadDecl)decl) return true;
 		static if(is(T==ReturnExp)) auto earlyReturn=cause;
 		else ReturnExp earlyReturn=null;
-		if(lastUses.canForget(decl,true,false,earlyReturn)){
+		bool atLoopGuard(){ // (a classical variable stays available on the path that exits the loop)
+			import ast.semantic_:typeForDecl;
+			auto type=typeForDecl(decl);
+			if(!type||!type.isClassical()) return false;
+			for(auto lu=lastUses.get(decl,true);lu;lu=lu.forwardTo?lu.forwardTo:lu.splitFrom)
+				if(lu.loopGuard) return true;
+			return false;
+		}
+		if(lastUses.canForget(decl,true,false,earlyReturn)&&!(earlyReturn&&atLoopGuard())){
 			lastUses.forget(decl,false,earlyReturn);
 			return true;
 		}
@@ -2976,6 +2988,8 @@ class CapturingScope(T): NestedScope{
 					}
 				}
 				replace(this);
+				if(meaning) foreach(cid;decl.captures.get(pmeaning,null)) // (e.g., earlier constant captures, renamed when an enclosing function consumed its own capture)
+					if(cid !is id&&cid.meaning is pmeaning) cid.meaning=meaning;
 			}
 			if(!id.isSemError()){
 				static if(is(T==FunctionDef)){

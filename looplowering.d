@@ -3557,6 +3557,11 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
+	auto r=lowerLoopImpl(loop,state,sc,flags);
+	static if(language==silq) if(auto ce=cast(CompoundExp)r) if(!containsReturn(loop.bdy)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+	return r;
+}
+private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
 	if(auto r=sliceLoop(loop,state,sc,flags)) return r;
 	if(auto r=splitLoop(loop,state,sc,flags)) return r;
 	enum returnOnlyMoved=false; // (experimental)
@@ -3584,8 +3589,7 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	Expression[] continuation=null;
 	bool dropUnreachable=false; // code after an infinite loop
 	static if(language==silq){
-		static if(is(T==WhileExp)) bool contInfinite=isTrue(loop.cond);
-		else enum contInfinite=false;
+		bool contInfinite=isEmpty(loop); // (the loop does not exit normally, e.g., `repeat 2 { return 1; }`)
 		if(!contInfinite&&containsReturn(loop.bdy))
 			continuation=sc.loopContinuation.take(loop);
 		else if(contInfinite)
@@ -3710,10 +3714,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		constParamDef=new DefineExp(constTpl,constTmpTpl);
 		constParamDef.loc=loop.loc;
 	}
-	bool isInfinite=false;
+	bool isInfinite=isEmpty(loop);
 	bool isCertainReturn=definitelyReturns(loop.bdy);
 	static if(is(T==WhileExp)){
-		isInfinite=isTrue(loop.cond);
 		auto ncond=loop.cond.copy(cargsDefault);
 	}else static if(is(T==ForExp)){
 		//writeln("?? ",constParams);
@@ -4049,6 +4052,13 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		auto defTpl=new TupleExp(cast(Expression[])chain(resultConstTmpNames.map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
+	foreach(arg;paramTpl2.e[$-movedParams.length..$]){ // (a moved variable that is not available after the loop is consumed by it, e.g., by the final evaluation of the condition)
+		auto id=cast(Identifier)arg;
+		if(!id||defTpl.e.any!(d=>(cast(Identifier)d)&&(cast(Identifier)d).id==id.id)) continue;
+		id.moved=true;
+		static if(is(T==WhileExp)) id.loc=loop.cond.loc;
+		else id.loc=loop.loc;
+	}
 	Expression[] stmts=[fd];
 	void defineLocals(ref Expression[] stmts,Expression locals){
 		auto def=new DefineExp(defTpl,locals);
@@ -4285,6 +4295,7 @@ struct ERPReturn{
 }
 ERPReturn[size_t] erpReturns;
 SetX!Id[size_t] erpForgettableAtReturn; // quantum variables that can be forgotten before the returned expression is evaluated
+SetX!Id[size_t] erpConsumedBeforeReturn; // variables consumed before a `return`, unless the explicit exits keep them (see `erpLoopExplicit`)
 // For a long-running host (the language server): drop the early-return elimination state of
 // previous checks. `erpNextId` keeps counting, so ids stay unique among nodes that survive a check.
 void clearLoopLoweringState(){
@@ -4294,6 +4305,7 @@ void clearLoopLoweringState(){
 	erpConsumingGuards=null;
 	erpReturns=null;
 	erpForgettableAtReturn=null;
+	erpConsumedBeforeReturn=null;
 }
 void erpBeforeReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)||!erpKey(ret)) return;
@@ -4313,6 +4325,19 @@ void erpBeforeReturn(ReturnExp ret,Scope sc){
 		if(cast(FunctionScope)c) break;
 	}
 	erpForgettableAtReturn[erpKey(ret)]=forgettable;
+	SetX!Id consumed,decided;
+	for(Scope c=sc;c;c=c.parentScope()){
+		foreach(_,d;c.rnsymtab){
+			if(!d.name||d.name.id in decided) continue;
+			decided.insert(d.name.id);
+			auto cd=cast(ConsumedDecl)d;
+			if(cd&&typeid(cd) is typeid(ConsumedDecl)&&!cd.use.moved&&!cd.use.byRef&&cd.use.type&&cd.use.type.isClassical())
+				continue; // (the rewritten loop still uses it, so its analysis `dup`s it)
+			if(cast(DeadDecl)d) consumed.insert(d.name.id);
+		}
+		if(cast(FunctionScope)c) break;
+	}
+	erpConsumedBeforeReturn[erpKey(ret)]=consumed;
 }
 void erpRecordReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)) return;
@@ -4398,6 +4423,13 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 	});
 	auto after=erpKey(loop) in erpJoins;
 	if(!ok||!after) return null;
+	visitStm(loop,(Expression x){ // (variables consumed before a return would need placeholders, TODO)
+		if(auto ret=cast(ReturnExp)x){
+			auto consumed=erpKey(ret) in erpConsumedBeforeReturn;
+			if(!consumed||(*after).any!(v=>v.name in *consumed)) ok=false;
+		}
+	});
+	if(!ok) return null;
 	// A `while` condition is evaluated as `¬done && cond`, so that it is not evaluated after the return. If the condition
 	// consumes variables, it would then consume them only on some paths: use `cond && ¬done` if the condition cannot fail,
 	// and do not rewrite the loop otherwise.

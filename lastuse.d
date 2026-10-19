@@ -119,6 +119,7 @@ final class LastUse{
 		r.next=next;
 		r.index=index;
 		r.consumedComponent=consumedComponent;
+		r.loopGuard=loopGuard;
 		return r;
 	}
 	enum Kind{
@@ -150,6 +151,7 @@ final class LastUse{
 	LastUse prev=null,next=null;
 	size_t index; // (in the order the last uses of the scope were added)
 	IndexExp consumedComponent=null; // (a consumption allowed because this specific component is not borrowed)
+	bool loopGuard=false; // (a use in a `while` condition, which is also evaluated on the path that exits the loop)
 
 	bool isConsumption(){
 		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;

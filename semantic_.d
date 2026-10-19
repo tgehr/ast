@@ -1996,12 +1996,39 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	int numTries=-1;
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	Declaration[] constForgets;
+	static if(language==silq){ // TODO: this is a bit hacky
+		SetX!Id redefined; // (the condition consumes the variables that the body redefines)
+		void collectDefinitions(Expression e){
+			if(auto ce=cast(CompoundExp)e){
+				foreach(x;ce.s) collectDefinitions(x);
+			}else if(auto de=cast(DefineExp)e){
+				import ast.substitute:defineLhsBoundVarsImpl;
+				defineLhsBoundVarsImpl(de.e1,(id){ redefined.insert(id.id); return 0; });
+			}else if(auto ite=cast(IteExp)e){
+				collectDefinitions(ite.then);
+				if(ite.othw) collectDefinitions(ite.othw);
+			}else if(auto fe=cast(ForExp)e) collectDefinitions(fe.bdy);
+			else if(auto nwe=cast(WhileExp)e) collectDefinitions(nwe.bdy);
+			else if(auto re=cast(RepeatExp)e) collectDefinitions(re.bdy);
+			else if(auto nwe=cast(WithExp)e){
+				collectDefinitions(nwe.trans);
+				collectDefinitions(nwe.bdy);
+			}
+		}
+		collectDefinitions(we.bdy);
+	}
 	// Setup the condition and body scope for one WhileExp iteration.
 	void setupWhileIter(BlockScope wesc,ref Expression ncond){
 		FunctionDef reason;
 		ncond=we.cond.copy(cargs);
 		ncond=conditionSemantic(we,ncond,wesc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
-		static if(language==silq) wesc.clearConsumed();
+		static if(language==silq){
+			import ast.type:freeIdentifiers;
+			foreach(id;ncond.freeIdentifiers)
+				if(id.meaning&&id.meaning.name&&id.meaning.name.id !in redefined)
+					if(auto lu=wesc.lastUses.get(id.meaning,true)) if(lu.use is id) lu.loopGuard=true;
+			wesc.clearConsumed();
+		}
 		propErr(ncond,we);
 		condSucceeded|=ncond.isSemCompleted();
 	}
@@ -2040,8 +2067,17 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	propErr(fcond,we);
 	static if(language==silq){
 		import ast.type:freeIdentifiers;
-		foreach(id;fcond.freeIdentifiers) // (`fcond` is not kept: its uses cannot be consumed later)
-			if(id.meaning) if(auto lu=sc.lastUses.get(id.meaning,true)) if(lu.use is id||lu.index>=numLastUses) lu.pin(); // (e.g., merged from a `let` in `fcond`)
+		SetX!Id consumedByCond; // (every evaluation of the condition consumes the same variables, including the final one)
+		if(ncond) foreach(id;ncond.freeIdentifiers)
+			if(cast(VarDecl)id.meaning&&!id.constLookup&&!id.implicitDup) consumedByCond.insert(id.id);
+		foreach(id;fcond.freeIdentifiers){ // (`fcond` is not kept: its uses cannot be consumed later)
+			if(!id.meaning) continue;
+			if(id.implicitDup&&id.id in consumedByCond&&sc.lastUses.canCancelImplicitDup(id.meaning)){
+				sc.lastUses.cancelImplicitDup(id.meaning);
+				continue;
+			}
+			if(auto lu=sc.lastUses.get(id.meaning,true)) if(lu.use is id||lu.index>=numLastUses) lu.pin(); // (e.g., merged from a `let` in `fcond`)
+		}
 	}
 	if(ncond) we.cond=ncond;
 	if(bdy) we.bdy=bdy;
@@ -7300,7 +7336,7 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 				if(d.isSemError()) continue;
 				if(bsc.rnsymtab.get(d.getId,null) !is d) continue; // TODO: this is a bit hacky
 				if(d.scope_ !is bsc) continue;
-				if(sc.rnsymtab.get(d.getId,null)) continue; // TODO: this is a bit hacky
+				if(auto od=sc.rnsymtab.get(d.getId,null)) if(!cast(DeadDecl)od) continue; // TODO: this is a bit hacky
 				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)){
 					d.setSemForceError();
 					continue;
@@ -7456,6 +7492,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					id.byRef=true;
 					assert(!!meaning);
 					id.meaning=meaning;
+					id.id=meaning.getId;
 					id.type=id.typeFromMeaning;
 					if(!id.type||meaning.isSemError()){
 						if(!meaning.isSemError())
@@ -7939,6 +7976,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 					if(!sameScope&&rid.scope_&&cid.scope_)
 						if(rid.scope_.getFunction()&&rid.scope_.getFunction() is cid.scope_.getFunction())
 							sameScope=true;
+					if(rid.meaning is creplDecl&&cid.scope_&&!sameScope&&cid.meaning is creplDecl&&creplDecl.scope_&&cid.scope_.getFunction() !is creplDecl.scope_.getFunction()){ // (a closure does not capture the aggregate, only replaced components)
+						if(!idx.isSemError()&&!crepl.write.isSemError()){
+							sc.error(format("cannot capture aggregate `%s` while its components are being replaced",creplDecl.getName),cid.loc);
+							sc.note("replaced component is here",crepl.write.loc);
+						}
+						idx.setSemError();
+						break;
+					}
 					if(rid.meaning is creplDecl && cid.scope_ && sameScope){
 						cid.constLookup=true;
 						assert(cid.type==rid.type);
