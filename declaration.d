@@ -77,6 +77,12 @@ abstract class Declaration: Expression{
 		if(mergedFrom.length==1) return canonicalSource_=mergedFrom[0].canonicalSource;
 		return canonicalSource_=this;
 	}
+	final void resetCanonicalSource(){ // (e.g., after a split is relinked)
+		if(!canonicalSource_) return;
+		canonicalSource_=null;
+		foreach(d;splitInto) d.resetCanonicalSource();
+		if(mergedInto&&mergedInto.mergedFrom.length==1) mergedInto.resetCanonicalSource();
+	}
 
 	bool isToplevelDeclaration(){
 		return scope_&&cast(TopScope)scope_;

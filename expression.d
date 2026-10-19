@@ -870,6 +870,17 @@ struct EqualityContext{
 			// identifier may not carry a meaning)
 			if(auto fd=cast(FunctionDef)stmt)
 				if(!acc.length||acc[$-1] !is fd) acc~=fd;
+			static if(language==silq){
+				if(auto ae=cast(AAssignExp)stmt) // (an assignment binds new versions of the assigned variables)
+					foreach(r;ae.replacements) if(r.new_) acc~=r.new_;
+				void merged(CompoundExp ce){ // (variables merged after `if` statements and loops)
+					if(ce&&ce.blscope_) foreach(m;ce.blscope_.mergedVars) if(m.mergedInto) acc~=m.mergedInto;
+				}
+				if(auto ite=cast(IteExp)stmt){ merged(ite.then); merged(ite.othw); }
+				else if(auto fe=cast(ForExp)stmt) merged(fe.bdy);
+				else if(auto we=cast(WhileExp)stmt) merged(we.bdy);
+				else if(auto re=cast(RepeatExp)stmt) merged(re.bdy);
+			}
 		}
 		collect(sa,da);
 		collect(sb,db);
@@ -958,7 +969,8 @@ class Identifier: Expression{
 		Identifier r;
 		bool resetName(){
 			if(!meaning||!meaning.name||!meaning.name.name.length) return false;
-			if(args.preserveSemantic||args.preserveMeanings) return false;
+			if(args.preserveSemantic) return false;
+			if(args.preserveMeanings&&!args.isBound(meaning)) return false; // (a bound meaning is looked up again by name)
 			return true;
 		}
 		if(resetName())
@@ -976,7 +988,7 @@ class Identifier: Expression{
 				r.meaning=args.mapDecl(r.meaning);
 				// a template use may deliberately display an id different
 				// from its meaning's name; preserve that relationship
-				if(r.meaning&&r.meaning.name&&oldmeaning&&oldmeaning.name&&id==oldmeaning.name.id)
+				if(r.meaning&&r.meaning.name&&oldmeaning&&oldmeaning.name&&(id==oldmeaning.name.id||id==oldmeaning.getId))
 					r.id=r.meaning.name.id;
 			}
 			if(args.mapScope) r.scope_=args.mapScope(r.scope_);
@@ -2355,6 +2367,10 @@ class RepeatExp: Expression{
 		if(auto r=dg(num)) return r;
 		return dg(bdy);
 	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){ // (e.g., within a `let` expression that is part of a type)
+		auto r=cast(RepeatExp)rhs;
+		return r&&isEqual(num,r.num,&ctx)&&isEqual(bdy,r.bdy,&ctx);
+	}
 }
 
 struct ForRange{
@@ -2606,6 +2622,20 @@ class ForExp: Expression{
 		if(auto r=aggr.componentsImpl(dg)) return r;
 		return dg(bdy);
 	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){ // (e.g., within a `let` expression that is part of a type)
+		auto r=cast(ForExp)rhs;
+		if(!r||pattern||r.pattern||!var!=!r.var) return this is rhs;
+		if(auto ra=aggr.isRange()){
+			auto rb=r.aggr.isRange();
+			if(!rb||ra.leftExclusive!=rb.leftExclusive||ra.rightExclusive!=rb.rightExclusive) return false;
+			if(!isEqual(ra.left,rb.left,&ctx)||!isEqual(ra.step,rb.step,&ctx)||!isEqual(ra.right,rb.right,&ctx)) return false;
+		}else{
+			auto ca=aggr.isContainer(),cb=r.aggr.isContainer();
+			if(!ca||!cb||!isEqual(ca.e,cb.e,&ctx)) return false;
+		}
+		if(loopVar&&r.loopVar) ctx.bind(loopVar,r.loopVar);
+		return isEqual(bdy,r.bdy,&ctx);
+	}
 }
 
 class WhileExp: Expression{
@@ -2630,6 +2660,10 @@ class WhileExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(cond)) return r;
 		return dg(bdy);
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){ // (e.g., within a `let` expression that is part of a type)
+		auto r=cast(WhileExp)rhs;
+		return r&&isEqual(cond,r.cond,&ctx)&&isEqual(bdy,r.bdy,&ctx);
 	}
 }
 
@@ -2861,6 +2895,7 @@ class LetExp: Expression{
 					if(auto id2=cast(Identifier)cpy){
 						if(!id.constLookup&&!id.implicitDup&&cast(VarDecl)id.meaning){
 							bound[id.meaning]=null;
+							if(id.meaning.name&&id2.id==id.meaning.getId) id2.id=id.meaning.name.id;
 							id2.meaning=null;
 							id2.scope_=null;
 						}
@@ -2901,9 +2936,29 @@ class LetExp: Expression{
 				}
 			}
 			foreach(i,stmt;s.s) if(i<ns.s.length) pair(stmt,ns.s[i]);
+			if(s.blscope_){ // (the copy also makes its own declarations within nested scopes, e.g., of `if` statements and loops)
+				auto fn=s.blscope_.getFunction();
+				void unbindLocal(Expression x){
+					if(auto id=cast(Identifier)x){
+						auto d=id.meaning;
+						if(!d) return;
+						if(auto p=bound.getPtr(d)){ // (e.g., a use of a function defined in a block without its own scope)
+							if(*p){ id.meaning=*p; return; }
+						}else if(!d.scope_||!d.scope_.isNestedIn(s.blscope_)||d.scope_.getFunction() !is fn) return;
+						if(d.name&&id.id==d.getId) id.id=d.name.id; // (the declaration is looked up again by name)
+						id.meaning=null;
+						id.scope_=null;
+						return;
+					}
+					foreach(c;x.components) unbindLocal(c);
+				}
+				foreach(stmt;ns.s) unbindLocal(stmt);
+				unbindLocal(ne);
+			}
 			if(bound.length){
 				int rebind(Identifier id){
 					if(auto p = bound.getPtr(id.meaning)){
+						if(!*p&&id.meaning.name&&id.id==id.meaning.getId) id.id=id.meaning.name.id;
 						id.meaning=*p;
 						if(!*p) id.scope_=null;
 					}
@@ -2964,11 +3019,12 @@ class LetExp: Expression{
 		}
 	}
 	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
-		import ast.substitute: ttTransitionLet;
+		import ast.substitute: ttTransitionLet, rescopeLet;
 		if(tt) return ttTransitionLet(this,subst,tt);
 		MapSX!(Id,Expression) active;
 		foreach(k,v;subst) if(freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
 		if(!active.length) return this;
+		if(isSemCompleted()&&s.blscope_) return rescopeLet(this,active);
 		SetX!Id taken;
 		foreach(k,v;subst) taken[k]=[];
 		freeVarsImpl((id){ taken[id.id]=[]; return 0; });

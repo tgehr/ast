@@ -2490,6 +2490,7 @@ abstract class Scope{
 				foreach(k;0..2){
 					newOuter.splitInto[k]=prevOuter.splitInto[k];
 					newOuter.splitInto[k].splitFrom=newOuter;
+					newOuter.splitInto[k].resetCanonicalSource();
 				}
 				outer=newOuter;
 			}

@@ -80,18 +80,18 @@ Expression transitionToType(Expression e,Scope target){
 	void fixUses(Expression x,Scope cur){
 		if(cast(FunctionDef)x||cast(LambdaExp)x) return;
 		if(auto le=cast(LetExp)x){
-			if(le.s.blscope_ in tsSet) cur=le.s.blscope_;
+			if(le.s.blscope_&&le.s.blscope_ in tsSet) cur=le.s.blscope_;
 			fixUses(le.s,cur);
 			fixUses(le.e,cur);
 			return;
 		}
 		if(auto ce=cast(CompoundExp)x){
-			if(ce.blscope_ in tsSet) cur=ce.blscope_;
+			if(ce.blscope_&&ce.blscope_ in tsSet) cur=ce.blscope_;
 			foreach(stmt;ce.s) fixUses(stmt,cur);
 			return;
 		}
 		if(auto id=cast(Identifier)x){
-			if(cur&&(id.scope_ in tt.codScopes||id.meaning&&id.meaning in twins))
+			if(cur&&(id.scope_&&id.scope_ in tt.codScopes||id.meaning&&id.meaning in twins))
 				id.scope_=cur;
 			return;
 		}
@@ -104,6 +104,7 @@ Expression transitionToType(Expression e,Scope target){
 Expression ttTransitionLet(LetExp le,MapSX!(Id,Expression) subst,TypeTransition* tt){
 	MapSX!(Id,Expression) active;
 	foreach(k,v;subst) if(le.freeVarsImpl((id)=>id.id==k?1:0)) active[k]=v;
+	if(le.isSemCompleted()&&le.s.blscope_) return ttRescopeLet(le,active,tt);
 	MapSX!(Id,Id) forced;
 	foreach(stmt;le.s.s)
 		statementBoundVarsImpl(stmt,(id){
@@ -121,6 +122,60 @@ Expression ttTransitionLet(LetExp le,MapSX!(Id,Expression) subst,TypeTransition*
 		if(r.type&&r.type.isSemEvaluated()) r.sstate=SemState.completed;
 	}
 	return r;
+}
+
+// substitution into an analyzed `let` expression: the result has its own scopes and declarations (see rescopeImpl)
+Expression rescopeLet(LetExp le,MapSX!(Id,Expression) active){
+	SetX!Id taken;
+	foreach(k,v;active) taken[k]=[];
+	le.freeVarsImpl((id){ taken[id.id]=[]; return 0; });
+	foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,taken);
+	bool wouldCapture(Id b){
+		foreach(k,v;active) if(v.hasFreeVar(b)) return true;
+		return false;
+	}
+	MapSX!(Id,Id) fresh;
+	Id rename(Declaration d){
+		auto b=d.getId;
+		if(!wouldCapture(b)) return b;
+		if(auto p=fresh.getPtr(b)) return *p;
+		auto nb=b;
+		do nb=nb.apos; while(nb in taken||wouldCapture(nb));
+		taken[nb]=[];
+		return fresh[b]=nb;
+	}
+	auto bs=le.s.blscope_;
+	BlockScope root;
+	if(auto ts=cast(TypeScope)bs){
+		auto nts=new TypeScope(ts.origin);
+		nts.parent=ts.parent;
+		root=nts;
+	}else{
+		root=new BlockScope(null,bs.restriction_,bs.restrictionCause_); // (the copy is not nested in the original's parent)
+		root.parent=bs.parent;
+	}
+	root.isLoopBody=bs.isLoopBody;
+	MapSX!(Declaration,Declaration) declMap;
+	auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&taken,&declMap,false);
+	LetRescope let={tpl:le,root:root,rename:&rename};
+	rescopeImpl(null,null,&let,ctx);
+	return let.result;
+}
+private Expression ttRescopeLet(LetExp le,MapSX!(Id,Expression) active,TypeTransition* tt){
+	auto fn=le.s.blscope_.getFunction();
+	MapSX!(Id,Id) fresh;
+	Id rename(Declaration d){
+		if(d.scope_&&d.scope_.getFunction() !is fn) return d.getId; // (e.g., a local variable of a nested function)
+		if(auto p=fresh.getPtr(d.getId)) return *p;
+		return fresh[d.getId]=tt.freshName(d.getId);
+	}
+	MapSX!(Declaration,Declaration) declMap;
+	auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&tt.taken,&declMap,false,tt);
+	auto root=tt.mapScope(le.s.blscope_);
+	if(!root.origin) root.origin=le.s.blscope_; // (e.g., no call site is known)
+	LetRescope let={tpl:le,root:root,rename:&rename};
+	rescopeImpl(null,null,&let,ctx);
+	return let.result;
 }
 
 Expression ttTransitionIte(IteExp ite,MapSX!(Id,Expression) subst,TypeTransition* tt){
@@ -1045,17 +1100,32 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 // forgottenVars, and identifiers rebound to the fresh declarations
 private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	if(!r.body_) return;
+	rescopeImpl(r,fd,null,bctx);
+}
+// (similarly, a `let` expression is made independent of the scopes it was analyzed in, with fresh names)
+private struct LetRescope{
+	LetExp tpl;
+	BlockScope root;
+	Id delegate(Declaration) rename;
+	LetExp result;
+}
+private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockSubst bctx){
 	MapSX!(Declaration,Declaration) dmap;
 	MapSX!(Scope,Scope) smap;
-	foreach(i,p;fd.params) dmap[p]=r.params[i];
-	smap[fd.fscope_]=r.fscope_;
+	Scope root=let?let.tpl.s.blscope_:fd.fscope_;
+	if(fd){
+		foreach(i,p;fd.params) dmap[p]=r.params[i];
+		smap[fd.fscope_]=r.fscope_;
+	}
 	Expression.CopyArgs cargs={preserveSemantic:true};
 
-	Scope[] twinned=[fd.fscope_]; // (function scopes whose declarations are twinned)
+	Scope[] twinned=[root]; // (function scopes whose declarations are twinned)
 	bool inTwinned(Scope s){
 		foreach(t;twinned) if(s is t||t&&s.isNestedIn(t)) return true;
 		return false;
 	}
+	static struct Bookkeeping{ BlockScope tpl,twin; }
+	Bookkeeping[] bookkeeping; // (filled in once the twins of nested definitions exist)
 	Scope mapScope(Scope s){ return s is null?null:smap.get(s,s); }
 	Scope mapScopeOfDecl(Scope s){ // (e.g. the scope of the zero-iterations path of a loop is not part of the syntax tree)
 		if(auto p=smap.getPtr(s)) return *p;
@@ -1064,6 +1134,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		auto ns=new BlockScope(mapScopeOfDecl(bs.parent),bs.restriction_,bs.restrictionCause_);
 		ns.isLoopBody=bs.isLoopBody;
 		smap[s]=ns;
+		bookkeeping~=Bookkeeping(bs,ns);
 		return ns;
 	}
 	Scope delegate(Scope,Scope,Scope) mapScopeTreeDg;
@@ -1071,18 +1142,27 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	Expression delegate(Expression) shareTy; // (evaluated types are shared unless they mention declarations of the twin)
 	Declaration mapDecl(Declaration d){
 		if(!d) return null;
-		if(d is fd) return r;
+		if(fd&&d is fd) return r;
 		if(auto p=dmap.getPtr(d)) return *p;
 		if(!cast(FunctionDef)d&&d.scope_&&inTwinned(d.scope_)){
 			auto vd=cast(VarDecl)d;
 			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
 			auto nid=d.name?d.getId:Id(); // (as for the twin's parameters, renamed names become names)
+			bool inherited=false;
 			for(Declaration a=d;;){
 				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null);
 				if(!nxt) break;
-				if(auto p=dmap.getPtr(nxt)){ if((*p).name) nid=(*p).getId; break; } // (names inherited via the split/merge lineage track the twin's own renaming)
+				if(let&&nxt.scope_&&!inTwinned(nxt.scope_)){ // (a version of a variable from outside the `let`)
+					auto m=mapDecl(nxt);
+					if(!m) return null; // (substituted away)
+					if(m.name) nid=m.getId;
+					inherited=true;
+					break;
+				}
+				if(auto p=dmap.getPtr(nxt)){ if((*p).name) nid=(*p).getId; inherited=true; break; } // (names inherited via the split/merge lineage track the twin's own renaming)
 				a=nxt;
 			}
+			if(let&&!inherited&&d.name) nid=let.rename(d);
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
 			nd.copyAnalyzedFieldsFrom(d);
 			dmap[d]=nd;
@@ -1094,8 +1174,11 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		if(auto pe=bctx.subst.getPtr(d.getId)){
 			// declarations lexically outer to the substituted function are
 			// substituted away; others (e.g. from inserted values) stay
-			if(d.scope_&&fd.scope_&&fd.scope_.isNestedIn(d.scope_)){
-				if(auto id=cast(Identifier)*pe) if(id.meaning) return id.meaning;
+			auto outer=let?root:fd.scope_;
+			if(d.scope_&&outer&&outer.isNestedIn(d.scope_)){
+				if(auto id=cast(Identifier)*pe) if(id.meaning){
+					if(!let||id.meaning.canonicalSource is d.canonicalSource) return id.meaning; // (in a `let` expression, only the twin of the same variable is a renaming)
+				}
 				return null;
 			}
 		}
@@ -1137,7 +1220,11 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		MapSX!(Id,Expression) subst;
 		import ast.type: freeIdentifiers;
 		foreach(id;e.freeIdentifiers){
-			if(!id.meaning||id.id in subst) continue;
+			if(id.id in subst) continue;
+			if(!id.meaning){
+				if(let) if(auto pe=bctx.subst.getPtr(id.id)) subst[id.id]=*pe;
+				continue;
+			}
 			auto nd=mapDecl(id.meaning);
 			if(nd is id.meaning) continue;
 			if(!nd){ // (substituted away)
@@ -1159,6 +1246,24 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 	}
 	Expression mapExp(Expression e,ref Expression.CopyArgs args){
 		if(cast(Type)e&&e.isSemEvaluated()) return shareTy(e); // (as for the types of expressions)
+		if(cast(Type)e&&e.isSemCompleted()) return shareTy(e.eval()); // (e.g., an inferred argument of a generic function)
+		if(let) if(auto id=cast(Identifier)e){ // (a use of a substituted variable from outside the `let`)
+			if(id.meaning&&id.meaning.isToplevelDeclaration()&&id.isSemCompleted()) // (e.g., a type alias such as `unit`, as for a substitution)
+				if(auto init=id.getInitializer()) return init;
+			if(!id.meaning){
+				if(id.id in bctx.subst) return id.substitute(bctx.subst);
+			}else if(!cast(FunctionDef)id.meaning&&!mapDecl(id.meaning)){
+				for(Declaration a=id.meaning;a;a=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null)){
+					if(a.scope_&&inTwinned(a.scope_)) continue;
+					if(auto pe=bctx.subst.getPtr(a.getId)){
+						MapSX!(Id,Expression) isubst;
+						isubst[id.id]=*pe;
+						return id.substitute(isubst);
+					}
+					break;
+				}
+			}
+		}
 		if(auto ofd=cast(FunctionDef)e){ // (a twin of its own: the nested definition may be shared with the template)
 			if(auto p=dmap.getPtr(ofd)) if(*p !is ofd) return *p;
 			Parameter[] nparams;
@@ -1169,7 +1274,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 				dmap[p]=np;
 				nparams~=np;
 			}
-			auto nfd=new FunctionDef(ofd.name?new Identifier(ofd.getId):null,nparams,ofd.isTuple,null,null);
+			auto nfd=new FunctionDef(ofd.name?new Identifier(let?let.rename(ofd):ofd.getId):null,nparams,ofd.isTuple,null,null);
 			if(ofd.name) nfd.name.loc=ofd.name.loc;
 			nfd.copyAnalyzedFieldsFrom(ofd);
 			foreach(k,ref v;dmap) if(v is ofd) v=nfd;
@@ -1205,7 +1310,7 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 			Expression[] ns;
 			foreach(x;ce.s) ns~=x.copy(args);
 			auto r=new CompoundExp(ns);
-			r.blscope_=cast(BlockScope)mapScope(ce.blscope_);
+			r.blscope_=cast(BlockScope)mapScopeOfDecl(ce.blscope_); // (e.g., a block of a `let` expression within a statement is not visited by `walkStmts`)
 			r.erpId=ce.erpId;
 			fixup(r,ce);
 			return r;
@@ -1256,49 +1361,62 @@ private void rescopeTwin(FunctionDef r,FunctionDef fd,ref BlockSubst bctx){
 		}
 		auto bs=cast(BlockScope)s;
 		BlockScope ns;
-		if(auto ts=cast(TypeScope)twincarried){
-			ns=ts;
-		}else{
+		if(auto ts=cast(TypeScope)twincarried)
+			if(!let||ts !is s) ns=ts; // (a `let` expression is not rescoped into its own scopes)
+		if(!ns){
 			assert(bs,"rescopeTwin: expected BlockScope");
 			ns=new BlockScope(parent,bs.restriction_,bs.restrictionCause_);
 			ns.isLoopBody=bs.isLoopBody;
 		}
 		smap[s]=ns;
 		if(twincarried !is s) smap[twincarried]=ns;
-		if(bs){
-			foreach(d;bs.splitVars){
-				auto sf=mapDecl(d.splitFrom);
-				if(!sf) continue;
-				auto nd=mapDecl(d);
-				nd.splitFrom=sf;
-				ns.splitVars~=nd;
-			}
-			foreach(d;bs.mergedVars){
-				auto mi=mapDecl(d.mergedInto);
-				if(!mi) continue;
-				auto nd=mapDecl(d);
-				nd.mergedInto=mi;
-				ns.mergedVars~=nd;
-			}
-			foreach(d;bs.forgottenVars) if(auto nd=mapDecl(d)) ns.forgottenVars~=nd;
-			foreach(d;bs.forgottenVarsOnEntry) if(auto nd=mapDecl(d)) ns.forgottenVarsOnEntry~=nd;
-		}
+		if(bs) bookkeeping~=Bookkeeping(bs,ns);
 		return ns;
+	}
+	void fillBookkeeping(BlockScope bs,BlockScope ns){
+		foreach(d;bs.splitVars){
+			auto sf=mapDecl(d.splitFrom);
+			if(!sf) continue;
+			auto nd=mapDecl(d);
+			nd.splitFrom=sf;
+			ns.splitVars~=nd;
+		}
+		foreach(d;bs.mergedVars){
+			auto mi=mapDecl(d.mergedInto);
+			if(!mi) continue;
+			auto nd=mapDecl(d);
+			nd.mergedInto=mi;
+			ns.mergedVars~=nd;
+		}
+		foreach(d;bs.forgottenVars) if(auto nd=mapDecl(d)) ns.forgottenVars~=nd;
+		foreach(d;bs.forgottenVarsOnEntry) if(auto nd=mapDecl(d)) ns.forgottenVarsOnEntry~=nd;
 	}
 	mapScopeTreeDg=&mapScopeTree;
 	cargs.mapDecl=&mapDecl; cargs.postCopy=&fixAssignFields;
 	cargs.mapScope=&mapScope;
 	cargs.mapExp=&mapExp;
-	auto bparent=cast(Scope)r.fscope_;
-	if(r.body_.blscope_) bparent=mapScopeTree(fd.body_.blscope_,r.body_.blscope_,r.fscope_);
-	walkStmts(fd.body_.s,r.body_.s,bparent,&dmap,&mapScopeTree);
-	r.body_=cast(CompoundExp)rescopeCopy(r.body_);
-	if(r.rret) r.rret=shareTy(r.rret);
-	if(r.ret) r.ret=shareTy(r.ret);
-	foreach(np;r.params){
-		if(np.dtype) np.dtype=shareTy(np.dtype);
-		if(np.vtype) np.vtype=shareTy(np.vtype);
+	if(let){
+		smap[root]=let.root;
+		bookkeeping~=Bookkeeping(cast(BlockScope)root,let.root);
+		walkStmts(let.tpl.s.s,let.tpl.s.s,let.root,&dmap,&mapScopeTree);
+		let.result=cast(LetExp)rescopeCopy(let.tpl);
+		assert(!!let.result);
+		foreach(td,nd;dmap)
+			if(td.scope_ is root&&nd.scope_ is let.root&&root.peekSymtab(td.getId,true) is td)
+				let.root.symtabInsert(nd);
+	}else{
+		auto bparent=cast(Scope)r.fscope_;
+		if(r.body_.blscope_) bparent=mapScopeTree(fd.body_.blscope_,r.body_.blscope_,r.fscope_);
+		walkStmts(fd.body_.s,r.body_.s,bparent,&dmap,&mapScopeTree);
+		r.body_=cast(CompoundExp)rescopeCopy(r.body_);
+		if(r.rret) r.rret=shareTy(r.rret);
+		if(r.ret) r.ret=shareTy(r.ret);
+		foreach(np;r.params){
+			if(np.dtype) np.dtype=shareTy(np.dtype);
+			if(np.vtype) np.vtype=shareTy(np.vtype);
+		}
 	}
+	foreach(b;bookkeeping) fillBookkeeping(b.tpl,b.twin);
 	// rebuild split/merge links in template order (creation order)
 	SetX!Declaration seen;
 	for(bool progress=true;progress;){

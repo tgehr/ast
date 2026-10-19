@@ -700,12 +700,16 @@ class Checker {
 		scope(exit) strictScope = prevStrictScope;
 		if(!e.s.blscope_ || e.s.blscope_.parent !is nscope && !cast(ast_scope.TypeScope)e.s.blscope_) {
 			// scope-free `let` expression, e.g. within a type used in a different scope
-			auto sub = new Checker(nscope, this);
+			auto sub = new Checker(e.s.blscope_ ? e.s.blscope_ : nscope, this); // (nested statements are checked against the `let`'s own scope)
 			sub.strictScope = false;
 			sub.scopeFree = true;
-			auto r = sub.visCompoundStmt(e.s);
-			assert(!(r & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
-			sub.visExpr(e.e);
+			StmtResult r = StmtResult.MayPass;
+			foreach(stmt; e.s.s) {
+				StmtResult sr = sub.visStmt(stmt);
+				assert(!(sr & StmtResult.MayReturn), format("early-return from let statement not supported", e, e.loc));
+				if(!(sr & StmtResult.MayPass)) { r = sr; break; }
+			}
+			if(r & StmtResult.MayPass) sub.visExpr(e.e);
 			return;
 		}
 		// scoped `let` expression: the scope either belongs to the surrounding
