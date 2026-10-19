@@ -6,6 +6,7 @@ import astopt;
 import std.conv,std.format,std.algorithm,std.range,std.exception;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.declaration,ast.semantic_,ast.error,util;
 import ast.callfailure: explainArgumentCount;
+import ast.conversion: typeExplicitConversion;
 import util.tuple:Q=Tuple,q=tuple;
 import util: SetX;
 
@@ -475,6 +476,35 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			return forget();
 	}
 	if(auto tae=cast(TypeAnnotationExp)olhs){
+		if(auto ce=cast(CallExp)tae.e) if(tae.type&&ce.type&&!typeExplicitConversion(tae.type,ce.type,TypeAnnotationType.coercion)){ // (only the reversed call classicalizes: moved non-entry arguments are defined through temporaries)
+			Expression[] unpacks;
+			Expression entry(Expression arg){
+				if(cast(Identifier)arg||cast(IndexExp)arg||cast(SliceExp)arg) return arg;
+				auto tmp=new Identifier(freshName);
+				tmp.loc=arg.loc;
+				auto use=tmp.copy();
+				use.moved=true;
+				unpacks~=lowerDefine!flags(arg,use,loc,sc,unchecked,noImplicitDup);
+				return tmp;
+			}
+			Expression nce=ce;
+			auto ft=cast(FunTy)ce.e.type, tpl=cast(TupleExp)ce.arg;
+			if(ft&&ft.isSquare==ce.isSquare){
+				Expression narg=ce.arg;
+				if(!ft.isConstForReverse.any) narg=entry(ce.arg);
+				else if(tpl&&!ft.isConstForReverse.all&&tpl.length==ft.nargs){
+					narg=new TupleExp(iota(tpl.length).map!(i=>ft.isConstForReverse[i]?tpl.e[i]:entry(tpl.e[i])).array);
+					narg.loc=tpl.loc;
+				}
+				if(unpacks.length){
+					nce=new CallExp(ce.e,narg,ce.isSquare,ce.isClassical_);
+					nce.loc=ce.loc;
+				}
+			}
+			auto def=lowerDefine!flags(nce,orhs,loc,sc,unchecked,noImplicitDup);
+			if(!unpacks.length) return def;
+			return res=new CompoundExp([def]~unpacks);
+		}
 		static if(reverseMode){
 			if(olhs.type){
 				if(!orhs.type||orhs.type!=tae.e.type){

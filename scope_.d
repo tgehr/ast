@@ -1800,6 +1800,7 @@ abstract class Scope{
 		if(!scopes.length) return false;
 		static if(language==silq){
 			foreach(sc;scopes){
+				if(auto bsc=cast(BlockScope)sc) if(bsc.keepConstLocals) continue;
 				foreach(_,d;sc.rnsymtab.dup){
 					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
 					if(sc.rnsymtab.get(d.getId,null) !is d) continue;
@@ -3028,6 +3029,7 @@ class BlockScope: NestedScope{
 	Annotation restriction_;
 	RestrictionCause restrictionCause_;
 	bool isLoopBody=false;
+	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
 	bool loopDeferredSpecificityCheck=false;

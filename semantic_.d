@@ -1195,7 +1195,17 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=null;
-	if(with_.trans.blscope_) sc.merge(false,with_.trans.blscope_);
+	Id[] constLocals; // (`const` locals of the transformation are scoped to the whole `with`)
+	if(auto bsc=with_.trans.blscope_){
+		static if(language==silq) foreach(_,d;bsc.rnsymtab){
+			if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
+			auto origin=d;
+			while(origin.splitFrom) origin=origin.splitFrom;
+			if(origin.scope_&&origin.scope_.isNestedIn(bsc)) constLocals~=d.getId;
+		}
+		bsc.keepConstLocals=true;
+		sc.merge(false,bsc);
+	}
 	if(auto ret=mayReturn(with_.trans)){
 		sc.error("cannot return from within `with` transformation",ret.loc);
 		with_.trans.setSemForceError();
@@ -1270,6 +1280,16 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
 		}
 		propErr(with_.itrans,with_);
+	}
+	static if(language==silq) foreach(id;constLocals){
+		auto d=sc.rnsymtab.get(id,null);
+		if(!d||cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
+		if(!sc.canForgetAppend(d)){
+			if(!sc.lastUses.betterUnforgettableError(d,sc))
+				sc.error(format("`const` variable `%s` cannot be forgotten at the end of its scope",d.getName),d.loc);
+			d.setSemForceError();
+			with_.setSemForceError();
+		}
 	}
 	with_.type=withType(with_);
 	with_.setSemCompleted();
@@ -2242,6 +2262,7 @@ Dependency getDependencyImpl(LetExp le,Scope sc){ // TODO: fix
 	}
 	foreach(c;le.components)
 		result.joinWith(getDependency(c,sc));
+	if(le.s.blscope_) Scope.substituteConsumed(result,sc.consumedDepLog); // (the `let`'s locals are replaced by what they depended on)
 	return result;
 }
 
@@ -2385,7 +2406,7 @@ bool isLiftedImpl(LetExp le,Scope sc){
 	}
 	bool check(Expression e){
 		if(auto id=cast(Identifier)e)
-			return id.constLookup||id.implicitDup||isLocal(id.meaning);
+			return id.constLookup||isLocal(id.meaning); // (as for identifiers, an implicit `dup` may become a consumption)
 		if(auto ce=cast(CallExp)e){
 			if(auto ft=cast(ProductTy)ce.e.type)
 				if(ft.annotation<Annotation.qfree)
@@ -3853,7 +3874,10 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		trans=compoundExpSemantic(trans,sc,flags,Annotation.mfree,blscope:true,resetConst:true,restrictionCause:RestrictionCause(with_));
 	}
 	sc.withTransConsumption=null;
-	if(trans.blscope_) sc.merge(false,trans.blscope_);
+	if(trans.blscope_){
+		trans.blscope_.keepConstLocals=true;
+		sc.merge(false,trans.blscope_);
+	}
 	auto crepls=sc.localComponentReplacements();
 	foreach(i,fd;fds){
 		foreach(decl;fd.capturedDecls[nCapturedDecls[i]..$])
@@ -3911,7 +3935,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		return !oidx||with_.trans.s.any!(s=>isOperand(s,oidx));
 	}).array;
 	if(!crepls.length) return false;
-	if(trans.blscope_){ // a component of a variable declared within the transformation can only be borrowed after the declaration
+	if(trans.blscope_){ // a component of a variable declared within the transformation, or at an index declared within it, can only be borrowed after the declaration
 		bool declaredInTrans(Declaration decl){
 			for(auto s=decl?decl.scope_:null;s;s=s.parentScope())
 				if(s is trans.blscope_) return true;
@@ -3922,7 +3946,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			auto idx=cast(IndexExp)crepl.write;
 			if(!idx) continue;
 			auto id=getIdFromIndex(idx);
-			if(id&&declaredInTrans(id.meaning)) later.insert(crepl.name);
+			if(id&&declaredInTrans(id.meaning)||indexIdentifiers(idx).any!(i=>declaredInTrans(i.meaning))) later.insert(crepl.name);
 		}
 		if(later.length){
 			auto k=trans.s.countUntil!(s=>s.subexpressions.any!((e){
@@ -7216,7 +7240,10 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 				if(!bsc.canForgetAppend(d)){
 					if(!d.isSemError()){
 						bool done=bsc.lastUses.betterUnforgettableError(d,bsc);
-						if(!done){
+						auto result=cast(Identifier)le.e,vd=cast(VarDecl)d;
+						if(!done&&result&&result.meaning is d&&vd&&vd.isTemporary){ // (e.g., `move(x)` in a `const` position)
+							nonLiftedError(le,sc);
+						}else if(!done){
 							sc.error(format("%s `%s` is not consumed at the end of `let` expression",d.kind,d.getName),d.loc);
 							sc.note("perhaps carry it out through the trailing expression",le.e.loc);
 						}
@@ -7279,6 +7306,14 @@ Expression moveSemantic(CallExp ce,ExpSemContext context){
 		return ce;
 	}
 	id.moved=true;
+	if(context.constResult!=ConstResult.no&&!context.inType){ // (in a `const` position, the moved value is a temporary)
+		auto tmp=temporaryIdentifier(ce.loc);
+		auto def=new DefineExp(tmp,ce.arg);
+		def.loc=ce.loc;
+		auto le=new LetExp(new CompoundExp([def]),tmp.copy());
+		le.loc=le.s.loc=ce.loc;
+		return expressionSemanticImpl(le,context);
+	}
 	auto r=expressionSemantic(id,context);
 	if(r.isSemError()) ce.setSemError();
 	return r;

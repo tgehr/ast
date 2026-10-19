@@ -2256,6 +2256,13 @@ class IteExp: Expression{
 	override Expression evalImpl(){
 		auto ncond=cond.eval(),nthen=cast(CompoundExp)then.eval(),nothw=cast(CompoundExp)othw.eval();
 		assert(nthen&&nothw); // TODO: check statically
+		if(ncond.type&&ncond.type.isClassical()){ // (constant folding)
+			if(auto c=ncond.asIntegerConstant()){
+				auto branch=c.get()!=0?nthen:nothw;
+				if(branch.s.length==1&&branch.s[0].type&&isSubtype(branch.s[0].type,type))
+					return branch.s[0];
+			}
+		}
 		if(ncond is cond && nthen is then && nothw is othw) return this;
 		auto r=new IteExp(ncond,nthen,nothw);
 		r.type=type;
