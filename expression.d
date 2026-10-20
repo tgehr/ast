@@ -972,9 +972,15 @@ struct EqualityContext{
 bool isEqual(Expression a,Expression b,EqualityContext* ctx){
 	if(a is b) return true;
 	if(!a||!b) return false;
-	if(ctx) return a.isEqualImpl(b,*ctx);
 	EqualityContext fresh;
-	return a.isEqualImpl(b,fresh);
+	if(!ctx) ctx=&fresh;
+	if(a.isEqualImpl(b,*ctx)) return true;
+	// (types may be evaluated to different extents, e.g., an annotation and its substituted copy)
+	if(a.isSemCompleted()&&b.isSemCompleted()&&a.type&&b.type&&isTypeTy(a.type)&&isTypeTy(b.type)){
+		auto ea=a.eval(),eb=b.eval();
+		if(ea !is a||eb !is b) return ea.isEqualImpl(eb,*ctx);
+	}
+	return false;
 }
 
 class Identifier: Expression{

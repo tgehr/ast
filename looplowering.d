@@ -202,6 +202,12 @@ private bool dependsTransitivelyOnLoopState(ref FixedPointIterState state,Scope 
 	return false;
 }
 
+// (for diagnostics, the variables after a lowered loop are linked to those of the analysis of the loop itself)
+private void linkLoweredVariables(Scope sc,ref MapX!(Id,Declaration) before){
+	foreach(id,d;sc.rnsymtab)
+		if(auto vd=cast(VarDecl)d) if(auto od=cast(VarDecl)before.get(id,null))
+			if(od !is vd&&!vd.loweredFrom&&!vd.typeSource&&!od.isSemError()) vd.loweredFrom=od;
+}
 Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(is(T==ForExp)){
 		auto range=loop.aggr.isRange;
@@ -2180,6 +2186,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	stmts~=cont;
 	auto split=new CompoundExp(stmts);
 	split.loc=loc;
+	auto before=sc.rnsymtab.dup;
+	scope(success) linkLoweredVariables(sc,before);
 	sc.restoreStateSnapshot(state.origStateSnapshot);
 	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
 		import util.io:stderr;
@@ -3708,6 +3716,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	static if(isDoWhile) foreach(v;sorted(exitLifted)) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
 	auto lowered=new CompoundExp(stmts);
 	lowered.loc=loc;
+	auto before=sc.rnsymtab.dup;
+	scope(success) linkLoweredVariables(sc,before);
 	sc.restoreStateSnapshot(state.origStateSnapshot);
 	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
 		import util.io:stderr;
@@ -4391,6 +4401,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}
 	auto lowered=new CompoundExp(stmts);
 	lowered.loc=loop.loc;
+	auto before=sc.rnsymtab.dup;
+	scope(success) linkLoweredVariables(sc,before);
 	sc.restoreStateSnapshot(state.origStateSnapshot);
 	//imported!"util.io".writeln("BEFORE SEMANTIC: ",lowered);
 	auto result=statementSemantic(lowered,sc,flags);

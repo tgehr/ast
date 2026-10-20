@@ -576,6 +576,7 @@ struct NumericCause{
 			auto range=fe.aggr.isRange;
 			return range&&explainVia(()=>explain(range.left,wanted,depth+1)||explain(range.right,wanted,depth+1),"`%s` has type `%s` because of the bounds of the loop");
 		}
+		if(vd.loweredFrom) return variable(vd.loweredFrom,use,wanted,depth+1);
 		if(auto ae=cast(AssignExp)vd.typeSource) return via(assignedValue(ae.e1,ae.e2,vd.getName),"`%s` is assigned a value of type `%s` here");
 		if(auto ae=cast(AAssignExp)vd.typeSource) return via(update=updateOperation(ae),"`%s` is updated to type `%s` here");
 		if(vd.initializer) return vd.initializer!is use&&via(vd.initializer,"`%s` is defined with type `%s` here");
