@@ -7309,13 +7309,12 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	StmFlags flags;
+	if(!le.s.blscope_) le.s.blscope_=new BlockScope(sc);
+	le.s.blscope_.isLetBody=true;
 	static if(language==silq){
 		Scope.OuterConstRead[] outerConstReads;
 		auto reblockConst=context.inConst&&!inType;
-		if(reblockConst){
-			if(!le.s.blscope_) le.s.blscope_=new BlockScope(sc);
-			le.s.blscope_.outerConstReads=&outerConstReads;
-		}
+		if(reblockConst) le.s.blscope_.outerConstReads=&outerConstReads;
 	}
 	le.s=compoundExpSemantic(le.s,sc,flags);
 	static if(language==silq) if(reblockConst) le.s.blscope_.outerConstReads=null;

@@ -1286,6 +1286,9 @@ class ProductTy: Type{
 		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;
 		if(!isSubtype(arg.type,dom)) return null;
+		return applyUnchecked(arg,target);
+	}
+	private Expression applyUnchecked(Expression arg,Scope target){
 		MapSX!(Id,Expression) subst;
 		if(isTuple){
 			auto targTy=arg.type.isTupleTy();
@@ -1321,7 +1324,8 @@ class ProductTy: Type{
 		if(isConst!=r.isConst||isSquare!=r.isSquare||annotation!=r.annotation||captureAnnotation!=r.captureAnnotation||
 		   isClassical_!=r.isClassical_||nargs!=r.nargs)
 			return false;
-		return this.isSubtypeImpl(r,&ctx)&&r.isSubtypeImpl(this,&ctx);
+		auto flipped=ctx.flipped();
+		return this.isSubtypeImpl(r,&ctx)&&r.isSubtypeImpl(this,&flipped);
 	}
 	auto isConstForReverse(){
 		return iota(nargs).map!(i=>argConstForReverse(i));
@@ -1351,8 +1355,12 @@ class ProductTy: Type{
 			return false;
 		auto name=freshName(Id(),r);
 		auto vars=varTy(name,r.dom);
-		auto lCod=tryApply(vars,isSquare);
-		auto rCod=r.tryApply(vars,isSquare);
+		if(ctx){
+			auto flipped=ctx.flipped(); // (the domain is contravariant)
+			if(!isSubtype(r.dom,dom,&flipped)) return false;
+		}else if(!isSubtype(r.dom,dom)) return false;
+		auto lCod=applyUnchecked(vars,null);
+		auto rCod=r.applyUnchecked(vars,null);
 		if(!lCod) return false;
 		assert(!!rCod);
 		return isSubtype(lCod,rCod,ctx);

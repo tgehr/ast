@@ -842,6 +842,12 @@ struct EqualityContext{
 	bool isBound(Declaration d){
 		return source(d) in mapL||source(d) in mapR;
 	}
+	EqualityContext flipped(){ // (the same bindings, for comparisons with swapped sides)
+		EqualityContext r;
+		r.mapL=mapR;
+		r.mapR=mapL;
+		return r;
+	}
 	bool lookup(Declaration l,Declaration r){
 		l=source(l), r=source(r);
 		if(l is r) return true;
@@ -903,16 +909,22 @@ struct EqualityContext{
 		foreach(i;0..a.params.length){
 			auto pa=a.params[i],pb=b.params[i];
 			if(pa.isConst!=pb.isConst) return false;
-			if((pa.dtype is null)!=(pb.dtype is null)) return false;
-			if(pa.dtype&&!pa.dtype.isEqualImpl(pb.dtype,this)) return false;
 			if((pa.vtype is null)!=(pb.vtype is null)) return false;
-			if(pa.vtype&&!pa.vtype.isEqualImpl(pb.vtype,this)) return false;
+			if(pa.vtype){ // (the annotations may be evaluated to different extents, e.g., in a substituted copy)
+				if(!pa.vtype.isEqualImpl(pb.vtype,this)) return false;
+			}else{
+				if((pa.dtype is null)!=(pb.dtype is null)) return false;
+				if(pa.dtype&&!pa.dtype.isEqualImpl(pb.dtype,this)) return false;
+			}
 			bind(pa,pb);
 		}
-		if((a.rret is null)!=(b.rret is null)) return false;
-		if(a.rret&&!a.rret.isEqualImpl(b.rret,this)) return false;
 		if((a.ret is null)!=(b.ret is null)) return false;
-		if(a.ret&&!a.ret.isEqualImpl(b.ret,this)) return false;
+		if(a.ret){
+			if(!a.ret.isEqualImpl(b.ret,this)) return false;
+		}else{
+			if((a.rret is null)!=(b.rret is null)) return false;
+			if(a.rret&&!a.rret.isEqualImpl(b.rret,this)) return false;
+		}
 		if((a.body_ is null)!=(b.body_ is null)) return false;
 		if(a.body_&&!a.body_.isEqualImpl(b.body_,this)) return false;
 		return true;
@@ -3283,7 +3295,11 @@ class VectorForExp: Expression{
 			bargs.boundFunctions~=fd.canonicalSource;
 			auto nbdy=new CompoundExp([e.copy(bargs)]);
 			nbdy.loc=fe.bdy.loc;
-			auto nfe=new ForExp(fe.var?fe.var.copy(args):null,fe.pattern?fe.pattern.copy(args):null,fe.aggr.copy(args),nbdy);
+			Identifier nvar=fe.var?fe.var.copy(args):null; // (the binders are those of the synthesized function, e.g., renamed by a substitution)
+			Expression npattern=null;
+			if(fe.pattern) npattern=(cast(DefineExp)analyzedStatements()[0]).e1.copy(bargs);
+			else if(nvar) nvar.id=fd.params[0].name.id;
+			auto nfe=new ForExp(nvar,npattern,fe.aggr.copy(args),nbdy);
 			nfe.loc=fe.loc;
 			nfe.noSplit=fe.noSplit;
 			return new VectorForExp(nfe);

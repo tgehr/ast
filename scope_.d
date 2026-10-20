@@ -2254,6 +2254,9 @@ abstract class Scope{
 				foreach(v;(*mustBeConstFromDummies).byValue)
 					mustBeConst.insert(v.getId);
 			import ast.semantic_: typeForDecl;
+			Scope letScope=null; // (variables declared outside of a `let` expression are captured, such that its lowering does not depend on where it is analyzed)
+			for(Scope s=loopScope;s&&!cast(FunctionScope)s;s=cast(NestedScope)s?(cast(NestedScope)s).parent:null)
+				if(auto bs=cast(BlockScope)s) if(bs.isLetBody){ letScope=bs; break; }
 			SetX!Declaration inTypes; // (types of parameters cannot depend on other parameters)
 			if(separateConstParams) foreach(id,decl;rnsymtab)
 				if(auto type=typeForDecl(decl))
@@ -2271,6 +2274,7 @@ abstract class Scope{
 					if(!accessedDecls||decl.canonicalSource !in *accessedDecls) continue; // not captured
 					// (classical variables are passed as well: a function without captures is analyzed only once)
 					if(type.isClassical()&&(!cast(VarDecl)decl&&!cast(Parameter)decl||decl.isToplevelDeclaration()||isTypeTy(type)||cast(FunTy)type||decl.canonicalSource in inTypes)) continue; // (const capture)
+					if(type.isClassical()&&letScope&&!(decl.canonicalSource.scope_&&decl.canonicalSource.scope_.isNestedIn(letScope))) continue; // (const capture)
 					Expression.CopyArgs cargsConst;
 					r[0]~=q(id,decl,type.copy(cargsConst),false); // separate const parameter
 					continue;
@@ -3080,6 +3084,7 @@ class BlockScope: NestedScope{
 	Annotation restriction_;
 	RestrictionCause restrictionCause_;
 	bool isLoopBody=false;
+	bool isLetBody=false;
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
@@ -3105,6 +3110,7 @@ class BlockScope: NestedScope{
 
 class TypeScope: BlockScope{
 	Scope origin; // the scope at the call site
+	MapSX!(Id,Declaration) freeDecls; // (the free variables of an analyzed copy, for parts that the analysis copies without meanings)
 	this(Scope origin){
 		super(null);
 		this.origin=origin;
@@ -3121,6 +3127,8 @@ class TypeScope: BlockScope{
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		if(auto decl=freeDecls.get(ident.id,null)) return decl;
+		if(this.origin) if(auto top=this.origin.getTopScope()) return top.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures); // (e.g., a prelude function used by a reversed `with` transformation)
 		return null; // note: free identifiers carry their own scopes
 	}
 	override bool isNestedIn(Scope rhs){ return rhs is this || (parent && parent.isNestedIn(rhs)); }

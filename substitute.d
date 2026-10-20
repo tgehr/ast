@@ -159,7 +159,56 @@ Expression rescopeLet(LetExp le,MapSX!(Id,Expression) active){
 	auto ctx=BlockSubst(active,MapSX!(Id,Id).init,&taken,&declMap,false);
 	LetRescope let={tpl:le,root:root,rename:&rename};
 	rescopeImpl(null,null,&let,ctx);
-	return let.result;
+	foreach(k,v;active){ // (e.g., a relabeling of the parameters of a function type does not substitute values)
+		if(!v.isSemCompleted()) return let.result;
+		foreach(id;v.freeIdentifiers) if(!id.meaning) return let.result;
+	}
+	return reanalyzeLet(let.result,cast(TypeScope)bs?(cast(TypeScope)bs).origin:bs);
+}
+// the substituted values may have more precise types than the variables they replace: the most precise types
+// are determined by analyzing the result again, as for any copy that is analyzed later (e.g., an inferred generic argument)
+private Expression reanalyzeLet(LetExp le,Scope origin){
+	if(!le||!le.isSemCompleted()||!origin) return le;
+	import ast.semantic_: expressionSemantic, expSemContext, ConstResult, InType;
+	import std.range: only;
+	auto sc=new TypeScope(origin); // (free variables are found by name, e.g., such that local functions capture them)
+	SetX!Declaration free;
+	foreach(id;le.freeIdentifiers){
+		if(!id.meaning) return le;
+		free[id.meaning]=[];
+		foreach(name;only(id.id,id.meaning.getId,id.meaning.name?id.meaning.name.id:id.id)){
+			if(auto p=sc.freeDecls.getPtr(name)){
+				if(*p !is id.meaning) return le; // (e.g., different variables of the same name)
+			}else sc.freeDecls[name]=id.meaning;
+		}
+	}
+	bool shadowed=false; // (by a declaration within the `let` expression)
+	void check(Declaration d){ if(d&&d !in free&&d.name&&(d.getId in sc.freeDecls||d.name.id in sc.freeDecls)) shadowed=true; }
+	void visit(Expression e){
+		if(!e||shadowed) return;
+		if(auto id=cast(Identifier)e) return check(id.meaning);
+		if(auto fd=cast(FunctionDef)e){
+			check(fd);
+			foreach(p;fd.params) check(p);
+			return visit(fd.body_);
+		}
+		if(auto lam=cast(LambdaExp)e) return visit(lam.fd);
+		if(auto ve=cast(VectorForExp)e){
+			if(auto r=ve.fe.aggr.isRange){ visit(r.left); visit(r.step); visit(r.right); }
+			else if(auto c=ve.fe.aggr.isContainer) visit(c.e);
+			return ve.fd?visit(ve.fd):visit(ve.fe.bdy);
+		}
+		foreach(c;e.components) visit(c);
+	}
+	visit(le);
+	if(shadowed) return le;
+	auto cpy=le.copy();
+	auto handler=sc.handler;
+	handler.suppress++;
+	scope(exit) handler.suppress--;
+	auto r=expressionSemantic(cpy,expSemContext(sc,ConstResult.yes,InType.yes));
+	if(!r.isSemCompleted()||r.isSemError()) return le;
+	return r;
 }
 private Expression ttRescopeLet(LetExp le,MapSX!(Id,Expression) active,TypeTransition* tt){
 	auto fn=le.s.blscope_.getFunction();
@@ -1273,7 +1322,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			if(auto p=dmap.getPtr(ofd)) if(*p !is ofd) return *p;
 			Parameter[] nparams;
 			foreach(p;ofd.params){
-				auto np=new Parameter(p.isConst,p.name?new Identifier(p.getId):null,null); // (as for the twin's parameters, renamed names become names)
+				auto np=new Parameter(p.isConst,p.name?new Identifier(let?let.rename(p):p.getId):null,null); // (as for the twin's parameters, renamed names become names)
 				np.copyAnalyzedFieldsFrom(p);
 				if(p.name) np.name.loc=p.name.loc;
 				dmap[p]=np;

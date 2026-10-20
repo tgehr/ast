@@ -281,10 +281,11 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	override FunctionDef copyImpl(CopyArgs args){
 		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
+		bool keepsMeanings=args.preserveMeanings||args.preserveSemantic&&sstate==SemState.initial; // (e.g., a loop iteration of a copy with preserved meanings)
 		Identifier[] selfReferences; // (recursive references refer to the copy)
 		FunctionDef[] nestedDefs;
-		if(args.preserveMeanings){
-			args.boundFunctions~=canonicalSource; // (the copy declares its own parameters and locals)
+		if(keepsMeanings){
+			if(args.preserveMeanings) args.boundFunctions~=canonicalSource; // (the copy declares its own parameters and locals)
 			auto prevPostCopy=args.postCopy;
 			args.postCopy=(Expression src,Expression cpy){
 				if(prevPostCopy) prevPostCopy(src,cpy);
@@ -312,6 +313,8 @@ class FunctionDef: FixedPointDeclaration{
 			if(!ret||!mentionsBound(ret)) r.ret=ret; // (otherwise recomputed)
 			r.hasReturn=hasReturn;
 			static if(language==psi) r.retNames=retNames;
+		}
+		if(keepsMeanings){ // (identifiers with preserved meanings are not looked up again)
 			import ast.substitute: computeCapturesFromBody;
 			computeCapturesFromBody(r);
 		}
