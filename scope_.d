@@ -2819,6 +2819,13 @@ class NestedScope: Scope{
 					if(auto wtt=getWithTransTrial())
 						if(sc.withTransTrial !is wtt)
 							continue; // trial analysis of a `with` transformation: its effects are rolled back, so do not propagate consumption into sibling scopes that do not belong to the trial
+					if(sc.diverges&&!sc.rnsymtab.get(odecl.getId,null)){ // (dropped by `closeUnreachable`, but the split is still part of the branch)
+						if(type) if(auto added=sc.addVariable(ndecl,type,true)){
+							sc.splitVar(ndecl,added);
+							sc.symtabRemove(added);
+						}
+						continue;
+					}
 					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
 						if(parent.getFunction() is sc.getFunction()){
 							if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
