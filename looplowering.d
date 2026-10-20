@@ -3912,6 +3912,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			foreach(d;xsc.mergedVars){
 				auto name=d.mergedInto.name;
 				if(!name||name.id in paramNames||replays.canFind!(r=>r[0]==name.id)) continue;
+				if(!d.derivedSequence.all!(x=>!x.scope_||x.scope_.isNestedIn(loop.bdy.blscope_))) continue; // (a variable from before the loop that the loop does not change, e.g., split into the body only to be forgotten by an early return)
 				auto id=new Identifier(name.id);
 				id.loc=d.loc;
 				auto type=typeForDecl(d.mergedInto);
