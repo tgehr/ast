@@ -3326,13 +3326,24 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// (renames variables in the copy `c`)
 	Expression rename(Expression c,Id[Id] names){
 		if(!names.length) return c;
-		import ast.substitute:statementFreeVarsImpl;
+		import ast.substitute:statementFreeVarsImpl,functionDefFreeVarsImpl;
 		statementFreeVarsImpl(c,(Identifier y){
 			if(auto t=y.id in names) y.id=*t;
 			return 0;
 		});
+		void renameNested(FunctionDef fd){ // (nested functions can refer to definitions of `c`, e.g., to a local function of a loop body)
+			if(fd.name) if(auto t=fd.name.id in names) fd.name.id=*t;
+			functionDefFreeVarsImpl(fd,(Identifier y){
+				if(auto t=y.id in names) y.id=*t;
+				return 0;
+			});
+		}
 		walkShallow(c,(Expression x){
-			if(auto le=cast(LambdaExp)x) le.orig=le.fd.copy();
+			if(auto fd=cast(FunctionDef)x) renameNested(fd);
+			if(auto le=cast(LambdaExp)x){
+				renameNested(le.fd);
+				le.orig=le.fd.copy();
+			}
 			if(auto id=cast(Identifier)x) if(auto t=id.id in names) id.id=*t;
 			if(auto le=cast(LetExp)x) if(le.isForward(true)){ // (its definition is not a component)
 				auto id=cast(Identifier)le.e,did=cast(Identifier)(cast(DefineExp)le.s.s[0]).e1;
