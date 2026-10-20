@@ -2291,6 +2291,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		// results of its recursive function are not lifted, and the recomputations define them
 		Id[][] classExits=new Id[][](classDeps.length);
 		SetX!Id exitLifted;
+		MapSX!(Id,Expression) exitTypes;
 		foreach(d;loop.exitScope.mergedVars){
 			auto decl=d.mergedInto;
 			if(!decl||!decl.name||decl.name.id in carriedNames||decl.name.id in exitLifted||!definedInLoop(d)) continue;
@@ -2299,6 +2300,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto dep=sc.getDependency(decl);
 			if(dep.isTop) continue;
 			exitLifted.insert(decl.name.id);
+			exitTypes[decl.name.id]=type;
 			size_t c=classDeps.length;
 			foreach(j,ref cd;classDeps) if(sameDeps(cd,dep)){ c=j; break; }
 			if(c==classDeps.length){
@@ -3713,7 +3715,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// (the copies of other lifted variables that the recomputations read end up with their recomputed values)
 	foreach(si,ref sl;slices) foreach(w;sorted(sl.carried)) if(auto c=w in renames[si]) stmts~=forgetOf(*c,dupOf(mkId(w)));
 	foreach(v;liftedOrder) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
-	static if(isDoWhile) foreach(v;sorted(exitLifted)) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
+	static if(isDoWhile) foreach(v;sorted(exitLifted)){
+		stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
+		auto type=exitTypes[v];
+		if(type.freeIdentifiers.any!(id=>true)) // (the recomputation may express the type in terms of logged values)
+			stmts~=define(mkId(v),setLoc(new TypeAnnotationExp(mkId(v),cp(type,null),TypeAnnotationType.coercion)));
+	}
 	auto lowered=new CompoundExp(stmts);
 	lowered.loc=loc;
 	auto before=sc.rnsymtab.dup;
@@ -4223,9 +4230,23 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				}else{
 					auto v=freshName();
 					Expression tupleOf(Expression[] es){ return es.length==1?es[0]:at(new TupleExp(es)); }
-					Expression ety=exitLocals.length==1?exitLocals[0][2]:tupleTy(exitLocals.map!(e=>e[2]).array);
+					// (the branch consumes the definitions, which are defined again after it: a definition precedes those its type mentions)
+					typeof(exitLocals) packed,rest=exitLocals.dup;
+					while(rest.length){
+						auto i=rest.countUntil!(x=>!rest.any!(y=>y[1]&&y[1].freeIdentifiers.any!(fv=>fv.id==x[0].id)));
+						if(i<0) i=0;
+						packed~=rest[i];
+						rest=rest[0..i]~rest[i+1..$];
+					}
+					Expression ety=packed.length==1?packed[0][2]:tupleTy(packed.map!(e=>e[2]).array);
 					Expression empty(){ return at(new TypeAnnotationExp(at(new VectorExp([])),arrayTy(ety).copy(cargsDefault),TypeAnnotationType.annotation)); }
-					auto vals=exitLocals.map!(e=>e[2] is e[1]?cast(Expression)e[0].copy(cargsDefault):at(new TypeAnnotationExp(e[0].copy(cargsDefault),e[2].copy(cargsDefault),TypeAnnotationType.annotation))).array;
+					Expression pack(Q!(Identifier,Expression,Expression) e){
+						auto id=e[0].copy(cargsDefault);
+						if(e[1]&&e[1].isClassical()) id.moved=true;
+						if(e[2] is e[1]) return id;
+						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),TypeAnnotationType.annotation));
+					}
+					auto vals=packed.map!pack.array;
 					auto then=at(new CompoundExp(nrst.s~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
 					auto othw=at(new CompoundExp(forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
@@ -4233,7 +4254,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					auto cont=at(new CompoundExp([at(new ForgetExp(mk(v),empty())),cast(Expression)contr]));
 					nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
 					Expression[] lhs,coercions;
-					foreach(e;exitLocals){
+					foreach(e;packed){
 						if(e[2] is e[1]){
 							lhs~=e[0].copy(cargsDefault);
 							continue;
@@ -4324,16 +4345,18 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto defTpl=new TupleExp(cast(Expression[])chain(resultConstTmpNames.map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
 	}
-	Expression[] exitCoercions; // (of the weakened definitions of the body)
+	Expression[] exitCoercions; // (of the weakened definitions of the body, and of the quantum ones, which the function may compute classically)
 	static if(isDoWhile) foreach(e;exitLocals){
-		if(e[2] is e[1]){
+		if(e[2] is e[1]&&(!e[1]||e[1].isClassical())){
 			defTpl.e~=e[0].copy(cargsDefault);
 			continue;
 		}
 		auto tmp=new Identifier(freshName());
 		tmp.loc=e[0].loc;
 		defTpl.e~=tmp;
-		auto coerced=new TypeAnnotationExp(tmp.copy(cargsDefault),e[1].copy(cargsDefault),TypeAnnotationType.coercion);
+		auto use=tmp.copy(cargsDefault);
+		use.moved=true; // (the result of the function does not outlive the coercion)
+		auto coerced=new TypeAnnotationExp(use,e[1].copy(cargsDefault),TypeAnnotationType.coercion);
 		coerced.loc=e[0].loc;
 		auto co=new DefineExp(e[0].copy(cargsDefault),coerced);
 		co.loc=e[0].loc;
@@ -4347,6 +4370,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		else id.loc=loop.loc;
 	}
 	Expression[] stmts=[fd];
+	Expression forgetFunction(){ // (its type may mention variables that it captures, which may change after the loop)
+		auto fid=new Identifier(fi);
+		fid.loc=loop.loc;
+		auto fe=new ForgetExp(fid,null);
+		fe.loc=loop.loc;
+		return fe;
+	}
 	void defineLocals(ref Expression[] stmts,Expression locals){
 		auto def=new DefineExp(defTpl,locals);
 		def.loc=loop.loc;
@@ -4368,6 +4398,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			rdef.loc=rdef.e1.loc=loop.loc;
 			stmts~=rdef;
 		}
+		stmts~=forgetFunction();
 	}
 	if(continuation){
 		auto fret=new ReturnExp(ce2);
@@ -4393,6 +4424,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		defineLocals(stmts,ce2);
 	}else{
 		stmts~=ce2;
+		stmts~=forgetFunction();
 	}
 	static if(is(T==ForExp)){
 		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~(modMatchDef?[modMatchDef]:[])~(adjDef?[adjDef]:[])~(adjIte?[adjIte]:[])~(adjUpd?[adjUpd]:[])~stmts;
@@ -4484,6 +4516,7 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 			if(auto de=cast(DefineExp)x) lhs(de.e1);
 			else if(auto ae=cast(AAssignExp)x) lhs(ae.e1);
 			else if(auto fe=cast(ForgetExp)x) lhs(fe.var);
+			else if(auto we=cast(WithExp)x){ if(we.itrans) writes(we.itrans); } // (e.g., a component replacement)
 			else if(auto id=cast(Identifier)x) if(id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup) later.insert(varName(id));
 		});
 	}
@@ -4503,7 +4536,7 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 		foreach(fv;de.e2.freeIdentifiers){
 			if(fv.meaning&&fv.meaning.isToplevelDeclaration()) continue;
 			auto v=varName(fv);
-			if(v in later||v !in paramNames&&v !in exitDecls) ok=false;
+			if(v==name||v in later||v !in paramNames&&v !in exitDecls) ok=false; // (`v==name`: the definition consumes the previous version)
 		}
 		if(ok) r=q(name,de.e2)~r;
 	}

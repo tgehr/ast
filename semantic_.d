@@ -2175,6 +2175,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		propErr(ncond,dw);
 		lsc.clearConsumed();
 		auto rsc=new BlockScope(lsc);
+		rsc.isLoopReset=true;
 		xsc=new BlockScope(lsc);
 		foreach(_,d;xsc.rnsymtab.dup) // (the state at the exit is not affected by the reset)
 			if(d.scope_ is lsc&&!cast(DeadDecl)d&&!d.isSemError()) xsc.forkSplit(d);
@@ -7653,7 +7654,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 		}
 		classicalForget(fe.var);
 		if(fe.var.type){
-			auto nval=new TypeAnnotationExp(fe.val,fe.var.type,TypeAnnotationType.coercion);
+			Expression.CopyArgs cargs={ preserveMeanings: true }; // (the variables mentioned by the type are accessed in this scope)
+			auto nval=new TypeAnnotationExp(fe.val,fe.var.type.copy(cargs),TypeAnnotationType.coercion);
 			nval.loc=fe.val.loc;
 			fe.val=nval;
 		}
@@ -7764,6 +7766,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return id;
 		}
 	}else{
+		if(sc) id.meaning=sc.getSplit(id.meaning); // (e.g., a copy of a type that mentions a variable that was split into this scope after the type was analyzed)
 		setConstResult(id,context);
 		setImplicitDup();
 		if(sc) sc.recordAccess(id,id.meaning);

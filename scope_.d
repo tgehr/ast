@@ -1144,6 +1144,41 @@ abstract class Scope{
 				oldDecl=splitInto;
 		}
 		lastUses.replaceDecl(splitFrom,splitInto);
+		void retype(Declaration d){
+			if(d.scope_ !is this) return;
+			retypeDeclaration(d,(Declaration m)=>m is splitFrom?splitInto:m);
+		}
+		foreach(_,d;rnsymtab) retype(d);
+		foreach(d,ref prop;declProps.props) retype(d);
+	}
+	// (the types of the declarations of a scope mention the versions of the variables in that scope)
+	private void retypeDeclaration(Declaration decl,scope Declaration delegate(Declaration) current){
+		auto vd=cast(VarDecl)decl;
+		if(!vd||!vd.vtype) return;
+		MapSX!(Id,Declaration) meanings;
+		MapSX!(Id,Expression) subst;
+		foreach(id;vd.vtype.freeIdentifiers){
+			if(!id.meaning) continue;
+			if(auto m=meanings.get(id.id,null)){
+				if(m !is id.meaning) subst.remove(id.id); // (different versions of the same name are not distinguished by substitution)
+				continue;
+			}
+			meanings[id.id]=id.meaning;
+			auto cur=current(id.meaning);
+			if(cur is id.meaning) continue;
+			import ast.semantic_: typeForDecl;
+			auto nid=new Identifier(cur.getId);
+			nid.meaning=cur;
+			nid.scope_=this;
+			nid.loc=id.loc;
+			nid.type=typeForDecl(cur);
+			nid.constLookup=true;
+			nid.setSemCompleted();
+			subst[id.id]=nid;
+		}
+		if(!subst.length) return;
+		vd.vtype=vd.vtype.substitute(subst);
+		updateType(vd);
 	}
 
 	final void updateType(Declaration decl){
@@ -1740,6 +1775,12 @@ abstract class Scope{
 		foreach(d;dependents)
 			if(!lastUses.canForget(d,true,false))
 				return false;
+		foreach(d;dependents)
+			for(auto s=cast(NestedScope)this;s&&!cast(FunctionScope)s;s=cast(NestedScope)s.parent)
+				if(auto bs=cast(BlockScope)s) if(bs.isLoopReset){
+					if(!d.scope_||!d.scope_.isNestedIn(bs.parent)) return false; // (the exit of a `do`-`while` loop follows the resets of the earlier iterations: a variable from outside the loop would have to be forgotten before it)
+					break;
+				}
 		EarlyForgottenDecl firstEFD=null;
 		foreach(d;dependents){
 			lastUses.forget(d,false);
@@ -1892,6 +1933,7 @@ abstract class Scope{
 			return dm;
 		}
 		MapSX!(Id,Expression) mergeTypeSubst;
+		auto numProducedOuter=producedOuter.length;
 		foreach(psym;rnsymtab.dup){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
@@ -2036,6 +2078,10 @@ abstract class Scope{
 				}
 				if(symExists) producedOuter~=sym;
 			}
+		}
+		if(mergeTypeSubst.length) foreach(sym;producedOuter[numProducedOuter..$]){ // (the types of the merged variables mention the merged versions, independently of the order of merging)
+			auto vd=cast(VarDecl)sym;
+			if(vd&&vd.vtype&&vd.scope_ is this) vd.vtype=vd.vtype.substitute(mergeTypeSubst);
 		}
 		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged)
 			changed=false;
@@ -2704,6 +2750,7 @@ class NestedScope: Scope{
 					result=added;
 					assert(ndecl.scope_ is parent&&result.scope_ is this,text(ndecl));
 					splitVar(ndecl,result);
+					retypeDeclaration(result,(Declaration m)=>getSplit(m));
 					import ast.semantic_:propErr;
 					propErr(ndecl,result);
 					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
@@ -3103,6 +3150,7 @@ class BlockScope: NestedScope{
 	RestrictionCause restrictionCause_;
 	bool isLoopBody=false;
 	bool isLetBody=false;
+	bool isLoopReset=false; // (of a `do`-`while` loop)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
