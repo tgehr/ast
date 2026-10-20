@@ -3788,7 +3788,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}
 	SetX!Id unchangedConst; // (variables that are only consumed by early returns, see `loopParams`)
 	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst);
-	auto constParams=loopParams_[0], movedParams=loopParams_[1];
+	auto constParams=loopParams_[0], movedParams=state.origStateSnapshot.orderedByTypeMentions(loopParams_[1]); // (consumed by the call in this order)
 	// (the loop bounds are passed as `const` parameters as well)
 	Q!(Id,Declaration,Expression,bool) boundParam(Identifier name,Expression type){
 		auto decl=new VarDecl(name.copy());
@@ -3886,6 +3886,23 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			}
 		}
 		sort!((a,b)=>a[0].id.str<b[0].id.str)(exitLocals);
+		Q!(Id,Expression,Expression)[] strongerExits; // (moved parameters that the body defines with a stronger type: name, type, parameter type)
+		if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars){
+			auto name=d.mergedInto.name;
+			if(!name) continue;
+			auto p=movedParams.find!(p=>p[1].name.id==name.id);
+			if(p.empty) continue;
+			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
+			if(type&&ptype&&type!=ptype) strongerExits~=q(name.id,type,ptype);
+		}
+		foreach(ref r;returnTpl.e){ // (see `exitCoercions`)
+			auto id=cast(Identifier)r;
+			if(!id) continue;
+			auto s=strongerExits.find!(s=>s[0]==id.id);
+			if(s.empty) continue;
+			r=new TypeAnnotationExp(id,s.front[2].copy(cargsDefault),TypeAnnotationType.annotation);
+			r.loc=id.loc;
+		}
 		foreach(e;exitLocals){ // (types mentioning local values of the function are weakened, see `exitCoercions`)
 			Expression r=e[0].copy(cargsDefault);
 			if(e[2] !is e[1]) r=new TypeAnnotationExp(r,e[2].copy(cargsDefault),TypeAnnotationType.annotation);
@@ -4362,10 +4379,28 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		co.loc=e[0].loc;
 		exitCoercions~=co;
 	}
-	foreach(arg;paramTpl2.e[$-movedParams.length..$]){ // (a moved variable that is not available after the loop is consumed by it, e.g., by the final evaluation of the condition)
+	static if(isDoWhile) foreach(ref d;defTpl.e){
+		auto id=cast(Identifier)d;
+		if(!id) continue;
+		auto s=strongerExits.find!(s=>s[0]==id.id);
+		if(s.empty) continue;
+		auto tmp=new Identifier(freshName());
+		tmp.loc=id.loc;
+		d=tmp;
+		auto use=tmp.copy(cargsDefault);
+		use.moved=true;
+		auto coerced=new TypeAnnotationExp(use,s.front[1].copy(cargsDefault),TypeAnnotationType.coercion);
+		coerced.loc=id.loc;
+		auto co=new DefineExp(id.copy(cargsDefault),coerced);
+		co.loc=id.loc;
+		exitCoercions~=co;
+	}
+	foreach(arg;paramTpl2.e[$-movedParams.length..$]){
 		auto id=cast(Identifier)arg;
-		if(!id||defTpl.e.any!(d=>(cast(Identifier)d)&&(cast(Identifier)d).id==id.id)) continue;
-		id.moved=true;
+		if(!id) continue;
+		id.moved=true; // (an implicit duplication of a classical value is not cancelled by the definition after the call if the type of another live variable mentions it)
+		if(defTpl.e.any!(d=>(cast(Identifier)d)&&(cast(Identifier)d).id==id.id)) continue;
+		// (a moved variable that is not available after the loop is consumed by it, e.g., by the final evaluation of the condition)
 		static if(is(T==WhileExp)) id.loc=loop.cond.loc;
 		else id.loc=loop.loc;
 	}

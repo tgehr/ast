@@ -9748,7 +9748,7 @@ bool setFtype(FunctionDef fd,bool force){
 				fsc.note("variable declared here",id.meaning.loc);
 				fd.setSemError();
 			}
-			if(fd.scope_) typeConstBlockDecl(id.meaning,fd,fd.scope_);
+			if(fd.scope_&&fd.sstate==SemState.started) typeConstBlockDecl(id.meaning,fd,fd.scope_); // (released after the definition: later, the live function itself blocks the variables)
 		}
 	}
 	return true;

@@ -963,7 +963,7 @@ class Checker {
 		}
 
 		foreach(decl; scTrue.mergedVars) {
-			visExpr(typeForDecl(decl.mergedInto));
+			visType(typeForDecl(decl.mergedInto));
 		}
 	}
 
@@ -996,7 +996,7 @@ class Checker {
 		// (only after all merged variables are defined: dependent types
 		// may reference sibling merged variables)
 		foreach(decl; scNested.mergedVars) {
-			visExpr(typeForDecl(decl.mergedInto));
+			visType(typeForDecl(decl.mergedInto));
 		}
 	}
 

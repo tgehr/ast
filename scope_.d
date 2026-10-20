@@ -2358,6 +2358,23 @@ abstract class Scope{
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;
 		}
+		// (a variable comes after the variables whose types mention it in this state)
+		Q!(Id,Declaration,Expression,bool)[] orderedByTypeMentions(Q!(Id,Declaration,Expression,bool)[] params){
+			import ast.semantic_: typeForDecl;
+			bool mentions(Q!(Id,Declaration,Expression,bool) p,Q!(Id,Declaration,Expression,bool) q){
+				auto decl=rnsymtab.get(p[0],null);
+				auto type=decl?typeForDecl(decl):null;
+				return type&&type.freeIdentifiers.any!(id=>id.meaning&&id.meaning.getId==q[0]);
+			}
+			typeof(params) ordered,rest=params;
+			while(rest.length){
+				auto i=rest.countUntil!(p=>!rest.any!(q=>q[0]!=p[0]&&mentions(q,p)));
+				if(i<0) i=0;
+				ordered~=rest[i];
+				rest=rest[0..i]~rest[i+1..$];
+			}
+			return ordered;
+		}
 		static bool unchangedOnContinuingPaths(Declaration decl,NestedScope loopScope){
 			Declaration split=null;
 			foreach(d;decl.splitInto) if(d.scope_ is loopScope) split=d;
@@ -2439,6 +2456,10 @@ abstract class Scope{
 						if(decl in state.dependencies.dependencies)
 							state.dependencies.replace(decl,splt);
 						state.declProps.replaceDecl(decl,splt);
+						if(auto lu=state.lastUses.get(decl,null)){ // (e.g., forgotten on entry)
+							state.lastUses.remove(decl);
+							state.lastUses[splt]=lu;
+						}
 					}
 					decl=splt;
 				}
