@@ -7646,6 +7646,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				}
 				if(auto nmeaning=sc.consume(meaning,id))
 					meaning=nmeaning;
+				static if(language==silq) sc.pinTypeMentions(meaning); // (the variables that its type mentions are live up to here)
 				if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
 					id.scope_=sc;
 					id.byRef=true;

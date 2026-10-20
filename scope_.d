@@ -434,15 +434,17 @@ abstract class Scope{
 		if(id.typeofSuppressedCapture) return;
 		if(!meaning.isToplevelDeclaration()&&!meaning.isAggregateMember()){
 			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
-			static if(language==silq){
-				import ast.semantic_: typeForDeclNoAnalyze;
-				if(auto type=typeForDeclNoAnalyze(meaning)) foreach(fid;type.freeIdentifiers) // (as are the variables that its type mentions)
-					if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
-			}
+			static if(language==silq) pinTypeMentions(meaning); // (as are the variables that its type mentions)
 			if(!id.constLookup&&!id.implicitDup)
 				lastUses.consumption(meaning,id,this); // TODO: ok?
 			updateDeclProps(meaning).accesses~=id;
 		}
+	}
+	static if(language==silq)
+	final void pinTypeMentions(Declaration meaning){ // (the variables that the type of `meaning` mentions are live where it is used)
+		import ast.semantic_: typeForDeclNoAnalyze;
+		if(auto type=typeForDeclNoAnalyze(meaning)) foreach(fid;type.freeIdentifiers)
+			if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
 	}
 	final void recordCapturer(Declaration capturer,Declaration meaning){
 		if(!meaning.isToplevelDeclaration){
