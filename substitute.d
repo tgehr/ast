@@ -399,7 +399,7 @@ private int stmtFreeVars(T)(T stmt,scope int delegate(Identifier) dg)
 }
 static if(language==silq)
 private int stmtFreeVars(WithExp we,scope int delegate(Identifier) dg){
-	return we.freeVarsImpl(dg);
+	return blockFreeVarsImpl(withStatements(we),null,dg);
 }
 private int stmtFreeVars(DefineExp de,scope int delegate(Identifier) dg){
 	if(auto r=de.e2.freeVarsImpl(dg)) return r;
@@ -478,6 +478,11 @@ private void collectBoundNames(T)(T stmt,ref SetX!Id names)
 }
 static if(language==silq)
 private void collectBoundNames(WithExp we,ref SetX!Id names){
+	foreach(x;withStatements(we)) collectBoundNamesImpl(x,names);
+}
+static if(language==silq)
+private Expression[] withStatements(WithExp we){ // (locals of the transformation are visible in the body and in the inverse transformation)
+	return we.trans.s~we.bdy.s~(we.itrans?we.itrans.s:[]);
 }
 static if(language==psi)
 private void collectBoundNames(DatDecl dd,ref SetX!Id names){
@@ -1247,8 +1252,8 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 	Expression mapExp(Expression e,ref Expression.CopyArgs args){
 		if(cast(Type)e&&e.isSemEvaluated()) return shareTy(e); // (as for the types of expressions)
 		if(cast(Type)e&&e.isSemCompleted()) return shareTy(e.eval()); // (e.g., an inferred argument of a generic function)
-		if(let) if(auto id=cast(Identifier)e){ // (a use of a substituted variable from outside the `let`)
-			if(id.meaning&&id.meaning.isToplevelDeclaration()&&id.isSemCompleted()) // (e.g., a type alias such as `unit`, as for a substitution)
+		if(let) if(auto id=cast(Identifier)e) if(id.isSemCompleted()){ // (a use of a substituted variable from outside the `let`; unanalyzed syntax, e.g., the body of an analyzed vector comprehension, is not substituted)
+			if(id.meaning&&id.meaning.isToplevelDeclaration()) // (e.g., a type alias such as `unit`, as for a substitution)
 				if(auto init=id.getInitializer()) return init;
 			if(!id.meaning){
 				if(id.id in bctx.subst) return id.substitute(bctx.subst);

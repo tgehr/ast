@@ -880,6 +880,14 @@ struct EqualityContext{
 				else if(auto fe=cast(ForExp)stmt) merged(fe.bdy);
 				else if(auto we=cast(WhileExp)stmt) merged(we.bdy);
 				else if(auto re=cast(RepeatExp)stmt) merged(re.bdy);
+				else if(auto wi=cast(WithExp)stmt){
+					if(wi.isIndices){ // (the inverse transformation writes back the components, redefining the aggregates)
+						import ast.semantic_:getIdFromIndex;
+						if(wi.itrans) foreach(x;wi.itrans.s)
+							if(auto de=cast(DefineExp)x) if(auto idx=cast(IndexExp)de.e1)
+								if(auto id=getIdFromIndex(idx)) if(id.meaning) acc~=id.meaning;
+					}else foreach(ce;[wi.trans,wi.bdy,wi.itrans]) merged(ce);
+				}
 			}
 		}
 		collect(sa,da);
@@ -1452,7 +1460,7 @@ class IndexExp: Expression{ //e[a]
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto idx=cast(IndexExp)rhs;
-		return idx&&isEqual(idx.e,e,&ctx)&&isEqual(idx.a,a,&ctx)&&idx.isClassical_==isClassical_;
+		return idx&&isEqual(e,idx.e,&ctx)&&isEqual(a,idx.a,&ctx)&&isClassical_==idx.isClassical_;
 	}
 	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
 		if(isEqual(this,rhs,ctx)) return true;
@@ -2360,6 +2368,7 @@ class RepeatExp: Expression{
 	override string toString(){ return _brk("repeat "~num.toString()~" "~bdy.toString()); }
 	override @property string kind(){ return "repeat loop"; }
 	override bool isCompound(){ return true; }
+	override Annotation getAnnotation(){ return min(num.getAnnotation(),bdy.getAnnotation()); }
 
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree; // TODO
@@ -2598,6 +2607,7 @@ class ForExp: Expression{
 	override string toString(){ return _brk(toStringNoBody()~bdy.toString()); }
 	override @property string kind(){ return "for loop"; }
 	override bool isCompound(){ return true; }
+	override Annotation getAnnotation(){ return min(aggr.getAnnotation(),bdy.getAnnotation()); }
 
 	override bool isTotal(){ return aggr.isTotal()&&bdy.isTotal(); }
 
@@ -2654,6 +2664,7 @@ class WhileExp: Expression{
 	override string toString(){ return _brk("while "~cond.toString()~bdy.toString()); }
 	override @property string kind(){ return "while loop"; }
 	override bool isCompound(){ return true; }
+	override Annotation getAnnotation(){ return min(cond.getAnnotation(),bdy.getAnnotation()); }
 
 	override Expression evalImpl(){ return this; }
 	mixin VariableFree; // TODO
@@ -2936,32 +2947,49 @@ class LetExp: Expression{
 				}
 			}
 			foreach(i,stmt;s.s) if(i<ns.s.length) pair(stmt,ns.s[i]);
-			if(s.blscope_){ // (the copy also makes its own declarations within nested scopes, e.g., of `if` statements and loops)
-				auto fn=s.blscope_.getFunction();
+			auto fn=s.blscope_?s.blscope_.getFunction():null;
+			bool isLocal(Declaration d){ // (the copy also makes its own declarations within nested scopes, e.g., of `if` statements and loops)
+				return s.blscope_&&d.scope_&&d.scope_.isNestedIn(s.blscope_)&&d.scope_.getFunction() is fn;
+			}
+			void unbind(Identifier id){
+				auto d=id.meaning;
+				if(d.name&&id.id==d.getId) id.id=d.name.id; // (the declaration is looked up again by name)
+				id.meaning=null;
+				id.scope_=null;
+			}
+			if(s.blscope_){
 				void unbindLocal(Expression x){
 					if(auto id=cast(Identifier)x){
 						auto d=id.meaning;
 						if(!d) return;
 						if(auto p=bound.getPtr(d)){ // (e.g., a use of a function defined in a block without its own scope)
 							if(*p){ id.meaning=*p; return; }
-						}else if(!d.scope_||!d.scope_.isNestedIn(s.blscope_)||d.scope_.getFunction() !is fn) return;
-						if(d.name&&id.id==d.getId) id.id=d.name.id; // (the declaration is looked up again by name)
-						id.meaning=null;
-						id.scope_=null;
+						}else if(!isLocal(d)) return;
+						unbind(id);
+						return;
+					}
+					if(auto fd=cast(FunctionDef)x){ // (as for a lambda, the captures of a nested function definition)
+						foreach(decl;fd.capturedDecls) foreach(c;fd.captures[decl]) unbindLocal(c);
 						return;
 					}
 					foreach(c;x.components) unbindLocal(c);
+					static if(language==silq) if(auto we=cast(WithExp)x) if(we.itrans) unbindLocal(we.itrans); // (not a component)
+					if(auto fe=cast(ForExp)x){ // (the loop variable is not a component)
+						if(fe.var) unbindLocal(fe.var);
+						if(fe.pattern) unbindLocal(fe.pattern);
+					}
 				}
 				foreach(stmt;ns.s) unbindLocal(stmt);
 				unbindLocal(ne);
 			}
-			if(bound.length){
-				int rebind(Identifier id){
+			if(bound.length||s.blscope_){
+				int rebind(Identifier id){ // (also within nested function definitions, which are not components)
+					if(!id.meaning) return 0;
 					if(auto p = bound.getPtr(id.meaning)){
 						if(!*p&&id.meaning.name&&id.id==id.meaning.getId) id.id=id.meaning.name.id;
 						id.meaning=*p;
 						if(!*p) id.scope_=null;
-					}
+					}else if(isLocal(id.meaning)) unbind(id);
 					return 0;
 				}
 				import ast.substitute: statementFreeVarsImpl, computeCapturesFromBody;
@@ -3250,13 +3278,23 @@ class VectorForExp: Expression{
 	}
 	override VectorForExp copyImpl(CopyArgs args){
 		if(args.preserveSemantic) enforce(!fd&&!len,"TODO");
+		if(fd) if(auto e=analyzedElement()){ // (the body is not substituted after semantic analysis, the synthesized function is)
+			auto bargs=args;
+			bargs.boundFunctions~=fd.canonicalSource;
+			auto nbdy=new CompoundExp([e.copy(bargs)]);
+			nbdy.loc=fe.bdy.loc;
+			auto nfe=new ForExp(fe.var?fe.var.copy(args):null,fe.pattern?fe.pattern.copy(args):null,fe.aggr.copy(args),nbdy);
+			nfe.loc=fe.loc;
+			nfe.noSplit=fe.noSplit;
+			return new VectorForExp(nfe);
+		}
 		return new VectorForExp(fe.copy(args));
 	}
 	override string toString(){
 		if(fd) if(auto r=analyzedToString()) return _brk(r);
 		return _brk("["~fe.bdy.s[0].toString()~" "~fe.toStringNoBody()~"]");
 	}
-	private string analyzedToString(){
+	private Expression[] analyzedStatements(){
 		if(!fd.body_||fd.params.length!=1||!fd.params[0].name) return null;
 		Expression[] stmts;
 		void add(Expression x){
@@ -3267,6 +3305,23 @@ class VectorForExp: Expression{
 		if(!stmts.length) return null;
 		auto ret=cast(ReturnExp)stmts[$-1];
 		if(!ret||!ret.e) return null;
+		return stmts;
+	}
+	private Expression analyzedElement(){ // (the element expression of the synthesized function)
+		auto stmts=analyzedStatements();
+		if(!stmts.length) return null;
+		if(stmts.length==2){ // (element pattern)
+			if(!fe.pattern) return null;
+			auto de=cast(DefineExp)stmts[0];
+			auto id=de?cast(Identifier)de.e2:null;
+			if(!id||id.id!=fd.params[0].name.id) return null;
+		}else if(stmts.length!=1||fe.pattern) return null;
+		return (cast(ReturnExp)stmts[$-1]).e;
+	}
+	private string analyzedToString(){
+		auto stmts=analyzedStatements();
+		if(!stmts.length) return null;
+		auto ret=cast(ReturnExp)stmts[$-1];
 		auto pname=fd.params[0].name;
 		string binder=pname.toString();
 		if(stmts.length==2){ // (element pattern)
