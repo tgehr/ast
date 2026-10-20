@@ -1715,10 +1715,11 @@ bool finalizeLoopIteration(
 	Expression loopExp,
 	string kind,
 	ref Declaration[] constForgets,
-	ref bool anyDeferredSpecificityCheck
+	ref bool anyDeferredSpecificityCheck,
+	bool noNextIteration=false // (e.g., the reset of a `do`-`while` loop returns)
 ){
 	propErr(bdy,loopExp);
-	auto returns=definitelyReturns(bdy);
+	auto returns=definitelyReturns(bdy)||noNextIteration;
 	auto bsc=bdy.blscope_;
 	constForgets=loopConstForgetCandidates(sc,bsc);
 	if(sc.mergeLoop(returns,state.forgetScope,bsc)){
@@ -1752,7 +1753,7 @@ struct LoopIterations{
 			if(cast(FunctionScope)s) break;
 			if(auto bs=cast(BlockScope)s) if(bs.isLoopBody&&bs.speculative) outer=true;
 		}
-		foreach(x;bdy.subexpressions) if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x) nested=true;
+		foreach(x;bdy.subexpressions) if(isLoopStatement(x)) nested=true;
 	}
 	void setup(BlockScope lsc){
 		this.lsc=lsc;
@@ -1772,6 +1773,10 @@ struct LoopIterations{
 			n++;
 		}
 	}
+}
+bool isLoopStatement(Expression e){
+	static if(language==silq) if(cast(DoWhileExp)e) return true;
+	return cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e;
 }
 // Whether `sc` is inside a loop body of the function it belongs to.
 bool insideLoopBody(Scope sc){
@@ -1811,6 +1816,7 @@ void runFinalLoopIteration(T)(
 	T loop, Scope sc, ref StmFlags flags, ref FixedPointIterState state, ref CompoundExp bdy,
 	string kind, ref Declaration[] constForgets, ref bool anyDeferredSpecificityCheck,
 	scope void delegate(BlockScope) setupIter=null, scope void delegate() checkAfterBody=null,
+	scope bool delegate() noNextIteration=null,
 ){
 	bool lowerThisPass=shouldLowerLoop(sc);
 	if(loop.isSemError()||bdy.isSemError()) return;
@@ -1837,7 +1843,7 @@ void runFinalLoopIteration(T)(
 	bdy=compoundExpSemantic(bdy,sc,flags);
 	assert(!!bdy);
 	if(checkAfterBody) checkAfterBody();
-	finalizeLoopIteration(state,sc,flags,bdy,loop,kind,constForgets,anyDeferredSpecificityCheck);
+	finalizeLoopIteration(state,sc,flags,bdy,loop,kind,constForgets,anyDeferredSpecificityCheck,noNextIteration !is null&&noNextIteration());
 	if(dummyData.contextPushed){
 		state.dummyAnalysisRan=true;
 		foreach(v;collectDummyResults(sc,state,dummyData,candidates).byValue)
@@ -2010,7 +2016,10 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 			}else if(auto fe=cast(ForExp)e) collectDefinitions(fe.bdy);
 			else if(auto nwe=cast(WhileExp)e) collectDefinitions(nwe.bdy);
 			else if(auto re=cast(RepeatExp)e) collectDefinitions(re.bdy);
-			else if(auto nwe=cast(WithExp)e){
+			else if(auto dw=cast(DoWhileExp)e){
+				collectDefinitions(dw.bdy);
+				if(dw.reset) collectDefinitions(dw.reset);
+			}else if(auto nwe=cast(WithExp)e){
 				collectDefinitions(nwe.trans);
 				collectDefinitions(nwe.bdy);
 			}
@@ -2134,6 +2143,101 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	Expression result=re;
 	if(re.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(re,state,sc,flags);
+	if(result.isSemCompleted())
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+	return result;
+}
+
+// the loop scope has two nested scopes: the reset, which continues with the next iteration, and the exit,
+// which is merged into the enclosing scope after the last iteration (the definitions of the body remain visible)
+static if(language==silq)
+Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool resetConst=true){
+	Expression.CopyArgs cargs={preserveSemantic: true};
+	sc.clearConsumed();
+	if(dw.implicitReset) dw.reset=null; // (e.g., a copy of an analyzed loop)
+	CompoundExp bdy,rst;
+	Expression ncond=null;
+	BlockScope lsc=null,xsc=null;
+	auto state=startFixedPointIteration(sc,flags);
+	bool converged=false;
+	int numTries=-1;
+	bool anyDeferredSpecificityCheck=false; // tracks across iterations
+	Declaration[] constForgets;
+	bool resetReturns=false;
+	void finishIteration(){
+		xsc=null;
+		resetReturns=false;
+		ncond=dw.cond.copy(cargs);
+		rst=dw.reset?dw.reset.copy(cargs):new CompoundExp([]);
+		if(!dw.reset) rst.loc=dw.cond.loc;
+		if(definitelyReturns(bdy)) return; // (the condition and the reset are not reached)
+		ncond=conditionSemantic(dw,ncond,lsc,InType.no);
+		propErr(ncond,dw);
+		lsc.clearConsumed();
+		auto rsc=new BlockScope(lsc);
+		xsc=new BlockScope(lsc);
+		foreach(_,d;xsc.rnsymtab.dup) // (the state at the exit is not affected by the reset)
+			if(d.scope_ is lsc&&!cast(DeadDecl)d&&!d.isSemError()) xsc.forkSplit(d);
+		rst.blscope_=rsc;
+		rst=compoundExpSemantic(rst,lsc,flags);
+		propErr(rst,dw);
+		resetReturns=definitelyReturns(rst);
+		if(resetReturns) rsc.closeUnreachable(lsc);
+		foreach(_,d;xsc.rnsymtab) // (the versions at the exit are only forgotten after the loop)
+			if(d.scope_ is xsc) if(auto lu=xsc.lastUses.get(d,true)) lu.pin();
+		xsc.diverges=true; // (the exit does not continue the loop body)
+		if(lsc.merge(false,rsc,xsc)) dw.setSemError();
+		xsc.diverges=false;
+	}
+	auto iterations=LoopIterations(sc,dw.bdy);
+	if(dw.reset) foreach(x;dw.reset.subexpressions) if(isLoopStatement(x)) iterations.nested=true;
+	while(!converged){
+		state.beginIteration();
+		bdy=dw.bdy.copy(cargs);
+		lsc=bdy.blscope_=state.makeScopes(sc);
+		iterations.setup(lsc);
+		bdy=compoundExpSemantic(bdy,sc,flags);
+		finishIteration();
+		auto returns=finalizeLoopIteration(state,sc,flags,bdy,dw,"do-while",constForgets,anyDeferredSpecificityCheck,resetReturns);
+		converged|=loopIterationConverged(bdy,dw,returns,state);
+		iterations.adjust(converged,bdy.isSemError()||dw.isSemError(),anyDeferredSpecificityCheck);
+		if(!converged && ++numTries>astopt.inferenceLimit){
+			sc.error("cannot determine types for variables in do-while loop",dw.loc);
+			sc.note("you may need to manually widen the type of loop-carried variables, increase the `--inference-limit=...`, or write a different loop",dw.loc);
+			dw.setSemError();
+			break;
+		}
+	}
+	if(!iterations.outer) runFinalLoopIteration(dw,sc,flags,state,bdy,"do-while",constForgets,anyDeferredSpecificityCheck,
+		(BlockScope nlsc){ lsc=nlsc; },
+		(){ finishIteration(); },
+		()=>resetReturns);
+	state.fixSplitMergeGraph(sc);
+	if(xsc&&lsc&&!resetReturns){ // (the exit of a later iteration follows the resets of the earlier ones)
+		foreach(n;lsc.splitVars){
+			auto end=lsc.rnsymtab.get(n.getId,null);
+			if(end&&!cast(DeadDecl)end&&end.isDerivedFrom(n)) continue; // (not changed by the loop)
+			if(auto x=xsc.rnsymtab.get(n.getId,null))
+				if(!cast(DeadDecl)x&&x.isDerivedFrom(n)) x.cutDerivation();
+		}
+	}
+	dw.implicitReset=!dw.reset;
+	dw.bdy=bdy;
+	dw.cond=ncond;
+	dw.reset=rst;
+	if(xsc&&sc.mergeLoopExit(xsc)) dw.setSemError();
+	dw.exitScope=xsc;
+	if(xsc) foreach(d;xsc.mergedVars){ // (variables defined in the loop are forgotten after it unless used later)
+		auto decl=d.mergedInto;
+		auto type=typeForDecl(decl);
+		if(!type||type.isClassical()||!sc.canSplit(decl)||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop) continue;
+		constForgets~=decl;
+	}
+	dw.type=definitelyReturns(bdy)||isTrue(dw.cond)?bottom:unit;
+	dw.setSemCompleted();
+	Expression result=dw;
+	if(dw.isSemCompleted()&&shouldLowerLoop(sc))
+		result=lowerLoop(dw,state,sc,flags);
 	if(result.isSemCompleted())
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
 	return result;
@@ -6363,6 +6467,10 @@ RestrictionCause findQuantumReturn(Expression e,bool lenient=true){
 		if(auto fe=cast(ForExp)e) return find(fe.bdy,control,quantumControl);
 		if(auto we=cast(WhileExp)e) return find(we.bdy,control,quantumControl);
 		if(auto re=cast(RepeatExp)e) return find(re.bdy,control,quantumControl);
+		static if(language==silq) if(auto dw=cast(DoWhileExp)e){
+			if(auto r=find(dw.bdy,control,quantumControl)) return r;
+			return find(dw.reset,control,quantumControl);
+		}
 		if(auto we=cast(WithExp)e) return find(we.bdy,control,quantumControl);
 		return RestrictionCause.init;
 	}
@@ -10261,6 +10369,10 @@ private bool definitelyReturnsImpl(RepeatExp re){
 	return isPositive(re.num) && definitelyReturns(re.bdy);
 }
 static if(language==silq)
+private bool definitelyReturnsImpl(DoWhileExp dw){
+	return definitelyReturns(dw.bdy)||isTrue(dw.cond);
+}
+static if(language==silq)
 private bool definitelyReturnsImpl(WithExp we){
 	return definitelyReturns(we.trans)||definitelyReturns(we.bdy);
 }
@@ -10302,6 +10414,11 @@ private ReturnExp mayReturnImpl(WhileExp we){
 }
 private ReturnExp mayReturnImpl(RepeatExp re){
 	return isZero(re.num)?null:mayReturn(re.bdy);
+}
+static if(language==silq)
+private ReturnExp mayReturnImpl(DoWhileExp dw){
+	if(auto ret=mayReturn(dw.bdy)) return ret;
+	return dw.reset?mayReturn(dw.reset):null;
 }
 static if(language==silq)
 private ReturnExp mayReturnImpl(WithExp we){

@@ -894,6 +894,10 @@ struct EqualityContext{
 								if(auto id=getIdFromIndex(idx)) if(id.meaning) acc~=id.meaning;
 					}else foreach(ce;[wi.trans,wi.bdy,wi.itrans]) merged(ce);
 				}
+				else if(auto dw=cast(DoWhileExp)stmt){
+					merged(dw.bdy);
+					if(dw.exitScope) foreach(m;dw.exitScope.mergedVars) if(m.mergedInto) acc~=m.mergedInto;
+				}
 			}
 		}
 		collect(sa,da);
@@ -2690,6 +2694,45 @@ class WhileExp: Expression{
 	}
 }
 
+class DoWhileExp: Expression{
+	CompoundExp bdy;
+	Expression cond;
+	CompoundExp reset; // (without it, the variables defined by the body are forgotten implicitly before the next iteration)
+	bool noSplit=false;
+	this(CompoundExp bdy,Expression cond,CompoundExp reset){
+		this.bdy=bdy;
+		this.cond=cond;
+		this.reset=reset;
+	}
+	override DoWhileExp copyImpl(CopyArgs args){
+		auto r=new DoWhileExp(bdy.copy(args),cond.copy(args),reset?reset.copy(args):null);
+		r.noSplit=noSplit;
+		r.implicitReset=implicitReset;
+		if(args.preserveSemantic) r.exitScope=args.mapScope?cast(BlockScope)args.mapScope(exitScope):exitScope;
+		return r;
+	}
+	override string toString(){ return _brk("do"~bdy.toString()~"while "~cond.toString()~(reset&&!implicitReset?reset.toString():"")); }
+	override @property string kind(){ return "do-while loop"; }
+	override bool isCompound(){ return reset&&!implicitReset; }
+	override Annotation getAnnotation(){ return min(bdy.getAnnotation(),cond.getAnnotation(),reset?reset.getAnnotation():Annotation.max); }
+
+	override Expression evalImpl(){ return this; }
+	mixin VariableFree; // TODO
+	override int componentsImpl(scope int delegate(Expression) dg){
+		if(auto r=dg(bdy)) return r;
+		if(auto r=dg(cond)) return r;
+		return reset?dg(reset):0;
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){ // (e.g., within a `let` expression that is part of a type)
+		auto r=cast(DoWhileExp)rhs;
+		return r&&isEqual(bdy,r.bdy,&ctx)&&isEqual(cond,r.cond,&ctx)&&isEqual(reset,r.reset,&ctx);
+	}
+
+	// semantic information
+	bool implicitReset=false; // (the reset block is synthesized: it only forgets the variables defined by the body)
+	BlockScope exitScope; // (the state after the final iteration, whose definitions remain visible after the loop)
+}
+
 class CompoundExp: Expression{
 	Expression[] s;
 	this(Expression[] ss){s=ss;}
@@ -3694,7 +3737,7 @@ private alias stmKindsCommon=AliasSeq!(
 	DefineExp,assignKinds,
 	ForExp,WhileExp,RepeatExp,ObserveExp,CObserveExp,AssertExp,ForgetExp
 );
-static if(language==silq) alias stmKinds=AliasSeq!(stmKindsCommon,WithExp);
+static if(language==silq) alias stmKinds=AliasSeq!(stmKindsCommon,WithExp,DoWhileExp);
 else static if(language==psi) alias stmKinds=AliasSeq!(stmKindsCommon,DatDecl);
 else alias stmKinds=stmKindsCommon;
 // statement kinds that are handled by analyzing them as expressions

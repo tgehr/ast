@@ -52,7 +52,7 @@ bool cannotFail(Expression e){
 				if(!(isInPrelude(fd)&&fd.attributes.getPtr(Id.s!"artificial")&&util.among(fd.getName,"dup","measure","rotZ"))) ok=false;
 			}
 		}else if(cast(IndexExp)x||cast(SliceExp)x||cast(DivExp)x||cast(IDivExp)x||cast(ModExp)x||cast(PowExp)x
-			||cast(AssertExp)x||cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x||cast(ReturnExp)x){
+			||cast(AssertExp)x||isLoopStatement(x)||cast(ReturnExp)x){
 			ok=false;
 		}else if(auto tae=cast(TypeAnnotationExp)x){
 			if(tae.annotationType==TypeAnnotationType.coercion) ok=false;
@@ -125,7 +125,7 @@ private void walkCond(Expression e,bool cond,scope void delegate(Expression,bool
 		walkCond(fe.bdy,true,dg);
 		return;
 	}
-	if(cast(WhileExp)e||cast(RepeatExp)e){
+	if(isLoopStatement(e)){ // (`for` loops are handled above)
 		foreach(c;e.components) walkCond(c,true,dg);
 		return;
 	}
@@ -208,6 +208,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(!range||!loop.loopVar) return null;
 	}
 	if(loop.noSplit) return null;
+	static if(language==silq) if(containsDoWhile(loop.bdy)) return null;
 	enum NONE=-3,LSH=-2,SHARED=-1;
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
 	if(!carried[0].length) return null;
@@ -657,7 +658,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		// within a single simple statement, subexpressions are evaluated before any variable is updated
 		bool simple=true;
 		walkShallow(root,(Expression x){
-			if(cast(CompoundExp)x||cast(IteExp)x||cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x||cast(WithExp)x) simple=false;
+			if(cast(CompoundExp)x||cast(IteExp)x||isLoopStatement(x)||cast(WithExp)x) simple=false;
 		});
 		SetX!Expression covered;
 		walkShallow(root,(Expression x){
@@ -2234,15 +2235,25 @@ private final class SliceNode{
 // A lifted variable can be forgotten given its dependencies, so the statements that compute it are `qfree` (apart from
 // the classical values they read), and its value only depends on quantum values that are either lifted themselves or
 // not changed by the loop. (The recomputing loops are not split again: their results only depend on what they read.)
+// For a `do`-`while` loop, the recomputations are `do`-`while` loops whose resets run as often as those of the main loop,
+// and the lifted definitions of the body that are available after the loop are recomputed as well.
 Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
 	alias K=SliceNode.Kind;
+	static if(language==silq) enum isDoWhile=is(T==DoWhileExp);
+	else enum isDoWhile=false;
 	static if(is(T==ForExp)){
 		auto range=loop.aggr.isRange;
 		if(!range||!loop.loopVar) return null;
 	}
 	if(loop.noSplit||containsReturn(loop.bdy)) return null;
+	static if(isDoWhile){
+		if(!loop.exitScope||isTrue(loop.cond)||containsReturn(loop.reset)) return null;
+		bool definedInLoop(Declaration d){ // (a definition of the body, not a variable from before the loop)
+			return d.derivedSequence.all!(x=>!x.scope_||x.scope_.isNestedIn(loop.bdy.blscope_));
+		}
+	}
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
-	if(!carried[0].length) return null;
+	if(!carried[0].length&&!isDoWhile) return null;
 	bool[Declaration] loopState;
 	foreach(p;carried[0]~carried[1]) loopState[p[1]]=true;
 	SetX!Id carriedNames,liftedNames;
@@ -2267,7 +2278,30 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		classVars[c]~=n;
 	}
-	if(!liftedNames.length) return null;
+	static if(isDoWhile){
+		// lifted definitions of the body that are available after the loop: the main loop computes copies of them, as the
+		// results of its recursive function are not lifted, and the recomputations define them
+		Id[][] classExits=new Id[][](classDeps.length);
+		SetX!Id exitLifted;
+		foreach(d;loop.exitScope.mergedVars){
+			auto decl=d.mergedInto;
+			if(!decl||!decl.name||decl.name.id in carriedNames||decl.name.id in exitLifted||!definedInLoop(d)) continue;
+			auto type=typeForDecl(decl);
+			if(!type||type.isClassical()||!sc.canSplit(decl)||!sc.dependencyTracked(decl)) continue;
+			auto dep=sc.getDependency(decl);
+			if(dep.isTop) continue;
+			exitLifted.insert(decl.name.id);
+			size_t c=classDeps.length;
+			foreach(j,ref cd;classDeps) if(sameDeps(cd,dep)){ c=j; break; }
+			if(c==classDeps.length){
+				classDeps~=dep;
+				classVars~=null;
+				classExits~=null;
+			}
+			classExits[c]~=decl.name.id;
+		}
+		if(!liftedNames.length&&!exitLifted.length) return null;
+	}else if(!liftedNames.length) return null;
 	static Id[] sorted(ref SetX!Id s){
 		Id[] r;
 		foreach(x;s) r~=x;
@@ -2499,6 +2533,13 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			return n;
 		}
 		void add(Expression s){
+			static if(language==silq) if(auto dw=cast(DoWhileExp)s){ // (`a`: the body, `b`: the reset)
+				auto n=mk(K.loop,s);
+				analyze(n,dw.cond);
+				n.a=build(dw.bdy.s,inR,region);
+				if(dw.reset) n.b=build(dw.reset.s,inR,region);
+				return;
+			}
 			if(auto ce=cast(CompoundExp)s){
 				if(!ce.blscope_){
 					foreach(t;ce.s) add(t);
@@ -2552,6 +2593,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		return r;
 	}
 	auto body_=build(loop.bdy.s,false,null);
+	static if(isDoWhile) auto reset_=build(loop.reset.s,false,null); // (runs after the condition, before each further iteration)
+	else SliceNode[] reset_=null;
 	if(unsupported) return null;
 	SetX!Id bodyDefs; // (names that the loop body changes)
 	foreach(n;nodes){
@@ -2564,7 +2607,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto mainVar=loop.loopVar.name.id;
 		if(mainVar in bodyDefs) return null;
 	}
-	static if(is(T==WhileExp)){
+	static if(is(T==WhileExp)||isDoWhile){
 		auto cnode=new SliceNode(K.atom,loop.cond,0,false,null);
 		analyze(cnode,loop.cond);
 		if(cnode.consumed.length||cnode.pconsumed.length) return null; // (the recomputation does not evaluate the condition)
@@ -2578,7 +2621,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// whose dependencies include all quantum variables that the loop reads)
 	{
 		bool bodyQfree=!nodes.any!(n=>n.nonQfree||n.extracted.length);
-		static if(is(T==WhileExp)) bodyQfree&=!cnode.nonQfree;
+		static if(is(T==WhileExp)||isDoWhile) bodyQfree&=!cnode.nonQfree;
 		if(bodyQfree&&allLifted&&classDeps.length==1){
 			bool precise=true;
 			foreach(u,d;invariantDecl){
@@ -2601,7 +2644,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		subConsumed[n.id]=r.dup;
 		return r;
 	}
-	foreach(n;body_) consumedIn(n);
+	foreach(n;body_~reset_) consumedIn(n);
 	// backward slicing for each class
 	struct Live{ SetX!Id q,c; } // (names whose values are needed: `c` for classical values in quantum regions)
 	static Live dupL(Live l){ return Live(l.q.dup,l.c.dup); }
@@ -2682,6 +2725,22 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				return r;
 			}
 			case K.loop:{
+				static if(language==silq) if(cast(DoWhileExp)n.e){ // (`a`: the body, after which the loop exits, `b`: the reset)
+					auto lx=dupL(live); // (needed after the body)
+					if(n.inR){ // (otherwise, the number of iterations is logged)
+						foreach(u;n.uses) lx.q.insert(u);
+						foreach(u;n.cuses) if(!available(u)) lx.c.insert(u);
+					}
+					Live ls; // (needed at the start of the body)
+					for(;;){
+						auto ls2=joinL(ls,back(n.a,joinL(lx,back(n.b,dupL(ls)))));
+						if(eqL(ls2,ls)) break;
+						ls=ls2;
+					}
+					if(!anyKept(n.a)&&!anyKept(n.b)) return live;
+					S.kept[n.id]=true;
+					return ls;
+				}
 				auto lc=dupL(live); // (needed at the end of the body)
 				if(n.inR&&cast(WhileExp)n.e){ // (the condition is evaluated after each iteration)
 					foreach(u;n.uses) lc.q.insert(u);
@@ -2799,6 +2858,19 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(n.inR) foreach(u;n.consumed) avail.remove(u);
 				else dispose(n.consumed);
 				auto entry=avail.dup;
+				static if(language==silq) if(cast(DoWhileExp)n.e){
+					for(;;){
+						auto exit=fwd(n.a,entry.dup);
+						auto end=fwd(n.b,exit.dup);
+						SetX!Id lost;
+						foreach(u;entry) if(u !in end) lost.insert(u);
+						if(!lost.length) return exit;
+						foreach(u;lost){
+							S.disp[n.id].insert(u);
+							entry.remove(u);
+						}
+					}
+				}
 				for(;;){
 					auto end=fwd(n.a,entry.dup);
 					SetX!Id lost;
@@ -2834,13 +2906,21 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(n;ns) avail=fwdNode(n,avail);
 		return avail;
 	}
+	Live backIteration(size_t cls,Live le){ // (needed at the start of an iteration, from what is needed at its end)
+		static if(isDoWhile){
+			auto lx=back(reset_,le);
+			foreach(v;classVars[cls]~classExits[cls]) lx.q.insert(v); // (the loop exits after the body)
+			return back(body_,lx);
+		}else return back(body_,le);
+	}
 	Slice[] slices;
-	foreach(cls;0..classDeps.length){
+	bool sliceClass(size_t cls){
+		fwdFailed=false;
 		S=Slice(cls,new bool[](nodes.length),new SetX!Id[](nodes.length),new SetX!Id[](nodes.length),new SetX!Id[](nodes.length),new bool[][](nodes.length),new bool[](nodes.length));
 		Live le;
 		foreach(v;classVars[cls]) le.q.insert(v);
 		for(;;){
-			auto ls=back(body_,dupL(le));
+			auto ls=backIteration(cls,dupL(le));
 			auto le2=dupL(le);
 			foreach(v;ls.q) if(v in carriedNames) le2.q.insert(v);
 			if(eqL(le2,le)) break;
@@ -2849,33 +2929,33 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		S.kept[]=false;
 		S.entryLogs=new SetX!Id[](nodes.length);
 		S.compKept=new bool[][](nodes.length);
-		auto ls=back(body_,dupL(le));
-		foreach(v;le.q) if(v !in liftedNames) return null; // (the class depends on a carried variable that is not lifted)
-		foreach(v;ls.q) if(v in bodyDefs&&v !in liftedNames) return null;
-		if(ls.c.length) return null;
+		auto ls=backIteration(cls,dupL(le));
+		foreach(v;le.q) if(v !in liftedNames) return false; // (the class depends on a carried variable that is not lifted)
+		foreach(v;ls.q) if(v in bodyDefs&&v !in liftedNames) return false;
+		if(ls.c.length) return false;
 		S.carried=le.q.dup;
 		foreach(n;nodes){
 			if(!S.kept[n.id]) continue;
 			final switch(n.kind){
 				case K.atom:
 					foreach(c;n.comps.length?n.comps.zip(S.compKept[n.id]).filter!(x=>x[1]).map!(x=>x[0]).array:[n]){
-						if(c.nonQfree) return null;
+						if(c.nonQfree) return false;
 						if(n.inR){
-							foreach(d;c.cdefs) if(d !in regionLocal[n.region.id]) return null;
-						}else foreach(d;c.cdefs) if((d !in c.cuses||available(d))&&(d in carriedNames||d !in c.cfresh)) return null; // (values read from the logs can be changed)
+							foreach(d;c.cdefs) if(d !in regionLocal[n.region.id]) return false;
+						}else foreach(d;c.cdefs) if((d !in c.cuses||available(d))&&(d in carriedNames||d !in c.cfresh)) return false; // (values read from the logs can be changed)
 					}
 					break;
 				case K.ite:
-					if((n.quantum||n.inR)&&n.nonQfree) return null;
-					if(n.quantum&&!n.inR) foreach(u;S.entryLogs[n.id]) if(u in regionLocal[n.id]) return null;
+					if((n.quantum||n.inR)&&n.nonQfree) return false;
+					if(n.quantum&&!n.inR) foreach(u;S.entryLogs[n.id]) if(u in regionLocal[n.id]) return false;
 					break;
 				case K.loop:
-					if(n.inR&&n.nonQfree) return null;
-					if(n.consumed.length||n.pconsumed.length) return null;
+					if(n.inR&&n.nonQfree) return false;
+					if(n.consumed.length||n.pconsumed.length) return false;
 					break;
 				case K.with_:
-					if(n.nonQfree) return null;
-					foreach(d;n.cdefs) if(d !in n.cfresh&&(n.inR||d !in n.cuses||available(d))) return null;
+					if(n.nonQfree) return false;
+					foreach(d;n.cdefs) if(d !in n.cfresh&&(n.inR||d !in n.cuses||available(d))) return false;
 					break;
 				case K.block:
 					break;
@@ -2888,11 +2968,27 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(!S.kept[n.id]) foreach(d;n.defs) droppedDefs.insert(d);
 			else foreach(j,c;n.comps) if(!S.compKept[n.id][j]) foreach(d;c.defs) droppedDefs.insert(d);
 		}
-		auto end=fwd(body_,S.carried.dup);
-		if(fwdFailed) return null;
-		foreach(v;S.carried) if(v !in end) return null;
+		static if(isDoWhile){
+			auto exit=fwd(body_,S.carried.dup);
+			foreach(v;S.carried) if(v !in exit) return false; // (the recomputation exits after the body as well)
+			foreach(v;classExits[cls]) if(v !in exit) return false;
+			auto end=fwd(reset_,exit);
+		}else auto end=fwd(body_,S.carried.dup);
+		if(fwdFailed) return false;
+		foreach(v;S.carried) if(v !in end) return false;
 		slices~=S;
+		return true;
 	}
+	foreach(cls;0..classDeps.length){
+		if(sliceClass(cls)) continue;
+		static if(isDoWhile) if(classExits[cls].length){ // (the main loop computes these definitions instead)
+			foreach(v;classExits[cls]) exitLifted.remove(v);
+			classExits[cls]=null;
+			if(!classVars[cls].length||sliceClass(cls)) continue;
+		}
+		return null;
+	}
+	if(!slices.length) return null;
 	// logs
 	enum LogKey{ value, call, cond, left, step, right, num, count, measurement }
 	struct Log{
@@ -2931,7 +3027,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		writesOf[n.id]=r.dup;
 		return r;
 	}
-	foreach(n;body_) writes(n);
+	foreach(n;body_~reset_) writes(n);
 	// (logged values that the type `t` mentions)
 	Q!(Id,Expression)[] typeVars(Expression t){
 		Q!(Id,Expression)[] r;
@@ -2966,8 +3062,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			case K.loop:{
 				if(n.inR) foreach(u;n.cuses) add(n,u);
 				SetX!Id changed;
-				if(!n.inR) foreach(c;n.a) foreach(u;writesOf[c.id]) changed.insert(u); // (read in each iteration)
-				seq(n.a,changed);
+				if(!n.inR) foreach(c;n.a~n.b) foreach(u;writesOf[c.id]) changed.insert(u); // (read in each iteration)
+				seq(n.a~n.b,changed);
 				break;
 			}
 			case K.with_:
@@ -3047,8 +3143,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						break;
 					case K.loop:{
 						auto h=have.dup;
-						foreach(c;n.a) foreach(u;writesOf[c.id]) h.remove(u);
-						plan(n.a,h);
+						foreach(c;n.a~n.b) foreach(u;writesOf[c.id]) h.remove(u);
+						plan(n.a~n.b,h);
 						break;
 					}
 					case K.with_:{
@@ -3064,7 +3160,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				foreach(u;writesOf[n.id]) have.remove(u);
 			}
 		}
-		plan(body_,SetX!Id.init);
+		plan(body_~reset_,SetX!Id.init);
 	}
 	// (the logs are defined before the loop: types mentioning values that the loop changes are weakened, and so are other
 	// types mentioning variables where possible, as enclosing loops may change them)
@@ -3114,7 +3210,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(c;n.a~n.b) r|=computeHasLogs(c);
 		return hasLogs[n.id]=r;
 	}
-	foreach(n;body_) computeHasLogs(n);
+	foreach(n;body_~reset_) computeHasLogs(n);
 	// statements that the main loop keeps: they may fail, have effects or change values that the loop state that is not
 	// lifted or the logs depend on (the lifted variables that no kept statement accesses are not copied)
 	auto mayFail=new bool[](nodes.length); // (the atom, the condition, the loop header or the transformation)
@@ -3142,7 +3238,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	{
 		foreach(v;carriedNames) if(v !in liftedNames) mLive.insert(v);
 		foreach(ref l;logs) if(l.var!=Id.init) mLive.insert(l.var);
-		static if(is(T==WhileExp)) foreach(s;only(&cnode.uses,&cnode.cuses)) foreach(u;*s) mLive.insert(u);
+		static if(is(T==WhileExp)||isDoWhile) foreach(s;only(&cnode.uses,&cnode.cuses)) foreach(u;*s) mLive.insert(u);
+		static if(isDoWhile) foreach(d;loop.exitScope.mergedVars) if(d.mergedInto&&d.mergedInto.name) mLive.insert(d.mergedInto.name.id); // (available after the loop)
 		bool changed=true;
 		void add(Id u){
 			if(u in mLive) return;
@@ -3174,7 +3271,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		while(changed){
 			changed=false;
-			foreach(n;body_) mark(n);
+			foreach(n;body_~reset_) mark(n);
 		}
 	}
 	// emission
@@ -3266,6 +3363,20 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			r.noSplit=true;
 			return r;
 		}
+		static if(isDoWhile){
+			Expression[] mkDoWhileLoop(CompoundExp b,CompoundExp rst,Id[] outputs){ // (the reset runs `num` times)
+				Id[Id] exitNames; // (the other definitions of the body that are available after the loop get fresh names)
+				foreach(d;loop.exitScope.mergedVars) if(d.mergedInto&&d.mergedInto.name&&definedInLoop(d)){
+					auto v=d.mergedInto.name.id;
+					if(v !in carriedNames&&!outputs.canFind(v)&&v !in exitNames) exitNames[v]=freshName();
+				}
+				auto c=freshName();
+				rst.s=inc(c)~rst.s;
+				auto r=setLoc(new DoWhileExp(b,setLoc(new BinaryExp!(Tok!"<")(mkId(c),mkId(num))),rst));
+				r.noSplit=true;
+				return [define(mkId(c),zero()),rename(r,exitNames)];
+			}
+		}
 	}
 	// the main loop
 	Id[Id] copyOf;
@@ -3274,6 +3385,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		copyOf[v]=freshName();
 		stmts~=define(mkId(copyOf[v]),dupOf(mkId(v)));
 	}
+	static if(isDoWhile) foreach(v;sorted(exitLifted)) copyOf[v]=freshName(); // (defined by the main loop)
 	foreach(ref l;logs) stmts~=define(mkId(l.name),annot(setLoc(new VectorExp([])),arrayTy(l.stored)));
 	auto mRebuild=new bool[](nodes.length);
 	bool computeRebuild(SliceNode n){
@@ -3284,7 +3396,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		return mRebuild[n.id]=r;
 	}
-	foreach(n;body_) computeRebuild(n);
+	foreach(n;body_~reset_) computeRebuild(n);
 	size_t logAt(SliceNode n,LogKey key,Id var=Id.init){
 		foreach(li;logsAt[n.id]) if(logs[li].key==key&&logs[li].var==var) return li;
 		return size_t.max;
@@ -3339,6 +3451,21 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						return mkId(t);
 					}
 					bool empty=!bdy.s.length&&!n.nonQfree&&!mayFail[n.id]; // (only the header is logged)
+					static if(language==silq) if(auto dw=cast(DoWhileExp)n.e){
+						auto rst=block(emitM(n.b));
+						auto cl=logAt(n,LogKey.count);
+						Id cnt;
+						if(cl!=size_t.max){ // (the number of resets)
+							cnt=freshName();
+							r~=define(mkId(cnt),zero());
+							rst.s=inc(cnt)~rst.s;
+						}
+						auto nl=setLoc(new DoWhileExp(bdy,cp(dw.cond,copyOf),rst));
+						nl.noSplit=dw.noSplit;
+						r~=nl;
+						if(cl!=size_t.max) r~=appendLog(cl,dupOf(mkId(cnt)));
+						break;
+					}
 					if(auto fe=cast(ForExp)n.e){
 						auto rng=fe.aggr.isRange;
 						auto left=logged(LogKey.left,cp(rng.left,copyOf),rng.left.type);
@@ -3390,6 +3517,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto ml=setLoc(new WhileExp(cp(loop.cond,copyOf),mbdy));
 			ml.noSplit=true;
 			stmts~=ml;
+		}else static if(isDoWhile){
+			auto mrst=block(inc(num)~emitM(reset_));
+			mrst.loc=loop.reset.loc;
+			auto ml=setLoc(new DoWhileExp(mbdy,cp(loop.cond,copyOf),mrst));
+			ml.noSplit=true;
+			stmts~=ml;
 		}else if(mbdy.s.length) stmts~=mkLoop(mbdy);
 	}
 	// the recomputations
@@ -3423,7 +3556,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach(u;vars) names.remove(u);
 			return names;
 		}
-		Expression[] emitS(SliceNode[] ns,Id[Id] names){
+		Expression[] emitS(SliceNode[] ns,Id[Id] names,Id[Id]* namesAfter=null){ // (`namesAfter`: the names at the end, e.g., for the reset of a `do`-`while` loop)
 			Expression[] r;
 			names=names.dup;
 			foreach(n;ns){
@@ -3492,8 +3625,25 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							return mkId(t);
 						}
 						SetX!Id changed;
-						if(!n.inR) foreach(c;n.a) foreach(u;writesOf[c.id]) changed.insert(u);
+						if(!n.inR) foreach(c;n.a~n.b) foreach(u;writesOf[c.id]) changed.insert(u);
 						auto bnames=without(names,changed);
+						static if(language==silq) if(auto dw=cast(DoWhileExp)n.e){
+							Id[Id] after;
+							if(n.inR){
+								auto nb=emitS(n.a,names,&after);
+								auto nr=emitS(n.b,after);
+								r~=setLoc(new DoWhileExp(block(nb),cp(dw.cond,after),block(nr)));
+							}else{
+								Id t;
+								r~=readLog(logAt(n,LogKey.count),t,names);
+								auto c=freshName();
+								r~=define(mkId(c),zero());
+								auto nb=emitS(n.a,bnames,&after);
+								auto nr=emitS(n.b,after);
+								r~=setLoc(new DoWhileExp(block(nb),setLoc(new BinaryExp!(Tok!"<")(mkId(c),mkId(t))),block(inc(c)~nr)));
+							}
+							break;
+						}
 						if(auto fe=cast(ForExp)n.e){
 							auto rng=fe.aggr.isRange;
 							auto left=read(LogKey.left,rng.left);
@@ -3529,19 +3679,33 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						break;
 				}
 			}
+			if(namesAfter) *namesAfter=names;
 			return r;
 		}
-		auto sbdy=emitS(body_,renames[si]);
-		if(sbdy.length){
-			foreach(c;counters) stmts~=define(mkId(c),zero());
-			auto b=block(sbdy);
-			b.loc=loop.bdy.loc;
-			stmts~=mkLoop(b);
+		static if(isDoWhile){
+			Id[Id] after;
+			auto sbdy=emitS(body_,renames[si],&after);
+			auto srst=emitS(reset_,after);
+			if(sbdy.length||srst.length){
+				foreach(c;counters) stmts~=define(mkId(c),zero());
+				auto b=block(sbdy),rs=block(srst);
+				b.loc=loop.bdy.loc;
+				stmts~=mkDoWhileLoop(b,rs,classExits[sl.cls]);
+			}
+		}else{
+			auto sbdy=emitS(body_,renames[si]);
+			if(sbdy.length){
+				foreach(c;counters) stmts~=define(mkId(c),zero());
+				auto b=block(sbdy);
+				b.loc=loop.bdy.loc;
+				stmts~=mkLoop(b);
+			}
 		}
 	}
 	// (the copies of other lifted variables that the recomputations read end up with their recomputed values)
 	foreach(si,ref sl;slices) foreach(w;sorted(sl.carried)) if(auto c=w in renames[si]) stmts~=forgetOf(*c,dupOf(mkId(w)));
 	foreach(v;liftedOrder) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
+	static if(isDoWhile) foreach(v;sorted(exitLifted)) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
 	auto lowered=new CompoundExp(stmts);
 	lowered.loc=loc;
 	sc.restoreStateSnapshot(state.origStateSnapshot);
@@ -3558,12 +3722,14 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	assert(loop.isSemCompleted());
 }do{
 	auto r=lowerLoopImpl(loop,state,sc,flags);
-	static if(language==silq) if(auto ce=cast(CompoundExp)r) if(!containsReturn(loop.bdy)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+	static if(language==silq) if(auto ce=cast(CompoundExp)r) if(!loopContainsReturn(loop)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
 	return r;
 }
 private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
+	static if(language==silq) enum isDoWhile=is(T==DoWhileExp);
+	else enum isDoWhile=false;
 	if(auto r=sliceLoop(loop,state,sc,flags)) return r;
-	if(auto r=splitLoop(loop,state,sc,flags)) return r;
+	static if(!isDoWhile) if(auto r=splitLoop(loop,state,sc,flags)) return r;
 	enum returnOnlyMoved=false; // (experimental)
 	enum separateConstParams=true; // (necessary inside a `with` transformation)
 	SetX!Declaration accessedDecls;
@@ -3576,21 +3742,23 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			}
 		}
 		collectAccesses(loop.bdy);
-		static if(is(T==WhileExp)) collectAccesses(loop.cond);
+		static if(is(T==WhileExp)||isDoWhile) collectAccesses(loop.cond);
+		static if(isDoWhile) collectAccesses(loop.reset);
 	}
 	SetX!Id namesInLoop; // names occurring in the loop
 	void collectNames(Expression e){
 		visitStm(e,(Expression x){ if(auto id=cast(Identifier)x) namesInLoop.insert(id.id); });
 	}
 	collectNames(loop.bdy);
-	static if(is(T==WhileExp)) collectNames(loop.cond);
+	static if(is(T==WhileExp)||isDoWhile) collectNames(loop.cond);
+	static if(isDoWhile) collectNames(loop.reset);
 	// continuation-passing lowering for loops with early returns:
 	// the statements after the loop (which end in a `return`) become the base case of the recursion
 	Expression[] continuation=null;
 	bool dropUnreachable=false; // code after an infinite loop
 	static if(language==silq){
 		bool contInfinite=isEmpty(loop); // (the loop does not exit normally, e.g., `repeat 2 { return 1; }`)
-		if(!contInfinite&&containsReturn(loop.bdy))
+		if(!contInfinite&&loopContainsReturn(loop))
 			continuation=sc.loopContinuation.take(loop);
 		else if(contInfinite)
 			dropUnreachable=sc.loopContinuation.take(loop).length!=0;
@@ -3627,7 +3795,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto numName=temporaryIdentifier(loop.num.loc);
 		constParams~=boundParam(numName,loop.num.type);
 	}
-	static if(is(T==WhileExp)){
+	static if(is(T==WhileExp)||isDoWhile){
 		Q!(Id,Declaration,Expression,bool)[] loopParams=[];
 	}else static if(is(T==ForExp)){
 		auto loopVarId=loop.var.id;
@@ -3682,6 +3850,32 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[3]&&p[0] !in unchangedConst).array,true));
 		returnTpl.loc=loop.loc;
 	}
+	static if(isDoWhile){ // (the definitions of the body that are available after the loop are returned as well)
+		Q!(Identifier,Expression,Expression)[] exitLocals; // (name, type, type in the result of the function)
+		SetX!Id paramNames,changed; // (`changed`: names of the values that the loop defines or changes)
+		foreach(p;allParams) paramNames.insert(p[1].name.id);
+		Q!(Id,Expression)[] replays; // (definitions of the body that are computed again after the loop, see `liftedExitDefinitions`)
+		if(auto xsc=loop.exitScope){ // (no exit if the body returns)
+			foreach(d;chain(xsc.mergedVars,loop.bdy.blscope_.mergedVars)) if(d.mergedInto.name) changed.insert(d.mergedInto.name.id);
+			if(!continuation) replays=liftedExitDefinitions(loop,sc,paramNames);
+			foreach(d;xsc.mergedVars){
+				auto name=d.mergedInto.name;
+				if(!name||name.id in paramNames||replays.canFind!(r=>r[0]==name.id)) continue;
+				auto id=new Identifier(name.id);
+				id.loc=d.loc;
+				auto type=typeForDecl(d.mergedInto);
+				auto rtype=type?weakenedExitType(type,changed):null;
+				exitLocals~=q(id,type,rtype?rtype:type);
+			}
+		}
+		sort!((a,b)=>a[0].id.str<b[0].id.str)(exitLocals);
+		foreach(e;exitLocals){ // (types mentioning local values of the function are weakened, see `exitCoercions`)
+			Expression r=e[0].copy(cargsDefault);
+			if(e[2] !is e[1]) r=new TypeAnnotationExp(r,e[2].copy(cargsDefault),TypeAnnotationType.annotation);
+			r.loc=e[0].loc;
+			returnTpl.e~=r;
+		}
+	}
 	auto cee=new Identifier(fi);
 	cee.loc=loop.loc;
 	Identifier[] constTmpNames;
@@ -3716,7 +3910,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}
 	bool isInfinite=isEmpty(loop);
 	bool isCertainReturn=definitelyReturns(loop.bdy);
-	static if(is(T==WhileExp)){
+	static if(is(T==WhileExp)||isDoWhile){
 		auto ncond=loop.cond.copy(cargsDefault);
 	}else static if(is(T==ForExp)){
 		//writeln("?? ",constParams);
@@ -3900,7 +4094,10 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		}
 	}
 
-	if(!isCertainReturn){
+	static if(isDoWhile){
+		auto nrst=loop.reset.copy(cargsDefault);
+		nrst.s=flattenStatementBlocks(nrst.s);
+	}else if(!isCertainReturn){
 		if(continuation){
 			auto thene=new ReturnExp(ce);
 			thene.loc=ce.loc;
@@ -3976,9 +4173,73 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			adjustEarlyReturns(re.bdy);
 		else if(auto we=cast(WithExp)e)
 			adjustEarlyReturns(we.bdy);
+		else static if(language==silq) if(auto dw=cast(DoWhileExp)e){
+			adjustEarlyReturns(dw.bdy);
+			if(dw.reset) adjustEarlyReturns(dw.reset);
+		}
 	}
 	Expression bdy;
-	if(continuation){
+	static if(isDoWhile){{
+		// `B; if c{}else{ exit } R; return f(…);`, or, with quantum definitions of the body that are available after the loop,
+		// `B; if c{ R; v:=[]; }else{ v:=[(x₁,…,xₙ)]; } if v.length=0{ forget(v=[]); return f(…); } [(x₁,…,xₙ)]:=v; exit`
+		// (the reset does not forget values in a branch while its sibling consumes what they depend on)
+		if(!isCertainReturn){ // (otherwise, the condition and the reset are not reached)
+			auto contr=new ReturnExp(ce); // (the reset continues with the next iteration)
+			contr.loc=ce.loc;
+			if(isInfinite){
+				nbdy.s~=nrst.s~[cast(Expression)contr];
+			}else{
+				T at(T)(T e){ e.loc=loop.loc; return e; }
+				Identifier mk(Id n){ return at(new Identifier(n)); }
+				Expression[] exit;
+				if(continuation) exit=continuation.map!(st=>st.copy(cargsDefault)).array;
+				else{
+					adjustEarlyReturns(nbdy);
+					adjustEarlyReturns(nrst);
+					Expression retexp=returnTpl;
+					if(hasEarlyReturns) retexp=inj(retexp,false);
+					exit=[at(new ReturnExp(retexp))];
+				}
+				Expression[] forgets; // (of recomputed definitions that the reset uses)
+				foreach(r;replays){
+					bool used=false;
+					visitStm(loop.reset,(Expression x){ if(auto id=cast(Identifier)x) if(varName(id)==r[0]) used=true; });
+					if(used) forgets~=at(new ForgetExp(mk(r[0]),r[1].copy(cargsDefault)));
+				}
+				bool hold=forgets.length||exitLocals.any!(e=>e[1]&&!e[1].isClassical());
+				if(!hold){
+					auto ite=at(new IteExp(ncond,at(new CompoundExp([])),at(new CompoundExp(forgets~exit))));
+					nbdy.s~=[cast(Expression)ite]~nrst.s~[cast(Expression)contr];
+				}else{
+					auto v=freshName();
+					Expression tupleOf(Expression[] es){ return es.length==1?es[0]:at(new TupleExp(es)); }
+					Expression ety=exitLocals.length==1?exitLocals[0][2]:tupleTy(exitLocals.map!(e=>e[2]).array);
+					Expression empty(){ return at(new TypeAnnotationExp(at(new VectorExp([])),arrayTy(ety).copy(cargsDefault),TypeAnnotationType.annotation)); }
+					auto vals=exitLocals.map!(e=>e[2] is e[1]?cast(Expression)e[0].copy(cargsDefault):at(new TypeAnnotationExp(e[0].copy(cargsDefault),e[2].copy(cargsDefault),TypeAnnotationType.annotation))).array;
+					auto then=at(new CompoundExp(nrst.s~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
+					auto othw=at(new CompoundExp(forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
+					nbdy.s~=at(new IteExp(ncond,then,othw));
+					auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
+					auto cont=at(new CompoundExp([at(new ForgetExp(mk(v),empty())),cast(Expression)contr]));
+					nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
+					Expression[] lhs,coercions;
+					foreach(e;exitLocals){
+						if(e[2] is e[1]){
+							lhs~=e[0].copy(cargsDefault);
+							continue;
+						}
+						auto tmp=freshName();
+						lhs~=mk(tmp);
+						coercions~=at(new DefineExp(e[0].copy(cargsDefault),at(new TypeAnnotationExp(mk(tmp),e[1].copy(cargsDefault),TypeAnnotationType.coercion))));
+					}
+					nbdy.s~=at(new DefineExp(at(new VectorExp([tupleOf(lhs)])),mk(v)));
+					nbdy.s~=coercions~exit;
+				}
+			}
+			if(continuation) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
+		}
+		bdy=nbdy;
+	}}else if(continuation){
 		auto othw=new CompoundExp(continuation.map!(st=>st.copy(cargsDefault)).array);
 		othw.loc=loop.loc;
 		auto ite=new IteExp(ncond,nbdy,othw);
@@ -4000,7 +4261,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
 	Expression ret=null;
-	if(!continuation&&(!isInfinite||!isCertainReturn)){
+	if(!isDoWhile&&!continuation&&(!isInfinite||!isCertainReturn)){
 		ret=new ReturnExp(retName.copy(cargsDefault)); // avoid non-toplevel return
 		ret.loc=loop.loc;
 	}
@@ -4008,8 +4269,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
 	// (the return type and the annotation are given explicitly where possible, avoiding a second analysis of the function)
-	Expression rret=null;
-	if(!continuation&&!hasEarlyReturns&&!isInfinite){
+	Expression rret=null; // (inferred for a `do`-`while` loop, whose result includes definitions of the body)
+	if(!isDoWhile&&!continuation&&!hasEarlyReturns&&!isInfinite){
 		Expression[] rids;
 		foreach(i,p;allParams){
 			if(i<loopParams.length) continue;
@@ -4030,7 +4291,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	fd.attributes[Id.s!"silq-loop"] = LiteralExp.makeString(lowerf(T.stringof[0..$-"Exp".length]));
 	fd.annotation=pure_;
 	visitStm(loop.bdy,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
-	static if(is(T==WhileExp)) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
+	static if(is(T==WhileExp)||isDoWhile) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
+	static if(isDoWhile) visitStm(loop.reset,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
 	fd.inferAnnotation=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){
@@ -4051,6 +4313,21 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}else{
 		auto defTpl=new TupleExp(cast(Expression[])chain(resultConstTmpNames.map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
 		defTpl.loc=loop.loc;
+	}
+	Expression[] exitCoercions; // (of the weakened definitions of the body)
+	static if(isDoWhile) foreach(e;exitLocals){
+		if(e[2] is e[1]){
+			defTpl.e~=e[0].copy(cargsDefault);
+			continue;
+		}
+		auto tmp=new Identifier(freshName());
+		tmp.loc=e[0].loc;
+		defTpl.e~=tmp;
+		auto coerced=new TypeAnnotationExp(tmp.copy(cargsDefault),e[1].copy(cargsDefault),TypeAnnotationType.coercion);
+		coerced.loc=e[0].loc;
+		auto co=new DefineExp(e[0].copy(cargsDefault),coerced);
+		co.loc=e[0].loc;
+		exitCoercions~=co;
 	}
 	foreach(arg;paramTpl2.e[$-movedParams.length..$]){ // (a moved variable that is not available after the loop is consumed by it, e.g., by the final evaluation of the condition)
 		auto id=cast(Identifier)arg;
@@ -4074,6 +4351,12 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				assgn.loc=loop.loc;
 				stmts~=assgn;
 			}
+		}
+		stmts~=exitCoercions;
+		static if(isDoWhile) foreach(r;replays){
+			auto rdef=new DefineExp(new Identifier(r[0]),r[1].copy(cargsDefault));
+			rdef.loc=rdef.e1.loc=loop.loc;
+			stmts~=rdef;
 		}
 	}
 	if(continuation){
@@ -4157,12 +4440,92 @@ bool containsReturn(Expression e){
 	visitStm(e,(Expression x){ if(cast(ReturnExp)x) r=true; });
 	return r;
 }
+static if(language==silq)
+bool containsDoWhile(Expression e){ // (not supported by `splitLoop`)
+	bool r=false;
+	visitStm(e,(Expression x){ if(cast(DoWhileExp)x) r=true; });
+	return r;
+}
 bool hasLoopWithReturn(Expression e){
 	bool r=false;
 	visitStm(e,(Expression x){
-		if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x) if(containsReturn(x)) r=true;
+		if(isLoopStatement(x)) if(containsReturn(x)) r=true;
 	});
 	return r;
+}
+// Lifted definitions of the body of a `do`-`while` loop that are available after it and that read only values that are available
+// after it as well, which the rest of the body and the condition do not change: they are computed again after the recursive function
+// returns instead of being returned (the result of the function is not lifted)
+static if(language==silq)
+Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames){
+	Q!(Id,Expression)[] r;
+	auto xsc=loop.exitScope;
+	MapSX!(Id,Declaration) exitDecls;
+	foreach(d;xsc.mergedVars) if(d.mergedInto.name) exitDecls[d.mergedInto.name.id]=d.mergedInto;
+	auto stms=flattenStatementBlocks(loop.bdy.s.dup);
+	SetX!Id later; // (names that the rest of the body or the condition change)
+	void writes(Expression e){
+		void lhs(Expression l){
+			visitStm(l,(Expression y){ if(auto id=cast(Identifier)y) later.insert(varName(id)); });
+		}
+		visitStm(e,(Expression x){
+			if(auto de=cast(DefineExp)x) lhs(de.e1);
+			else if(auto ae=cast(AAssignExp)x) lhs(ae.e1);
+			else if(auto fe=cast(ForgetExp)x) lhs(fe.var);
+			else if(auto id=cast(Identifier)x) if(id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup) later.insert(varName(id));
+		});
+	}
+	writes(loop.cond);
+	foreach_reverse(i,st;stms){
+		scope(exit) writes(st);
+		auto de=cast(DefineExp)st;
+		auto id=de?cast(Identifier)de.e1:null;
+		if(!id||!id.meaning) continue;
+		auto name=varName(id);
+		auto decl=exitDecls.get(name,null);
+		if(!decl||name in paramNames||name in later||r.canFind!(x=>x[0]==name)) continue;
+		auto type=typeForDecl(decl);
+		if(!type||type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop) continue;
+		bool ok=true;
+		visitStm(loop.cond,(Expression x){ if(auto cid=cast(Identifier)x) if(varName(cid)==name) ok=false; });
+		foreach(fv;de.e2.freeIdentifiers){
+			if(fv.meaning&&fv.meaning.isToplevelDeclaration()) continue;
+			auto v=varName(fv);
+			if(v in later||v !in paramNames&&v !in exitDecls) ok=false;
+		}
+		if(ok) r=q(name,de.e2)~r;
+	}
+	return r;
+}
+// the type in the result of a lowered `do`-`while` loop of a definition of the body of type `t` (`null` if not possible)
+static if(language==silq)
+Expression weakenedExitType(Expression t,ref SetX!Id changed){
+	bool mentionsChanged(Expression t){
+		foreach(id;t.freeIdentifiers)
+			if(id.id in changed||id.meaning&&id.meaning.name&&id.meaning.name.id in changed) return true;
+		return false;
+	}
+	Expression rec(Expression t){
+		if(!mentionsChanged(t)) return t;
+		if(auto ft=isFixedIntTy(t)) return t.isClassical()?(ft.isSigned?ℤt(true):ℕt(true)):null;
+		if(auto vt=cast(VectorTy)t){ if(auto w=rec(vt.next)) return arrayTy(w); return null; }
+		if(auto at=cast(ArrayTy)t){ if(auto w=rec(at.next)) return arrayTy(w); return null; }
+		if(auto tt=cast(TupleTy)t){
+			Expression[] ws;
+			foreach(c;tt.types){
+				auto w=rec(c);
+				if(!w) return null;
+				ws~=w;
+			}
+			return tupleTy(ws);
+		}
+		return null;
+	}
+	return rec(t);
+}
+bool loopContainsReturn(T)(T loop){
+	static if(language==silq) static if(is(T==DoWhileExp)) return containsReturn(loop.bdy)||loop.reset&&containsReturn(loop.reset);
+	return containsReturn(loop.bdy);
 }
 // Code after a loop with an early return (ending in a `return`), offered to `lowerLoop` by `compoundExpSemantic`.
 struct LoopContinuation{
@@ -4173,7 +4536,7 @@ struct LoopContinuation{
 	// offer `stms[i+1..$]` to the loop statement `stms[i]`, if applicable
 	bool offer(Expression[] block,size_t i){
 		auto e=block[i];
-		if(!astopt.removeLoops||!(cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e)) return false;
+		if(!astopt.removeLoops||!isLoopStatement(e)) return false;
 		if(i+1>=block.length) return false;
 		// the code after an infinite loop is unreachable; it is dropped by the lowering
 		if(!isInfiniteLoop(e)&&(!endsWithReturn(block[$-1])||!containsReturn(e))) return false;
@@ -4200,11 +4563,15 @@ struct LoopContinuation{
 }
 // `while true` (syntactically, as the loop may not be analyzed yet)
 bool isInfiniteLoop(Expression e){
+	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return endsWithReturn(dw.bdy)||isTrueCondition(dw.cond); // (or `do{ … return e; }while c`)
 	auto we=cast(WhileExp)e;
 	if(!we) return false;
-	if(we.cond.type) return isTrue(we.cond);
-	if(auto id=cast(Identifier)we.cond) return id.id==Id.s!"true";
-	if(auto le=cast(LiteralExp)we.cond) return le.lit.type==Tok!"0"&&le.lit.str=="1";
+	return isTrueCondition(we.cond);
+}
+private bool isTrueCondition(Expression cond){
+	if(cond.type) return isTrue(cond);
+	if(auto id=cast(Identifier)cond) return id.id==Id.s!"true";
+	if(auto le=cast(LiteralExp)cond) return le.lit.type==Tok!"0"&&le.lit.str=="1";
 	return false;
 }
 bool erpRecording(Scope sc){
@@ -4273,7 +4640,7 @@ void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
 	// call at the end of the body of a loop function)
 	if((cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
 		erpRecordJoin(original,sc);
-	if((cast(ForExp)original||cast(WhileExp)original||cast(RepeatExp)original)&&containsReturn(original)){
+	if(isLoopStatement(original)&&containsReturn(original)){
 		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
 		if(stms[i].type==bottom&&erpKey(original)) erpDivergingLoops[erpKey(original)]=true; // (loop never exits normally)
 		if(auto we=cast(WhileExp)stms[i]){ // (see `erpLoopExplicit`)
@@ -4420,6 +4787,9 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			if(!info||info.quantum) ok=false;
 			else foreach(c;info.consumed) if(!isQuantum(c[1])) ok=false;
 		}
+	});
+	static if(language==silq) visitStm(loop,(Expression x){ // (returns within `do`-`while` loops are not made explicit, TODO)
+		if(cast(DoWhileExp)x&&containsReturn(x)) ok=false;
 	});
 	auto after=erpKey(loop) in erpJoins;
 	if(!ok||!after) return null;
@@ -4571,7 +4941,7 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 	foreach(i,s;stms){
 		// unwrap blocks that only anchor `const` forgets of an analyzed loop (see `anchorLoopConstForgets`)
 		if(auto cmp=cast(CompoundExp)s)
-			if(cmp.s.length==1&&(cast(ForExp)cmp.s[0]||cast(WhileExp)cmp.s[0]||cast(RepeatExp)cmp.s[0]))
+			if(cmp.s.length==1&&isLoopStatement(cmp.s[0]))
 				s=cmp.s[0];
 		bool nested=(cast(IteExp)s||cast(CompoundExp)s)&&hasLoopWithReturn(s);
 		if(!nested){

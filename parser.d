@@ -930,6 +930,7 @@ struct Parser{
 			case Tok!"repeat": return parseRepeat();
 			case Tok!"for": return parseFor();
 			case Tok!"while": return parseWhile();
+			static if(language==silq) case Tok!"do": return parseDoWhile();
 			static if(language==psi) case Tok!"observe": return parseObserve();
 			static if(language==psi) case Tok!"cobserve": return parseCObserve();
 			default: break;
@@ -1170,7 +1171,7 @@ struct Parser{
 		}else exp=parseExpression();
 		return res=New!ReturnExp(exp);
 	}
-	Expression parseCondition(){
+	Expression parseCondition(bool optionalBlock=false){ // (with `optionalBlock`, the condition is followed by either `;` or a block)
 		mixin(SetLoc!Expression);
 		if(ttype==Tok!"("||ttype==Tok!"["){
 			auto state=saveState();
@@ -1183,12 +1184,14 @@ struct Parser{
 				nextToken();
 				skipToUnmatched();
 				nextToken();
+				bool called=false;
 				while(ttype==Tok!"("||ttype==Tok!"["){
+					called=true;
 					nextToken();
 					skipToUnmatched();
 					nextToken();
 				}
-				if(ttype!=Tok!"{"){
+				if(ttype!=Tok!"{"&&!(optionalBlock&&called&&ttype==Tok!";")){ // (e.g., `while (x){ … }(y);` calls a lambda)
 					restoreState(state);
 					return parseExpression(0,false);
 				}
@@ -1257,6 +1260,16 @@ struct Parser{
 		auto num=parseCondition();
 		auto bdy=parseCompoundExp();
 		return res=New!RepeatExp(num,bdy);
+	}
+	static if(language==silq) DoWhileExp parseDoWhile(){
+		mixin(SetLoc!DoWhileExp);
+		expect(Tok!"do");
+		auto bdy=parseCompoundExp();
+		expect(Tok!"while");
+		auto cond=parseCondition(true);
+		CompoundExp reset=null;
+		if(ttype==Tok!"{") reset=parseCompoundExp();
+		return res=New!DoWhileExp(bdy,cond,reset);
 	}
 	WhileExp parseWhile(){
 		mixin(SetLoc!WhileExp);

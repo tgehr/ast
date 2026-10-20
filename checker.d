@@ -428,6 +428,69 @@ class Checker {
 		return retBdy;
 	}
 
+	StmtResult implStmt(ast_exp.DoWhileExp e) {
+		expectNoLoop(e);
+		expectConst(e.cond, "do-while condition");
+		auto sc = e.bdy.blscope_;
+		assert(sc.parent is nscope);
+
+		MapX!(Id,ast_decl.Declaration) merged;
+		auto sub = new Checker(sc, this);
+		foreach(inner0; sc.splitVars) {
+			auto id = inner0.getId;
+			auto outer0 = inner0.splitFrom;
+			assert(outer0.splitInto.length == 2);
+			assert(outer0.splitInto[1] is inner0);
+			assert(id !in merged, format("ERROR: Duplicate merged variable %s", id.str));
+			merged[id] = outer0;
+			getVar(outer0, false, "splitVars", e);
+			sub.defineVar(inner0, "splitVars", e);
+		}
+		foreach(decl; sc.forgottenVarsOnEntry) {
+			sub.getVar(decl, false, "forgottenVarsOnEntry", e);
+		}
+		StmtResult result = StmtResult.MayPass;
+		foreach(stmt; e.bdy.s) {
+			auto r = sub.visStmt(stmt);
+			if(r & StmtResult.MayReturn) result |= StmtResult.MayReturn;
+			if(!(r & StmtResult.MayPass)) return result & ~StmtResult.MayPass;
+		}
+		sub.visExpr(e.cond);
+
+		Checker reset, exit;
+		sub.visSplit(reset, e.reset.blscope_, exit, e.exitScope, e);
+		auto r = reset.visCompoundStmt(e.reset);
+		if(r & StmtResult.MayReturn) result |= StmtResult.MayReturn;
+		if(r & StmtResult.MayPass) {
+			sub.visMerge(reset, e);
+			reset.checkEmpty();
+			foreach(decl; sc.forgottenVars) {
+				sub.getVar(decl, false, "forgottenVars", e);
+			}
+			foreach(inner1; sc.mergedVars) {
+				auto id = inner1.getId;
+				assert(id in merged, format("ERROR: Merged variable %s not split", id.str));
+				auto outer1 = inner1.mergedInto;
+				assert(outer1.mergedFrom.length == 2);
+				assert(outer1.mergedFrom[1] is inner1);
+				sub.getVar(inner1, false, "mergedVars", e); // (continues with the next iteration)
+			}
+			assert(merged.length == sc.mergedVars.length);
+			sub.checkEmpty();
+		}
+
+		foreach(decl; e.exitScope.forgottenVarsOnEntry) {
+			exit.getVar(decl, false, "forgottenVarsOnEntry", e);
+		}
+		foreach(decl; e.exitScope.forgottenVars) {
+			exit.getVar(decl, false, "forgottenVars", e);
+		}
+		visMerge(exit, e);
+		exit.checkEmpty();
+		if(ast_exp.isTrue(e.cond)) return result & ~StmtResult.MayPass;
+		return result;
+	}
+
 	StmtResult implStmt(ast_exp.RepeatExp e) {
 		expectNoLoop(e);
 		expectConst(e.num, "repeat count");

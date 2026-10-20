@@ -1042,7 +1042,7 @@ private bool copyAttr(Id name) {
 
 private bool hasLoop(Expression e){
 	foreach(x;e.subexpressions)
-		if(cast(ForExp)x||cast(WhileExp)x||cast(RepeatExp)x)
+		if(isLoopStatement(x))
 			return true;
 	return false;
 }
@@ -1411,6 +1411,7 @@ ComputationClass classifyStatement(Expression e){
 		}
 		if(auto fe=cast(ForExp)e) return classifyBody(fe.bdy);
 		if(auto we=cast(WhileExp)e) return unsupported;
+		static if(language==silq) if(auto dw=cast(DoWhileExp)e) return unsupported;
 		if(auto re=cast(RepeatExp)e) return classifyBody(re.bdy);
 		if(auto oe=cast(ObserveExp)e) enforce(0);
 		if(auto oe=cast(CObserveExp)e) enforce(0);
@@ -1451,6 +1452,10 @@ Expression[] mergeCompound(Expression[] s){
 		if(auto fe=cast(ForExp)e) fe.bdy.s=mergeCompound(fe.bdy.s);
 		if(auto we=cast(WhileExp)e) we.bdy.s=mergeCompound(we.bdy.s);
 		if(auto re=cast(RepeatExp)e) re.bdy.s=mergeCompound(re.bdy.s);
+		static if(language==silq) if(auto dw=cast(DoWhileExp)e){
+			dw.bdy.s=mergeCompound(dw.bdy.s);
+			if(dw.reset) dw.reset.s=mergeCompound(dw.reset.s);
+		}
 		r~=e;
 	}
 	return r;
@@ -1693,6 +1698,10 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	}
 	if(auto we=cast(WhileExp)e){
 		sc.error("reversal of while loops not supported yet",we.loc);
+		return error();
+	}
+	static if(language==silq) if(auto dw=cast(DoWhileExp)e){
+		sc.error("reversal of do-while loops not supported yet",dw.loc);
 		return error();
 	}
 	if(auto re=cast(RepeatExp)e){

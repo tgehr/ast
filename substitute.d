@@ -384,6 +384,11 @@ static if(language==silq)
 private int stmtBoundVars(WithExp we,scope int delegate(Identifier) dg){
 	return 0; // names bound by a `with` block are local to the construct
 }
+static if(language==silq)
+private int stmtBoundVars(DoWhileExp dw,scope int delegate(Identifier) dg){
+	foreach(x;dw.bdy.s) if(auto r=statementBoundVarsImpl(x,dg)) return r; // (visible after the loop)
+	return 0;
+}
 static if(language==psi)
 private int stmtBoundVars(DatDecl dd,scope int delegate(Identifier) dg){
 	auto name=dd.rename?dd.rename:dd.name;
@@ -433,6 +438,10 @@ private int stmtFreeVars(WhileExp we,scope int delegate(Identifier) dg){
 private int stmtFreeVars(RepeatExp re,scope int delegate(Identifier) dg){
 	if(auto r=re.num.freeVarsImpl(dg)) return r;
 	return blockFreeVarsImpl(re.bdy.s,null,dg);
+}
+static if(language==silq)
+private int stmtFreeVars(DoWhileExp dw,scope int delegate(Identifier) dg){
+	return blockFreeVarsImpl(dw.bdy.s~dw.cond~(dw.reset?dw.reset.s:[]),null,dg);
 }
 private int stmtFreeVars(ReturnExp re,scope int delegate(Identifier) dg){
 	return re.e?re.e.freeVarsImpl(dg):0;
@@ -517,6 +526,11 @@ private void collectBoundNames(WhileExp we,ref SetX!Id names){
 }
 private void collectBoundNames(RepeatExp re,ref SetX!Id names){
 	foreach(x;re.bdy.s) collectBoundNamesImpl(x,names);
+}
+static if(language==silq)
+private void collectBoundNames(DoWhileExp dw,ref SetX!Id names){
+	foreach(x;dw.bdy.s) collectBoundNamesImpl(x,names);
+	if(dw.reset) foreach(x;dw.reset.s) collectBoundNamesImpl(x,names);
 }
 private void collectBoundNames(DefineExp de,ref SetX!Id names){
 	if(auto le=cast(LambdaExp)de.e2) collectFunctionBoundNames(le.fd,names);
@@ -953,6 +967,36 @@ private Expression substStm(RepeatExp re,ref BlockSubst ctx){
 	if(nnum is re.num&&nbdy is re.bdy) return re;
 	auto r=new RepeatExp(nnum,nbdy);
 	return finishStatement(r,re,ctx);
+}
+static if(language==silq)
+private Expression substStm(DoWhileExp dw,ref BlockSubst ctx){
+	foreach(x;dw.bdy.s) statementBoundVarsImpl(x,(id){
+		auto b=id.id;
+		if(b !in ctx.forced&&ctx.wouldCapture(b)) ctx.forced[b]=ctx.freshName(b);
+		return 0;
+	});
+	auto bctx=ctx.nested();
+	auto nbdy=substituteBlockCompound(dw.bdy,bctx);
+	auto ncond=useSubstitute(dw.cond,bctx);
+	CompoundExp nreset=dw.reset;
+	if(dw.reset){
+		auto rctx=bctx.nested();
+		nreset=substituteBlockCompound(dw.reset,rctx);
+		if(rctx.changed) bctx.changed=true;
+	}
+	foreach(x;dw.bdy.s) statementBoundVarsImpl(x,(id){ // (the definitions of the body are visible after the loop)
+		auto b=id.id;
+		if(b in ctx.forced){
+			if(auto v=bctx.subst.getPtr(b)) ctx.subst[b]=*v;
+			else ctx.subst.remove(b);
+		}else ctx.subst.remove(b);
+		return 0;
+	});
+	if(bctx.changed) ctx.changed=true;
+	if(nbdy is dw.bdy&&ncond is dw.cond&&nreset is dw.reset) return dw;
+	auto r=new DoWhileExp(nbdy,ncond,nreset);
+	r.implicitReset=dw.implicitReset;
+	return finishStatement(r,dw,ctx);
 }
 private Expression substStm(ReturnExp re,ref BlockSubst ctx){
 	auto ne=re.e?substituteLValue(re.e,ctx):null;
@@ -1399,6 +1443,14 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			fixup(r,re);
 			return r;
 		}
+		static if(language==silq) if(auto dw=cast(DoWhileExp)e){
+			auto r=new DoWhileExp(cast(CompoundExp)rescopeCopy(dw.bdy),rescopeCopy(dw.cond),cast(CompoundExp)rescopeCopy(dw.reset));
+			r.noSplit=dw.noSplit;
+			r.implicitReset=dw.implicitReset;
+			r.exitScope=cast(BlockScope)mapScope(dw.exitScope);
+			fixup(r,dw);
+			return r;
+		}
 		if(auto ve=cast(VectorForExp)e){
 			auto r=new VectorForExp(cast(ForExp)mapExp(ve.fe,args));
 			r.fd=ve.fd?cast(FunctionDef)mapExp(ve.fd,args):null;
@@ -1557,6 +1609,20 @@ private void walkStmt(RepeatExp re,Expression twstmt,Scope fparent,MapSX!(Declar
 	auto re2=cast(RepeatExp)twstmt;
 	assert(!!re2);
 	walkStmts([re.bdy],[re2.bdy],fparent,dmap,mapFn);
+}
+static if(language==silq)
+private void walkStmt(DoWhileExp dw,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
+	auto dw2=cast(DoWhileExp)twstmt;
+	assert(!!dw2);
+	if(!dw.bdy.blscope_){
+		walkStmts(dw.bdy.s,dw2.bdy.s,fparent,dmap,mapFn);
+		if(dw.reset) walkStmts([dw.reset],[dw2.reset],fparent,dmap,mapFn);
+		return;
+	}
+	auto ns=mapFn(dw.bdy.blscope_,dw2.bdy.blscope_,fparent); // (the reset and the exit are nested in the scope of the body)
+	walkStmts(dw.bdy.s,dw2.bdy.s,ns,dmap,mapFn);
+	if(dw.reset) walkStmts([dw.reset],[dw2.reset],ns,dmap,mapFn);
+	if(dw.exitScope) mapFn(dw.exitScope,dw2.exitScope,ns);
 }
 private void walkStmt(CommaExp ce,Expression twstmt,Scope fparent,MapSX!(Declaration,Declaration)* dmap,MapScopeTreeDg mapFn){
 	auto ce2=cast(CommaExp)twstmt;

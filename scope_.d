@@ -1056,6 +1056,17 @@ abstract class Scope{
 		unconsume(result);
 		return result;
 	}
+	final Declaration forkSplit(Declaration decl)in{ // (into sibling scopes that do not rejoin, e.g., the exit of a `do`-`while` loop: declarations whose types depend on `decl` are split as well)
+		assert(decl.scope_&&this.isNestedIn(decl.scope_));
+	}do{
+		if(decl.scope_ is this) return decl;
+		auto blocker=decl.typeConstBlocker;
+		auto result=consume(decl,null,null,true);
+		if(!result) return decl;
+		unconsume(result);
+		if(blocker) foreach(d;decl.splitInto) d.typeConstBlocker=blocker;
+		return result;
+	}
 	final void unsplit(Declaration decl)in{
 		assert(this is decl.scope_);
 	}do{
@@ -1794,6 +1805,13 @@ abstract class Scope{
 	}do{
 		if(returns) loopScope.closeUnreachable(this);
 		return merge(false,!returns,forgetScope,loopScope);
+	}
+	final bool mergeLoopExit(BlockScope exitScope)in{ // (the exit scope is nested in the loop scope of the last iteration)
+		assert(activeNestedScopes.empty);
+		assert(exitScope.isNestedIn(this)&&exitScope !is this);
+	}do{
+		activeNestedScopes=[exitScope];
+		return merge(false,exitScope);
 	}
 
 	bool merge(bool quantumControl,bool isLoop,NestedScope[] scopes...)in{

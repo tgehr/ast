@@ -42,6 +42,7 @@ abstract class Declaration: Expression{
 		if(d.isSemError()) sstate=SemState.error;
 		else if(d.isSemCompleted()) sstate=SemState.completed;
 		canonicalSource_=d.canonicalSource;
+		loopExitSplit=d.loopExitSplit;
 		// scope, rename, split/merge links, type-const blockers are established per copy
 	}
 	override @property string kind(){ return "declaration"; }
@@ -70,10 +71,16 @@ abstract class Declaration: Expression{
 	DefinitionSources definitionSources; // (what the dependency is formed from)
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
+	bool loopExitSplit=false; // (at the exit of a `do`-`while` loop whose earlier iterations may change the value)
+	final void cutDerivation(){
+		loopExitSplit=true;
+		canonicalSource_=this;
+		foreach(d;splitInto) d.resetCanonicalSource();
+	}
 	Declaration canonicalSource_=null;
 	Declaration canonicalSource(){ // TODO: compute eagerly instead?
 		if(canonicalSource_) return canonicalSource_;
-		if(splitFrom) return canonicalSource_=splitFrom.canonicalSource;
+		if(splitFrom&&!loopExitSplit) return canonicalSource_=splitFrom.canonicalSource;
 		if(mergedFrom.length==1) return canonicalSource_=mergedFrom[0].canonicalSource;
 		return canonicalSource_=this;
 	}
@@ -116,7 +123,7 @@ abstract class Declaration: Expression{
 		bool rec(Declaration d){
 			if(d is origin) return true;
 			if(d in memo) return memo[d];
-			bool r=d.splitFrom&&rec(d.splitFrom)||d.mergedFrom.length&&d.mergedFrom.all!(m=>rec(m));
+			bool r=d.splitFrom&&!d.loopExitSplit&&rec(d.splitFrom)||d.mergedFrom.length&&d.mergedFrom.all!(m=>rec(m));
 			memo[d]=r;
 			return r;
 		}
