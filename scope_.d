@@ -434,6 +434,11 @@ abstract class Scope{
 		if(id.typeofSuppressedCapture) return;
 		if(!meaning.isToplevelDeclaration()&&!meaning.isAggregateMember()){
 			lastUses.pin(meaning,false); // previous last use cannot be used to forget anymore
+			static if(language==silq){
+				import ast.semantic_: typeForDeclNoAnalyze;
+				if(auto type=typeForDeclNoAnalyze(meaning)) foreach(fid;type.freeIdentifiers) // (as are the variables that its type mentions)
+					if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
+			}
 			if(!id.constLookup&&!id.implicitDup)
 				lastUses.consumption(meaning,id,this); // TODO: ok?
 			updateDeclProps(meaning).accesses~=id;
@@ -2357,6 +2362,11 @@ abstract class Scope{
 			}
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;
+		}
+		Expression typeOf(Id id){
+			import ast.semantic_: typeForDecl;
+			if(auto decl=rnsymtab.get(id,null)) return typeForDecl(decl);
+			return null;
 		}
 		// (a variable comes after the variables whose types mention it in this state)
 		Q!(Id,Declaration,Expression,bool)[] orderedByTypeMentions(Q!(Id,Declaration,Expression,bool)[] params){

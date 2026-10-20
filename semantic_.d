@@ -2189,6 +2189,21 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		xsc.diverges=true; // (the exit does not continue the loop body)
 		if(lsc.merge(false,rsc,xsc)) dw.setSemError();
 		xsc.diverges=false;
+		foreach(d;rsc.mergedVars){ // (the next iteration does not see the definitions of the body that the types of the versions at the end mention)
+			auto vd=cast(VarDecl)d.mergedInto;
+			if(!vd||!vd.vtype||!lsc.splitVars.any!(h=>h.getId==vd.getId)) continue;
+			SetX!Id gone;
+			foreach(id;vd.vtype.freeIdentifiers){
+				if(!id.meaning||!id.meaning.scope_||!id.meaning.scope_.isNestedIn(lsc)) continue;
+				if(!lsc.splitVars.any!(h=>h.getId==id.meaning.getId)) gone.insert(id.id);
+			}
+			if(!gone.length) continue;
+			import ast.looplowering: weakenedExitType;
+			if(auto weak=weakenedExitType(vd.vtype,gone)){
+				vd.vtype=weak;
+				lsc.updateType(vd);
+			}
+		}
 	}
 	auto iterations=LoopIterations(sc,dw.bdy);
 	if(dw.reset) foreach(x;dw.reset.subexpressions) if(isLoopStatement(x)) iterations.nested=true;

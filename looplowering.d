@@ -2265,6 +2265,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	bool[Declaration] loopState;
 	foreach(p;carried[0]~carried[1]) loopState[p[1]]=true;
 	SetX!Id carriedNames,liftedNames;
+	MapSX!(Id,Q!(Id,Declaration,Expression,bool)) liftedParams;
 	Dependency[] classDeps;
 	Id[][] classVars;
 	bool allLifted=true;
@@ -2278,6 +2279,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		auto n=p[1].name.id;
 		liftedNames.insert(n);
+		liftedParams[n]=p;
 		size_t c=classDeps.length;
 		foreach(j,ref d;classDeps) if(sameDeps(d,dep)){ c=j; break; }
 		if(c==classDeps.length){
@@ -3389,6 +3391,14 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 	}
 	// the main loop
+	foreach(v;sorted(liftedNames)){ // (the main loop changes variables that their types mention, the recomputations consume them)
+		auto p=liftedParams[v];
+		auto type=state.origStateSnapshot.typeOf(p[0]),ptype=typeForDecl(p[1]);
+		if(!type||!ptype||type==ptype||!mentions(type,true)) continue;
+		auto use=mkId(v);
+		use.moved=true;
+		stmts~=define(mkId(v),annot(use,p[2].copy()));
+	}
 	Id[Id] copyOf;
 	auto liftedOrder=sorted(liftedNames).filter!(v=>v in mLive).array;
 	foreach(v;liftedOrder){
@@ -3715,6 +3725,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// (the copies of other lifted variables that the recomputations read end up with their recomputed values)
 	foreach(si,ref sl;slices) foreach(w;sorted(sl.carried)) if(auto c=w in renames[si]) stmts~=forgetOf(*c,dupOf(mkId(w)));
 	foreach(v;liftedOrder) stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
+	static if(isDoWhile) foreach(v;sorted(liftedNames)){ // (the recomputation may express the type in terms of logged values)
+		Expression type=null;
+		foreach(d;loop.exitScope.mergedVars) if(d.mergedInto&&d.mergedInto.name&&d.mergedInto.name.id==v) type=typeForDecl(d.mergedInto);
+		if(type&&type.freeIdentifiers.any!(id=>true))
+			stmts~=define(mkId(v),setLoc(new TypeAnnotationExp(mkId(v),cp(type,null),TypeAnnotationType.coercion)));
+	}
 	static if(isDoWhile) foreach(v;sorted(exitLifted)){
 		stmts~=forgetOf(copyOf[v],dupOf(mkId(v)));
 		auto type=exitTypes[v];
@@ -3886,11 +3902,11 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			}
 		}
 		sort!((a,b)=>a[0].id.str<b[0].id.str)(exitLocals);
-		Q!(Id,Expression,Expression)[] strongerExits; // (moved parameters that the body defines with a stronger type: name, type, parameter type)
+		Q!(Id,Expression,Expression)[] strongerExits; // (parameters that the body defines with a stronger type: name, type, parameter type)
 		if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars){
 			auto name=d.mergedInto.name;
 			if(!name) continue;
-			auto p=movedParams.find!(p=>p[1].name.id==name.id);
+			auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==name.id);
 			if(p.empty) continue;
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
 			if(type&&ptype&&type!=ptype) strongerExits~=q(name.id,type,ptype);
@@ -4404,7 +4420,22 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		static if(is(T==WhileExp)) id.loc=loop.cond.loc;
 		else id.loc=loop.loc;
 	}
-	Expression[] stmts=[fd];
+	Expression[] weakenings; // (of the lifted variables whose types mention variables that the call consumes while they are live)
+	foreach(p;constParams){
+		if(!p[3]) continue;
+		auto type=state.origStateSnapshot.typeOf(p[0]),ptype=typeForDecl(p[1]);
+		if(!type||!ptype||type==ptype) continue;
+		if(!type.freeIdentifiers.any!(id=>id.meaning&&movedParams.any!(q=>q[0]==id.meaning.getId))) continue;
+		auto use=new Identifier(p[1].name.id);
+		use.loc=loop.loc;
+		use.moved=true;
+		auto weak=new TypeAnnotationExp(use,p[2].copy(cargsDefault),TypeAnnotationType.annotation);
+		weak.loc=loop.loc;
+		auto def=new DefineExp(new Identifier(p[1].name.id),weak);
+		def.loc=def.e1.loc=loop.loc;
+		weakenings~=def;
+	}
+	Expression[] stmts=weakenings~[cast(Expression)fd];
 	Expression forgetFunction(){ // (its type may mention variables that it captures, which may change after the loop)
 		auto fid=new Identifier(fi);
 		fid.loc=loop.loc;
@@ -4425,6 +4456,19 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
 				assgn.loc=loop.loc;
 				stmts~=assgn;
+				static if(isDoWhile) foreach(e;assgnTpl1.e){ // (see `strongerExits`)
+					auto id=cast(Identifier)e;
+					auto s=strongerExits.find!(s=>s[0]==id.id);
+					if(s.empty) continue;
+					auto use=new Identifier(id.id);
+					use.loc=loop.loc;
+					use.moved=true;
+					auto coerced=new TypeAnnotationExp(use,s.front[1].copy(cargsDefault),TypeAnnotationType.coercion);
+					coerced.loc=loop.loc;
+					auto co=new DefineExp(new Identifier(id.id),coerced);
+					co.loc=co.e1.loc=loop.loc;
+					stmts~=co;
+				}
 			}
 		}
 		stmts~=exitCoercions;
