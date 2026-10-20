@@ -755,6 +755,22 @@ class EarlyForgottenDecl: DeadDecl{
 	}
 }
 
+class LoopForgottenDecl: DeadDecl{ // (a variable of the body of a `do`-`while` loop that the next iteration can only forget at its last use)
+	Declaration decl;
+	this(Declaration decl){
+		super(decl.name);
+		this.type=decl.type;
+		this.decl=decl;
+	}
+	override void explain(string kind,Scope sc){
+		import std.format:format;
+		sc.note(format("%s `%s` is forgotten within the loop, as the next iteration cannot keep it",kind,decl.getName),decl.loc);
+	}
+	override string toString(){
+		return text("loopForgotten(",super.toString(),")");
+	}
+}
+
 class EarlyReturnForgottenDecl: ConsumedDecl{
 	Declaration decl;
 	ReturnExp ret;

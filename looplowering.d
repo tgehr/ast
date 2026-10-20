@@ -2325,10 +2325,13 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) return !ft.isSquare&&ft.annotation<Annotation.qfree;
 		return false;
 	}
-	static bool isVar(Identifier id){
+	bool isVar(Identifier id){
 		if(!id.meaning||cast(DatDecl)id.meaning) return false;
 		if(auto fd=cast(FunctionDef)id.meaning) return !fd.isToplevelDeclaration();
-		return !!cast(VarDecl)id.meaning;
+		if(!cast(VarDecl)id.meaning) return false;
+		for(auto s=cast(BlockScope)id.meaning.scope_;s&&s !is loop.bdy.blscope_;s=cast(BlockScope)s.parent)
+			if(s.isLetBody) return false; // (local to a `let` expression of the statement)
+		return true;
 	}
 	static bool recomputed(Identifier id){ // (quantum values and functions are recomputed, other classical values are logged)
 		if(cast(FunctionDef)id.meaning||!id.type) return true;
@@ -3331,6 +3334,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		walkShallow(c,(Expression x){
 			if(auto le=cast(LambdaExp)x) le.orig=le.fd.copy();
 			if(auto id=cast(Identifier)x) if(auto t=id.id in names) id.id=*t;
+			if(auto le=cast(LetExp)x) if(le.isForward(true)){ // (its definition is not a component)
+				auto id=cast(Identifier)le.e,did=cast(Identifier)(cast(DefineExp)le.s.s[0]).e1;
+				if(auto t=id.id in names) id.id=did.id=*t;
+			}
 		});
 		renameItrans(c,names);
 		renameSkipped(c,names);

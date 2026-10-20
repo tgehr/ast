@@ -2164,6 +2164,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	Declaration[] constForgets;
 	bool resetReturns=false;
+	Declaration[] exitDrops; // (versions at the exit of variables of the body that the next iteration can only forget at their last uses)
 	void finishIteration(){
 		xsc=null;
 		resetReturns=false;
@@ -2184,8 +2185,31 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		propErr(rst,dw);
 		resetReturns=definitelyReturns(rst);
 		if(resetReturns) rsc.closeUnreachable(lsc);
-		foreach(_,d;xsc.rnsymtab) // (the versions at the exit are only forgotten after the loop)
-			if(d.scope_ is xsc) if(auto lu=xsc.lastUses.get(d,true)) lu.pin();
+		exitDrops=[];
+		if(!resetReturns) foreach(_,d;xsc.rnsymtab.dup){ // (they are not available after the loop, which allows the next iteration to forget them)
+			if(d.scope_ !is xsc||cast(DeadDecl)d||d.isSemError()||!d.splitFrom) continue;
+			auto o=d.splitFrom,h=state.forgetScope.rnsymtab.get(o.getId,null);
+			if(h&&!cast(DeadDecl)h) continue; // (carried to the next iteration)
+			auto r=rsc.rnsymtab.get(o.getId,null);
+			if(!r||cast(DeadDecl)r||r !is o&&r.splitFrom !is o) continue; // (consumed or defined again by the reset)
+			if(rsc.canRecompute(r)||rsc.lastUses.canForget(r,true,false)) continue;
+			xsc.forgottenVarsOnEntry~=d;
+			if(!rsc.lastUses.canForget(r,true,false)){
+				xsc.forgottenVarsOnEntry=xsc.forgottenVarsOnEntry[0..$-1];
+				continue;
+			}
+			xsc.symtabRemove(d);
+			if(xsc.dependencyTracked(d)) xsc.pushDependencies(d,false);
+			exitDrops~=d;
+			auto ld=new LoopForgottenDecl(o);
+			if(d.rename){
+				ld.rename=new Identifier(d.rename.id);
+				ld.rename.loc=d.rename.loc;
+			}
+			ld.scope_=xsc;
+			ld.setSemCompleted();
+			if(xsc.canInsert(ld.name.id)) xsc.symtabInsert(ld);
+		}
 		xsc.diverges=true; // (the exit does not continue the loop body)
 		if(lsc.merge(false,rsc,xsc)) dw.setSemError();
 		xsc.diverges=false;
@@ -2241,8 +2265,11 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	dw.bdy=bdy;
 	dw.cond=ncond;
 	dw.reset=rst;
+	if(xsc) foreach(_,d;xsc.rnsymtab) // (the versions at the exit are only forgotten after the loop)
+		if(d.scope_ is xsc) if(auto lu=xsc.lastUses.get(d,true)) lu.pin();
 	if(xsc&&sc.mergeLoopExit(xsc)) dw.setSemError();
 	dw.exitScope=xsc;
+	if(xsc) xsc.forgottenVarsOnEntry=xsc.forgottenVarsOnEntry.filter!(d=>!exitDrops.canFind(d)).array; // (already forgotten in the body)
 	if(xsc) foreach(d;xsc.mergedVars){ // (variables defined in the loop are forgotten after it unless used later)
 		auto decl=d.mergedInto;
 		auto type=typeForDecl(decl);
@@ -2404,17 +2431,27 @@ Dependency getDependencyImpl(Expression e,Scope sc){
 		result.joinWith(getDependency(c,sc));
 	return result;
 }
+private Declaration dependencyDecl(Identifier id,Scope sc){ // (the declaration through which `sc` tracks `id`)
+	auto decl=id.meaning;
+	while(decl&&decl.splitFrom&&decl.scope_&&(decl.scope_.getFunction()!=sc.getFunction()||decl.scope_ !is sc&&decl.scope_.isNestedIn(sc)))
+		decl=decl.splitFrom; // (captures, and versions split into nested scopes that were merged, e.g., the branches of an `if` expression)
+	return decl;
+}
+private Dependency consumedDependency(Declaration decl,Scope sc){
+	if(!sc.dependencyTracked(decl))
+		if(auto pd=sc.consumedDepLog.getPtr(decl))
+			return pd.dup;
+	return sc.getDependency(decl);
+}
 Dependency getDependencyImpl(Identifier id,Scope sc){
 	auto result=Dependency(false);
 	if(!id.meaning||id.type&&id.type.isClassical()) return result;
-	auto decl=id.meaning;
-	while(decl&&decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!=sc.getFunction())
-		decl=decl.splitFrom;
-	if(!sc.dependencyTracked(decl))
+	auto decl=dependencyDecl(id,sc);
+	if(!sc.dependencyTracked(decl)&&!sc.consumedDepLog.getPtr(decl))
 		sc.addDefaultDependency(decl); // TODO: ideally can be removed
 	result.dependencies.insert(decl);
 	if(!id.constLookup&&!id.implicitDup||id.byRef)
-		result.replace(decl,sc.getDependency(decl));
+		result.replace(decl,consumedDependency(decl,sc));
 	return result;
 }
 Dependency getDependencyImpl(LambdaExp le,Scope sc){
@@ -2503,10 +2540,8 @@ DefinitionSources getDependencySources(Expression e,Scope sc){
 		if(!r.known||e.type&&e.type.isClassical()) return;
 		if(auto id=cast(Identifier)e){
 			if(!id.meaning) return;
-			auto decl=id.meaning;
-			while(decl&&decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!=sc.getFunction())
-				decl=decl.splitFrom;
-			if(!id.constLookup&&!id.implicitDup||id.byRef) r.consume(decl,sc.getDependency(decl));
+			auto decl=dependencyDecl(id,sc);
+			if(!id.constLookup&&!id.implicitDup||id.byRef) r.consume(decl,consumedDependency(decl,sc));
 			else r.reads.insert(decl);
 			return;
 		}
@@ -7403,6 +7438,7 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 	dId.scope_=context.sc;
 	auto var=addVar(dId.id,de.e2.type,de.e1.loc,context.sc);
 	dId.meaning=var;
+	dId.id=var.getId; // (renamed, as for other definitions)
 	dId.type=dId.typeFromMeaning;
 	dId.constLookup=false;
 	dId.byRef=true;
@@ -10078,7 +10114,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		return functionDefSemantic(fd,sc);
 	}
 	static if(language==silq)
-		if(fd.erpStage==1&&!fd.tainted)
+		if(fd.erpStage==1&&(!fd.tainted||fd.scope_&&fd.scope_.getFunction())) // (the captures of a nested function are only available now)
 			if(erpSwitch()) return functionDefSemantic(fd,sc);
 	finalize(fd);
 	static if(language==silq){

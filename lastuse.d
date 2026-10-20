@@ -596,7 +596,7 @@ final class LastUse{
 					nested.forgottenVarsOnEntry=nested.forgottenVarsOnEntry.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
 				auto copy=nested.rnsymtab.get(result.getId,null);
-				if(copy&&copy !is result&&!result.splitSequence.canFind(copy)) copy=null;
+				if(copy&&copy !is result&&!result.splitSequence.canFind(copy)&&!copy.isSplitFrom(result)) copy=null;
 				if(copy){
 					nested.symtabRemove(copy);
 					if(copy is result||nested.dependencyTracked(copy))
