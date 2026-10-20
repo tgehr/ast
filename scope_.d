@@ -1774,7 +1774,7 @@ abstract class Scope{
 		if(dependencyTracked(decl)) explainUnknownDependency(decl,getDependency(decl));
 	}
 	static if(language==silq)
-	final bool tryUncomputeTypeDependents(Declaration decl,Identifier use){
+	final bool tryUncomputeTypeDependents(Declaration decl,Identifier use,string action="consume"){
 		import ast.semantic_:liveTypeDependents,typeConstBlocked;
 		if(allowMerge) return false;
 		auto dependents=liveTypeDependents(decl,rnsymtab);
@@ -1792,6 +1792,7 @@ abstract class Scope{
 		foreach(d;dependents){
 			lastUses.forget(d,false);
 			auto ed=new EarlyForgottenDecl(d,decl,use);
+			ed.action=action;
 			if(!firstEFD) firstEFD=ed;
 			else ed.reportVia=firstEFD;
 			if(d.rename){

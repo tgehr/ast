@@ -3044,6 +3044,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			if(!id.meaning) id.meaning=lookupMeaning(id,Lookup.probingWithCapture,context.sc,false,&failures);
 			propErr(next,e);
 			if(id.meaning){
+				static if(language==silq) if(!id.meaning.typeConstBlocker&&typeConstBlocked(id.meaning,context.sc))
+					context.sc.tryUncomputeTypeDependents(id.meaning,id,"assign to"); // (the aggregate is updated, so it has to be split)
 				id.meaning=context.sc.split(id.meaning,id);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
@@ -6017,6 +6019,8 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			id.meaning=lookupMeaning(id,Lookup.probingWithCapture,sc,false,null);
 			if(id.meaning) typeForDeclAnalyzing(id.meaning);
 			if(id.meaning){
+				if(!id.meaning.typeConstBlocker&&typeConstBlocked(id.meaning,sc))
+					sc.tryUncomputeTypeDependents(id.meaning,id,"assign to"); // (as for other consumptions of the old value)
 				id.meaning=sc.split(id.meaning,id);
 				id.id=id.meaning.getId;
 				id.type=id.typeFromMeaning;

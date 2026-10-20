@@ -207,6 +207,8 @@ private void linkLoweredVariables(Scope sc,ref MapX!(Id,Declaration) before){
 	foreach(id,d;sc.rnsymtab)
 		if(auto vd=cast(VarDecl)d) if(auto od=cast(VarDecl)before.get(id,null))
 			if(od !is vd&&!vd.loweredFrom&&!vd.typeSource&&!od.isSemError()) vd.loweredFrom=od;
+	foreach(id,d;before)
+		if(auto dd=cast(DeadDecl)d) if(id !in sc.rnsymtab) sc.symtabInsert(dd); // (explains uses of a variable that the loop does not produce)
 }
 Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(is(T==ForExp)){

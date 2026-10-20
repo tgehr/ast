@@ -724,6 +724,7 @@ class EarlyForgottenDecl: DeadDecl{
 	Declaration decl;
 	Declaration consumed;
 	Identifier use;
+	string action="consume";
 	EarlyForgottenDecl reportVia=null;
 	this(Declaration decl,Declaration consumed,Identifier use)in{
 		assert(!!decl&&!!consumed&&!!use);
@@ -740,7 +741,7 @@ class EarlyForgottenDecl: DeadDecl{
 		if(reportVia) return reportVia.reportUndefinedIdentifier(id,sc);
 		if(isSemError()) return true;
 		setSemForceError();
-		sc.error(format("cannot consume `const` %s `%s`",consumed.kind,use),use.loc);
+		sc.error(format("cannot %s `const` %s `%s`",action,consumed.kind,use),use.loc);
 		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",consumed.name,typeForDecl(decl),decl.kind,decl.getName),decl.loc);
 		return true;
 	}
