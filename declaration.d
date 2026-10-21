@@ -81,14 +81,15 @@ abstract class Declaration: Expression{
 	Declaration canonicalSource(){ // TODO: compute eagerly instead?
 		if(canonicalSource_) return canonicalSource_;
 		if(splitFrom&&!loopExitSplit) return canonicalSource_=splitFrom.canonicalSource;
-		if(mergedFrom.length==1) return canonicalSource_=mergedFrom[0].canonicalSource;
+		if(mergedFrom.length&&mergedFrom.all!(d=>d.canonicalSource is mergedFrom[0].canonicalSource)) // (no path changes it)
+			return canonicalSource_=mergedFrom[0].canonicalSource;
 		return canonicalSource_=this;
 	}
 	final void resetCanonicalSource(){ // (e.g., after a split is relinked)
 		if(!canonicalSource_) return;
 		canonicalSource_=null;
 		foreach(d;splitInto) d.resetCanonicalSource();
-		if(mergedInto&&mergedInto.mergedFrom.length==1) mergedInto.resetCanonicalSource();
+		if(mergedInto) mergedInto.resetCanonicalSource();
 	}
 
 	bool isToplevelDeclaration(){

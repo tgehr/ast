@@ -1822,6 +1822,7 @@ abstract class Scope{
 			mergedInto.setSemForceError();
 		mergedInto.mergedFrom~=mergedFrom;
 		mergedFrom.mergedInto=mergedInto;
+		mergedInto.resetCanonicalSource();
 		mergedVars~=mergedFrom;
 	}
 
