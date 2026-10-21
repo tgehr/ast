@@ -676,13 +676,13 @@ final class LastUse{
 				return r;
 			case lazyMerge:
 				auto r=getMergeForgettability(decl,nestedScopes,true,forceConsumed);
-				if(!forceConsumed){
-					foreach(nsc;nestedScopes){
-						foreach(ssc;nsc.siblingScopes){
-							if(auto bs=cast(BlockScope)ssc){
-								if(bs.isLoopBody&&bs.diverges){
+				foreach(nsc;nestedScopes){
+					foreach(ssc;nsc.siblingScopes){
+						if(auto bs=cast(BlockScope)ssc){
+							if(bs.isLoopBody&&bs.diverges){ // (forgets in the scope of the path that skips such a loop are not generated: the variable can only be forgotten before the loop)
+								auto nlu=nsc.lastUses.lastUses.get(versionIn(decl,nsc),null);
+								if(!nlu||nlu.forwardTo||nlu.kind!=Kind.lazySplit||!nlu.isLastSplitSibling()||!nlu.splitFrom.canForget(false))
 									return Forgettability.none;
-								}
 							}
 						}
 					}

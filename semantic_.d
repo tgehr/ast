@@ -1049,10 +1049,11 @@ void collectNondeterministicSubexpressions(Expression e,ref Expression[] result)
 	foreach(c;e.components) collectNondeterministicSubexpressions(c,result);
 }
 static if(language==silq)
-bool hasLetScope(Expression e){
+bool hasLocalScope(Expression e){
 	if(auto le=cast(LetExp)e) if(le.s.blscope_) return true;
-	if(cast(FunctionDef)e||cast(LambdaExp)e) return false;
-	foreach(c;e.components) if(hasLetScope(c)) return true;
+	if(cast(LambdaExp)e||cast(VectorForExp)e) return true;
+	if(cast(FunctionDef)e) return false;
+	foreach(c;e.components) if(hasLocalScope(c)) return true;
 	return false;
 }
 
@@ -1095,13 +1096,14 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 			branch.blscope_.closeUnreachable(sc);
 	}
 	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
+	auto diverges=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
 	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
-	static if(language==silq) Identifier[] redefined; // (used by `condForget`)
+	static if(language==silq) Identifier[] condForgetUses;
 	static if(language==silq) // TODO: can we avoid doing this?
-	if(quantumControl&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
+	if(quantumControl&&!diverges&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
 		Expression[] nondeterministic;
 		collectNondeterministicSubexpressions(ite.cond,nondeterministic);
 		IdMapSX!(Expression,bool) sharedNodes;
@@ -1112,13 +1114,14 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 			auto condForget=ite.cond.copy(cargs);
 			condForget=expressionSemantic(condForget,expSemContext(sc,ConstResult.yes,InType.no));
 			sc.clearConsumed();
+			if(condForget.isSemError()) sc.note("the condition is evaluated again after the branches to uncompute it",ite.cond.loc);
 			propErr(condForget,ite);
 			ite.condForget=condForget;
 		}
-		if(hasLetScope(ite.cond)){ // (the local declarations and scopes of a `let` expression cannot be shared with the entry condition)
+		if(hasLocalScope(ite.cond)){ // (local declarations and scopes, e.g., of a `let` expression or a lambda, cannot be shared with the entry condition)
 			reanalyzeCondForget();
 		}else{
-			bool typeChanged=false;
+			bool reanalyze=false;
 			Expression.CopyArgs cargs={preserveSemantic:true};
 			cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
 				// nondeterministic subexpressions are shared with the entry condition;
@@ -1126,26 +1129,29 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 				if(e in sharedNodes) return e;
 				if(auto id=cast(Identifier)e){
 					if(!id.meaning||id.meaning.isToplevelDeclaration()) return null;
-					auto nid=new Identifier(id.name);
-					nid.loc=id.loc;
 					if(auto meaning=sc.peekSymtab(id.meaning.getId,true)){
-						if(meaning!is id.meaning&&!cast(DeadDecl)meaning){
-							if(typeForDecl(meaning)!=typeForDecl(id.meaning)) typeChanged=true;
-							nid.meaning=meaning;
-							nid.type=nid.typeFromMeaning;
-							nid.scope_=sc;
-							nid.constLookup=id.constLookup;
-							nid.setSemCompleted();
-							redefined~=nid;
-							return nid;
+						if(cast(DeadDecl)meaning){ // (e.g., consumed within the branches)
+							reanalyze=true;
+							return null;
 						}
+						if(typeForDecl(meaning)!=typeForDecl(id.meaning)) reanalyze=true;
+						auto nid=new Identifier(id.name);
+						nid.loc=id.loc;
+						nid.meaning=meaning;
+						nid.type=nid.typeFromMeaning;
+						nid.scope_=sc;
+						nid.constLookup=id.constLookup;
+						nid.implicitDup=id.implicitDup;
+						nid.setSemCompleted();
+						condForgetUses~=nid;
+						return nid;
 					}
 				}
 				return null;
 			};
 			ite.condForget=ite.cond.copy(cargs);
-			if(typeChanged){ // (e.g., the branches made a component of a borrowed aggregate quantum, so types within the copy would be stale)
-				redefined=[];
+			if(reanalyze){ // (e.g., the branches made a component of a borrowed aggregate quantum, so types within the copy would be stale)
+				condForgetUses=[];
 				reanalyzeCondForget();
 			}
 		}
@@ -1158,11 +1164,14 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 			}
 		}
 	}
-	ite.type=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw)?bottom:unit;
-	static if(language==silq) if(redefined.length){ // (`condForget` is evaluated after the branches)
+	ite.type=diverges?bottom:unit;
+	static if(language==silq) if(condForgetUses.length){ // (`condForget` is evaluated after the branches)
 		ite.setSemCompleted();
 		Expression r=ite;
-		foreach(id;redefined) sc.lastUses.constUse(id,r,true,false);
+		foreach(id;condForgetUses){
+			sc.recordAccess(id,id.meaning);
+			sc.lastUses.constUse(id,r,true,false);
+		}
 		return r;
 	}
 	return ite;
@@ -1340,9 +1349,13 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq)
 	if(haveWithTransReplacements){
 		sc.resetLocalComponentReplacements();
-		if(!with_.isSemError())
-			return lowerIndexReplacement(prologues,epilogues,with_,sc,flags);
+		if(!with_.isSemError()){
+			auto r=lowerIndexReplacement(prologues,epilogues,with_,sc,flags);
+			propErr(with_.bdy,r);
+			return r;
+		}
 	}
+	propErr(with_.bdy,with_); // (only now, e.g., such that replaced components are still put back)
 	return with_;
 }
 
@@ -7375,13 +7388,22 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	// initialize both scopes first, to allow captures to be inserted
 	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
+	static if(language==silq){
+		auto crepls=sc.allComponentReplacements(); // (each branch may consume a replaced component)
+		auto entryReads=crepls.map!(crepl=>q(crepl.read,crepl.constRead)).array;
+	}
 	ite.then=branchBlockSemantic(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
 		ite.setSemError();
 		return ite;
 	}
+	static if(language==silq){
+		auto thenReads=crepls.map!(crepl=>q(crepl.read,crepl.constRead)).array;
+		foreach(i,crepl;crepls) crepl.read=entryReads[i][0], crepl.constRead=entryReads[i][1];
+	}
 	ite.othw=branchBlockSemantic(ite.othw, context, quantumControl);
+	static if(language==silq) foreach(i,crepl;crepls) if(!crepl.read) crepl.read=thenReads[i][0], crepl.constRead=thenReads[i][1];
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);

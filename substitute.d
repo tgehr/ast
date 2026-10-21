@@ -1503,6 +1503,18 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		}
 		foreach(d;bs.forgottenVars) if(auto nd=mapDecl(d)) ns.forgottenVars~=nd;
 		foreach(d;bs.forgottenVarsOnEntry) if(auto nd=mapDecl(d)) ns.forgottenVarsOnEntry~=nd;
+		NestedScope[] twins(NestedScope[] scopes){
+			NestedScope[] r;
+			foreach(s;scopes) if(auto p=smap.getPtr(s)) if(auto n=cast(NestedScope)*p) r~=n;
+			return r;
+		}
+		// (the nested scopes of the twin are merged like those of the template)
+		ns.activeNestedScopes=twins(bs.activeNestedScopes);
+		ns.mergedNestedScopes=[];
+		foreach(g;bs.mergedNestedScopes) ns.mergedNestedScopes~=twins(g);
+		ns.allowMerge=bs.allowMerge;
+		ns.siblingScopes=twins(bs.siblingScopes);
+		ns.siblingsFinal=bs.siblingsFinal;
 	}
 	mapScopeTreeDg=&mapScopeTree;
 	cargs.mapDecl=&mapDecl; cargs.postCopy=&fixAssignFields;

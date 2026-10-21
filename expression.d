@@ -1257,6 +1257,7 @@ class Identifier: Expression{
 		if(byRef) return null; // TODO: why is this suddenly needed?
 		auto vd=cast(VarDecl)meaning;
 		if(!vd) return null;
+		if(!vd.initializer) if(auto source=cast(VarDecl)vd.canonicalSource) vd=source; // (e.g., the version merged from the scope of a `with` transformation has the value of its definition)
 		if(vd.definition) if(auto td=cast(FixedPointDeclaration)vd.definition.toplevel) if(!td.typeFinal) return null;
 		if(!vd.scope_&&!vd.isSemFinal()) return null;
 		assert(vd.isSemFinal());

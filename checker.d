@@ -153,6 +153,7 @@ class Checker {
 	}
 
 	void visExpr(ast_exp.Expression e) {
+		if(isEntryValue(e)) return;
 		assert(e.isSemCompleted(), format("expression not fully analyzed: << %s >> in state %s", e, e.sstate));
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
 		visType(e.type);
@@ -362,7 +363,23 @@ class Checker {
 		}
 		if(retTrue & StmtResult.MayPass) ifTrue.checkEmpty();
 		if(retFalse & StmtResult.MayPass) ifFalse.checkEmpty();
+		if(e.condForget && ((retTrue | retFalse) & StmtResult.MayPass)) visCondForget(e);
 		return retTrue | retFalse;
+	}
+
+	void visCondForget(ast_exp.IteExp e) { // (evaluated after the branches, reusing the values of nondeterministic subexpressions of the condition)
+		ast_exp.Expression[] reused;
+		ast_sem.collectNondeterministicSubexpressions(e.cond, reused);
+		foreach(nd; reused) entryValues[cast(void*)nd] = unit;
+		scope(exit) foreach(nd; reused) entryValues.remove(cast(void*)nd);
+		visExpr(e.condForget);
+		expectConst(e.condForget, "condition");
+	}
+
+	bool isEntryValue(ast_exp.Expression e) {
+		for(auto sc = this; sc; sc = sc.parent)
+			if(cast(void*)e in sc.entryValues) return true;
+		return false;
 	}
 
 	StmtResult implStmt(ast_exp.WithExp e) {
@@ -1403,6 +1420,7 @@ class Checker {
 	bool strictScope = true;
 	bool scopeFree = false;
 	MapX!(void*,Unit) checked;
+	MapX!(void*,Unit) entryValues; // (see visCondForget)
 }
 
 void checkFunction(ast_decl.FunctionDef fd) {
