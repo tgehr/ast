@@ -611,12 +611,36 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		dce(list,linfos,(Id n)=>n in isCarried||n in early||totalOcc.get(n,0)>occ.get(n,0));
 		return list;
 	}
+	// A path of the loop body that ends in a diverging statement (e.g., a quantum-controlled `return` or a failing `assert`)
+	// does not reach the next iteration of the original loop, but it does in the split loops without that statement.
+	struct Div{
+		bool on; // (the path diverges before the end of the iteration)
+		SetX!Id redefs; // (variables defined on the path before it diverges)
+	}
+	Div including(Div dv,Expression s){ // (`s` runs before the path continues as described by `dv`)
+		bool b=false;
+		auto defs=analyzeStm(s,b).strong;
+		if(definitelyReturns(s)) return Div(true,defs);
+		if(!dv.on) return dv;
+		auto redefs=dv.redefs.dup;
+		foreach(d;defs) redefs.insert(d);
+		return Div(true,redefs);
+	}
+	Div[] divsOf(Expression[] list,Div after){ // (after each statement of a block)
+		auto r=new Div[](list.length);
+		foreach_reverse(j,s;list){
+			r[j]=after;
+			after=including(after,s);
+		}
+		return r;
+	}
 	struct Atom{
 		Expression e;
 		size_t stm;
 		size_t[] ites;
 		bool[] inElse;
 		Expression[] parts;
+		Div div;
 	}
 	struct Ite{
 		Expression e;
@@ -660,7 +684,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		return true;
 	}
-	void extractFrom(Expression root,size_t i,size_t[] ctx,bool[] inElse){
+	void extractFrom(Expression root,size_t i,size_t[] ctx,bool[] inElse,Div dv){
 		bool rb=false;
 		auto rootInfo=analyzeStm(root,rb);
 		// within a single simple statement, subexpressions are evaluated before any variable is updated
@@ -697,7 +721,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			extracted[cast(const(void)*)ce]=fresh;
 			reanalyze[cast(const(void)*)root]=true;
 			isExtractAtom[cast(const(void)*)w]=true;
-			atoms~=Atom(w,i,ctx,inElse,[ce]);
+			atoms~=Atom(w,i,ctx,inElse,[ce],dv);
 		});
 	}
 	bool[size_t] isPseudo;
@@ -710,14 +734,14 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		isCondVar.insert(n);
 		return n;
 	}
-	void flatten(Expression e,size_t i,size_t[] ctx,bool[] inElse){
+	void flatten(Expression e,size_t i,size_t[] ctx,bool[] inElse,Div dv){ // (`dv`: the path after `e`)
 		if(auto fe=cast(ForgetExp)e) if(!fe.val&&fe.var.type&&fe.var.type.isClassical()) return; // (the split loops forget classical variables where needed)
 		if(auto ite=cast(IteExp)e){
 			bool b=false;
 			auto info=analyzeStm(ite.cond,b);
 			bad|=b;
 			if(info.nonQfree&&ite.cond.type&&ite.cond.type.isClassical()){
-				extractFrom(ite.cond,i,ctx,inElse);
+				extractFrom(ite.cond,i,ctx,inElse,including(dv,e));
 				info=analyzeStm(ite.cond,b);
 			}
 			if(!info.strong.length){
@@ -731,8 +755,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto k=ites.length;
 				ites~=Ite(ite,i,info,ctx,atoms.length,false,[ite.cond]);
 				auto before=atoms.length;
-				foreach(x;blockStms(ite.then.s,false)) flatten(x,i,ctx~k,inElse~false);
-				if(ite.othw) foreach(x;blockStms(ite.othw.s,false)) flatten(x,i,ctx~k,inElse~true);
+				void branch(CompoundExp b,bool isElse){
+					auto list=blockStms(b.s,false);
+					foreach(j,dj;divsOf(list,dv)) flatten(list[j],i,ctx~k,inElse~isElse,dj);
+				}
+				branch(ite.then,false);
+				if(ite.othw) branch(ite.othw,true);
 				if(atoms.length!=before) return;
 				ites=ites[0..k];
 			}
@@ -740,12 +768,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(auto we=cast(WithExp)e) if(!we.isIndices){
 			auto k=ites.length;
 			auto p=atoms.length;
-			atoms~=Atom(we.trans,i,ctx,inElse,[we.trans]);
+			atoms~=Atom(we.trans,i,ctx,inElse,[we.trans],including(dv,e));
 			auto it=Ite(we,i,StmInfo.init,ctx,p,false,[]);
 			it.isWith=true;
 			it.pseudo=p;
 			ites~=it;
-			foreach(x;blockStms(we.bdy.s,false)) flatten(x,i,ctx~k,inElse~false);
+			auto list=blockStms(we.bdy.s,false);
+			foreach(j,dj;divsOf(list,including(dv,e))) flatten(list[j],i,ctx~k,inElse~false,dj);
 			if(atoms.length!=p+1){
 				isPseudo[p]=true;
 				return;
@@ -772,7 +801,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(!cast(WhileExp)e) foreach(h;heads){
 				bool b=false;
 				auto hi=analyzeStm(h,b);
-				if(hi.nonQfree&&h.type&&h.type.isClassical()) extractFrom(h,i,ctx,inElse);
+				if(hi.nonQfree&&h.type&&h.type.isClassical()) extractFrom(h,i,ctx,inElse,including(dv,e));
 			}
 			foreach(h;heads){
 				bool b=false;
@@ -789,13 +818,14 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto k=ites.length;
 				ites~=Ite(e,i,info,ctx,atoms.length,true,heads);
 				auto before=atoms.length;
-				foreach(x;blockStms(lbdy.s,true)) flatten(x,i,ctx~k,inElse~false);
+				auto list=blockStms(lbdy.s,true);
+				foreach(j,dj;divsOf(list,Div.init)) flatten(list[j],i,ctx~k,inElse~false,dj); // (a nested loop continues with its next iteration)
 				if(atoms.length!=before) return;
 				ites=ites[0..k];
 			}
 		}
 		if(auto ce=cast(CompoundExp)e) if(!ce.blscope_){
-			foreach(x;ce.s) flatten(x,i,ctx,inElse);
+			foreach(j,dj;divsOf(ce.s,dv)) flatten(ce.s[j],i,ctx,inElse,dj);
 			return;
 		}
 		if(auto de=cast(DefineExp)e) if(splitTuple(de)){
@@ -803,7 +833,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			foreach(k;0..lhs.e.length){
 				auto w=new DefineExp(lhs.e[k],rhs.e[k]);
 				w.loc=de.loc;
-				atoms~=Atom(w,i,ctx,inElse,[lhs.e[k],rhs.e[k]]);
+				atoms~=Atom(w,i,ctx,inElse,[lhs.e[k],rhs.e[k]],including(dv,e));
 			}
 			return;
 		}
@@ -816,12 +846,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto t=inf.types.get(d,null)) if(!t.isClassical()) qdef=true;
 			}
 			if(inf.nonQfree&&qdef){
-				extractFrom(e,i,ctx,inElse);
+				extractFrom(e,i,ctx,inElse,including(dv,e));
 			}
 		}
-		atoms~=Atom(e,i,ctx,inElse,[e]);
+		atoms~=Atom(e,i,ctx,inElse,[e],including(dv,e));
 	}
-	foreach(i,s;stms) flatten(s,i,[],[]);
+	foreach(i,dv;divsOf(stms,Div.init)) flatten(stms[i],i,[],[],dv);
 	if(bad) return null;
 	StmInfo[] ainfos;
 	foreach(ref a;atoms){
@@ -1101,9 +1131,25 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(!progress) return null;
 		setupRanks();
 	}
+	// On a diverging path, the original loop body may consume a variable that the loops without the diverging statement
+	// still need, as the path continues there: they do not forget it, and other consumptions of it prevent the split.
+	bool keepAlive(size_t a,Id u){
+		if(!atoms[a].div.on||u in atoms[a].div.redefs) return false;
+		if(u in isCarried) return true;
+		foreach(b;a+1..atoms.length) if(u in ainfos[b].uses) return true;
+		return false;
+	}
+	bool dropOnDiv(size_t a){
+		auto fe=cast(ForgetExp)atoms[a].e;
+		if(!ainfos[a].isForget||fe&&fe.val) return false;
+		foreach(u;ainfos[a].consumed) if(keepAlive(a,u)) return true;
+		return false;
+	}
+	bool dropped(size_t a,int X){ return X!=P&&dropOnDiv(a); }
 	// (a loop whose lifted state is computed by a single loop is still rewritten without its dead code: otherwise, the
 	// results of the recursive function it is lowered to would depend on the quantum variables the dead code reads)
-	if((atomColor.filter!(c=>c>=0).array~(atomColor.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2&&!dceRemoved) return null;
+	auto counted=iota(atoms.length).filter!(a=>atomColor[a]>=0&&!dropped(a,atomColor[a])).map!(a=>atomColor[a]).array;
+	if((counted~(counted.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2&&!dceRemoved) return null;
 	foreach(a,c;atomColor) if(c==P) foreach(u;ainfos[a].consumed) if(u in isCarried&&colorOf(u)>P) return null; // (the main loop runs on copies of late lifted state)
 	if(hasQuantumReturn){
 		// The split-off loops also run for basis states that have returned already: their computations must not fail
@@ -1667,7 +1713,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	Id[Id] fNames;
 	foreach(i,p;carried[0]) if(rank[classOf[i]]>P) fNames[p[1].name.id]=freshName();
 	foreach(X;0..cast(int)classDeps.length+1){
-		if(!atomColor.canFind(X)&&!(X==P&&atomColor.any!(c=>c>P))) continue;
+		if(!iota(atoms.length).any!(a=>atomColor[a]==X&&!dropped(a,X))&&!(X==P&&atomColor.any!(c=>c>P))&&!logs.any!(l=>l.src==X&&l.primary)) continue;
 		if(X==P) foreach(v,fv;fNames) stmts~=define(mkId(fv),dupOf(mkId(v)));
 		bool readsLogs=logs.any!(l=>l.dst==X&&!l.rLevel);
 		Id counter;
@@ -2093,14 +2139,16 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						}
 					}
 				}
-				foreach(l;logs) if(l.stm==i&&l.src==X&&l.consume&&l.wAt==a){
+				foreach(l;logs) if(l.stm==i&&l.src==X&&l.consume&&l.wAt==a&&!keepAlive(a,l.var)){
 					alignTo(atoms[a].ites[0..l.level],atoms[a].inElse[0..l.level],a);
 					auto fid=mkId(l.var);
 					auto fe=new ForgetExp(fid,null);
 					fe.loc=loc;
 					emit(fe);
 				}
-				if(a in isPseudo||!keepIn(a,X)) continue;
+				if(a in isPseudo||!keepIn(a,X)||dropped(a,X)) continue;
+				if(X!=P) foreach(u;ainfos[a].consumed)
+					if(u !in ainfos[a].strong&&keepAlive(a,u)&&!logs.any!(l=>l.dst==X&&l.consume&&l.var==u&&l.wAt==a)) return null;
 				alignTo(atoms[a].ites,atoms[a].inElse,a);
 				foreach(u;ainfos[a].uses) if(u in outOfScope){
 					auto ty=ainfos[a].types.get(u,null);
@@ -4517,9 +4565,11 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto othw=new CompoundExp(defLocals);
 		match(stmts,ce2,retId2,then,locals,othw);
 	}else if(isInfinite){
-		auto fret=new ReturnExp(ce2);
-		fret.loc=loop.loc;
-		stmts~=fret;
+		if(loopContainsReturn(loop)){
+			auto fret=new ReturnExp(ce2);
+			fret.loc=loop.loc;
+			stmts~=fret;
+		}else stmts~=ce2; // (the call does not return either, so it does not consume the other variables)
 	}else if(defTpl.e.length){
 		defineLocals(stmts,ce2);
 	}else{
@@ -4706,12 +4756,18 @@ struct LoopContinuation{
 		return r;
 	}
 }
-// `while true` (syntactically, as the loop may not be analyzed yet)
+// a loop that does not exit normally, e.g., `while true` (syntactically, as the loop may not be analyzed yet)
 bool isInfiniteLoop(Expression e){
 	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return endsWithReturn(dw.bdy)||isTrueCondition(dw.cond); // (or `do{ … return e; }while c`)
+	if(auto re=cast(RepeatExp)e) return isPositiveCount(re.num)&&endsWithReturn(re.bdy); // (`repeat 2{ assert(false); }`)
 	auto we=cast(WhileExp)e;
 	if(!we) return false;
 	return isTrueCondition(we.cond);
+}
+private bool isPositiveCount(Expression num){
+	if(num.type) return isPositive(num);
+	if(auto le=cast(LiteralExp)num) return le.lit.type==Tok!"0"&&le.lit.str.any!(c=>'1'<=c&&c<='9');
+	return false;
 }
 private bool isTrueCondition(Expression cond){
 	if(cond.type) return isTrue(cond);
@@ -5093,6 +5149,15 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 		bool nested=(cast(IteExp)s||cast(CompoundExp)s)&&hasLoopWithReturn(s);
 		if(!nested){
 			r~=s;
+			if(tail.length&&endsWithReturn(s)&&i+1<stms.length){
+				// the rest is unreachable, and it may not be able to call the join point (e.g., after a `return`, all
+				// variables are consumed): a loop with early returns there continues with a failing `assert` instead
+				auto no=LiteralExp.makeBoolean(false);
+				no.loc=s.loc;
+				auto unreachable=new AssertExp(no);
+				unreachable.loc=no.loc;
+				tail=[unreachable];
+			}
 			continue;
 		}
 		auto rest=stms[i+1..$];
