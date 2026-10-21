@@ -6552,6 +6552,8 @@ string restrictionViolation(RestrictionCause cause,Annotation restriction,string
 		return format("%s under quantum control must be `%s`",what,ann);
 	if(cast(WithExp)cause.cause)
 		return format("%s in `with` transformation must be `%s`",what,ann);
+	if(cast(LetExp)cause.cause)
+		return format("%s within type must be `%s`",what,ann);
 	if(cast(FunctionDef)cause.cause)
 		return format("cannot %s within `%s` function",action,ann);
 	return format("cannot %s in `%s` context",action,ann);
@@ -7485,7 +7487,11 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	StmFlags flags;
-	if(!le.s.blscope_) le.s.blscope_=new BlockScope(sc);
+	if(!le.s.blscope_){
+		static if(language==silq) auto restriction_=inType?Annotation.qfree:Annotation.none; // (like function calls within types)
+		else auto restriction_=inType?Annotation.pure_:Annotation.none;
+		le.s.blscope_=new BlockScope(sc,restriction_,RestrictionCause(inType?le:null));
+	}
 	le.s.blscope_.isLetBody=true;
 	static if(language==silq){
 		Scope.OuterConstRead[] outerConstReads;
@@ -7660,10 +7666,10 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					id.setSemError();
 					return false;
 				}
-				if(auto nmeaning=sc.consume(meaning,id))
-					meaning=nmeaning;
+				auto nmeaning=sc.consume(meaning,id); // (null if not available here, e.g., declared outside of an enclosing lambda)
+				if(nmeaning) meaning=nmeaning;
 				static if(language==silq) sc.pinTypeMentions(meaning); // (the variables that its type mentions are live up to here)
-				if(sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
+				if(nmeaning&&sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
 					id.scope_=sc;
 					id.byRef=true;
 					assert(!!meaning);
