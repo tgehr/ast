@@ -1134,12 +1134,12 @@ abstract class Scope{
 		}
 		rec(decl);
 	}
-	final void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
+	final void replaceDecl(Declaration splitFrom,Declaration splitInto,bool nested=true)in{
 		assert(splitFrom !is splitInto);
 	}do{
 		if(splitFrom.isSemError())
 			splitInto.setSemForceError();
-		foreach(scopes;mergedNestedScopes){
+		if(nested) foreach(scopes;mergedNestedScopes){
 			foreach(sc;scopes)
 				sc.replaceDecl(splitFrom,splitInto);
 		}

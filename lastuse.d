@@ -569,7 +569,7 @@ final class LastUse{
 				if(d !is cdecl){
 					csc.symtabRemove(d);
 					csc.reinsert(cdecl);
-					csc.replaceDecl(d,cdecl);
+					csc.replaceDecl(d,cdecl,!(d.scope_&&d.scope_ !is csc&&d.scope_.isNestedIn(csc))); // (while merging, the table holds a branch's version, which stays in the branch)
 				}
 			}else csc.reinsert(cdecl);
 			if(csc is decl.scope_) break;
