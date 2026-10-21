@@ -668,6 +668,9 @@ class Checker {
 	}
 
 	void implLhs(ast_exp.IndexExp e) {
+		ast_exp.IndexExp[] inner;
+		for(auto sube = cast(ast_exp.IndexExp) e.e; sube; sube = cast(ast_exp.IndexExp) sube.e) inner ~= sube;
+		foreach_reverse(sube; inner) visExpr(sube.a); // (evaluated before `e.a`)
 		visExpr(e.a);
 		auto expectedType = ast_sem.indexType(e.e.type, e.a);
 		assert(e.type == expectedType, format("index type mismatch: %s has type %s, indexed with %s results in %s instead of %s at %s", e.e, e.e.type, e.a, expectedType, e.type, e.loc));

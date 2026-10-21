@@ -3735,6 +3735,28 @@ Expression defineLhsPresemantic(Expression lhs,DefineLhsContext context){
 	return defineLhsSemantic!true(lhs,context);
 }
 
+void recordIndexConstUses(Expression index,ref Expression parent,Scope sc){ // (`index` is evaluated again at `parent`)
+	foreach(id;index.freeIdentifiers){
+		if(!id.meaning||!id.constLookup) continue;
+		auto use=id;
+		if(id.scope_ !is sc){ // (e.g., within a branch of an `if` expression: a use of the version in `sc`)
+			auto decl=id.meaning;
+			while(decl.splitFrom&&!(decl.scope_&&sc.isNestedIn(decl.scope_))) decl=decl.splitFrom;
+			if(!decl.scope_||!sc.isNestedIn(decl.scope_)) continue;
+			use=new Identifier(decl.getId);
+			use.loc=id.loc;
+			use.scope_=sc;
+			use.meaning=decl;
+			use.constLookup=true;
+			use.byRef=true;
+			use.type=use.typeFromMeaning;
+			if(!use.type) continue;
+			use.setSemCompleted();
+		}
+		sc.lastUses.constUse(use,parent,true,false);
+	}
+}
+
 static if(language==silq)
 Expression swapSemantic(DefineExp be,Scope sc){
 	bool isSwap=false;
@@ -3841,13 +3863,8 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	assert(cid&&cid.meaning);
 	sc.lastUses.definition(cid.meaning,ce);
 	foreach(idx;idx1){
-		foreach(id;idx.a.freeIdentifiers){
-			if(!id.meaning) continue;
-			if(id.constLookup){
-				sc.lastUses.constUse(id,parent,true,false);
-				assert(parent is ce);
-			}
-		}
+		recordIndexConstUses(idx.a,parent,sc);
+		assert(parent is ce);
 	}
 	return ce;
 }
@@ -4359,13 +4376,8 @@ Expression lowerIndexReplacement(CompoundExp[] prologues,CompoundExp[] epilogues
 				auto cid=getIdFromIndex(idx);
 				assert(cid&&cid.meaning);
 				sc.lastUses.definition(cid.meaning,ce);
-				foreach(id;idx.a.freeIdentifiers){
-					if(!id.meaning) continue;
-					if(id.constLookup){
-						sc.lastUses.constUse(id,parent,true,false);
-						assert(parent is ce);
-					}
-				}
+				recordIndexConstUses(idx.a,parent,sc);
+				assert(parent is ce);
 			}
 		}
 		recordArrayDefinitions(cast(WithExp)current);
