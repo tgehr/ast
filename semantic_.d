@@ -262,7 +262,9 @@ Expression presemantic(Declaration expr,Scope sc){
 		fd.fscope_=fsc;
 		if(!fd.context && cast(NestedScope)sc && !isInDataScope(sc))
 			fd.context=addVar(Id.s!"`outer",contextTy(true),fd.loc,null);
+		fd.declaringParameters=true;
 		declareParameters(fd,fd.isSquare,fd.params,fsc); // parameter variables
+		fd.declaringParameters=false;
 		if(fd.rret){
 			fd.rret=expressionSemantic(fd.rret, ExpSemContext.forType(fsc));
 			fd.ret=typeSemantic(fd.rret, fsc);
@@ -613,7 +615,6 @@ Expression analyzeToplevel(ToplevelDefinition td,DefineExp expr,Scope sc){
 	}
 	td.result=defineOrAssignSemantic(expr,sc,flags);
 	foreach(vd;td.vars) propErr(td.result,vd); // (also for variables nested in patterns)
-	if(td.numUpdatesPending==0) finalizeToplevel(td);
 	return td.result;
 }
 void finalizeToplevel(ToplevelDefinition td){
@@ -644,9 +645,35 @@ void notifyDependents(FixedPointDeclaration d){
 		}else if(auto td=cast(ToplevelDefinition)dep) notifyToplevel(td);
 	}
 }
+FixedPointDeclaration[] holdDependents(FixedPointDeclaration d,FixedPointDeclaration[] dependents){ // (a dependent is not finalized before it is analyzed with the new type of `d`)
+	FixedPointDeclaration[] held;
+	foreach(dep;dependents){
+		if(dep is d||dep.typeFinal||dep.isSemError()||held.canFind(dep)) continue;
+		dep.numUpdatesPending+=1;
+		held~=dep;
+	}
+	return held;
+}
+void releaseDependents(FixedPointDeclaration[] held,FixedPointDeclaration d){
+	foreach(dep;held){
+		if(auto ofd=cast(FunctionDef)dep){
+			if(ofd.sstate==SemState.initial){ // (analyzed again afterwards)
+				ofd.numUpdatesPending-=1;
+				continue;
+			}
+			notify(ofd,cast(FunctionDef)d);
+		}else if(auto td=cast(ToplevelDefinition)dep) notifyToplevel(td);
+	}
+}
 void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
-	foreach(dep;d.dependents){
-		if(dep is cause||dep.isSemError()) continue;
+	bool skip(FixedPointDeclaration dep){ // (the cause is analyzed again afterwards, unless that already happened within the analysis of `d`)
+		return dep is cause&&dep.sstate!=SemState.passive;
+	}
+	auto dependents=d.dependents;
+	auto held=holdDependents(d,dependents);
+	scope(exit) releaseDependents(held,d);
+	foreach(dep;dependents){
+		if(skip(dep)||dep.isSemError()) continue;
 		if(auto td=cast(ToplevelDefinition)dep){
 			reanalyzeToplevel(td,cause);
 			continue;
@@ -654,7 +681,7 @@ void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
 		auto ufd=cast(FunctionDef)dep;
 		while(ufd&&ufd.isSemCompleted())
 			ufd=ufd.scope_.getFunction();
-		if(!ufd||ufd is cause||ufd.sstate==SemState.started) continue;
+		if(!ufd||skip(ufd)||ufd.sstate==SemState.started) continue;
 		if(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted) continue;
 		assert(!ufd.ftypeFinal);
 		assert(!!ufd.scope_);
@@ -681,13 +708,15 @@ void reanalyzeToplevel(ToplevelDefinition td,FixedPointDeclaration cause=null){
 	args.preserveMeanings=true;
 	auto e=td.original.copy(args);
 	e.toplevel=td;
+	td.numActiveUpdates++;
 	analyzeToplevel(td,e,sc);
 	if(!td.isSemError()&&!equal!((a,b)=>a is b||a&&b&&a==b)(typesBefore,td.vars.map!(vd=>vd.vtype)))
 		reanalyzeDependents(td,cause);
+	if(--td.numActiveUpdates==0&&td.numUpdatesPending==0) finalizeToplevel(td); // (only after the dependents are analyzed with the new types)
 }
 void notifyToplevel(ToplevelDefinition td){
 	if(td.numUpdatesPending==0) return;
-	if(--td.numUpdatesPending==0) finalizeToplevel(td);
+	if(--td.numUpdatesPending==0&&!td.numActiveUpdates) finalizeToplevel(td); // (otherwise, at the end of the update)
 }
 Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
 	auto td=cast(ToplevelDefinition)expr.toplevel;
@@ -709,9 +738,11 @@ Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
 	}
 	if(td.result) return td.result;
 	if(td.sstate==SemState.started) return expr;
+	td.numActiveUpdates++;
 	auto r=analyzeToplevel(td,expr,sc);
 	if(td.dependents.length&&!td.isSemError())
 		reanalyzeDependents(td,null);
+	if(--td.numActiveUpdates==0&&td.numUpdatesPending==0) finalizeToplevel(td);
 	return r;
 }
 Expression toplevelSemanticImpl(CommaExp ce,Scope sc){
@@ -7828,8 +7859,16 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		id.implicitDup=!id.constLookup&&(id.meaning.isConst||!id.byRef&&(id.implicitDup||sc.canForget(id.meaning,true))); // TODO: last-use analysis
 		static if(language==silq) if(id.moved) id.implicitDup=false;
 	}
+	bool inOwnParameterTypes(){ // (the type of the function is not known yet)
+		auto fd=cast(FunctionDef)id.meaning;
+		if(!fd||!fd.declaringParameters) return false;
+		if(!fd.isSemError()) sc.error(format("type of function `%s` depends on itself",fd.name),id.loc);
+		id.setSemError();
+		return true;
+	}
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
+		if(inOwnParameterTypes()) return id;
 		id.constLookup=isConstLookup(id,context);
 		if(id.meaning) setImplicitDup();
 		bool avoidCapture=false;
@@ -7869,6 +7908,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			return id;
 		}
 	}else{
+		if(inOwnParameterTypes()) return id;
 		if(sc) id.meaning=sc.getSplit(id.meaning); // (e.g., a copy of a type that mentions a variable that was split into this scope after the type was analyzed)
 		setConstResult(id,context);
 		setImplicitDup();
@@ -9860,6 +9900,8 @@ bool setFtype(FunctionDef fd,bool force){
 bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 	if(!sc) return false;
 	if(auto vd=cast(VarDecl)meaning){
+		if(auto fd=cast(FunctionDef)vd.canonicalSource) // (e.g., the version of a local function merged after an `if`)
+			return subscribeToTypeUpdates(fd,sc,loc);
 		if(vd.definition) if(auto td=cast(ToplevelDefinition)vd.definition.toplevel){
 			if(!td.typeFinal&&!td.isSemError()){
 				FixedPointDeclaration dep=sc.getFunction();
@@ -10144,6 +10186,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		//imported!"util.io".writeln("NOTIFYING: ",fd," ",ftypeBefore," ⇒ ",fd.ftype," ",numCapturesBefore," ⇒ ",numCapturesAfter);
 		if(!fd.isSemFinal()) resetFunction(fd,fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",dependents);
+		FixedPointDeclaration[] held=fd.ftype!=ftypeBefore?holdDependents(fd,dependents):null;
 		if(fd.ftype!=ftypeBefore) foreach(d;dependents){
 			if(auto td=cast(ToplevelDefinition)d){
 				reanalyzeToplevel(td,fd);
@@ -10163,7 +10206,9 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			auto nufd=functionDefSemantic(ufd,ufd.scope_);
 			assert(nufd is ufd);
 		}
-		return functionDefSemantic(fd,sc);
+		auto r=functionDefSemantic(fd,sc);
+		releaseDependents(held,fd);
+		return r;
 	}
 	static if(language==silq)
 		if(fd.erpStage==1&&(!fd.tainted||fd.scope_&&fd.scope_.getFunction())) // (the captures of a nested function are only available now)
@@ -10429,6 +10474,7 @@ Expression typeForDecl(Declaration decl){
 		return vd.vtype;
 	}
 	if(auto fd=cast(FunctionDef)decl){
+		if(fd.declaringParameters) return null;
 		if(!fd.ftype||!fd.ftypeFinal) setFtype(fd,true);
 		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started) fd=reportingErrorsOf(fd,functionDefSemantic(fd,fd.scope_));
 		assert(!!fd);

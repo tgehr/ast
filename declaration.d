@@ -237,6 +237,7 @@ class ToplevelDefinition: FixedPointDeclaration{
 	DefineExp original;
 	Expression result;
 	VarDecl[] vars;
+	int numActiveUpdates=0; // (analyses, together with the following reanalysis of dependents)
 	this(DefineExp definition){
 		super(null);
 		this.definition=definition;
@@ -351,6 +352,7 @@ class FunctionDef: FixedPointDeclaration{
 
 	// semantic information
 	FunctionScope fscope_;
+	bool declaringParameters=false; // (analyzing the types of the parameters)
 	DatDecl dataTypeOf=null;
 	VarDecl context;
 	static if(language==psi) VarDecl contextVal;
