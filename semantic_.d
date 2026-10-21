@@ -3771,7 +3771,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 		return null;
 	auto preState=sc.getStateSnapshot(true);
 	foreach(i;0..2){
-		if(!guaranteedSameLocations(idx1[i],idx2[$-1-i],be.loc,sc,InType.no)){
+		if(!guaranteedSameLocations(idx2[$-1-i],idx1[i],be.loc,sc,InType.no)){ // (analyzes the index on the right first, as it is evaluated first)
 			sc.restoreStateSnapshot(preState);
 			return null;
 		}
