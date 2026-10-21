@@ -630,6 +630,12 @@ final class LastUse{
 		return getForgettability(forceConsumed,earlyReturn)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 
+	bool canForgetBeforeLoops(bool forceConsumed,ReturnExp earlyReturn){ // (a forget on entry of a loop body has to be moved before the loop)
+		for(auto lu=this;lu&&lu.kind==Kind.lazySplit;lu=lu.splitFrom)
+			if(auto bs=cast(BlockScope)lu.scope_) if(bs.isLoopBody)
+				if(lu.splitFrom.getForgettability(forceConsumed,earlyReturn)==Forgettability.none) return false;
+		return true;
+	}
 	bool isLastSplitSibling(){
 		auto nsc=cast(NestedScope)scope_;
 		assert(!!nsc);
@@ -664,7 +670,7 @@ final class LastUse{
 				auto r=Forgettability.none;
 				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop)
 					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn));
-				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl))
+				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl)&&canForgetBeforeLoops(forceConsumed,earlyReturn))
 					r=Forgettability.forgettable;
 				//imported!"util.io".writeln("RESULT: ",r);
 				return r;

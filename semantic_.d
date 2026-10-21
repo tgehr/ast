@@ -1665,7 +1665,7 @@ Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,Bloc
 		if(cast(DeadDecl)decl||decl.isSemError()) continue;
 		if(decl.isToplevelDeclaration()) continue;
 		auto type=typeForDecl(decl);
-		if(!type||type.isClassical()) continue;
+		if(!type) continue;
 		auto lastUse=sc.lastUses.lastUses.get(decl,null);
 		if(!lastUse||lastUse.kind!=LastUse.Kind.constPinned) continue;
 		if(!lastUse.nestedScopes.any!(nsc=>nsc is loopScope)) continue;
@@ -1695,7 +1695,7 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 		if(!wrapper){
 			wrapper=new CompoundExp([loopExp]);
 			wrapper.loc=loopExp.loc;
-			wrapper.type=unit;
+			wrapper.type=definitelyReturns(loopExp)?bottom:unit; // (e.g., `while true` loops)
 			if(loopExp.isSemError()) wrapper.setSemError();
 			else wrapper.setSemCompleted();
 		}
@@ -2273,7 +2273,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	if(xsc) foreach(d;xsc.mergedVars){ // (variables defined in the loop are forgotten after it unless used later)
 		auto decl=d.mergedInto;
 		auto type=typeForDecl(decl);
-		if(!type||type.isClassical()||!sc.canSplit(decl)||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop) continue;
+		if(!type||!sc.canSplit(decl)||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop) continue;
 		constForgets~=decl;
 	}
 	dw.type=definitelyReturns(bdy)||isTrue(dw.cond)?bottom:unit;

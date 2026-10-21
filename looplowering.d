@@ -4786,9 +4786,11 @@ void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
 	if((cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
 		erpRecordJoin(original,sc);
 	if(isLoopStatement(original)&&containsReturn(original)){
+		auto stm=stms[i];
+		if(auto cmp=cast(CompoundExp)stm) if(cmp.s.length==1&&isLoopStatement(cmp.s[0])) stm=cmp.s[0]; // (see `anchorLoopConstForgets`)
 		erpRecordJoin(original,sc); // (variables after the loop, see `erpExplicitExits`)
-		if(stms[i].type==bottom&&erpKey(original)) erpDivergingLoops[erpKey(original)]=true; // (loop never exits normally)
-		if(auto we=cast(WhileExp)stms[i]){ // (see `erpLoopExplicit`)
+		if(stm.type==bottom&&erpKey(original)) erpDivergingLoops[erpKey(original)]=true; // (loop never exits normally)
+		if(auto we=cast(WhileExp)stm){ // (see `erpLoopExplicit`)
 			bool consumes=false;
 			visitStm(we.cond,(Expression x){
 				if(auto id=cast(Identifier)x)
