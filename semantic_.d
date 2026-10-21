@@ -3330,7 +3330,14 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 		tae.t = expressionSemantic(tae.t, context.expSem.nestType());
 		tae.type = typeSemantic(tae.t, context.sc);
 	}
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type,context.initializer));
+	auto initializer=context.initializer;
+	static if(!isPresemantic) if(initializer&&tae.type&&!context.sc.allowsLinear()){ // (the definition is not lowered, so the annotation is applied to the initializer here)
+		auto ninit=new TypeAnnotationExp(initializer,tae.t,tae.annotationType);
+		ninit.loc=tae.loc;
+		initializer=expressionSemantic(ninit,context.expSem.nestConst);
+		propErr(initializer,tae);
+	}
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type,initializer));
 	static if(!isPresemantic){
 		if(cast(CallExp)unwrap(tae.e)) return tae.e;
 		return expressionSemantic(tae,context.expSem);

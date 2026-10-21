@@ -336,6 +336,7 @@ class Checker {
 
 	StmtResult implStmt(ast_exp.IteExp e) {
 		visExpr(e.cond);
+		if(ast_ty.isEmpty(e.cond.type)) return StmtResult.Diverges; // (the condition aborts, so neither branch runs)
 
 		Checker ifTrue, ifFalse;
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);

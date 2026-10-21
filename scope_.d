@@ -3218,6 +3218,7 @@ class BlockScope: NestedScope{
 
 class TypeScope: BlockScope{
 	Scope origin; // the scope at the call site
+	LetExp reanalyzed; // (the substituted `let` expression analyzed in this scope, see ast.substitute.reanalyzeLet)
 	MapSX!(Id,Declaration) freeDecls; // (the free variables of an analyzed copy, for parts that the analysis copies without meanings)
 	this(Scope origin){
 		super(null);

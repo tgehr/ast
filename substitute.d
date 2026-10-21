@@ -169,9 +169,16 @@ Expression rescopeLet(LetExp le,MapSX!(Id,Expression) active){
 // are determined by analyzing the result again, as for any copy that is analyzed later (e.g., an inferred generic argument)
 private Expression reanalyzeLet(LetExp le,Scope origin){
 	if(!le||!le.isSemCompleted()||!origin) return le;
+	for(Scope s=origin;s;){ // (e.g., a function is called within its own return type: do not analyze a copy within the analysis of another copy)
+		if(auto ts=cast(TypeScope)s){
+			if(ts.reanalyzed&&ts.reanalyzed.loc==le.loc) return le;
+			s=ts.origin?ts.origin:ts.parent;
+		}else s=s.parentScope();
+	}
 	import ast.semantic_: expressionSemantic, expSemContext, ConstResult, InType;
 	import std.range: only;
 	auto sc=new TypeScope(origin); // (free variables are found by name, e.g., such that local functions capture them)
+	sc.reanalyzed=le;
 	SetX!Declaration free;
 	foreach(id;le.freeIdentifiers){
 		if(!id.meaning) return le;
