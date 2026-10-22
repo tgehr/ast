@@ -1603,6 +1603,7 @@ abstract class Scope{
 			substituteConsumed(dep[1],consumedDepLog);
 			if(dep[0] in dependencies.dependencies){
 				//writeln(dep[0]," ",toRemove," ",dependencies)
+				dep[1].remove(dep[0]); // (its previous value is joined, e.g., a replaced component computed from other components)
 				dep[1].joinWith(dependencies.dependencies[dep[0]]);
 				if(!sourcesTracked) dep[0].definitionSources=DefinitionSources.init;
 			}

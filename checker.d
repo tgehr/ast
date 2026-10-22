@@ -827,7 +827,7 @@ class Checker {
 
 	void implExpr(ast_exp.LambdaExp e) {
 		checkFunction(e.fd);
-		getFunc(e.fd, e.fd.capturedDecls, e.constLookup, e);
+		getFunc(e.fd, e.fd.capturedDecls, false, e); // (consumed captures are consumed also if the closure is borrowed, e.g., `(λ()⇒move(x))()`)
 	}
 
 	void implExpr(ast_exp.VectorForExp e) {
@@ -838,7 +838,7 @@ class Checker {
 		assert(!!ft, format("vector comprehension element function has no type: << %s >> on %s", e, e.loc));
 		assert(ft.captureAnnotation <= ast_ty.CaptureAnnotation.const_, format("vector comprehension element function has moved captures: << %s >> on %s", e, e.loc));
 		checkFunction(fd);
-		getFunc(fd, fd.capturedDecls, true, e);
+		getFunc(fd, fd.capturedDecls, false, e); // (consumed classical captures, e.g., `[move(x)+i for i in [0..3)]`)
 		if(auto range = e.fe.aggr.isRange) {
 			expectConst(range.left, "vector comprehension range bound");
 			visExpr(range.left);

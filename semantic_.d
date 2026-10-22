@@ -681,7 +681,7 @@ void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
 		auto ufd=cast(FunctionDef)dep;
 		while(ufd&&ufd.isSemCompleted())
 			ufd=ufd.scope_.getFunction();
-		if(!ufd||skip(ufd)||ufd.sstate==SemState.started) continue;
+		if(!ufd||skip(ufd)||ufd.sstate==SemState.started||ufd.isSemError()) continue; // (e.g., the enclosing function of a local function has an error)
 		if(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted) continue;
 		assert(!ufd.ftypeFinal);
 		assert(!!ufd.scope_);
@@ -703,6 +703,7 @@ void reanalyzeToplevel(ToplevelDefinition td,FixedPointDeclaration cause=null){
 	foreach(vd;td.vars){
 		vd.replaceType=true;
 		vd.initializer=null;
+		vd.sstate=SemState.initial; // (e.g., the new analysis can fail)
 	}
 	Expression.CopyArgs args;
 	args.preserveMeanings=true;
@@ -2907,7 +2908,7 @@ Expression defineLhsSemanticImpl(LiteralExp lit,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(lit,context);
 }
 Expression defineLhsSemanticImpl(LetExp let,DefineLhsContext context){
-	if(auto fwd=let.isForward(false)) return defineLhsSemantic(fwd,context);
+	if(auto fwd=let.isForward(false)) return defineLhsSemantic!isPresemantic(fwd,context);
 	static if(language==silq){
 		if(context.sc.allowsLinear()){
 			static if(!isPresemantic){
@@ -6026,6 +6027,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 }do{
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
+	if(auto le=cast(LetExp)be.e1) if(auto fwd=le.isForward(false)) be.e1=fwd; // (as for definitions)
 	Expression oe1=be.e1;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -10198,7 +10200,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.isSemCompleted())
 				ufd=ufd.scope_.getFunction();
-			if(!ufd||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue;
+			if(!ufd||ufd.isSemError()||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue;
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);

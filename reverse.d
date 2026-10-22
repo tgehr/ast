@@ -120,7 +120,7 @@ bool validDefLhs(LowerDefineFlags flags)(Expression olhs,Scope sc,bool unchecked
 		if(e.implicitDup){
 			if(noImplicitDup){
 				if(auto id=cast(Identifier)olhs)
-					if(id.meaning.isConst)
+					if(id.meaning&&id.meaning.isConst) // (a copy is analyzed again)
 						return false;
 			}else return false;
 		}
