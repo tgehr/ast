@@ -527,11 +527,19 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 		expr=toplevelSemantic(expr,sc);
 		success&=expr.isSemCompleted();
 	}
+	ToplevelDefinition[] tds; // (the remaining declarations only wait for each other, so all of them are final before any of them is analyzed again)
+	foreach(decl;declared) if(auto de=cast(DefineExp)decl) if(auto td=cast(ToplevelDefinition)de.toplevel) if(!td.typeFinal){
+		td.typeFinal=true;
+		tds~=td;
+	}
+	foreach(expr;exprs) if(expr.sstate==SemState.passive) if(auto fd=cast(FunctionDef)expr){
+		fd.tainted=false;
+		fd.ftypeFinal=true;
+	}
+	foreach(td;tds) completeToplevel(td);
 	foreach(expr;exprs){ // TODO: ok?
 		if(expr.sstate==SemState.passive){
 			if(auto fd=cast(FunctionDef)expr){
-				fd.tainted=false;
-				fd.ftypeFinal=true;
 				bool reanalyze=false;
 				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
 					fd.finalPassDone=true;
@@ -567,7 +575,6 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 	}
 	foreach(i,decl;declared){
 		if(auto de=cast(DefineExp)decl) if(auto td=cast(ToplevelDefinition)de.toplevel){
-			finalizeToplevel(td);
 			if(td.result) exprs[i]=td.result;
 		}
 	}
@@ -591,7 +598,6 @@ FunctionDef reanalyzePassiveFunction(FunctionDef fd){
 		p.scope_=null;
 		newfscope_.insert(p);
 	}
-	resetRret(fd);
 	if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
 	return functionDefSemantic(fd,fd.scope_);
 }
@@ -620,6 +626,9 @@ Expression analyzeToplevel(ToplevelDefinition td,DefineExp expr,Scope sc){
 void finalizeToplevel(ToplevelDefinition td){
 	if(td.typeFinal) return;
 	td.typeFinal=true;
+	completeToplevel(td);
+}
+void completeToplevel(ToplevelDefinition td){
 	auto rhs=td.result;
 	if(auto de=cast(DefineExp)rhs) rhs=de.e2;
 	if(rhs&&!td.isSemError()&&td.vars.length){
@@ -672,6 +681,7 @@ void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
 	auto dependents=d.dependents;
 	auto held=holdDependents(d,dependents);
 	scope(exit) releaseDependents(held,d);
+	FunctionDef[] reanalyzed; // (e.g., the enclosing function of several local functions, also from its earlier analyses)
 	foreach(dep;dependents){
 		if(skip(dep)||dep.isSemError()) continue;
 		if(auto td=cast(ToplevelDefinition)dep){
@@ -683,6 +693,8 @@ void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
 			ufd=ufd.scope_.getFunction();
 		if(!ufd||skip(ufd)||ufd.sstate==SemState.started||ufd.isSemError()) continue; // (e.g., the enclosing function of a local function has an error)
 		if(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted) continue;
+		if(reanalyzed.canFind(ufd)) continue;
+		reanalyzed~=ufd;
 		assert(!ufd.ftypeFinal);
 		assert(!!ufd.scope_);
 		resetFunction(ufd,null);
@@ -714,10 +726,12 @@ void reanalyzeToplevel(ToplevelDefinition td,FixedPointDeclaration cause=null){
 	if(!td.isSemError()&&!equal!((a,b)=>a is b||a&&b&&a==b)(typesBefore,td.vars.map!(vd=>vd.vtype)))
 		reanalyzeDependents(td,cause);
 	if(--td.numActiveUpdates==0&&td.numUpdatesPending==0) finalizeToplevel(td); // (only after the dependents are analyzed with the new types)
+	else if(!td.numActiveUpdates) finalizeClosure(td);
 }
 void notifyToplevel(ToplevelDefinition td){
 	if(td.numUpdatesPending==0) return;
 	if(--td.numUpdatesPending==0&&!td.numActiveUpdates) finalizeToplevel(td); // (otherwise, at the end of the update)
+	else if(!td.numActiveUpdates) finalizeClosure(td);
 }
 Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
 	auto td=cast(ToplevelDefinition)expr.toplevel;
@@ -744,6 +758,7 @@ Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
 	if(td.dependents.length&&!td.isSemError())
 		reanalyzeDependents(td,null);
 	if(--td.numActiveUpdates==0&&td.numUpdatesPending==0) finalizeToplevel(td);
+	else if(!td.numActiveUpdates) finalizeClosure(td);
 	return r;
 }
 Expression toplevelSemanticImpl(CommaExp ce,Scope sc){
@@ -1407,6 +1422,7 @@ void registerConstCaptures(FunctionDef fd,Scope sc){
 }
 Expression statementSemanticImpl(FunctionDef fd,Scope sc,ref StmFlags flags,bool resetConst=true){
 	fd=functionDefSemantic(fd,sc);
+	if(!fd.ftypeFinal&&fd.numUpdatesPending&&!fd.isSemError()&&sc.getFunction()) subscribeToTypeUpdates(fd,sc,fd.loc); // (the enclosing function is final only after its local functions, e.g., for their deferred checks)
 	registerConstCaptures(fd,sc);
 	Expression r=fd;
 	if(fd.isSemCompleted()){
@@ -10036,12 +10052,6 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 	fd.context=null;
 	fd.thisVar=null;
 	prepareFunctionDef(fd,fd.scope_);
-	resetRret(fd);
-}
-void resetRret(FunctionDef fd){ // (the restored annotation is analyzed again, as in `presemantic`)
-	if(!fd.origRret) return;
-	fd.rret=expressionSemantic(fd.origRret.copy(),ExpSemContext.forType(fd.fscope_));
-	propErr(fd.rret,fd);
 }
 void resetFunctionDefsToUpdate()(FunctionDef fd){
 	notifyDependents(fd);
@@ -10054,7 +10064,39 @@ void finalize()(FunctionDef fd){
 		resetFunctionDefsToUpdate(fd);
 	}else{
 		fd.sstate=SemState.passive;
-		resetFunctionDefsToUpdate(fd);
+		if(fd.numUpdatesPending==0) resetFunctionDefsToUpdate(fd); // (it does not wait for other declarations, so its type does not change anymore)
+		else finalizeClosure(fd);
+	}
+}
+void finalizeClosure(FixedPointDeclaration start){ // (declarations that are analyzed and only wait for each other are final, e.g., recursive functions)
+	static bool analyzed(FixedPointDeclaration d){
+		if(d.typeFinal||d.isSemError()) return false;
+		if(auto fd=cast(FunctionDef)d) return fd.sstate==SemState.passive||fd.sstate==SemState.completed;
+		auto td=cast(ToplevelDefinition)d;
+		return td&&td.sstate==SemState.passive&&!td.numActiveUpdates;
+	}
+	if(!analyzed(start)) return;
+	FixedPointDeclaration[] set=[start];
+	for(size_t i=0;i<set.length;i++)
+		foreach(dep;set[i].dependents)
+			if(analyzed(dep)&&!set.canFind(dep)) set~=dep;
+	for(bool changed=true;changed;){
+		changed=false;
+		foreach_reverse(i,d;set){
+			if(d.numUpdatesPending==set.count!(e=>e.dependents.canFind(d))) continue;
+			set=set[0..i]~set[i+1..$]; // (it waits for a declaration outside of the set)
+			changed=true;
+		}
+	}
+	if(!set.canFind(start)) return;
+	foreach(d;set){
+		d.typeFinal=true;
+		d.numUpdatesPending=0;
+		d.dependents=d.dependents.filter!(dep=>!set.canFind(dep)).array;
+	}
+	foreach(d;set){
+		if(auto fd=cast(FunctionDef)d) completeFunction(fd);
+		else if(auto td=cast(ToplevelDefinition)d) completeToplevel(td);
 	}
 }
 static if(language==psi)
@@ -10079,25 +10121,35 @@ void finalizeRetNames(FunctionDef fd){ // make the names of the return values di
 }
 void notify(FunctionDef fd,FunctionDef ufd){
 	if(fd.numUpdatesPending==0) return; // already finalized
-	if(--fd.numUpdatesPending==0){
-		if(fd.sstate!=SemState.started){ // semantic analysis is still active
-			static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
-				// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
-				fd.tainted=false;
-				if(erpRewrite(fd)){
-					fd.inferringReturnType=true;
-					resetFunction(fd,fd);
-					functionDefSemantic(fd,fd.scope_);
-					return;
-				}
-			}
-			fd.ftypeFinal=true;
-			fd.inferringReturnType=false;
-			fd.inferAnnotation=false;
-			static if(language==psi) finalizeRetNames(fd);
-			finalize(fd);
+	if(--fd.numUpdatesPending==0) completeFunction(fd);
+	else if(fd.sstate==SemState.passive) finalizeClosure(fd);
+}
+void completeFunction(FunctionDef fd){ // (its type is final)
+	if(fd.sstate==SemState.started) return; // semantic analysis is still active
+	static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
+		// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
+		fd.tainted=false;
+		if(erpRewrite(fd)){
+			fd.inferringReturnType=true;
+			resetFunction(fd,fd);
+			functionDefSemantic(fd,fd.scope_);
+			return;
 		}
 	}
+	fd.ftypeFinal=true;
+	fd.inferringReturnType=false;
+	fd.inferAnnotation=false;
+	static if(language==psi) finalizeRetNames(fd);
+	if(fd.deferredSpecificityCheck&&!fd.finalPassDone&&fd.sstate==SemState.passive&&fd.scope_){ // (the checks deferred while the types were speculative)
+		fd.tainted=false;
+		fd.finalPassDone=true;
+		fd.inferringReturnType=true;
+		fd.deferredSpecificityCheck=false;
+		resetFunction(fd,fd);
+		functionDefSemantic(fd,fd.scope_);
+		return;
+	}
+	finalize(fd);
 }
 
 FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
@@ -10114,9 +10166,6 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!fd.ret){
 		fd.ret=bottom;
 		setFtype(fd,true);
-	}
-	if(fd.inferringReturnType){
-		if(fd.rret&&!fd.origRret) fd.origRret=fd.rret.copy();
 	}
 	if(fd.body_&&!fd.origBody_) fd.origBody_=fd.body_.copy();
 	auto fsc=fd.fscope_;
@@ -10211,6 +10260,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(!fd.isSemFinal()) resetFunction(fd,fd);
 		//imported!"util.io".writeln("end of ",fd," ftypeBefore: ",ftypeBefore," ftype: ",fd.ftype," equal: ",ftypeBefore==fd.ftype," to update: ",dependents);
 		FixedPointDeclaration[] held=fd.ftype!=ftypeBefore?holdDependents(fd,dependents):null;
+		FunctionDef[] reanalyzed; // (as in `reanalyzeDependents`)
 		if(fd.ftype!=ftypeBefore) foreach(d;dependents){
 			if(auto td=cast(ToplevelDefinition)d){
 				reanalyzeToplevel(td,fd);
@@ -10223,6 +10273,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			while(ufd&&ufd.isSemCompleted())
 				ufd=ufd.scope_.getFunction();
 			if(!ufd||ufd.isSemError()||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue;
+			if(reanalyzed.canFind(ufd)) continue;
+			reanalyzed~=ufd;
 			assert(!ufd.ftypeFinal);
 			assert(!!ufd.scope_);
 			resetFunction(ufd,fd);

@@ -412,7 +412,6 @@ class FunctionDef: FixedPointDeclaration{
 		sealed=true;
 	}
 	bool inferringReturnType;
-	Expression origRret=null;
 	CompoundExp origBody_=null;
 
 	// inference mode
