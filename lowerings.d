@@ -148,6 +148,8 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	assert(args.length==2);
 }do{
 	Expression.CopyArgs cargs={ preserveMeanings: true };
+	if(isEmpty(args[0].type)!=isEmpty(args[1].type)) // (compared at the type of the other operand, as in `cmpType`, e.g., `x==(1,)[2]`)
+		args=annotateEmpty(args,(isEmpty(args[0].type)?args[1]:args[0]).type,context);
 	auto e0=args[0],e1=args[1];
 	if(!cast(TupleTy)e0.type&&!cast(ArrayTy)e0.type&&!cast(VectorTy)e0.type){
 		assert(!cast(TupleTy)e1.type&&!cast(ArrayTy)e1.type&&!cast(VectorTy)e1.type);
@@ -415,7 +417,23 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	return expressionSemantic(ce,context);
 }
 
+Expression[] annotateEmpty(Expression[] args,Expression type,ExpSemContext context){ // (operands of type `⊥` are annotated, so that a lowering keeps all operands)
+	auto r=args.dup;
+	foreach(ref arg;r){
+		if(!isEmpty(arg.type)) continue;
+		auto tae=new TypeAnnotationExp(arg,type,TypeAnnotationType.annotation);
+		tae.loc=arg.loc;
+		arg=expressionSemantic(tae,context.nestConst);
+	}
+	return r;
+}
+
 Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression original,Expression[] args,Location loc,ExpSemContext context){
+	if(original&&original.type&&!isEmpty(original.type)&&args.any!(arg=>isEmpty(arg.type))){ // (the call aborts, but the other operands are evaluated as well, e.g., `x+(1,)[2]` for `x:!ℝ`)
+		auto type=original.type;
+		foreach(arg;args) if(!isEmpty(arg.type)){ type=arg.type; break; }
+		args=annotateEmpty(args,type,context);
+	}
 	foreach(arg;args){
 		if(isEmpty(arg.type)){
 			arg.constLookup=context.constResult!=ConstResult.no;

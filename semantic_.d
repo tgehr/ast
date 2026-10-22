@@ -584,7 +584,6 @@ FunctionDef reanalyzePassiveFunction(FunctionDef fd){
 	fd.tainted=false;
 	fd.sstate=SemState.initial;
 	if(fd.origBody_) fd.body_=fd.origBody_.copy();
-	if(fd.origRret) fd.rret=fd.origRret.copy();
 	auto newfscope_=new FunctionScope(fd.scope_,fd);
 	fd.fscope_=newfscope_;
 	foreach(p;fd.params){
@@ -592,6 +591,7 @@ FunctionDef reanalyzePassiveFunction(FunctionDef fd){
 		p.scope_=null;
 		newfscope_.insert(p);
 	}
+	resetRret(fd);
 	if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
 	return functionDefSemantic(fd,fd.scope_);
 }
@@ -3853,7 +3853,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 				if(isFirst){
 					assert(cidx is idx2[0]);
 					if(cid.meaning && cid.type){
-						if(auto type=cid.type.getQuantum()){
+						if(auto type=getQuantumElements(cid.type)){
 							cid.meaning=sc.consume(cid.meaning,cid);
 							auto dep=getDependency(cid,sc);
 							auto var=addVar(cid.meaning.name.id,type,cidx.loc,sc);
@@ -4174,7 +4174,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	foreach(s;chain) states~=s.getStateSnapshot(true);
 	foreach(s;chain) s.isolateComponentReplacements();
 	Q!(Declaration,SemState)[] localDecls; // (errors are suppressed in the trial analysis: it must not leave declarations erroneous)
-	foreach(s;chain) if(!cast(TopScope)s) foreach(_,decl;s.rnsymtab) localDecls~=q(decl,decl.sstate);
+	foreach(s;chain) foreach(_,decl;s.rnsymtab) if(!cast(TopScope)s||decl.isSemCompleted()) localDecls~=q(decl,decl.sstate); // (a top-level declaration analyzed during the trial reports its errors)
 	sc.withTransConsumption=sc;
 	auto handler=sc.handler;
 	handler.suppress++;
@@ -5438,6 +5438,23 @@ Expression updatedType(Expression lhs,Expression rhsty,Expression baseTyOverride
 		return baseTyOverride?baseTyOverride:base.type;
 	}
 	return updatedType(baseTyOverride?baseTyOverride:base.type,indices,rhsty);
+}
+
+Expression getQuantumElements(Expression type){ // (as `getQuantum`, but the lengths of arrays stay classical, e.g., for a quantum swap)
+	if(auto qtype=type.getQuantum()) return qtype;
+	if(auto at=cast(ArrayTy)type){
+		auto next=getQuantumElements(at.next);
+		return next?arrayTy(next):null;
+	}
+	if(auto vt=cast(VectorTy)type){
+		auto next=getQuantumElements(vt.next);
+		return next?vectorTy(next,vt.num):null;
+	}
+	if(auto tt=cast(TupleTy)type){
+		auto types=tt.types.map!getQuantumElements.array;
+		return types.all!(t=>!!t)?tupleTy(types):null;
+	}
+	return null;
 }
 
 Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)in{
@@ -9972,7 +9989,6 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 		}
 	}
 	if(fd.sealed) fd.unseal();
-	if(fd.origRret) fd.rret=fd.origRret.copy();
 	assert(!!fd.origBody_);
 	fd.body_=fd.origBody_.copy();
 	auto newfscope_=new FunctionScope(fd.scope_,fd);
@@ -10020,6 +10036,12 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 	fd.context=null;
 	fd.thisVar=null;
 	prepareFunctionDef(fd,fd.scope_);
+	resetRret(fd);
+}
+void resetRret(FunctionDef fd){ // (the restored annotation is analyzed again, as in `presemantic`)
+	if(!fd.origRret) return;
+	fd.rret=expressionSemantic(fd.origRret.copy(),ExpSemContext.forType(fd.fscope_));
+	propErr(fd.rret,fd);
 }
 void resetFunctionDefsToUpdate()(FunctionDef fd){
 	notifyDependents(fd);
@@ -10366,6 +10388,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		ret.setSemError();
 		return ret;
 	}
+	static if(language==silq) fd.fscope_.returnAnalyzed=true;
 	if(fd.ret){
 		assert(!!ret.e.type);
 		if(!widenReturnType(ret.e.type)){

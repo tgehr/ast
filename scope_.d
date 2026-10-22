@@ -1909,6 +1909,9 @@ abstract class Scope{
 						if(!sc.lastUses.betterUnforgettableError(d,sc))
 							sc.error(format("`const` variable `%s` cannot be forgotten at the end of its scope",d.getName),d.loc);
 						d.setSemForceError();
+					}else{
+						sc.consume(d,null); // (not merged, e.g., with a variable of the same name in another branch)
+						sc.clearConsumed();
 					}
 				}
 			}
@@ -3095,6 +3098,7 @@ class CapturingScope(T): NestedScope{
 				symtabInsert(meaning);
 				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this,consumedClassical);
+				static if(language==silq&&is(T==FunctionDef)) if(consumedClassical&&!meaningBefore.isLinear()&&decl.fscope_.returnAnalyzed) decl.captureReanalysis=true; // (the returns analyzed before did not forget it)
 				void replace(Scope csc){ // TODO: this is a bit hacky
 					foreach(sc;csc.activeNestedScopes){
 						sc.replaceDecl(meaningBefore,meaning);
@@ -3155,6 +3159,7 @@ class CapturingScope(T): NestedScope{
 
 class FunctionScope: CapturingScope!FunctionDef{
 	alias fd=decl;
+	static if(language==silq) bool returnAnalyzed=false; // (a capture consumed afterwards requires another analysis)
 	this(Scope parent,FunctionDef fd){
 		super(parent,fd);
 	}
