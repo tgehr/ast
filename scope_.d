@@ -443,7 +443,11 @@ abstract class Scope{
 	static if(language==silq)
 	final void pinTypeMentions(Declaration meaning){ // (the variables that the type of `meaning` mentions are live where it is used)
 		import ast.semantic_: typeForDeclNoAnalyze;
-		if(auto type=typeForDeclNoAnalyze(meaning)) foreach(fid;type.freeIdentifiers)
+		if(auto type=typeForDeclNoAnalyze(meaning)) pinMentions(type);
+	}
+	static if(language==silq)
+	final void pinMentions(Expression type){ // (the variables that `type` mentions are live here)
+		foreach(fid;type.freeIdentifiers)
 			if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
 	}
 	final void recordCapturer(Declaration capturer,Declaration meaning){

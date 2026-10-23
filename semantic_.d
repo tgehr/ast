@@ -5368,8 +5368,10 @@ bool isNonConstDecl(Declaration decl,Scope sc,bool allowComponentConstBlocks=fal
 			return true;
 		}
 	if(sc.isConst(decl)){
-		if(allowRecomputable&&sc.canRecompute(decl)) // (const-blocked reads can be recomputed)
+		if(allowRecomputable&&sc.canRecompute(decl)){ // (const-blocked reads can be recomputed)
+			static if(language==silq) sc.noteDependencyResolved(sc.getDependency(decl)); // (as in `canSplit`)
 			return true;
+		}
 		return false;
 	}
 	return true;
@@ -8799,6 +8801,7 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 		}
 	tae.t = expressionSemantic(tae.t, context.nestType());
 	tae.type = typeSemantic(tae.t, sc);
+	static if(language==silq) if(tae.type&&!tae.t.isSemError()) sc.pinMentions(tae.type); // (the conversion reads the variables that the type mentions, after it evaluates the annotation)
 	propErr(tae.t,tae);
 	if(tae.isSemError())
 		return tae;
