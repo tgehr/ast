@@ -5258,46 +5258,54 @@ Expression typeForDeclNoAnalyze(Declaration decl){
 	return null;
 }
 
-Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
-	Declaration scan(MapX!(Id,Declaration) rnsymtab){
-		foreach(_,d;rnsymtab){
-			if(cast(DeadDecl)d) continue;
-			if(d.isSemError()) continue;
-			if(d.mergedInto) continue; // consumed by merging; the merged declaration is checked separately
-			auto type=typeForDeclNoAnalyze(d);
-			if(!type) continue;
-			foreach(id;type.freeIdentifiers){
-				if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
-					return d;
-			}
-		}
-		return null;
+private bool isLiveTypeDependent(Declaration d,Declaration decl){
+	if(cast(DeadDecl)d) return false;
+	if(d.isSemError()) return false;
+	if(d.mergedInto) return false; // consumed by merging; the merged declaration is checked separately
+	auto type=typeForDeclNoAnalyze(d);
+	if(!type) return false;
+	foreach(id;type.freeIdentifiers){
+		if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
+			return true;
 	}
-	if(auto r=scan(rnsymtab)) return r;
+	return false;
+}
+Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+	foreach(_,d;rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
 	if(decl.scope_&&decl.scope_.rnsymtab!is rnsymtab)
-		if(auto r=scan(decl.scope_.rnsymtab)) return r;
+		foreach(_,d;decl.scope_.rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
 	return null;
 }
+private int enclosingDecls(Declaration decl,Scope sc,scope int delegate(Declaration) dg){ // (the declarations of the scopes between `sc` and the scope of `decl`, e.g., of the body of a loop that contains a closure that captures `decl`)
+	if(!decl.scope_) return 0;
+	SetX!Id shadowed; // (e.g., versions consumed in an inner scope)
+	foreach(id,_;sc.rnsymtab) shadowed.insert(id);
+	for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent){
+		auto csc=nsc.parent;
+		if(!csc||csc is decl.scope_||!csc.isNestedIn(decl.scope_)) break;
+		foreach(id,d;csc.rnsymtab)
+			if(id !in shadowed)
+				if(auto r=dg(d)) return r;
+		foreach(id,_;csc.rnsymtab) shadowed.insert(id);
+	}
+	return 0;
+}
 Declaration liveTypeDependent(Declaration decl,Scope sc){
-	return liveTypeDependent(decl,sc.rnsymtab);
+	if(auto r=liveTypeDependent(decl,sc.rnsymtab)) return r;
+	Declaration r=null;
+	enclosingDecls(decl,sc,(Declaration d){
+		if(!isLiveTypeDependent(d,decl)) return 0;
+		r=d;
+		return 1;
+	});
+	return r;
 }
 
 Declaration[] liveTypeDependents(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 	Declaration[] r;
 	void scan(MapX!(Id,Declaration) rnsymtab){
-		foreach(_,d;rnsymtab){
-			if(cast(DeadDecl)d) continue;
-			if(d.isSemError()) continue;
-			if(d.mergedInto) continue; // consumed by merging; the merged declaration is checked separately
-			auto type=typeForDeclNoAnalyze(d);
-			if(!type) continue;
-			foreach(id;type.freeIdentifiers){
-				if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource){
-					if(!r.canFind(d)) r~=d;
-					break;
-				}
-			}
-		}
+		foreach(_,d;rnsymtab)
+			if(isLiveTypeDependent(d,decl)&&!r.canFind(d)) r~=d;
 	}
 	scan(rnsymtab);
 	if(decl.scope_&&decl.scope_.rnsymtab!is rnsymtab)
@@ -5309,7 +5317,7 @@ bool typeConstBlocked(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,rnsymtab);
 }
 bool typeConstBlocked(Declaration decl,Scope sc){
-	return typeConstBlocked(decl,sc.rnsymtab);
+	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,sc);
 }
 
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
@@ -10272,7 +10280,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.isSemCompleted())
 				ufd=ufd.scope_.getFunction();
-			if(!ufd||ufd.isSemError()||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue;
+			if(!ufd||ufd.sstate==SemState.started||ufd.isSemError()||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue; // (as in `reanalyzeDependents`)
 			if(reanalyzed.canFind(ufd)) continue;
 			reanalyzed~=ufd;
 			assert(!ufd.ftypeFinal);

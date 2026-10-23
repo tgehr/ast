@@ -2973,6 +2973,7 @@ class CapturingScope(T): NestedScope{
 					recapture.scope_=origin;
 					//imported!"util.io".writeln("RECAPTURING: ",capture," ",decl.isConsumedCapture(capture)," ",kind);
 					bool isConsuming=decl.isConsumedCapture(capture)&&kind==Lookup.consuming;
+					static if(language==silq) recapture.moved=isConsuming; // (also a classical capture, e.g., for an enclosing closure)
 					DeadDecl[] failures;
 					recapture.meaning=origin.lookup(recapture,true,false,isConsuming?Lookup.consuming:Lookup.constant,&failures);
 					bool callErrorShown=false;

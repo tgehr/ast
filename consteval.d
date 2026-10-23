@@ -20,6 +20,7 @@ private Expression make(int v){
 private Expression make(TokenType subop)(Location loc, Expression sub1) {
 	import ast.semantic_: minusType;
 
+	if(isEmpty(sub1.type)) return sub1; // (the operand diverges, e.g., `x coerce ⊥`)
 	assert(isNumericTy(sub1.type));
 	Expression subty;
 	static if(subop == Tok!"-") {
@@ -39,6 +40,8 @@ private Expression make(TokenType subop)(Location loc, Expression sub1) {
 private Expression make(TokenType subop)(Location loc, Expression sub1, Expression sub2) {
 	import ast.semantic_: arithmeticType, subtractionType, nSubType, cmpType;
 
+	if(isEmpty(sub1.type)) return sub1; // (an operand diverges, e.g., `x coerce ⊥`)
+	if(isEmpty(sub2.type)) return sub2;
 	assert(isNumericTy(sub1.type));
 	assert(isNumericTy(sub2.type));
 	Expression subty;

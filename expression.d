@@ -454,7 +454,7 @@ class TypeAnnotationExp: Expression{
 	}
 	override Expression evalImpl(){
 		auto ne = e.eval();
-		if(annotationType == TypeAnnotationType.annotation || ne.type == type) {
+		if(annotationType == TypeAnnotationType.annotation && isSubtype(ne.type, type) || ne.type == type) { // (otherwise, the annotation converts, e.g., `vector(0,0:𝔹):𝔹[]`: `𝔹^0` is classical)
 			return ne;
 		}
 		if(annotationType==TypeAnnotationType.conversion||annotationType==TypeAnnotationType.coercion)
@@ -2119,7 +2119,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				Expression e = evalNumericBinop!op(loc, ne1, v1, ne2, v2);
 				if(e) {
 					assert(e.type);
-					assert(isNumericTy(e.type));
+					assert(isNumericTy(e.type)||isEmpty(e.type)); // (e.g., an operand evaluates to `x coerce ⊥`)
 					if(!isSubtype(e.type, type)) {
 						e = new TypeAnnotationExp(e, type, TypeAnnotationType.coercion);
 						e.type = type;
@@ -2903,6 +2903,7 @@ class LambdaExp: Expression{
 		this.fd=fd;
 	}
 	override LambdaExp copyImpl(CopyArgs args){
+		if(args.preserveSemantic&&isSemCompleted()) return new LambdaExp(orig,fd); // (the copy is not analyzed again, e.g., a hoisted read of an aliased component)
 		return new LambdaExp(orig);
 	}
 	override string toString(){
