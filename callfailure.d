@@ -81,8 +81,14 @@ void explainArgumentCount(CallExp ce,ProductTy ft,size_t provided,Scope sc,size_
 		sc.error(format("%s takes %s, but a tuple of %s elements was provided",fun,countArguments(expected,ft.isSquare),tupleLength),ce.loc);
 		return;
 	}
-	sc.error(format("%s takes %s, but %s %s provided",fun,countArguments(expected,ft.isSquare),provided,provided==1?"was":"were"),ce.loc);
 	auto decls=parameterDecls(ce.e,ft);
+	if(ft.isTuple&&expected==1&&provided==1&&!cast(TupleExp)ce.arg){ // e.g., `f(x)` for `def f(x:𝔹,)`
+		sc.error(format("%s takes a tuple with 1 element, but a single value was provided",fun),ce.loc);
+		sc.note(format("add a trailing comma to pass a tuple with one element: `%s`",oneTupleCall(ce,ft.isSquare,true)),ce.loc);
+		if(showDecls(decls)) sc.note("the trailing comma makes the parameter list a tuple with one element",decls[0].loc);
+		return;
+	}
+	sc.error(format("%s takes %s, but %s %s provided",fun,countArguments(expected,ft.isSquare),provided,provided==1?"was":"were"),ce.loc);
 	if(provided<expected){
 		foreach(i;provided..expected){
 			if(showDecls(decls)) sc.note(format("missing argument for %s",describeParam(ft,decls,i)),decls[i].loc);
@@ -610,6 +616,13 @@ Expression updateOperation(AAssignExp ae){
 	return null;
 }
 
+/// `ce` with a single argument `x` passed as `(x,)` if `asTuple`, otherwise as `(x)`, e.g., `f(x,)` (or a generic example)
+string oneTupleCall(CallExp ce,bool isSquare,bool asTuple){
+	auto callee=calleeText(ce), arg=sourceText(asTuple?ce.arg:(cast(TupleExp)ce.arg).e[0]);
+	if(!callee||!arg.length||arg.length>40||arg.canFind('\n')) callee="f", arg="x";
+	return format("%s%s%s%s%s",callee,isSquare?"[":"(",arg,asTuple?",":"",isSquare?"]":")");
+}
+
 /// generic report, used if there is no more specific explanation
 void reportCallFailure(CallExp ce,ProductTy ft,Scope sc){
 	Expression aty=ce.arg.type?ce.arg.type:ce.arg;
@@ -757,6 +770,11 @@ bool explainArgumentMismatch(CallExp ce,ProductTy ft,Scope sc,string fun,string 
 		auto tpl=cast(TupleExp)ce.arg;
 		if(tpl&&tpl.length!=1&&isScalar(ft.argTy(0))){
 			explainArgumentCount(ce,ft,tpl.length,sc);
+			return true;
+		}
+		if(tpl&&tpl.length==1&&tpl.e[0].type&&isSubtype(tpl.e[0].type,ft.argTy(0))){ // e.g., `g(x,)` for `def g(x:𝔹)`
+			sc.error(format("%s takes a single argument, but a tuple with 1 element was provided",fun),ce.loc);
+			sc.note(format("remove the trailing comma to pass a single argument: `%s`",oneTupleCall(ce,ft.isSquare,false)),ce.loc);
 			return true;
 		}
 		args=[Argument(ce.arg,ce.arg.type,stripParens(ce.arg.loc))];
