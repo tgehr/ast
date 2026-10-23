@@ -1297,7 +1297,8 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argExp.loc=fd.loc; // TODO: use precise parameter locations
 		Expression argRet=new ReturnExp(argExp);
 		argRet.loc=argExp.loc;
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],bfd.fscope_,unchecked,noImplicitDup,true))~[argRet];
+		auto given=(retDef?definedNames(retDef):[])~(retDefReplaced?[rpname]:[]);
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1],retDef?[retDef]:[],bfd.fscope_,unchecked,noImplicitDup,true,false,given))~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		import util.io:stderr;
@@ -1377,6 +1378,7 @@ ComputationClass classifyStatement(Expression e){
 			if(auto tpl=cast(TupleExp)unwrap(de.e1))
 				if(tpl.length==0) // TODO: this is a hack, support properly
 					return ComputationClass.quantum;
+			static if(language==silq) if(isClassicalMove(de)) return classical; // (recomputed, see `recomputation`)
 			return classifyExpression(de.e2);
 		}
 		if(auto ae=cast(AssignExp)e) return unsupported;
@@ -1461,13 +1463,116 @@ Expression[] mergeCompound(Expression[] s){
 	return r;
 }
 
-Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false){
+static if(language==silq)
+bool isClassicalMove(Expression e){ // (a classical definition that moves classical variables, e.g., at their last use)
+	auto de=cast(DefineExp)e;
+	if(!de||de.isSwap||!de.e2.type) return false;
+	if(!de.e2.subexpressions.all!(x=>!x.type||x.type.isClassical())||!de.e2.isQfree()||!de.e2.consumes) return false;
+	auto names=definedNames(de);
+	return !de.e2.subexpressions.any!((x){ // (not into a new version of a moved variable)
+		auto id=cast(Identifier)x;
+		return id&&id.meaning&&!id.constLookup&&!id.implicitDup&&names.canFind(nameOf(id));
+	});
+}
+
+Identifier[] definedIdentifiers(Expression e){ // (the variables that a definition introduces)
+	Identifier[] r;
+	void rec(Expression e){
+		e=unwrap(e);
+		if(auto id=cast(Identifier)e){
+			if(!id.implicitDup) r~=id;
+		}else if(auto tpl=cast(TupleExp)e) foreach(x;tpl.e) rec(x);
+		else if(auto vec=cast(VectorExp)e) foreach(x;vec.e) rec(x);
+		else if(auto ce=cast(CatExp)e){ rec(ce.e1); rec(ce.e2); }
+	}
+	if(auto de=cast(DefineExp)e) rec(de.e1);
+	else if(auto ce=cast(CompoundExp)e) foreach(s;ce.s) r~=definedIdentifiers(s);
+	return r;
+}
+Id nameOf(Identifier id){ return (id.meaning&&id.meaning.name?id.meaning.name:id).id; }
+Id[] definedNames(Expression e){
+	if(auto ite=cast(IteExp)e){ // (the variables that both branches define)
+		auto othw=ite.othw?definedNames(ite.othw):[];
+		return definedNames(ite.then).filter!(n=>othw.canFind(n)).array;
+	}
+	if(auto ce=cast(CompoundExp)e) return ce.s.map!definedNames.joiner.array;
+	return definedIdentifiers(e).map!nameOf.array;
+}
+
+bool usesUp(Id name,Expression[] statements){ // (whether the statements consume, forget or redefine a variable called `name`)
+	foreach(s;statements) foreach(x;s.subexpressions){
+		if(auto id=cast(Identifier)x)
+			if(id.meaning&&id.meaning.name&&id.meaning.name.id==name&&!id.constLookup&&!id.implicitDup)
+				return true;
+		if(cast(DefineExp)x&&definedNames(x).canFind(name)) return true;
+	}
+	return false;
+}
+
+Expression recomputation(Expression s,Scope sc){ // (the copy of a classical statement that the reversal of a block recomputes)
+	Expression.CopyArgs cargs;
+	static if(language==silq) cargs.mapExp=(Expression x,ref Expression.CopyArgs args){ // (reads the variables that it moves, such that the reversed statements see the same versions)
+		if(cast(FunctionDef)x) return x.copy();
+		if(auto id=cast(Identifier)x) if(id.moved){
+			auto r=id.copy();
+			r.moved=false;
+			return cast(Expression)r;
+		}
+		if(auto de=cast(DefineExp)x) if(isClassicalMove(de)){
+			auto rhs=new CallExp(getDup(de.e2.loc,sc),de.e2.copy(args),false,false);
+			rhs.loc=de.e2.loc;
+			auto r=new DefineExp(de.e1.copy(args),rhs);
+			r.loc=de.loc;
+			return cast(Expression)r;
+		}
+		return null;
+	};
+	return s.copy(cargs);
+}
+
+Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null){
 	statements=mergeCompound(statements);
-	if(hoistClassical){
-		Expression[] classicalStatements=statements.filter!(s=>classifyStatement(s)==ComputationClass.classical).array;
-		foreach(ref e;classicalStatements) e=e.copy();
-		Expression[] quantumStatements=statements.retro.filter!(s=>classifyStatement(s)!=ComputationClass.classical).array;
-		foreach(ref e;quantumStatements) e=reverseStatement(e,sc,unchecked,noImplicitDup,hoistClassical,defer);
+	if(hoistClassical){ // (`given`: the variables whose values the reversal receives, e.g., the classical results of a function; `alive`: the variables that the reversal of an enclosing block recomputes)
+		auto defined=middle.map!definedNames.joiner.array; // (received after the recomputation, which they are checked against)
+		Id[] checked;
+		Id[] givenAfter(size_t i){ return given.filter!(n=>!usesUp(n,statements[i+1..$])).array; }
+		bool isRecomputed(size_t i){
+			auto s=statements[i];
+			if(classifyStatement(s)!=ComputationClass.classical) return false;
+			auto names=definedNames(s), after=givenAfter(i);
+			if(names.any!(n=>after.canFind(n)&&!defined.canFind(n))) return false; // (the reversed definition checks the received value)
+			checked~=names.filter!(n=>after.canFind(n)).array;
+			return true;
+		}
+		auto recomputed=iota(statements.length).map!isRecomputed.array;
+		foreach(e;middle) foreach(id;definedIdentifiers(e)) if(checked.canFind(nameOf(id))) id.implicitDup=true;
+		auto aliveAt=new Id[][](statements.length); // (the variables whose current versions the reversal of a statement sees as recomputed values)
+		foreach(i,s;statements){
+			aliveAt[i]=alive;
+			auto names=definedNames(s);
+			alive=alive.filter!(n=>!names.canFind(n)).array;
+			if(recomputed[i]) alive~=names;
+		}
+		Expression reversal(size_t i){
+			static if(language==silq) if(auto fe=cast(ForgetExp)statements[i]) if(fe.val) if(auto id=cast(Identifier)unwrap(fe.var)){
+				if(id.type&&id.type.isClassical()&&aliveAt[i].canFind(nameOf(id))){ // (the forgotten value is recomputed, it is checked)
+					auto var=id.copy();
+					var.moved=false;
+					Expression nval=new CallExp(getDup(fe.val.loc,sc),fe.val.copy(),false,false);
+					nval.loc=fe.val.loc;
+					if(fe.val.type!=fe.var.type){
+						nval=new TypeAnnotationExp(nval,fe.var.type,TypeAnnotationType.coercion);
+						nval.loc=fe.val.loc;
+					}
+					auto r=new ForgetExp(nval,var);
+					r.loc=fe.loc;
+					return r;
+				}
+			}
+			return reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,givenAfter(i),aliveAt[i]);
+		}
+		Expression[] classicalStatements=iota(statements.length).filter!(i=>recomputed[i]).map!(i=>recomputation(statements[i],sc)).array;
+		Expression[] quantumStatements=iota(statements.length).retro.filter!(i=>!recomputed[i]).map!reversal.array;
 		return classicalStatements~middle~quantumStatements;
 	}
 	return chain(middle,statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup,false,defer))).array;
@@ -1496,7 +1601,7 @@ Expression stripElaborationCoercions(Expression e){ // re-derive pattern coercio
 	return e;
 }
 
-Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false){
+Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null){
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	if(!e) return e;
 	Expression error(){
@@ -1534,7 +1639,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	if(auto ce=cast(CompoundExp)e){
 		static if(language==silq) if(ce.loweredFrom) return reverseStatement(ce.loweredFrom,sc,unchecked,noImplicitDup,hoistClassical,defer);
 		auto hoist=hoistClassical||ce.blscope_&&!ce.isSemError(); // (classical locals of a nested block are recomputed in its reversal)
-		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer));
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer,given,alive));
 		res.loc=ce.loc;
 		foreach(s;res.s) propErr(s,res);
 		static if(language==silq){
@@ -1546,9 +1651,9 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return res;
 	}
 	if(auto ite=cast(IteExp)e){
-		auto then=cast(CompoundExp)reverseStatement(ite.then,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		auto then=cast(CompoundExp)reverseStatement(ite.then,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive);
 		assert(!!then);
-		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive);
 		assert(!!othw==!!ite.othw);
 		auto res=new IteExp(ite.cond.copy(),then,othw);
 		res.loc=ite.loc;
@@ -1557,12 +1662,17 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return res;
 	}
 	if(auto we=cast(WithExp)e){
-		auto trans=we.trans.copy();
-		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		Expression.CopyArgs cargs;
+		static if(language==silq) cargs.mapExp=(Expression x,ref Expression.CopyArgs args){ // (a lowered loop is copied as the loop, which is lowered again)
+			if(auto ce=cast(CompoundExp)x) if(ce.loweredFrom) return ce.loweredFrom.copy(args);
+			return null;
+		};
+		auto trans=we.trans.copy(cargs);
+		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive);
 		assert(!!bdy);
 		auto res=new WithExp(trans,bdy);
 		res.isIndices=we.isIndices;
-		if(we.itrans) res.itrans=we.itrans.copy();
+		if(we.itrans) res.itrans=we.itrans.copy(cargs);
 		res.loc=we.loc;
 		propErr(trans,res);
 		propErr(bdy,res);
