@@ -4178,7 +4178,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	// TODO: avoid recursive snapshotting
 	Scope[] chain;
 	FunctionDef[] fds;
-	size_t[] nCapturedDecls;
+	size_t[] nCapturedDecls,nMovedCaptures;
 	MapX!(Declaration,size_t)[] captureLengths;
 	Declaration[][] consumedOuters;
 	Declaration[][] splitVars;
@@ -4192,6 +4192,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 			if(!fds.canFind(fd)){
 				fds~=fd;
 				nCapturedDecls~=fd.capturedDecls.length;
+				nMovedCaptures~=fd.movedCaptures.length;
 				MapX!(Declaration,size_t) lens;
 				foreach(decl,ids;fd.captures)
 					lens[decl]=ids.length;
@@ -4232,6 +4233,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		foreach(decl;fd.capturedDecls[nCapturedDecls[i]..$])
 			fd.captures.remove(decl);
 		fd.capturedDecls=fd.capturedDecls[0..nCapturedDecls[i]];
+		fd.movedCaptures=fd.movedCaptures[0..nMovedCaptures[i]];
 		foreach(decl,len;captureLengths[i])
 			if(decl in fd.captures)
 				fd.captures[decl]=fd.captures[decl][0..len];
@@ -10082,6 +10084,7 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 	fd.fscope_=newfscope_;
 	fd.captures=ncaptures;
 	fd.capturedDecls=ncapturedDecls;
+	fd.movedCaptures=[];
 	fd.context=null;
 	fd.thisVar=null;
 	prepareFunctionDef(fd,fd.scope_);

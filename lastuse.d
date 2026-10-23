@@ -1013,7 +1013,7 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
-		lastUse.dep=lastUse.scope_.getDependency(lastUse.decl).dup;
+		lastUse.dep=lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
 		if(lastUse.dep.isTop){
 			// TODO: make sure classical variables have dependency ∅ instead?
 			import ast.semantic_:typeForDecl;
@@ -1213,7 +1213,7 @@ struct LastUses{
 			finish(le);
 			return le;
 		}
-		auto depOk=!use.scope_.getDependency(use.meaning).isTop;
+		auto depOk=!use.scope_.getDependency(use.scope_.trackingDecl(use.meaning)).isTop;
 		if(!inType&&depOk){
 			if(isStatement){
 				auto ce=cast(CompoundExp)parent;

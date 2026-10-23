@@ -359,6 +359,7 @@ class FunctionDef: FixedPointDeclaration{
 	VarDecl thisVar; // for constructors
 	MapX!(Declaration,Identifier[]) captures;
 	Declaration[] capturedDecls;
+	Declaration[] movedCaptures; // (captures consumed from the enclosing scope, in order)
 	bool captureAnnotationReady=false;
 	bool sealed=false;
 	static if(language==silq){

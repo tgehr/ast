@@ -89,6 +89,17 @@ struct Dependencies{
 		dependencies[ndecl]=dependencies[decl];
 		dependencies.remove(decl);
 	}
+	void merge(Declaration decl,Declaration ndecl)in{ // (`ndecl` is another version of the variable of `decl`)
+		assert(decl in dependencies&&ndecl in dependencies);
+	}do{
+		auto dep=dependencies[decl];
+		dependencies.remove(decl);
+		foreach(k,ref v;dependencies) v.replace(decl,ndecl);
+		dependencies[ndecl].joinWith(dep);
+		foreach(k,ref v;dependencies)
+			if(k in v.dependencies)
+				v=Dependency(true); // TODO: get rid of this
+	}
 	void substitute(Declaration decl,Dependency dep){ // substitute `decl` by `dep` inside all tracked sets (`decl` itself has no entry)
 		foreach(k,ref v;dependencies){
 			v.replace(decl,dep);
@@ -1147,8 +1158,12 @@ abstract class Scope{
 			foreach(sc;scopes)
 				sc.replaceDecl(splitFrom,splitInto);
 		}
-		if(dependencyTracked(splitFrom))
-			replaceDependencies(splitFrom,splitInto);
+		if(dependencyTracked(splitFrom)){
+			static if(language==silq) bool merge=dependencyTracked(splitInto); // (another version of the same variable, e.g., a capture that is also tracked through its declaration outside of the function)
+			else enum merge=false;
+			if(merge) dependencies.merge(splitFrom,splitInto);
+			else replaceDependencies(splitFrom,splitInto);
+		}
 		declProps.replaceDecl(splitFrom,splitInto);
 		foreach(ref oldDecl;forgottenVarsOnEntry){
 			if(oldDecl is splitFrom)
@@ -1210,6 +1225,7 @@ abstract class Scope{
 			symtabRemove(odecl);
 			if(odecl !is ndecl)
 				replaceDecl(odecl,ndecl);
+			static if(language==silq) if(!splitting&&!dependencyTracked(ndecl)) addDefaultDependency(ndecl); // (consumed like a tracked declaration, such that its dependency is not tracked again afterwards)
 			if(dependencyTracked(ndecl)){
 				auto prevConsumingUse=consumingUse;
 				consumingUse=use;
@@ -1621,6 +1637,11 @@ abstract class Scope{
 		static if(language==psi) return true; // (in PSI, all data is classical: dependencies are not tracked)
 		return !!(decl in dependencies.dependencies);
 	}
+	final Declaration trackingDecl(Declaration decl){ // (a variable of an enclosing function is tracked through its declaration outside of the function, as in `dependencyDecl`)
+		while(decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!is getFunction())
+			decl=decl.splitFrom;
+		return decl;
+	}
 	final Dependency getDependency(Identifier id)in{
 		assert(id.isSemCompleted()||id.isSemError());
 		assert(!!id.meaning);
@@ -1634,6 +1655,10 @@ abstract class Scope{
 		if(!dependencyTracked(decl)){
 			auto cur=rnsymtab.get(decl.getId,null);
 			if(cur&&cur !is decl&&!cast(DeadDecl)cur) return getDefaultDependency(decl);
+			static if(language==silq) if(cast(DeadDecl)cur){ // (the variable was consumed here: its dependency is not tracked again)
+				if(auto pd=consumedDepLog.getPtr(decl)) return pd.dup;
+				return getDefaultDependency(decl);
+			}
 			addDefaultDependency(decl); // TODO: ideally can be removed
 		}
 		return dependencies.dependencies[decl];
@@ -2420,6 +2445,7 @@ abstract class Scope{
 		bool restoreable=false;
 		size_t numMergedNestedScopes;
 		size_t numLastUses;
+		size_t numMovedCaptures;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		MapX!(Id,Declaration) nsymtab=symtab.dup;
@@ -2428,16 +2454,20 @@ abstract class Scope{
 		DeclProps declProps;
 		TrackedTemporary[] trackedTemporaries;
 		Declaration[] prevCapturedDecls;
+		size_t numMovedCaptures;
 		if(restoreable){
 			declProps=saveDeclProps();
 			trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			nlastUses=lastUses.getSnapshot(this);
-			if(auto fd=getFunction())
+			if(auto fd=getFunction()){
 				prevCapturedDecls=fd.capturedDecls;
+				numMovedCaptures=fd.movedCaptures.length;
+			}
 		}
 		auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		r.numMergedNestedScopes=mergedNestedScopes.length;
 		r.numLastUses=lastUses.numAdded;
+		r.numMovedCaptures=numMovedCaptures;
 		return r;
 	}
 	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
@@ -2459,15 +2489,23 @@ abstract class Scope{
 		if(auto fd=getFunction()){
 			assert(state.prevCapturedDecls.length<=fd.capturedDecls.length);
 			assert(state.prevCapturedDecls==fd.capturedDecls[0..state.prevCapturedDecls.length]);
-			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$]){
-				if(!fd.isConsumedCapture(decl)) continue;
+			assert(state.numMovedCaptures<=fd.movedCaptures.length);
+			void provide(Declaration decl){
 				if(decl.getId !in state.rnsymtab||cast(DeadDecl)state.rnsymtab[decl.getId]){
 					if(decl.name.id !in state.symtab||cast(DeadDecl)state.symtab[decl.name.id])
 						state.symtab[decl.name.id]=decl;
 					state.rnsymtab[decl.getId]=decl;
+					auto tracked=trackingDecl(decl);
+					if(tracked !is decl&&tracked in state.dependencies.dependencies&&decl !in state.dependencies.dependencies)
+						state.dependencies.replace(tracked,decl);
 				}
 			}
+			foreach(decl;fd.capturedDecls[state.prevCapturedDecls.length..$])
+				if(fd.isConsumedCapture(decl)) provide(decl);
+			foreach(decl;fd.movedCaptures[state.numMovedCaptures..$]) // (also a capture from before the snapshot)
+				provide(decl);
 			state.prevCapturedDecls=fd.capturedDecls;
+			state.numMovedCaptures=fd.movedCaptures.length;
 		}
 		void splitSymtab(ref MapX!(Id,Declaration) symtab,bool replace){
 			Q!(Declaration,Declaration)[] splits;
@@ -3100,13 +3138,16 @@ class CapturingScope(T): NestedScope{
 				pmeaning=meaning;
 			}
 			if(consumed){
+				static if(is(T==FunctionDef)) decl.movedCaptures~=meaning;
 				symtabInsert(meaning);
 				meaning=consume(meaning,id);
 				origin.insertCapture(id,meaning,this,consumedClassical);
 				static if(language==silq&&is(T==FunctionDef)) if(consumedClassical&&!meaningBefore.isLinear()&&decl.fscope_.returnAnalyzed) decl.captureReanalysis=true; // (the returns analyzed before did not forget it)
+				auto tracked=trackingDecl(meaningBefore);
 				void replace(Scope csc){ // TODO: this is a bit hacky
 					foreach(sc;csc.activeNestedScopes){
 						sc.replaceDecl(meaningBefore,meaning);
+						if(tracked !is meaningBefore) sc.replaceDecl(tracked,meaning);
 						replace(sc);
 					}
 				}
