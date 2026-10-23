@@ -1424,6 +1424,16 @@ void registerConstCaptures(FunctionDef fd,Scope sc){
 	}
 }
 Expression statementSemanticImpl(FunctionDef fd,Scope sc,ref StmFlags flags,bool resetConst=true){
+	static if(language==silq) if(fd.name&&sc.getWithTransInverse()){ // (in the inverse of a `with` transformation, a definition of a function that is still defined uses that function, as a definition of a variable that is still defined checks its value) // TODO: get rid of this
+		auto decl=sc.lookupHere(fd.name,false,Lookup.probing,null);
+		if(decl&&!cast(DeadDecl)decl&&decl.canonicalSource !is fd&&cast(FunctionDef)decl.canonicalSource&&decl.scope_&&decl.scope_.getFunction() is sc.getFunction()){
+			auto r=new CompoundExp([]);
+			r.loc=fd.loc;
+			r.type=unit;
+			r.setSemCompleted();
+			return r;
+		}
+	}
 	fd=functionDefSemantic(fd,sc);
 	if(!fd.ftypeFinal&&fd.numUpdatesPending&&!fd.isSemError()&&sc.getFunction()) subscribeToTypeUpdates(fd,sc,fd.loc); // (the enclosing function is final only after its local functions, e.g., for their deferred checks)
 	registerConstCaptures(fd,sc);

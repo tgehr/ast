@@ -3829,8 +3829,12 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(language==silq) enum isDoWhile=is(T==DoWhileExp);
 	else enum isDoWhile=false;
-	if(auto r=sliceLoop(loop,state,sc,flags)) return r;
-	static if(!isDoWhile) if(auto r=splitLoop(loop,state,sc,flags)) return r;
+	static if(language==silq) bool singleIteration=!loopContainsReturn(loop)&&definitelyReturns(loop.bdy); // (the body does not complete an iteration)
+	else enum singleIteration=false;
+	if(!singleIteration){
+		if(auto r=sliceLoop(loop,state,sc,flags)) return r;
+		static if(!isDoWhile) if(auto r=splitLoop(loop,state,sc,flags)) return r;
+	}
 	enum returnOnlyMoved=false; // (experimental)
 	enum separateConstParams=true; // (necessary inside a `with` transformation)
 	SetX!Declaration accessedDecls;
@@ -4237,6 +4241,55 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			nbdy.s~=thene;
 		}
 	}
+	Expression finish(Expression[] stmts){
+		static if(is(T==ForExp)){
+			stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~(modMatchDef?[modMatchDef]:[])~(adjDef?[adjDef]:[])~(adjIte?[adjIte]:[])~(adjUpd?[adjUpd]:[])~stmts;
+		}else static if(is(T==RepeatExp)){
+			stmts=[cast(Expression)numDef]~stmts;
+		}
+		auto lowered=new CompoundExp(stmts);
+		lowered.loc=loop.loc;
+		auto before=sc.rnsymtab.dup;
+		scope(success) linkLoweredVariables(sc,before);
+		sc.restoreStateSnapshot(state.origStateSnapshot);
+		//imported!"util.io".writeln("BEFORE SEMANTIC: ",lowered);
+		auto result=statementSemantic(lowered,sc,flags);
+		if(continuation||dropUnreachable) sc.loopContinuation.used=true; // (after analyzing `lowered`)
+		if(result.isSemError()){
+			sc.note("loop not yet supported by loop lowering pass",result.loc);
+		}
+		static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
+			import util.io:stderr;
+			stderr.writeln(loop);
+			stderr.writeln("-loop-lowering→");
+			stderr.writeln(result);
+		}
+		return result;
+	}
+	if(singleIteration){ // (an `if` statement for the first iteration)
+		Expression[] stmts;
+		if(!isInfinite){
+			static if(is(T==ForExp)||is(T==RepeatExp)){ // (the initial value of the loop parameter)
+				static if(is(T==ForExp)) Expression init=leftName.copy(cargsDefault);
+				else Expression init=LiteralExp.makeInteger(0);
+				init.loc=loop.loc;
+				init=new TypeAnnotationExp(init,loopParams[0][2].copy(cargsDefault),TypeAnnotationType.annotation);
+				init.loc=loop.loc;
+				static if(is(T==ForExp)) auto pos=constTmpNames[0].copy(cargsDefault);
+				else auto pos=new Identifier(loopVarId);
+				pos.loc=loop.loc;
+				auto posDef=new DefineExp(pos,init);
+				posDef.loc=loop.loc;
+				stmts~=posDef;
+			}
+			static if(!isDoWhile){
+				auto ite=new IteExp(ncond,nbdy,null);
+				ite.loc=loop.loc;
+				stmts~=ite;
+			}else assert(0);
+		}else stmts~=nbdy; // (the first iteration is reached)
+		return finish(stmts);
+	}
 	bool hasEarlyReturns=false;
 	Expression inj(Expression e,bool isRet){ // TODO: use sum type
 		auto wrap=new VectorExp([e]);
@@ -4595,29 +4648,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		stmts~=ce2;
 		stmts~=forgetFunction();
 	}
-	static if(is(T==ForExp)){
-		stmts=[cast(Expression)leftDef]~(stepDef?[stepDef]:[])~[cast(Expression)rightDef]~(modMatchDef?[modMatchDef]:[])~(adjDef?[adjDef]:[])~(adjIte?[adjIte]:[])~(adjUpd?[adjUpd]:[])~stmts;
-	}else static if(is(T==RepeatExp)){
-		stmts=[cast(Expression)numDef]~stmts;
-	}
-	auto lowered=new CompoundExp(stmts);
-	lowered.loc=loop.loc;
-	auto before=sc.rnsymtab.dup;
-	scope(success) linkLoweredVariables(sc,before);
-	sc.restoreStateSnapshot(state.origStateSnapshot);
-	//imported!"util.io".writeln("BEFORE SEMANTIC: ",lowered);
-	auto result=statementSemantic(lowered,sc,flags);
-	if(continuation||dropUnreachable) sc.loopContinuation.used=true; // (after analyzing `lowered`)
-	if(result.isSemError()){
-		sc.note("loop not yet supported by loop lowering pass",result.loc);
-	}
-	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
-		import util.io:stderr;
-		stderr.writeln(loop);
-		stderr.writeln("-loop-lowering→");
-		stderr.writeln(result);
-	}
-	return result;
+	return finish(stmts);
 }
 
 // Early-return elimination (ERP).
