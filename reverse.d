@@ -391,22 +391,24 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			if(nlhs) return nlhs;
 			nlhs=olhs.copy();
 			if(noImplicitDup){ // TODO: this is a hack
-				void removeImplicitDup(Expression e){
+				void removeImplicitDup(Expression e,Expression o,bool inCall){ // (`o`: the original of `e`)
 					if(cast(Identifier)e)
-						e.implicitDup=false;
+						if(!inCall||!o.type||!o.type.isClassical()) // (a classical argument of a reversed call is an input of the reversal, it is checked)
+							e.implicitDup=false;
 					if(auto tae=cast(TypeAnnotationExp)e){
-						removeImplicitDup(tae.e);
+						removeImplicitDup(tae.e,(cast(TypeAnnotationExp)o).e,inCall);
 					}else if(auto tpl=cast(TupleExp)e){
-						foreach(ne;tpl.e)
-							removeImplicitDup(ne);
+						foreach(i,ne;tpl.e)
+							removeImplicitDup(ne,(cast(TupleExp)o).e[i],inCall);
 					}else if(auto let=cast(LetExp)e){
 						if(auto fwd=let.isForward(false))
-							removeImplicitDup(fwd);
+							if(auto ofwd=(cast(LetExp)o).isForward(false))
+								removeImplicitDup(fwd,ofwd,inCall);
 					}else if(auto ce=cast(CallExp)e){
-						removeImplicitDup(ce.arg);
+						removeImplicitDup(ce.arg,(cast(CallExp)o).arg,true);
 					}
 				}
-				removeImplicitDup(nlhs);
+				removeImplicitDup(nlhs,olhs,false);
 			}
 			return nlhs;
 		}else return olhs;
@@ -1504,7 +1506,7 @@ bool usesUp(Id name,Expression[] statements){ // (whether the statements consume
 	bool rec(Expression e){
 		if(auto ce=cast(CompoundExp)e) return ce.s.any!rec;
 		if(auto ite=cast(IteExp)e) return rec(ite.cond)||rec(ite.then)||ite.othw&&rec(ite.othw);
-		if(auto we=cast(WithExp)e) return rec(we.bdy); // (the inverse restores what the transformation consumes)
+		if(auto we=cast(WithExp)e) return rec(we.bdy)&&!(we.itrans&&definedNames(we.itrans).canFind(name)); // (the inverse restores what the transformation or the body consumes)
 		foreach(x;e.subexpressions){
 			if(auto id=cast(Identifier)x)
 				if(id.meaning&&id.meaning.name&&id.meaning.name.id==name&&!id.constLookup&&!id.implicitDup)
@@ -1758,6 +1760,16 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	if(auto ce=cast(CommaExp)e) assert(0);
 	if(auto de=cast(DefineExp)e){
 		if(de.isSwap) return de.copy(); // TODO: ok?
+		static if(language==silq) if(!defer) if(auto le=cast(LambdaExp)unwrap(de.e2)) if(auto id=cast(Identifier)unwrap(de.e1)){
+			auto captureAnnotation=le.fd.ftype?le.fd.ftype.captureAnnotation:le.fd.getCaptureAnnotation();
+			if(captureAnnotation==CaptureAnnotation.none){ // (no quantum captures, nothing to uncompute)
+				auto nid=new Identifier(nameOf(id));
+				nid.loc=id.loc;
+				auto res=new ForgetExp(nid,null);
+				res.loc=de.loc;
+				return res;
+			}
+		}
 		Expression nrhs=stripElaborationCoercions(de.e1.copy()); // re-derive pattern coercions against current types
 		if(de.e1.type!=de.e2.type){
 			nrhs=new TypeAnnotationExp(nrhs,de.e2.type,TypeAnnotationType.coercion);

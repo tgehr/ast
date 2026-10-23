@@ -364,10 +364,20 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			vd.definition=be;
 			return vd;
 		}
+		bool checked(Identifier id){ // (in the inverse of a `with` transformation, a definition of a variable that is still defined checks its value)
+			static if(language==silq) if(sc.getWithTransInverse()){
+				auto decl=sc.lookupHere(id,false,Lookup.probing,null);
+				if(decl&&!cast(DeadDecl)decl&&decl.scope_&&!sc.lastUses.canRedefine(decl)){
+					id.implicitDup=true;
+					return true;
+				}
+			}
+			return false;
+		}
 		bool declareLhsPattern(Expression e){
 			e=unwrap(e);
 			if(auto id=cast(Identifier)e){
-				if(!id.implicitDup)
+				if(!id.implicitDup&&!checked(id))
 					propErr(makeVar(id),be);
 				return true;
 			}
@@ -394,14 +404,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			return false;
 		}
 		if(auto id=cast(Identifier)unwrap(be.e1)){
-			if(id.implicitDup) return be;
-			static if(language==silq) if(sc.getWithTransInverse()){
-				auto decl=sc.lookupHere(id,false,Lookup.probing,null);
-				if(decl&&!cast(DeadDecl)decl&&decl.scope_&&!sc.lastUses.canRedefine(decl)){
-					id.implicitDup=true;
-					return be;
-				}
-			}
+			if(id.implicitDup||checked(id)) return be;
 			auto vd=makeVar(id);
 			propErr(vd,be);
 			return be;
@@ -458,7 +461,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			VarDecl[] vds;
 			foreach(exp;tpl.e){
 				if(auto id=cast(Identifier)exp){
-					if(!id.implicitDup)
+					if(!id.implicitDup&&!checked(id))
 						vds~=makeVar(id);
 				}else goto LbadDefLhs;
 			}
