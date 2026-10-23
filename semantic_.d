@@ -8400,6 +8400,11 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	propErr(sl.r,sl);
 	if(sl.isSemError())
 		return sl;
+	bool boundsInType(){ // (the type of the slice can mention the bounds only if they do not consume variables)
+		foreach(b;only(sl.l,sl.r)) foreach(id;b.freeVars) if(id.meaning&&!id.constLookup&&!id.implicitDup) return false;
+		foreach(b;only(sl.l,sl.r)) foreach(id;b.freeVars) if(id.meaning&&id.implicitDup) sc.pinLastUse(id.meaning); // (the duplicated values stay available)
+		return true;
+	}
 	// TODO: quantum slicing (at least when length is known)
 	if(!isSubtype(sl.l.type,ℤt(true))){
 		sc.error(format("lower bound should be classical integer, not `%s`",sl.l.type),sl.l.loc);
@@ -8425,7 +8430,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		auto lv=sl.l.eval(), rv=sl.r.eval();
 		if(auto lat=cast(ArrayTy)vart.next.type) tsl.type=lat;
 		else if(auto lvt=cast(VectorTy)vart.next.type){
-			if(lv.isDeterministic()&&rv.isDeterministic()){
+			if(lv.isDeterministic()&&rv.isDeterministic()&&boundsInType()){
 				auto se=new NSubExp(rv,lv);
 				se.type=nSubType(sl.r.type,sl.l.type);
 				se.setSemCompleted();
@@ -8451,7 +8456,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		}
 	}
 	if(next){
-		if(lval.isDeterministic()&&rval.isDeterministic()){
+		if(lval.isDeterministic()&&rval.isDeterministic()&&boundsInType()){
 			auto se=new NSubExp(rval,lval);
 			se.type=nSubType(sl.r.type,sl.l.type);
 			assert(!!se.type);
