@@ -284,11 +284,13 @@ struct Location{
 		r.startColumn = rep.ptr-l.ptr<l.length ? displayWidth(l[0..rep.ptr-l.ptr], tabsize) : displayWidth(l, tabsize);
 
 		r.endByte = r.startByte + cast(int)rep.length;
-		auto n = cast(int)rep.count('\n');
+		auto n = cast(int)rep.representation.count('\n'); // (byte-wise: rep may contain invalid UTF-8)
 		r.endLine = r.startLine + n;
 		string lastRep = rep;
 		if(n != 0) {
-			lastRep = rep[rep.lastIndexOf('\n') + 1..$];
+			import std.range: retro;
+			auto afterLastNl = rep.representation.retro.countUntil('\n'); // number of bytes after the last '\n'
+			lastRep = rep[$-afterLastNl..$];
 			l= source.getLineOf(lastRep);
 		}
 		r.endColumn = displayWidth(l[0..min($, lastRep.ptr + lastRep.length - l.ptr)], tabsize) - 1;
@@ -397,8 +399,11 @@ string caseSimpleToken(string prefix="", bool needs = false)pure{
 						if(!isWhite(ch)) errors~=tokError(format("unsupported character '%s'",ch),s[0..len]);
 						// else if(isNewLine(ch)) line++; // TODO: implement this everywhere
 						continue;`:`res[0].type = Tok!"`~prefix~`"; break;`)~`
-						
-					}catch(Exception){} goto default;`;
+
+					}catch(Exception){
+						// invalid UTF-8 sequence at p (p already points at its first byte, see above)
+						`~(prefix==""?`invCharSeq(); continue;`:`res[0].type = Tok!"`~prefix~`"; break;`)~`
+					}`;
 		}
 		if(needs) r~=`default: p--; res[0].type = Tok!"`~prefix~`"`~";\nbreak;\n}\nbreak;\n";
 	}
@@ -415,6 +420,7 @@ struct Anchor{
 
 struct Lexer{
 	string code; // Manually allocated!
+	immutable(char)* eof; // address of the first padding byte (end of the source code)
 	Token[] buffer;
 	Token[] errors;
 	Source source;
@@ -432,6 +438,11 @@ struct Lexer{
 	this(Source src){
 		source = src;
 		code = src.code.ptr[0..src.code.length+4]; // rely on 4 padding zero bytes
+		eof = src.code.ptr+src.code.length;
+		if(src.code.length > int.max){ // (LocationInfo uses int byte offsets)
+			errors~=tokError("no support for sources exceeding 2GB",null);
+			code = eof[0..4]; // lex only the padding, i.e., produce just an EOF token
+		}
 		enum initsize=4096;//685438;//
 		buffer = new Token[](initsize);//
 		//buffer = (cast(Token*)malloc(Token.sizeof*initsize))[0..initsize];//
@@ -441,7 +452,6 @@ struct Lexer{
 		n=s=0;
 		e=lexTo(buffer);
 		m=e&buffer.length-1;
-		if(src.code.length > int.max) errors~=tokError("no support for sources exceeding 2GB",null),code.length=int.max;
 	}
 	@property ref const(Token) front()const{return buffer[n];}
 	@property bool empty(){return buffer[n].type==Tok!"EOF";}
@@ -505,7 +515,12 @@ private:
 
 	size_t lexTo(Token[] res)in{assert(res.length);}do{
 		import std.array: appender;
-		if(!code.length) return 0;
+		if(code.length<=4){ // only padding left: keep producing EOF tokens without consuming anything
+			res[0].type = Tok!"EOF";
+			res[0].loc.rep=(eof+1)[0..1];
+			res[0].loc.line = line;
+			return 1;
+		}
 		auto p=code.ptr;
 		auto s=p;    // used if the input has to be sliced
 		auto sl=line;// ditto
@@ -513,11 +528,13 @@ private:
 		size_t len;  // used as a temporary that stores the length of the last UTF sequence
 		size_t num=0;// number of tokens lexed, return value
 		typeof(p) invCharSeq_l=null;
-		void invCharSeq(){
-			if(p>invCharSeq_l+1) errors~=tokError("unsupported character",p[0..1]);
-			else errors[$-1].loc.rep=errors[$-1].loc.rep.ptr[0..errors[$-1].loc.rep.length+1];
+		size_t invCharSeq_e=size_t.max; // index of the error that covers the byte at invCharSeq_l
+		void invCharSeq(){ // report the byte at p as part of an invalid UTF-8 sequence, merge runs of such bytes into one error
+			if(invCharSeq_e<errors.length && p==invCharSeq_l+1) errors[invCharSeq_e].loc.rep=errors[invCharSeq_e].loc.rep.ptr[0..errors[invCharSeq_e].loc.rep.length+1];
+			else{ invCharSeq_e=errors.length; errors~=tokError("invalid UTF-8 sequence",p[0..1]); }
 			invCharSeq_l=p; p++;
 		}
+		bool atEof(){ return p>=eof; } // (p never passes eof except in the EOF case below)
 		// text macros:
 		enum skipUnicode = q{if(*p<0x80){p++;break;} len=0; try utf.decode(p[0..4],len), p+=len; catch(Exception){invCharSeq();}};
 		enum skipUnicodeCont = q{if(*p<0x80){p++;continue;} len=0; try utf.decode(p[0..4],len), p+=len; catch(Exception){invCharSeq();}}; // don't break, continue
@@ -528,6 +545,10 @@ private:
 		Lswitch:switch(*p++){
 				// whitespace
 				case 0, 0x1A:
+					if(begin<eof){ // embedded NUL or SUB byte: do not silently truncate the file
+						errors~=tokError(format("unsupported character U+%04X",cast(int)*begin),begin[0..1]);
+						continue;
+					}
 					res[0].type = Tok!"EOF";
 					res[0].loc.rep=p[0..1];
 					res[0].loc.line = line; // TODO: Why is this necessary?
@@ -611,9 +632,12 @@ private:
 				case '\'':
 					s = p; sl = line;
 					res[0].type = Tok!"''";
+					res[0].int64 = 0;
 					if(*p=='\\'){
 						try p++, res[0].int64 = cast(ulong)readEscapeSeq(p);
 						catch(EscapeSeqException e) if(e.msg) errors~=tokError(e.msg,e.loc); else invCharSeq();
+					}else if(*p=='\n'||*p=='\r'||*p==0||*p==0x1A){
+						// newline or end of file: don't consume it, report below
 					}else{
 						try{
 							len=0;
@@ -636,17 +660,17 @@ private:
 					del = '`'; skipdel:
 					s = p; sl = line;
 					readwysiwyg: for(;;){
-						if(*p==del){p++; break;} 
+						if(*p==del){p++; res[0].str = s[0..p-s-1]; break;} // reference to code
 						switch(*p){
 							mixin(caseNl); // handle newlines
 							case 0, 0x1A:
 								errors~=tokError("unterminated string literal", (s-1)[0..1],sl);
+								res[0].str = s[0..p-s];
 								break readwysiwyg;
 							default: mixin(skipUnicode);
 						}
 					}
 					res[0].type = Tok!"``";
-					res[0].str = s[0..p-s-1]; // reference to code
 					goto lexstringsuffix;
 				// token string
 				case 'q':
@@ -673,15 +697,13 @@ private:
 					goto lexstringsuffix;+/
 					delimitedstring:
 					res[0].type = Tok!"``";
+					res[0].str = null;
 					s=++p; sl=line;
 					switch(*p){
 						case 'a': .. case 'z':
 						case 'A': .. case 'Z':
 							for(;;){
 								switch(*p){
-									case '\r': if(p[1]=='\n') p++; goto case;
-									case '\n': line++; break;
-									case 0, 0x1A: break;
 									case 'a': .. case 'z':
 									case 'A': .. case 'Z':
 									case '0': .. case '9':
@@ -692,20 +714,20 @@ private:
 										try{auto ch=utf.decode(p[0..4],len);
 											if(isAlphaEx(ch)){p+=len; continue;}
 											break;
-										}catch(Exception){invCharSeq(); break;}
-									default: break;
+										}catch(Exception){break;} // (reported below)
+									default: break; // (includes newline and end of file)
 								}
 								break;
 							}
+							auto ident=s[0..p-s];
 							if(*p!='\n' && *p!='\r') errors~=tokError("heredoc identifier must be followed by a new line",p[0..1]);
 							while(((*p!='\n') & (*p!='\r')) & ((*p!=0) & (*p!=0x1A))) mixin(skipUnicodeCont); // mere error handling
-							auto ident=s[0..p-s];
 							if(*p=='\r'){line++;p++;if(*p=='\n') p++;}
 							else if(*p=='\n'){line++;p++;}
 							s=p;
 							readheredoc: while((*p!=0) & (*p!=0x1A)){ // always at start of new line here
 								for(auto ip=ident.ptr, end=ident.ptr+ident.length;;){
-									if(ip==end) break readheredoc;
+									if(ip==end){ if(*p=='"') break readheredoc; break; } // (a line merely starting with the identifier does not terminate the string)
 									switch(*p){
 										mixin(caseNl);
 										case 0x80: .. case 0xFF:
@@ -738,26 +760,30 @@ private:
 								case '(': rdel=')'; s=++p; break;
 								case '<': rdel='>'; s=++p; break;
 								case '{': rdel='}'; s=++p; break;
-								case '\r': if(p[1]=='\n') p++; goto case;
-								case '\n': line++; p++; goto case;
-								case ' ','\t','\v':
+								case 0, 0x1A: // end of file (or embedded NUL): do not consume
+									errors~=tokError("unterminated delimited string literal",(s-2)[0..2],sl);
+									goto lexstringsuffix;
+								case '\r', '\n', ' ', '\t', '\v': // do not consume: lexed as whitespace afterwards
 									errors~=tokError("string delimiter cannot be whitespace",p[0..1]);
-									goto case;
-								case 0x80: case 0xFF:
-									s=p;
+									goto lexstringsuffix;
+								case 0x80: .. case 0xFF:
 									len=0;
 									try{
 										ddel=utf.decode(p[0..4],len);
 										s=p+=len;
-									}catch(Exception){invCharSeq();}
+									}catch(Exception){
+										invCharSeq();
+										goto lexstringsuffix;
+									}
 									break;
-								default: p++; break;
+								default: s=++p; break;
 							}
 							if(ddel){
 								while((*p!=0) & (*p!=0x1A)){
-									if(*p=='\r'){line++;p++;if(*p=='\n') p++;}
-									else if(*p=='\n'){line++;p++;}
+									if(*p=='\r'){line++;p++;if(*p=='\n') p++; continue;}
+									else if(*p=='\n'){line++;p++; continue;}
 									else if(*p<0x80){p++; continue;}
+									len=0;
 									try{
 										auto x=utf.decode(p[0..4],len);
 										if(ddel==x){
@@ -768,19 +794,22 @@ private:
 									}catch(Exception){invCharSeq();}
 								}
 							}else{
-								for(int nest=1;(nest!=0) & (*p!=0) & (*p!=0x1A);){
+								int nest=1;
+								for(;(nest!=0) & (*p!=0) & (*p!=0x1A);){
 									if(*p=='\r'){line++;p++;if(*p=='\n') p++;}
 									else if(*p=='\n'){line++;p++;}
 									else if(*p==rdel){nest--; p++;}
 									else if(*p==del){nest++; p++;}
 									else if(*p & 0x80){
+										len=0;
 										try{
 											utf.decode(p[0..4],len);
 											p+=len;
 										}catch(Exception){invCharSeq();}
 									}else p++;
 								}
-								res[0].str = s[0..p-s-1]; // reference to code
+								if(!nest) res[0].str = s[0..p-s-1]; // reference to code
+								else res[0].str = s[0..p-s]; // (unterminated)
 							}
 							if(*p!='"'){
 								if(*p) errors~=tokError("expected '\"' to close delimited string literal",p[0..1]);
@@ -793,10 +822,10 @@ private:
 				case 'x':
 					if(*p!='"') goto case 'X';
 					auto r=appender!string(); p++; s=p; sl=line;
-					readhexstring: for(int c=0,ch,d;;p++,c++){
+					readhexstring: for(int c=0,ch,d;;){ // c counts hex digits (not other characters)
 						switch(*p){
 							mixin(caseNl); // handle newlines
-							case ' ', '\t', '\v': c--; break;
+							case ' ', '\t', '\v': p++; break;
 							case 0, 0x1A:
 								errors~=tokError("unterminated hex string literal",(s-1)[0..1],sl);
 								break readhexstring;
@@ -805,21 +834,24 @@ private:
 							case 'A': .. case 'F': d=*p-('A'-0xA); goto handlexchar;
 							handlexchar:
 								if(c&1) r.put(cast(char)(ch|d));
-								else ch=d<<4; break;
+								else ch=d<<4;
+								c++; p++;
+								break;
 							case '"':
 								if(c&1) errors~=tokError(format("found %s character%s when expecting an even number of hex digits",toEngNum(c),c!=1?"s":""),s[0..p-s]);
 								p++; break readhexstring;
 							default:
-								if(*p<128) errors~=tokError(format("found '%s' when expecting hex digit",*p),p[0..1]);
-								else{
-									s=p;
+								if(*p<128){
+									if(*p<0x20||*p==0x7f) errors~=tokError(format("found U+%04X when expecting hex digit",cast(int)*p),p[0..1]);
+									else errors~=tokError(format("found '%s' when expecting hex digit",*p),p[0..1]);
+									p++;
+								}else{
 									len=0;
 									try{
 										auto chr = utf.decode(p[0..4],len);
-										p+=len-1;
-										if(isWhite(chr)) break; //TODO: newlines
+										if(!isWhite(chr)) errors~=tokError(format("found '%s' when expecting hex digit",p[0..len]),p[0..len]);
+										p+=len;
 									}catch(Exception){invCharSeq();}
-									errors~=tokError(format("found '%s' when expecting hex digit",s[0..len]),s[0..len]);
 								}
 								break;
 						}
@@ -832,12 +864,13 @@ private:
 					// appender only used if there is an escape sequence, slice otherwise
 					// TODO: how costly is eager initialization?
 					auto r=appender!string();
-					auto start = s = p;
+					auto start = s = p; sl = line;
+					bool terminated=false;
 					readdqstring: for(;;){
 						switch(*p){
 							mixin(caseNl);
 							case 0, 0x1A:
-								errors~=tokError("unterminated string literal",(start-1)[0..1]);
+								errors~=tokError("unterminated string literal",(start-1)[0..1],sl); // (reported at the line of the opening quote)
 								break readdqstring;
 							case '\\':
 								r.put(s[0..p++-s]);
@@ -845,13 +878,14 @@ private:
 								catch(EscapeSeqException e) if(e.msg) errors~=tokError(e.msg,e.loc); else invCharSeq();
 								s = p;
 								continue;
-							case '"': p++; break readdqstring;
+							case '"': p++; terminated=true; break readdqstring;
 							default: mixin(skipUnicode);
 						}
-					}					
+					}
+					auto end = terminated ? p-1 : p; // (don't include the closing quote)
 					res[0].type = Tok!"``";
-					if(!r.data.length) res[0].str = start[0..p-1-start];
-					else{ r.put(s[0..p-1-s]); res[0].str = r.data; }
+					if(!r.data.length) res[0].str = start[0..end-start];
+					else{ r.put(s[0..end-s]); res[0].str = r.data; }
 					goto lexstringsuffix; }
 					lexstringsuffix:
 					if(*p=='c')      res[0].type = Tok!"``c", p++;
@@ -916,8 +950,9 @@ private:
 					while(((*p!='\n') & (*p!='\r')) & ((*p!=0) & (*p!=0x1A))) mixin(skipUnicodeCont);
 					continue;
 				}
-				default:
-					p--; invCharSeq(); p++;
+				default: // unsupported ASCII character (control characters, '\\', '#', ...); already consumed
+					if(*begin<0x20||*begin==0x7f) errors~=tokError(format("unsupported character U+%04X",cast(int)*begin),begin[0..1]);
+					else errors~=tokError(format("unsupported character '%s'",*begin),begin[0..1]);
 					continue;
 			}
 			res[0].loc.rep=begin[0..p-begin];
@@ -1026,7 +1061,10 @@ private dchar readEscapeSeq(ref immutable(char)* _p) in{assert(*(_p-1)=='\\');}d
 			_p=p;
 			if(!utf.isValidDchar(cast(dchar)r)) throw new EscapeSeqException(format("invalid UTF character '\\%s'",s[0..p-s]),(s-1)[0..p-s+1]);
 			return cast(dchar)r;
+		case 0, 0x1A, '\n', '\r': // end of file or line: do not consume
+			_p=p; throw new EscapeSeqException("unterminated escape sequence",(p-1)[0..1]);
 		default:
+			if(*p<0x20||*p==0x7f){_p=p+1; throw new EscapeSeqException(format("unrecognized escape sequence '\\' followed by U+%04X",cast(int)*p),p[0..1]);}
 			if(*p<128){_p=p+1; throw new EscapeSeqException(format("unrecognized escape sequence '\\%s'",*p),p[0..1]);}
 			else{
 				auto s=p;

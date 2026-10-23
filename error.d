@@ -143,7 +143,7 @@ class VerboseErrorHandler: ErrorHandler{
 		write(ty, li.source.name, li.startLine, li.startColumn, err);
 		if(line.length&&line[0]){
 			display(line);
-			auto ntabs = line.countUntil!(c => c != '\t');
+			auto ntabs = line.representation.countUntil!(c => c != '\t'); // (byte-wise: the line may contain invalid UTF-8)
 			highlight(li.startColumn, cast(int)(ntabs < 0 ? line.length : ntabs), loc.rep);
 		}
 	}

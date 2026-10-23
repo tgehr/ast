@@ -233,6 +233,7 @@ struct Parser{
 		//_tok=&code.front();
 		ttype=tok.type;
 		this.handler = handler;
+		flushLexerErrors();
 	}
 	@property ref Token tok(){return code.buffer[code.n];};
 	@property ref const(Token) ptok(){return code.buffer[code.n-1&code.buffer.length-1];};
@@ -241,9 +242,11 @@ struct Parser{
 		if(ttype==Tok!"EOF") return;
 		code.popFront();
 		ttype=tok.type;
+		flushLexerErrors();
+	}
+	void flushLexerErrors(){
 		if(!code.errors.length || muteerr) return;
 		while(code.errors.length&&code.errors[0].loc.rep.ptr<tok.loc.rep.ptr){
-			// a lexer error amidst expect errors is likely to be uninteresting
 			if(displayExpectErr){
 				handler.error(code.errors[0].str,code.errors[0].loc);
 				noteLexerError(code.errors[0]);
@@ -320,8 +323,11 @@ struct Parser{
 		// give error for missing ';', '}', ')' etc at the right place:
 		if(rd){
 			loc=code.buffer[code.n-1&code.buffer.length-1].loc;
-			foreach(dchar x;loc.rep) if(isNewLine(x)) loc.line++;
-			loc.rep=(loc.rep.ptr+loc.rep.length)[0..utf.stride(loc.rep.ptr[loc.rep.length..loc.rep.length+4],0)];
+			import std.string: representation; // (token may contain invalid utf-8)
+			foreach(i,x;loc.rep.representation) if(x=='\n'||x=='\r'&&(i+1>=loc.rep.length||loc.rep[i+1]!='\n')) loc.line++;
+			size_t len=1;
+			try len=utf.stride(loc.rep.ptr[loc.rep.length..loc.rep.length+4],0); catch(Exception){} // (invalid UTF-8 after the token)
+			loc.rep=(loc.rep.ptr+loc.rep.length)[0..len];
 		}
 		auto tt=peek().type;
 		if(tt!=Tok!"i"&&tt==type){
