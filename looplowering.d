@@ -2232,7 +2232,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stmts~=fe;
 	}
 	// the code after a loop with quantum-controlled returns follows the main loop, which is lowered with it as its continuation
-	auto cont=hasQuantumReturn?sc.loopContinuation.take(loop):null;
+	auto cont=hasQuantumReturn?sc.loopContinuation.take(loop,!isEmpty(loop)):null;
 	stmts~=cont;
 	auto split=new CompoundExp(stmts);
 	split.loc=loc;
@@ -3860,7 +3860,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	static if(language==silq){
 		bool contInfinite=isEmpty(loop); // (the loop does not exit normally, e.g., `repeat 2 { return 1; }`)
 		if(!contInfinite&&loopContainsReturn(loop))
-			continuation=sc.loopContinuation.take(loop);
+			continuation=sc.loopContinuation.take(loop,true);
 		else if(contInfinite)
 			dropUnreachable=sc.loopContinuation.take(loop).length!=0;
 	}
@@ -3940,6 +3940,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		}).filter!(id=>!!id).array;
 	}
 	auto fi=freshName();
+	// (a value of an empty type is not computed, so a loop that uses a variable of an empty type is not reached: the function
+	// only returns its parameters, and the variables of empty types, which only diverging paths change, are not parameters)
+	bool unreached=!isDoWhile&&!isEmpty(loop)&&!loopContainsReturn(loop)&&chain(constParams,movedParams).any!(p=>isEmpty(p[2]));
+	if(unreached){
+		constParams=constParams.filter!(p=>!isEmpty(p[2])).array;
+		movedParams=movedParams.filter!(p=>!isEmpty(p[2])).array;
+	}
 	auto allParams=loopParams~constParams~movedParams;
 	auto loopConstParams=loopParams~constParams;
 	auto constMovedParams=constParams~movedParams;
@@ -3971,14 +3978,16 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			}
 		}
 		sort!((a,b)=>a[0].id.str<b[0].id.str)(exitLocals);
-		Q!(Id,Expression,Expression)[] strongerExits; // (parameters that the body defines with a stronger type: name, type, parameter type)
+		Q!(Id,Expression,Expression)[] strongerExits; // (parameters that the body defines with a stronger type: name, type, type in the result of the function)
 		if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars){
 			auto name=d.mergedInto.name;
 			if(!name) continue;
 			auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==name.id);
 			if(p.empty) continue;
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
-			if(type&&ptype&&type!=ptype) strongerExits~=q(name.id,type,ptype);
+			if(!type||!ptype||type==ptype) continue;
+			auto rtype=isSubtype(type,ptype)?ptype:joinTypes(type,ptype); // (the parameter type can be stronger, e.g., `do{ x+=1; }while c{ x=0:!𝔹; }`)
+			if(rtype&&rtype!=type) strongerExits~=q(name.id,type,rtype);
 		}
 		foreach(ref r;returnTpl.e){ // (see `exitCoercions`)
 			auto id=cast(Identifier)r;
@@ -4305,8 +4314,9 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		if(!isCertainReturn){ // (otherwise, the condition and the reset are not reached)
 			auto contr=new ReturnExp(ce); // (the reset continues with the next iteration)
 			contr.loc=ce.loc;
+			Expression[] next=definitelyReturns(loop.reset)?[]:[contr]; // (unless the reset does not exit)
 			if(isInfinite){
-				nbdy.s~=nrst.s~[cast(Expression)contr];
+				nbdy.s~=nrst.s~next;
 			}else{
 				T at(T)(T e){ e.loc=loop.loc; return e; }
 				Identifier mk(Id n){ return at(new Identifier(n)); }
@@ -4328,7 +4338,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				bool hold=forgets.length||exitLocals.any!(e=>e[1]&&!e[1].isClassical());
 				if(!hold){
 					auto ite=at(new IteExp(ncond,at(new CompoundExp([])),at(new CompoundExp(forgets~exit))));
-					nbdy.s~=[cast(Expression)ite]~nrst.s~[cast(Expression)contr];
+					nbdy.s~=[cast(Expression)ite]~nrst.s~next;
 				}else{
 					auto v=freshName();
 					Expression tupleOf(Expression[] es){ return es.length==1?es[0]:at(new TupleExp(es)); }
@@ -4352,9 +4362,11 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					auto then=at(new CompoundExp(nrst.s~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
 					auto othw=at(new CompoundExp(forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
-					auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
-					auto cont=at(new CompoundExp([at(new ForgetExp(mk(v),empty())),cast(Expression)contr]));
-					nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
+					if(next.length){
+						auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
+						auto cont=at(new CompoundExp([cast(Expression)at(new ForgetExp(mk(v),empty()))]~next));
+						nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
+					}
 					Expression[] lhs,coercions;
 					foreach(e;packed){
 						if(e[2] is e[1]){
@@ -4387,9 +4399,16 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		othwe.loc=loop.loc;
 		auto othw=new CompoundExp([othwe]);
 		othw.loc=othwe.loc;
-		auto ite=new IteExp(ncond,nbdy,othw);
-		ite.loc=loop.loc;
-		bdy=ite;
+		if(unreached){ // (the condition is evaluated, e.g., it may consume variables)
+			auto cdef=new DefineExp(new Identifier(freshName()),ncond);
+			cdef.loc=cdef.e1.loc=ncond.loc;
+			othw.s=cast(Expression)cdef~othw.s;
+			bdy=othw;
+		}else{
+			auto ite=new IteExp(ncond,nbdy,othw);
+			ite.loc=loop.loc;
+			bdy=ite;
+		}
 	}else bdy=nbdy;
 	auto fdn=new Identifier(fi);
 	fdn.loc=loop.loc;
@@ -4726,6 +4745,7 @@ bool loopContainsReturn(T)(T loop){
 struct LoopContinuation{
 	Expression[] stms;
 	Expression target; // the loop statement the continuation is offered to
+	bool returning; // the loop contains a `return` and the continuation ends in one
 	bool used; // set by `lowerLoop` if it absorbed the continuation
 	Expression absorbedBy; // set if the desugaring of `target` passed the continuation on
 	// offer `stms[i+1..$]` to the loop statement `stms[i]`, if applicable
@@ -4733,17 +4753,19 @@ struct LoopContinuation{
 		auto e=block[i];
 		if(!astopt.removeLoops||!isLoopStatement(e)) return false;
 		if(i+1>=block.length) return false;
-		// the code after an infinite loop is unreachable; it is dropped by the lowering
-		if(!isInfiniteLoop(e)&&(!endsWithReturn(block[$-1])||!containsReturn(e))) return false;
+		bool returns=endsWithReturn(block[$-1])&&containsReturn(e);
+		// the code after an infinite loop is unreachable; it is dropped by the lowering (only the type of a `for` loop is never empty)
+		if(!returns&&cast(ForExp)e) return false;
 		stms=block[i+1..$];
 		target=e;
+		returning=returns;
 		used=false;
 		absorbedBy=null;
 		return true;
 	}
-	// take the continuation offered to `loop` (if any)
-	Expression[] take(Expression loop){
-		if(!stms.length||target !is loop) return null;
+	// take the continuation offered to `loop` (if any; with `returning`, only one that ends in a `return`)
+	Expression[] take(Expression loop,bool returning=false){
+		if(!stms.length||target !is loop||returning&&!this.returning) return null;
 		auto r=stms;
 		stms=null;
 		target=null;
@@ -4755,25 +4777,6 @@ struct LoopContinuation{
 		this=LoopContinuation.init;
 		return r;
 	}
-}
-// a loop that does not exit normally, e.g., `while true` (syntactically, as the loop may not be analyzed yet)
-bool isInfiniteLoop(Expression e){
-	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return endsWithReturn(dw.bdy)||isTrueCondition(dw.cond); // (or `do{ … return e; }while c`)
-	if(auto re=cast(RepeatExp)e) return isPositiveCount(re.num)&&endsWithReturn(re.bdy); // (`repeat 2{ assert(false); }`)
-	auto we=cast(WhileExp)e;
-	if(!we) return false;
-	return isTrueCondition(we.cond);
-}
-private bool isPositiveCount(Expression num){
-	if(num.type) return isPositive(num);
-	if(auto le=cast(LiteralExp)num) return le.lit.type==Tok!"0"&&le.lit.str.any!(c=>'1'<=c&&c<='9');
-	return false;
-}
-private bool isTrueCondition(Expression cond){
-	if(cond.type) return isTrue(cond);
-	if(auto id=cast(Identifier)cond) return id.id==Id.s!"true";
-	if(auto le=cast(LiteralExp)cond) return le.lit.type==Tok!"0"&&le.lit.str=="1";
-	return false;
 }
 bool erpRecording(Scope sc){
 	for(auto fd=sc.getFunction();fd;fd=fd.scope_?fd.scope_.getFunction():null)

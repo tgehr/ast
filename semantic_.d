@@ -6979,7 +6979,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 										}
 										return false;
 									}
-									foreach(j;0..i)
+									foreach(j;0..min(i,ft.nargs)) // (the number of arguments can be wrong)
 										if(mentions(ft.argTy(j))) return true;
 									if(mentions(fun.type)) return true;
 									if(mentions(ft.cod)) return true;
@@ -7354,7 +7354,7 @@ Expression unwrap(Expression e){
 		return unwrap(tae.e);
 	if(auto let=cast(LetExp)e)
 		if(auto fwd=let.isForward(false))
-			return fwd;
+			return unwrap(fwd); // (e.g., nested by a substitution)
 	return e;
 }
 
@@ -9094,7 +9094,11 @@ Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
 		auto a1=cast(ArrayTy)t1,a2=cast(ArrayTy)t2;
 		auto v1=cast(VectorTy)t1,v2=cast(VectorTy)t2;
 		Expression n1=a1?a1.next:v1?v1.next:null,n2=a2?a2.next:v2?v2.next:null;
-		if(n1&&n2) return cmpType!eqOnly(n1,n2);
+		if(n1&&n2){
+			auto r=cmpType!eqOnly(n1,n2);
+			if(r&&isEmpty(r)) return Bool(true); // (there are no elements to compare)
+			return r;
+		}
 		auto tpl1=t1.isTupleTy();
 		auto tpl2=t2.isTupleTy();
 		if(tpl1&&tpl2){

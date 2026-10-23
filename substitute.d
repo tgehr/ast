@@ -1503,6 +1503,8 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		}
 		foreach(d;bs.forgottenVars) if(auto nd=mapDecl(d)) ns.forgottenVars~=nd;
 		foreach(d;bs.forgottenVarsOnEntry) if(auto nd=mapDecl(d)) ns.forgottenVarsOnEntry~=nd;
+	}
+	void fillNesting(BlockScope bs,BlockScope ns){ // (once all twins exist, as a twin is nested into its parent when it is created)
 		NestedScope[] twins(NestedScope[] scopes){
 			NestedScope[] r;
 			foreach(s;scopes) if(auto p=smap.getPtr(s)) if(auto n=cast(NestedScope)*p) r~=n;
@@ -1541,11 +1543,13 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			if(np.vtype) np.vtype=shareTy(np.vtype);
 		}
 	}
-	foreach(b;bookkeeping) fillBookkeeping(b.tpl,b.twin);
-	// rebuild split/merge links in template order (creation order)
 	SetX!Declaration seen;
+	size_t numFilled=0;
 	for(bool progress=true;progress;){
 		progress=false;
+		for(;numFilled<bookkeeping.length;numFilled++,progress=true) // (twins of declarations can create twins of further scopes, e.g., of the zero-iterations path of a loop)
+			fillBookkeeping(bookkeeping[numFilled].tpl,bookkeeping[numFilled].twin);
+		// rebuild split/merge links in template order (creation order)
 		foreach(td,nd;dmap){
 			if(td in seen) continue;
 			seen[td]=[]; progress=true;
@@ -1591,6 +1595,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 				if(auto owner=luOwner.getPtr(p)) ns.lastUses.parent=&(*owner).lastUses;
 		}
 	}
+	foreach(b;bookkeeping) fillNesting(b.tpl,b.twin);
 }
 
 // walks template/twin statement trees in parallel, rebuilding the twin's

@@ -186,7 +186,7 @@ class Checker {
 		auto to = ast_low.getLowering(from, ast_sem.expSemContext(nscope, constResult, ast_sem.InType.no));
 		assert(!!to, format("TODO: lowering for %s (%s): << %s >>", E.stringof, typeid(from).name, from));
 		// imported!"util.io".writeln("lowered ", from, " → ", to, " ", from.type, " ", to.type);
-		assert(to.isSemCompleted() && to.type && ast_ty.isSubtype(to.type, from.type), format("lowered `(%s): %s` → `(%s): %s`", from, from.type, to, to.type));
+		assert(to.isSemCompleted() && to.type && (ast_ty.isSubtype(to.type, from.type) || ast_ty.isEmpty(from.type)), format("lowered `(%s): %s` → `(%s): %s`", from, from.type, to, to.type)); // (e.g., an operand of an empty type, which the lowering evaluates as well)
 		return to;
 	}
 
@@ -215,7 +215,7 @@ class Checker {
 		return to;
 	}
 
-	void visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) {
+	bool visCompoundValue(ast_exp.CompoundExp e, string causeType, bool constLookup) { // (returns whether the value may be produced)
 		assert(e.blscope_ is nscope);
 		assert(e.s.length > 0);
 
@@ -228,7 +228,8 @@ class Checker {
 			assert(!(r & StmtResult.MayReturn), "early return in compound expression ("~causeType~")");
 		}
 		assert(!cast(ast_exp.ReturnExp)e.s[$-1], "early return in compound expression ("~causeType~")"); // TODO: check is incomplete
-		if(!ast_sem.definitelyReturns(e.s[$-1])){
+		bool diverges = ast_sem.definitelyReturns(e.s[$-1]);
+		if(!diverges){
 			visExpr(e.s[$-1]);
 			if(constLookup) {
 				expectConst(e.s[$-1], causeType);
@@ -239,6 +240,7 @@ class Checker {
 		foreach(decl; e.blscope_.forgottenVars) {
 			getVar(decl, false, "forgottenVars ("~causeType~")", e);
 		}
+		return !diverges;
 	}
 
 	void checkEmpty() {
@@ -324,6 +326,7 @@ class Checker {
 		foreach(decl; e.forgottenVars) {
 			getVar(decl, false, "forgottenVars", e);
 		}
+		if(ast_ty.isEmpty(e.e.type)) return StmtResult.Diverges; // (the value diverges, so the function does not return)
 		checkEmpty();
 		return StmtResult.MayReturn;
 	}
@@ -888,11 +891,11 @@ class Checker {
 
 	void implExpr(ast_exp.ForgetExp e) {
 		expectMoved(e.var, "forgotten variable");
+		visExpr(e.var); // (before the value, as in the frontend and in hqir.d)
 		if(e.val) {
 			expectConst(e.val, "forget RHS");
 			visExpr(e.val);
 		}
-		visExpr(e.var);
 	}
 
 	void implExpr(ast_exp.LiteralExp e) {
@@ -1043,14 +1046,14 @@ class Checker {
 		visSplit(ifTrue, e.then.blscope_, ifFalse, e.othw.blscope_, e);
 
 		visType(e.type);
-		ifTrue.visCompoundValue(e.then, "if-true", e.constLookup);
-		ifFalse.visCompoundValue(e.othw, "if-false", e.constLookup);
+		bool passTrue = ifTrue.visCompoundValue(e.then, "if-true", e.constLookup);
+		bool passFalse = ifFalse.visCompoundValue(e.othw, "if-false", e.constLookup);
 
 		assert(ifTrue.nscope.mergedVars.length == 0);
-		ifTrue.checkEmpty();
+		if(passTrue) ifTrue.checkEmpty(); // (as for `if` statements, a branch that diverges need not consume its variables)
 
 		assert(ifFalse.nscope.mergedVars.length == 0);
-		ifFalse.checkEmpty();
+		if(passFalse) ifFalse.checkEmpty();
 	}
 
 	void implExpr(ast_exp.AssertExp e) {
