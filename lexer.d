@@ -25,6 +25,184 @@ bool isAlphaEx(dchar c){
 	return isAlpha(c)||canFind("𝟘𝟙∏₀₁₂₃₄₅₆₇₈₉₋₊⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺"d,c);
 }
 
+// Unicode hardening (avoids "Trojan Source", CVE-2021-42574)
+/// Unicode Bidi_Control characters.
+bool isBidiControl(dchar c){
+	return c==0x061C||c==0x200E||c==0x200F||(0x202A<=c&&c<=0x202E)||(0x2066<=c&&c<=0x2069);
+}
+/// Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1).
+bool isDefaultIgnorable(dchar c){
+	if(c<0x80) return false;
+	return c==0x00AD||c==0x034F||c==0x061C||c==0x115F||c==0x1160||c==0x17B4||c==0x17B5
+		||(0x180B<=c&&c<=0x180F)||(0x200B<=c&&c<=0x200F)||(0x202A<=c&&c<=0x202E)
+		||(0x2060<=c&&c<=0x206F)||c==0x3164||(0xFE00<=c&&c<=0xFE0F)||c==0xFEFF||c==0xFFA0
+		||(0xFFF0<=c&&c<=0xFFF8)||(0x1BCA0<=c&&c<=0x1BCA3)||(0x1D173<=c&&c<=0x1D17A)
+		||(0xE0000<=c&&c<=0xE0FFF);
+}
+/// non-ASCII line breaks (treated as line breaks by some editors, but not by this lexer).
+bool isUnicodeLineBreak(dchar c){ return c==0x85||c==0x2028||c==0x2029; }
+/// C1 control characters.
+bool isC1Control(dchar c){ return 0x80<=c&&c<=0x9F; }
+/// letters (according to std.uni.isAlpha) that are invisible or look like ASCII punctuation.
+bool isMisleadingLetter(dchar c){
+	return (0x01C0<=c&&c<=0x01C3) // click letters: ǀ ǁ ǂ ǃ
+		||(0x02B9<=c&&c<=0x02BD)||c==0x02C6||(0x02C8<=c&&c<=0x02CD)||c==0x02D0||c==0x02D1||c==0x02EE // modifier letters: ʹ ʺ ʻ ʼ ʽ ˆ ˈ ˉ ˊ ˋ ˌ ˍ ː ˑ ˮ
+		||(0xA4F8<=c&&c<=0xA4FD) // Lisu tone letters: ꓸ ꓹ ꓺ ꓻ ꓼ ꓽ
+		||c==0xA78F||c==0x1427||c==0x2D51 // ꞏ ᐧ ⵑ
+		||c==0x115F||c==0x1160||c==0x3164||c==0xFFA0; // Hangul fillers (invisible)
+}
+/// characters that are rejected anywhere in a source file, including comments and string literals.
+bool isForbiddenInText(dchar c){
+	return isBidiControl(c)||isUnicodeLineBreak(c)||isC1Control(c);
+}
+/// whether `c` may appear in an identifier.
+bool isIdentChar(dchar c){ return isAlphaEx(c)&&!identifierCharProblem(c); }
+/// returns null if `c` may appear in an identifier, otherwise the reason why not. (Precondition: isAlphaEx(c).)
+string identifierCharProblem(dchar c){
+	if(isDefaultIgnorable(c)) return "it is invisible";
+	if(isMisleadingLetter(c)) return "it is invisible or looks like ASCII punctuation";
+	if(!allowedIn!NFC(c)){ // (e.g. U+2126 OHM SIGN, U+212A KELVIN SIGN, Greek letters with oxia, which look like their NFC equivalents)
+		auto nfc=normalize!NFC(to!string(c));
+		if(nfc.length&&nfc!=to!string(c)) return format("it is not in Unicode normalization form C; use %s instead",describeChars(nfc));
+		return "it may not be in Unicode normalization form C";
+	}
+	return null;
+}
+/// Unicode names of the characters this lexer rejects, for diagnostics.
+string charName(dchar c){
+	if(0xFE00<=c&&c<=0xFE0F) return "VARIATION SELECTOR";
+	if(0xE0100<=c&&c<=0xE01EF) return "VARIATION SELECTOR";
+	if(0xE0000<=c&&c<=0xE007F) return "TAG CHARACTER";
+	switch(c){
+		case 0x00A0: return "NO-BREAK SPACE";
+		case 0x1680: return "OGHAM SPACE MARK";
+		case 0x2000: return "EN QUAD";
+		case 0x2001: return "EM QUAD";
+		case 0x2002: return "EN SPACE";
+		case 0x2003: return "EM SPACE";
+		case 0x2004: return "THREE-PER-EM SPACE";
+		case 0x2005: return "FOUR-PER-EM SPACE";
+		case 0x2006: return "SIX-PER-EM SPACE";
+		case 0x2007: return "FIGURE SPACE";
+		case 0x2008: return "PUNCTUATION SPACE";
+		case 0x2009: return "THIN SPACE";
+		case 0x200A: return "HAIR SPACE";
+		case 0x202F: return "NARROW NO-BREAK SPACE";
+		case 0x205F: return "MEDIUM MATHEMATICAL SPACE";
+		case 0x3000: return "IDEOGRAPHIC SPACE";
+		case 0x0085: return "NEXT LINE";
+		case 0x2028: return "LINE SEPARATOR";
+		case 0x2029: return "PARAGRAPH SEPARATOR";
+		case 0x00AD: return "SOFT HYPHEN";
+		case 0x034F: return "COMBINING GRAPHEME JOINER";
+		case 0x061C: return "ARABIC LETTER MARK";
+		case 0x115F: return "HANGUL CHOSEONG FILLER";
+		case 0x1160: return "HANGUL JUNGSEONG FILLER";
+		case 0x17B4: return "KHMER VOWEL INHERENT AQ";
+		case 0x17B5: return "KHMER VOWEL INHERENT AA";
+		case 0x180B: return "MONGOLIAN FREE VARIATION SELECTOR ONE";
+		case 0x180C: return "MONGOLIAN FREE VARIATION SELECTOR TWO";
+		case 0x180D: return "MONGOLIAN FREE VARIATION SELECTOR THREE";
+		case 0x180E: return "MONGOLIAN VOWEL SEPARATOR";
+		case 0x180F: return "MONGOLIAN FREE VARIATION SELECTOR FOUR";
+		case 0x200B: return "ZERO WIDTH SPACE";
+		case 0x200C: return "ZERO WIDTH NON-JOINER";
+		case 0x200D: return "ZERO WIDTH JOINER";
+		case 0x200E: return "LEFT-TO-RIGHT MARK";
+		case 0x200F: return "RIGHT-TO-LEFT MARK";
+		case 0x202A: return "LEFT-TO-RIGHT EMBEDDING";
+		case 0x202B: return "RIGHT-TO-LEFT EMBEDDING";
+		case 0x202C: return "POP DIRECTIONAL FORMATTING";
+		case 0x202D: return "LEFT-TO-RIGHT OVERRIDE";
+		case 0x202E: return "RIGHT-TO-LEFT OVERRIDE";
+		case 0x2060: return "WORD JOINER";
+		case 0x2061: return "FUNCTION APPLICATION";
+		case 0x2062: return "INVISIBLE TIMES";
+		case 0x2063: return "INVISIBLE SEPARATOR";
+		case 0x2064: return "INVISIBLE PLUS";
+		case 0x2066: return "LEFT-TO-RIGHT ISOLATE";
+		case 0x2067: return "RIGHT-TO-LEFT ISOLATE";
+		case 0x2068: return "FIRST STRONG ISOLATE";
+		case 0x2069: return "POP DIRECTIONAL ISOLATE";
+		case 0x206A: return "INHIBIT SYMMETRIC SWAPPING";
+		case 0x206B: return "ACTIVATE SYMMETRIC SWAPPING";
+		case 0x206C: return "INHIBIT ARABIC FORM SHAPING";
+		case 0x206D: return "ACTIVATE ARABIC FORM SHAPING";
+		case 0x206E: return "NATIONAL DIGIT SHAPES";
+		case 0x206F: return "NOMINAL DIGIT SHAPES";
+		case 0x3164: return "HANGUL FILLER";
+		case 0xFEFF: return "ZERO WIDTH NO-BREAK SPACE (byte order mark)";
+		case 0xFFA0: return "HALFWIDTH HANGUL FILLER";
+		case 0x1BCA0: return "SHORTHAND FORMAT LETTER OVERLAP";
+		case 0x1BCA1: return "SHORTHAND FORMAT CONTINUING OVERLAP";
+		case 0x1BCA2: return "SHORTHAND FORMAT DOWN STEP";
+		case 0x1BCA3: return "SHORTHAND FORMAT UP STEP";
+		case 0x1D173: return "MUSICAL SYMBOL BEGIN BEAM";
+		case 0x1D174: return "MUSICAL SYMBOL END BEAM";
+		case 0x1D175: return "MUSICAL SYMBOL BEGIN TIE";
+		case 0x1D176: return "MUSICAL SYMBOL END TIE";
+		case 0x1D177: return "MUSICAL SYMBOL BEGIN SLUR";
+		case 0x1D178: return "MUSICAL SYMBOL END SLUR";
+		case 0x1D179: return "MUSICAL SYMBOL BEGIN PHRASE";
+		case 0x1D17A: return "MUSICAL SYMBOL END PHRASE";
+		case 0x01C0: return "LATIN LETTER DENTAL CLICK";
+		case 0x01C1: return "LATIN LETTER LATERAL CLICK";
+		case 0x01C2: return "LATIN LETTER ALVEOLAR CLICK";
+		case 0x01C3: return "LATIN LETTER RETROFLEX CLICK";
+		case 0x02B9: return "MODIFIER LETTER PRIME";
+		case 0x02BA: return "MODIFIER LETTER DOUBLE PRIME";
+		case 0x02BB: return "MODIFIER LETTER TURNED COMMA";
+		case 0x02BC: return "MODIFIER LETTER APOSTROPHE";
+		case 0x02BD: return "MODIFIER LETTER REVERSED COMMA";
+		case 0x02C6: return "MODIFIER LETTER CIRCUMFLEX ACCENT";
+		case 0x02C8: return "MODIFIER LETTER VERTICAL LINE";
+		case 0x02C9: return "MODIFIER LETTER MACRON";
+		case 0x02CA: return "MODIFIER LETTER ACUTE ACCENT";
+		case 0x02CB: return "MODIFIER LETTER GRAVE ACCENT";
+		case 0x02CC: return "MODIFIER LETTER LOW VERTICAL LINE";
+		case 0x02CD: return "MODIFIER LETTER LOW MACRON";
+		case 0x02D0: return "MODIFIER LETTER TRIANGULAR COLON";
+		case 0x02D1: return "MODIFIER LETTER HALF TRIANGULAR COLON";
+		case 0x02EE: return "MODIFIER LETTER DOUBLE APOSTROPHE";
+		case 0xA4F8: return "LISU LETTER TONE MYA TI";
+		case 0xA4F9: return "LISU LETTER TONE NA PO";
+		case 0xA4FA: return "LISU LETTER TONE MYA CYA";
+		case 0xA4FB: return "LISU LETTER TONE MYA BO";
+		case 0xA4FC: return "LISU LETTER TONE MYA NA";
+		case 0xA4FD: return "LISU LETTER TONE MYA JEU";
+		case 0xA78F: return "LATIN LETTER SINOLOGICAL DOT";
+		case 0x1427: return "CANADIAN SYLLABICS FINAL MIDDLE DOT";
+		case 0x2D51: return "TIFINAGH LETTER TUAREG YANG";
+		default: return null;
+	}
+}
+/// describes a character for diagnostics, e.g. "'é' (U+00E9)" or "U+202E (RIGHT-TO-LEFT OVERRIDE)". Never includes misleading characters verbatim.
+string describeChar(dchar c){
+	if(auto name=charName(c)) return format("U+%04X (%s)",c,name);
+	if(c<0x20||c==0x7F||isC1Control(c)||isDefaultIgnorable(c)||isWhite(c)||isMark(c)||!isGraphical(c)||!utf.isValidDchar(c)) return format("U+%04X",c);
+	return format("'%s' (U+%04X)",c,c);
+}
+string describeChars(string s){
+	import std.utf: byDchar;
+	string r;
+	foreach(dchar c;s.byDchar) r~=(r.length?" ":"")~describeChar(c);
+	return r;
+}
+/// describes why `c` is not acceptable in code (outside comments and string literals).
+string unsupportedCharMessage(dchar c){
+	if(isBidiControl(c)) return format("bidirectional formatting character %s is not allowed",describeChar(c));
+	if(isUnicodeLineBreak(c)) return format("unsupported character %s (only '\\n' and '\\r' are line breaks)",describeChar(c));
+	if(c>=0x80&&isWhite(c)) return format("unsupported whitespace character %s (only ASCII whitespace is allowed)",describeChar(c));
+	if(isDefaultIgnorable(c)) return format("unsupported character %s (invisible)",describeChar(c));
+	return format("unsupported character %s",describeChar(c));
+}
+/// describes why `c` is not acceptable in comments and string literals.
+string forbiddenInTextMessage(dchar c){
+	if(isBidiControl(c)) return format("bidirectional formatting character %s is not allowed, not even in comments and string literals (use an escape sequence in a string literal if it is needed)",describeChar(c));
+	if(isUnicodeLineBreak(c)) return format("character %s is not allowed, not even in comments and string literals (it may be displayed as a line break, but it is not one; use '\\n' or an escape sequence)",describeChar(c));
+	return format("control character %s is not allowed, not even in comments and string literals (use an escape sequence in a string literal if it is needed)",describeChar(c));
+}
+
 private immutable {
 string[2][] complexTokens =
 	[["i",     "Identifier"                ],
@@ -394,10 +572,14 @@ string caseSimpleToken(string prefix="", bool needs = false)pure{
 									}
 							}
 							default: break;
-						}`~(prefix==""?`if(isAlphaEx(ch)){s=p, p+=len; goto identifier; }
+						}`~(prefix==""?`if(isAlphaEx(ch)){
+							s=p, p+=len;
+							if(auto why=identifierCharProblem(ch)){ errors~=tokError(format("character %s cannot be used in an identifier: %s",describeChar(ch),why),s[0..len]); continue; }
+							goto identifier;
+						}
 						s=p, p+=len;
-						if(!isWhite(ch)) errors~=tokError(format("unsupported character '%s'",ch),s[0..len]);
-						// else if(isNewLine(ch)) line++; // TODO: implement this everywhere
+						if(ch==0xFEFF&&s==source.code.ptr) continue; // (UTF-8 byte order mark at the start of the file)
+						errors~=tokError(unsupportedCharMessage(ch),s[0..len]); // (this includes all non-ASCII whitespace)
 						continue;`:`res[0].type = Tok!"`~prefix~`"; break;`)~`
 
 					}catch(Exception){
@@ -536,8 +718,11 @@ private:
 		}
 		bool atEof(){ return p>=eof; } // (p never passes eof except in the EOF case below)
 		// text macros:
-		enum skipUnicode = q{if(*p<0x80){p++;break;} len=0; try utf.decode(p[0..4],len), p+=len; catch(Exception){invCharSeq();}};
-		enum skipUnicodeCont = q{if(*p<0x80){p++;continue;} len=0; try utf.decode(p[0..4],len), p+=len; catch(Exception){invCharSeq();}}; // don't break, continue
+		void textChar(dchar ch,immutable(char)* at,size_t len){ // check a character inside a comment or string literal
+			if(isForbiddenInText(ch)) errors~=tokError(forbiddenInTextMessage(ch),at[0..len]);
+		}
+		enum skipUnicode = q{if(*p<0x80){p++;break;} len=0; try{textChar(utf.decode(p[0..4],len),p,len); p+=len;} catch(Exception){invCharSeq();}};
+		enum skipUnicodeCont = q{if(*p<0x80){p++;continue;} len=0; try{textChar(utf.decode(p[0..4],len),p,len); p+=len;} catch(Exception){invCharSeq();}}; // don't break, continue
 		enum caseNl = q{case '\r':  if(p[1]=='\n') p++; goto case; case '\n': line++; p++; continue;};
 		loop: while(res.length) { // breaks on EOF or buffer full
 			auto begin=p; // start of a token's representation
@@ -546,7 +731,7 @@ private:
 				// whitespace
 				case 0, 0x1A:
 					if(begin<eof){ // embedded NUL or SUB byte: do not silently truncate the file
-						errors~=tokError(format("unsupported character U+%04X",cast(int)*begin),begin[0..1]);
+						errors~=tokError(format("unsupported character %s",describeChar(*begin)),begin[0..1]);
 						continue;
 					}
 					res[0].type = Tok!"EOF";
@@ -642,6 +827,7 @@ private:
 						try{
 							len=0;
 							res[0].int64 = utf.decode(p[0..4],len);
+							textChar(cast(dchar)res[0].int64,p,len);
 							p+=len;
 						}catch(Exception){invCharSeq();}
 					}
@@ -712,7 +898,7 @@ private:
 									case 0x80: .. case 0xFF:
 										len=0;
 										try{auto ch=utf.decode(p[0..4],len);
-											if(isAlphaEx(ch)){p+=len; continue;}
+											if(isIdentChar(ch)){p+=len; continue;}
 											break;
 										}catch(Exception){break;} // (reported below)
 									default: break; // (includes newline and end of file)
@@ -733,7 +919,7 @@ private:
 										case 0x80: .. case 0xFF:
 											len=0;
 											try{auto ch=utf.decode(p[0..4],len);
-												if(isAlphaEx(ch)){
+												if(isIdentChar(ch)){
 													if(p[0..len]!=ip[0..len]) break;
 													p+=len; ip+=len; continue;
 												}
@@ -786,6 +972,7 @@ private:
 									len=0;
 									try{
 										auto x=utf.decode(p[0..4],len);
+										textChar(x,p,len);
 										if(ddel==x){
 											res[0].str = s[0..p-s]; // reference to code
 											p+=len; break;
@@ -803,7 +990,7 @@ private:
 									else if(*p & 0x80){
 										len=0;
 										try{
-											utf.decode(p[0..4],len);
+											textChar(utf.decode(p[0..4],len),p,len);
 											p+=len;
 										}catch(Exception){invCharSeq();}
 									}else p++;
@@ -842,14 +1029,13 @@ private:
 								p++; break readhexstring;
 							default:
 								if(*p<128){
-									if(*p<0x20||*p==0x7f) errors~=tokError(format("found U+%04X when expecting hex digit",cast(int)*p),p[0..1]);
-									else errors~=tokError(format("found '%s' when expecting hex digit",*p),p[0..1]);
+									errors~=tokError(format("found %s when expecting hex digit",describeChar(*p)),p[0..1]);
 									p++;
 								}else{
 									len=0;
 									try{
 										auto chr = utf.decode(p[0..4],len);
-										if(!isWhite(chr)) errors~=tokError(format("found '%s' when expecting hex digit",p[0..len]),p[0..len]);
+										errors~=tokError(format("found %s when expecting hex digit",describeChar(chr)),p[0..len]);
 										p+=len;
 									}catch(Exception){invCharSeq();}
 								}
@@ -904,7 +1090,7 @@ private:
 								break;
 							case 0x80: .. case 0xFF:
 								len=0;
-								try if(isAlphaEx(utf.decode(p[0..4],len))) p+=len;
+								try if(isIdentChar(utf.decode(p[0..4],len))) p+=len;
 									else break readattrib;
 								catch(Exception){break readattrib;} // will be caught in the next iteration
 								break;
@@ -931,7 +1117,7 @@ private:
 								break;
 							case 0x80: .. case 0xFF:
 								len=0;
-								try if(isAlphaEx(utf.decode(p[0..4],len))) p+=len;
+								try if(isIdentChar(utf.decode(p[0..4],len))) p+=len;
 									else break readident;
 								catch(Exception){break readident;} // will be caught in the next iteration
 								break;
@@ -951,8 +1137,7 @@ private:
 					continue;
 				}
 				default: // unsupported ASCII character (control characters, '\\', '#', ...); already consumed
-					if(*begin<0x20||*begin==0x7f) errors~=tokError(format("unsupported character U+%04X",cast(int)*begin),begin[0..1]);
-					else errors~=tokError(format("unsupported character '%s'",*begin),begin[0..1]);
+					errors~=tokError(format("unsupported character %s",describeChar(*begin)),begin[0..1]);
 					continue;
 			}
 			res[0].loc.rep=begin[0..p-begin];
@@ -1064,16 +1249,16 @@ private dchar readEscapeSeq(ref immutable(char)* _p) in{assert(*(_p-1)=='\\');}d
 		case 0, 0x1A, '\n', '\r': // end of file or line: do not consume
 			_p=p; throw new EscapeSeqException("unterminated escape sequence",(p-1)[0..1]);
 		default:
-			if(*p<0x20||*p==0x7f){_p=p+1; throw new EscapeSeqException(format("unrecognized escape sequence '\\' followed by U+%04X",cast(int)*p),p[0..1]);}
-			if(*p<128){_p=p+1; throw new EscapeSeqException(format("unrecognized escape sequence '\\%s'",*p),p[0..1]);}
+			if(*p<128){_p=p+1; throw new EscapeSeqException(format("unrecognized escape sequence '\\' followed by %s",describeChar(*p)),p[0..1]);}
 			else{
 				auto s=p;
 				size_t len=0;
+				dchar ch;
 				try{
-					utf.decode(p[0..4],len);
+					ch=utf.decode(p[0..4],len);
 					p+=len;
 				}catch(Exception){throw new EscapeSeqException(null,p[0..1]);}
-				_p=p; throw new EscapeSeqException(format("unrecognized escape sequence '\\%s'",s[0..len]),s[0..len]);
+				_p=p; throw new EscapeSeqException(format("unrecognized escape sequence '\\' followed by %s",describeChar(ch)),s[0..len]);
 			}
 	}
 }
