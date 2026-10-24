@@ -656,7 +656,7 @@ string countArguments(size_t n,bool isSquare=false){
 /// `loc` without one level of enclosing brackets (the location of a single argument includes the brackets of the call)
 Location stripParens(Location loc){
 	auto r=loc.rep;
-	if(r.length<2||!(r[0]=='('&&r[$-1]==')'||r[0]=='['&&r[$-1]==']')) return loc;
+	if(r.length<3||!(r[0]=='('&&r[$-1]==')'||r[0]=='['&&r[$-1]==']')) return loc; // (`()` is not stripped: the location would be empty)
 	int depth=0;
 	foreach(i,char c;r[0..$-1]){
 		if(c=='('||c=='[') depth++;

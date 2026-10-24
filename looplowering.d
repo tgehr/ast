@@ -2735,7 +2735,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	// consumption within statements (for statements that are not part of a recomputation)
 	SetX!Id[] subConsumed=new SetX!Id[](nodes.length);
 	SetX!Id consumedIn(SliceNode n){
-		auto r=n.consumed.dup;
+		auto r=n.kind==K.with_?SetX!Id.init:n.consumed.dup; // (the inverse of a transformation restores what it consumes)
 		foreach(u;n.xconsumed) r.insert(u);
 		foreach(c;n.a~n.b) foreach(u;consumedIn(c)) r.insert(u);
 		subConsumed[n.id]=r.dup;

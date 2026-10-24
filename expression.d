@@ -1263,6 +1263,7 @@ class Identifier: Expression{
 		assert(vd.isSemFinal());
 		auto init=vd.initializer;
 		if(vd.isSemError()||!init) return null;
+		if(init.type&&vd.vtype&&!isSubtype(init.type,vd.vtype)) return null; // (e.g., the value before a coercion, as for `x` in `(x coerce ⊥)~y:=…`)
 		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype) || isQNumeric(vd.vtype)){
 			init = init.eval();
 			return classical?init.getClassical():init;
