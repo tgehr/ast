@@ -1932,6 +1932,7 @@ abstract class Scope{
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
+		SetX!Declaration goneConstLocals; // (the types of the merged variables do not mention them)
 		static if(language==silq){
 			foreach(sc;scopes){
 				if(auto bsc=cast(BlockScope)sc) if(bsc.keepConstLocals) continue;
@@ -1948,6 +1949,7 @@ abstract class Scope{
 					}else{
 						sc.consume(d,null); // (not merged, e.g., with a variable of the same name in another branch)
 						sc.clearConsumed();
+						for(auto x=d;x;x=x.splitFrom) goneConstLocals.insert(x);
 					}
 				}
 			}
@@ -1983,6 +1985,33 @@ abstract class Scope{
 		}
 		MapSX!(Id,Expression) mergeTypeSubst;
 		auto numProducedOuter=producedOuter.length;
+		Declaration goneMention(Expression type){ // (a `const` local of a branch that `type` mentions)
+			if(type&&goneConstLocals.length)
+				foreach(id;type.freeIdentifiers) if(id.meaning&&id.meaning in goneConstLocals) return id.meaning;
+			return null;
+		}
+		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
+			if(!goneMention(type)) return type;
+			if(auto vt=cast(VectorTy)type){
+				auto next=visibleType(vt.next);
+				if(!next) return null;
+				return goneMention(vt.num)?arrayTy(next):vectorTy(next,vt.num);
+			}
+			if(auto at=cast(ArrayTy)type){
+				auto next=visibleType(at.next);
+				return next?arrayTy(next):null;
+			}
+			if(auto tt=cast(TupleTy)type){
+				Expression[] types;
+				foreach(t;tt.types){
+					auto w=visibleType(t);
+					if(!w) return null;
+					types~=w;
+				}
+				return tupleTy(types);
+			}
+			return null;
+		}
 		foreach(psym;rnsymtab.dup){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
@@ -2076,14 +2105,31 @@ abstract class Scope{
 								}
 								removeSym();
 								removeOSym(sc,osym);
-							}else promoteSym(nt);
+							}else{
+								auto vt=visibleType(nt);
+								promoteSym(vt?vt:nt);
+							}
 						}
 					}
 				}
 			}
+			if(symExists&&needMerge&&sym.scope_ is scopes[0]){
+				auto type=typeForDecl(sym);
+				if(auto gone=goneMention(type)) if(!visibleType(type)){ // (not merged, as for incompatible types on different paths)
+					splitSym();
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)){
+						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						scopes[0].explainUnforgettable(sym);
+						note(format("its type `%s` mentions `const` variable `%s`, which is not visible after its block",type,gone.getName),gone.loc);
+						errors=true;
+					}
+					removeSym();
+					deadMerges[sym.name.id].goneMention=gone;
+				}
+			}
 			if(symExists&&needMerge){
 				if(auto ntype=typeForDecl(sym)){
-					if(sym.scope_ is scopes[0]) promoteSym(ntype);
+					if(sym.scope_ is scopes[0]) promoteSym(visibleType(ntype));
 					auto sources=DefinitionSources.empty;
 					if(nestedControlDependency.isTop) sources=DefinitionSources.init;
 					else foreach(d;nestedControlDependency.dependencies) sources.reads.insert(d);

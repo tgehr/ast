@@ -1094,6 +1094,7 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		src=cast(FunctionDef)presemantic(src,sc);
 		if(src) src=functionDefSemantic(src,sc);
 		if(src&&(src.isSemCompleted()||src.sstate==SemState.passive)) bfd=src;
+		foreach(meaning;fd.capturedDecls) resurrect(meaning); // (the analysis of `src` consumes the captures that it moves, as the definition of `fd` did)
 	}
 	// enforce(!argTypes.any!(t=>t.hasClassicalComponent()),"reversed function cannot have classical components in consumed arguments"); // lack of classical components may not be statically known at the point of function definition due to generic parameters
 	auto fbody_=bfd.body_;

@@ -465,6 +465,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			return true;
 		});
+		foreach(n;info.uses) info.fresh.remove(n); // (a definition that reads the previous value consumes it, e.g., `x:=H(x)`)
 		return info;
 	}
 	Expression[] stms;
@@ -1730,12 +1731,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	Expression[] stmts;
 	static if(is(T==ForExp)){
 		auto lo=freshName(),hi=freshName(),st=range.step?freshName():Id.init;
-		stmts~=define(mkId(lo),annot(range.left.copy(),range.left.type));
-		if(range.step) stmts~=define(mkId(st),annot(range.step.copy(),range.step.type));
-		stmts~=define(mkId(hi),annot(range.right.copy(),range.right.type));
+		// (the bounds are not evaluated again, see `lowerLoopImpl`)
+		stmts~=define(mkId(lo),annot(range.left,range.left.type));
+		if(range.step) stmts~=define(mkId(st),annot(range.step,range.step.type));
+		stmts~=define(mkId(hi),annot(range.right,range.right.type));
 	}else static if(is(T==RepeatExp)){
 		auto num=freshName();
-		stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
+		stmts~=define(mkId(num),annot(loop.num,loop.num.type)); // (not evaluated again, see `lowerLoopImpl`)
 	}else{
 		auto num=freshName();
 		stmts~=define(mkId(num),annot(LiteralExp.makeInteger(0),ℕt(true)));
@@ -1758,8 +1760,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto ety=l.access?arrayTy(l.type):l.type;
 			stmts~=define(mkId(l.name),annot(empty,arrayTy(ety)));
 		}
-		Expression logEntry(Log l){
-			if(l.ite!=size_t.max) return dupOf(vcopy(ites[l.ite].heads[0]));
+		Expression logEntry(Log l,scope Expression delegate(Expression) cpCond){ // (`cpCond`: copies a condition as the loop evaluates it, e.g., with the value of an extracted call)
+			if(l.ite!=size_t.max) return dupOf(cpCond(ites[l.ite].heads[0]));
 			if(!l.access) return dupOf(mkId(l.var));
 			auto one=new VectorExp([dupOf(vcopy(l.access))]);
 			one.loc=loc;
@@ -1772,11 +1774,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			app.loc=loc;
 			return app;
 		}
-		Expression[] appendLog(Log l){
+		Expression[] appendLog(Log l,scope Expression delegate(Expression) cpCond){
 			Expression append(Expression e){ return appendOf(l,e); }
-			if(l.slot!=Id.init) return [define(mkId(l.slot),logEntry(l))];
-			if(!l.access||!l.bound) return [append(logEntry(l))];
-			auto one=logEntry(l);
+			if(l.slot!=Id.init) return [define(mkId(l.slot),logEntry(l,cpCond))];
+			if(!l.access||!l.bound) return [append(logEntry(l,cpCond))];
+			auto one=logEntry(l,cpCond);
 			Expression bound=vcopy(l.bound);
 			if(l.bound is l.access.e){
 				auto len=new Identifier(Id.s!"length");
@@ -2158,10 +2160,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						foreach(e;readLog(l)) emit(e);
 					}else{
 						alignTo(atoms[a].ites[0..l.level],atoms[a].inElse[0..l.level],a);
-						foreach(e;appendLog(l)) emit(e);
+						foreach(e;appendLog(l,&cp)) emit(e);
 						if(l.slot!=Id.init){
 							foreach(d;l.rLevel..l.level){
-								auto sdef=define(mkId(l.slot),l.viaDummy?dummyOf(l.type):logEntry(l));
+								auto sdef=define(mkId(l.slot),l.viaDummy?dummyOf(l.type):logEntry(l,&cp));
 								if(open[d].inElse) open[d].thenPre~=sdef;
 								else open[d].elsePre~=sdef;
 							}
@@ -3456,9 +3458,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	Expression[] stmts;
 	static if(is(T==ForExp)){
 		auto lo=freshName(),hi=freshName(),st=range.step?freshName():Id.init;
-		stmts~=define(mkId(lo),annot(range.left.copy(),range.left.type));
-		if(range.step) stmts~=define(mkId(st),annot(range.step.copy(),range.step.type));
-		stmts~=define(mkId(hi),annot(range.right.copy(),range.right.type));
+		// (the bounds are not evaluated again, see `lowerLoopImpl`)
+		stmts~=define(mkId(lo),annot(range.left,range.left.type));
+		if(range.step) stmts~=define(mkId(st),annot(range.step,range.step.type));
+		stmts~=define(mkId(hi),annot(range.right,range.right.type));
 		Expression mkLoop(CompoundExp b){
 			auto r=setLoc(new ForExp(mkId(mainVar),null,ForAggregate(ForRange(range.leftExclusive,mkId(lo),range.step?mkId(st):null,range.rightExclusive,mkId(hi))),b));
 			r.noSplit=true;
@@ -3466,7 +3469,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 	}else{
 		auto num=freshName();
-		static if(is(T==RepeatExp)) stmts~=define(mkId(num),annot(loop.num.copy(),loop.num.type));
+		static if(is(T==RepeatExp)) stmts~=define(mkId(num),annot(loop.num,loop.num.type)); // (not evaluated again, see `lowerLoopImpl`)
 		else stmts~=define(mkId(num),zero());
 		Expression mkLoop(CompoundExp b){
 			auto r=setLoc(new RepeatExp(mkId(num),b));
@@ -4088,17 +4091,14 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		Expression adjUpd=null;
 		if(auto range=loop.aggr.isRange){
 			leftName=temporaryIdentifier(range.left.loc);
-			auto leftInit=range.left.copy(cargsDefault);
-			leftInit.loc=range.left.loc;
+			auto leftInit=range.left; // (the analysis evaluated the bounds before the loop: a copy would be evaluated again, e.g., consume a variable again)
 			leftDef=new DefineExp(leftName,leftInit);
 			leftDef.loc=range.left.loc;
-			auto rightInit=range.right.copy(cargsDefault);
-			rightInit.loc=range.right.loc;
+			auto rightInit=range.right;
 			rightDef=new DefineExp(rightName,rightInit);
 			rightDef.loc=range.right.loc;
 			if(range.step){
-				auto stepInit=range.step.copy(cargsDefault);
-				stepInit.loc=range.step.loc;
+				auto stepInit=range.step;
 				stepDef=new DefineExp(stepName,stepInit);
 				stepDef.loc=range.step.loc;
 				if(range.leftExclusive==range.rightExclusive){
@@ -4201,8 +4201,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			assert(0,"unknown aggregate type");
 		}
 	}else static if(is(T==RepeatExp)){
-		auto numInit=loop.num.copy(cargsDefault);
-		numInit.loc=loop.num.loc;
+		auto numInit=loop.num; // (as for the bounds of a `for` loop)
 		auto numDef=new DefineExp(numName,numInit);
 		numDef.loc=loop.num.loc;
 		auto loopVarName=new Identifier(loopVarId);

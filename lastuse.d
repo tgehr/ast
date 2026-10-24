@@ -120,6 +120,7 @@ final class LastUse{
 		r.index=index;
 		r.consumedComponent=consumedComponent;
 		r.loopGuard=loopGuard;
+		r.discarded=discarded;
 		return r;
 	}
 	enum Kind{
@@ -135,6 +136,7 @@ final class LastUse{
 		capture,
 	}
 	Kind kind; // TODO: sum type?
+	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
@@ -445,7 +447,7 @@ final class LastUse{
 				while(head.prev) head=head.prev;
 				walk(head,cdep.dup,true);
 			}
-			if(lu is this) continue;
+			if(lu is this||lu.discarded) continue;
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
@@ -1396,8 +1398,10 @@ struct LastUses{
 		return nlastUses;
 	}
 	void restoreSnapshot(MapX!(Declaration,LastUse) snapshot,size_t numAdded,Scope sc){
-		for(auto lu=lastLastUse;lu&&lu.index>=numAdded;lu=lu.prev)
+		for(auto lu=lastLastUse;lu&&lu.index>=numAdded;lu=lu.prev){
 			lu.use=null; // (from the discarded analysis, cannot be consumed)
+			lu.discarded=true; // (does not constrain later consumptions either)
+		}
 		foreach(_,d;sc.rnsymtab){
 			if(auto nlu=lastUses.get(d,null)){
 				if(nlu.isConsumption()||nlu!is snapshot.get(d,null)){

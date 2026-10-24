@@ -1693,10 +1693,13 @@ void computeCapturesFromBody(FunctionDef fd){
 	fd.capturedDecls=[];
 	fd.captures=typeof(fd.captures).init;
 	if(!fd.body_) return;
+	bool local(Declaration d){ return d&&d.scope_&&fd.fscope_&&d.scope_.isNestedIn(fd.fscope_); }
 	functionDefFreeVarsImpl(fd,(id){
 		if(id.lazyCapture) return 0;
 		auto m=id.meaning;
 		if(m is fd||m&&m.isSplitFrom(fd)) return 0;
+		while(local(m)&&(m.splitFrom||m.mergedFrom.length)) m=m.splitFrom?m.splitFrom:m.mergedFrom[0]; // (a version of a captured variable within the function, e.g., in a twin)
+		if(local(m)) return 0;
 		if(m&&m.scope_&&m.scope_.getFunction()){
 			if(m !in fd.captures) fd.capturedDecls~=m;
 			fd.captures[m]~=id;

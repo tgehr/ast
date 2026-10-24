@@ -820,6 +820,7 @@ class IllegalConsumedDecl: ConsumedDecl{
 class DeadMerge: DeadDecl{
 	bool quantumControl;
 	size_t numBranches=2;
+	Declaration goneMention; // (a `const` local of a branch that the type mentions)
 	this(Identifier name){
 		super(name);
 	}
@@ -860,7 +861,10 @@ class DeadMerge: DeadDecl{
 			}
 			return;
 		}
-		if(mergedFrom.length==1){
+		if(goneMention){
+			sc.note(format("declared with type `%s` here",typeForDecl(mergedFrom[0])),mergedFrom[0].loc);
+			sc.note(format("`const` variable `%s` is not visible after its block",goneMention.getName),goneMention.loc);
+		}else if(mergedFrom.length==1){
 			sc.note("declared on only one path",mergedFrom[0].loc);
 		}else if(mergedFrom.length<numBranches){
 			foreach(d;mergedFrom){
