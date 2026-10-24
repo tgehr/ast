@@ -384,7 +384,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 		assert(!!cur);
 		if(!cur.scope_.getFunction()) return; // no need to capture global declarations
 		if(cur.scope_.isNestedIn(context.sc)){
-			while(cur.splitFrom&&cur.splitFrom.scope_!is context.sc)
+			while(cur.scope_ !is context.sc&&cur.splitFrom) // (e.g., the split of a parameter that is forgotten after its last use, in `vector(n,0:!𝔹)==vector(n,0:!𝔹)`)
 				cur=cur.splitFrom;
 			assert(cur.scope_ is context.sc);
 		}
@@ -553,7 +553,9 @@ Expression getLowering(VectorForExp vfe,ExpSemContext context){
 	}else{
 		auto cnt=vfe.fe.aggr.isContainer();
 		assert(!!cnt);
-		naggr=ForAggregate(ForContainer(addParam(false,cnt.e.type,cnt.e,cnt.e.loc)));
+		auto ety=vfe.fe.aggr.elementType();
+		assert(!!ety);
+		naggr=ForAggregate(ForContainer(addParam(false,arrayTy(ety),cnt.e,cnt.e.loc))); // (the loop checks at run time that no elements remain, e.g., if its body diverges for elements of an empty type)
 	}
 	auto rname=new Identifier(freshName());
 	rname.loc=loc;

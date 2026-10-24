@@ -1823,6 +1823,33 @@ bool hasFreeIdentifier(Expression self,Id name){
 	foreach(id;self.freeIdentifiers) if(id.id==name) return true;
 	return false;
 }
+/// a supertype of `type` that does not mention the variables for which `eliminated` holds, as the join with a type that does not mention them, or `null`
+Expression eliminateVariables(Expression type,scope bool delegate(Declaration) eliminated){
+	bool mentions(Expression e){
+		foreach(id;e.freeIdentifiers) if(id.meaning&&eliminated(id.meaning)) return true;
+		return false;
+	}
+	if(!mentions(type)) return type;
+	if(auto vt=cast(VectorTy)type){
+		auto next=eliminateVariables(vt.next,eliminated);
+		if(!next) return null;
+		return mentions(vt.num)?arrayTy(next):vectorTy(next,vt.num);
+	}
+	if(auto at=cast(ArrayTy)type){
+		auto next=eliminateVariables(at.next,eliminated);
+		return next?arrayTy(next):null;
+	}
+	if(auto tt=cast(TupleTy)type){
+		Expression[] types;
+		foreach(t;tt.types){
+			auto w=eliminateVariables(t,eliminated);
+			if(!w) return null;
+			types~=w;
+		}
+		return tupleTy(types);
+	}
+	return null;
+}
 
 
 // kinds (in PSI, all types are classical: `*` denotes `ctype` and `qtype` is not used)

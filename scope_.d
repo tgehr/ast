@@ -1922,6 +1922,10 @@ abstract class Scope{
 		mergedNestedScopes~=activeNestedScopes;
 		activeNestedScopes=[];
 		allowMerge=false;
+		static if(language==silq) foreach(sc;scopes){ // (released after the enclosing statement, e.g., for branches of an `if` expression whose types mention variables)
+			typeConstBlockLog~=sc.typeConstBlockLog;
+			sc.typeConstBlockLog=[];
+		}
 		scope(exit){
 			auto pending=pendingConsumptions;
 			pendingConsumptions=[];
@@ -1991,26 +1995,7 @@ abstract class Scope{
 			return null;
 		}
 		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
-			if(!goneMention(type)) return type;
-			if(auto vt=cast(VectorTy)type){
-				auto next=visibleType(vt.next);
-				if(!next) return null;
-				return goneMention(vt.num)?arrayTy(next):vectorTy(next,vt.num);
-			}
-			if(auto at=cast(ArrayTy)type){
-				auto next=visibleType(at.next);
-				return next?arrayTy(next):null;
-			}
-			if(auto tt=cast(TupleTy)type){
-				Expression[] types;
-				foreach(t;tt.types){
-					auto w=visibleType(t);
-					if(!w) return null;
-					types~=w;
-				}
-				return tupleTy(types);
-			}
-			return null;
+			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
 		}
 		foreach(psym;rnsymtab.dup){
 			auto sym=psym;

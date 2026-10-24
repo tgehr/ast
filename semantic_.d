@@ -10022,6 +10022,12 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 }
 
 
+bool isBodyLocal(FunctionDef fd,Declaration decl){ // (a variable of the body of `fd`, which the type of `fd` cannot mention)
+	auto bsc=fd.body_?fd.body_.blscope_:null;
+	if(!bsc||cast(DatDecl)decl) return false;
+	return decl.scope_&&decl.scope_.isNestedIn(bsc)&&decl.canonicalSource.scope_&&decl.canonicalSource.scope_.isNestedIn(bsc);
+}
+
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype&&fd.ftypeFinal) return true;
 	if(fd.isNested&&!force&&!fd.sealed)
@@ -10061,7 +10067,7 @@ bool setFtype(FunctionDef fd,bool force){
 		if(fd.ret) foreach(id;fd.ret.freeIdentifiers){
 			if(!id.meaning) continue;
 			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
-			if(id.meaning.scope_&&id.meaning.scope_.isNestedIn(bdy.blscope_)&&id.meaning.canonicalSource.scope_&&id.meaning.canonicalSource.scope_.isNestedIn(bdy.blscope_)){
+			if(isBodyLocal(fd,id.meaning)){
 				fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), fd.loc);
 				fsc.note("variable declared here",id.meaning.loc);
 				fd.setSemError();
@@ -10505,6 +10511,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	static if(language==silq) erpBeforeReturn(ret,sc);
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
+	static if(language==silq) bool quantumControlled=sc.quantumControlled||!!(flags&StmFlags.quantumReturn);
 
 	bool widenReturnType(Expression type){
 		if(fd.ret&&isSubtype(type,fd.ret))
@@ -10513,6 +10520,8 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			//imported!"util.io".writeln("NOT INFERRING: ",fd);
 			return false;
 		}
+		static if(language==silq) if(type) if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions)
+			if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
 		if(!fd.ret){
 			fd.ret=type;
 			setFtype(fd,true);
@@ -10530,7 +10539,6 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 		return false;
 	}
-	static if(language==silq) bool quantumControlled=sc.quantumControlled||!!(flags&StmFlags.quantumReturn);
 	if(fd.inferringReturnType){
 		determineType(ret.e,context,(ty){
 			static if(language==silq){
