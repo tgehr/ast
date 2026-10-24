@@ -1637,6 +1637,11 @@ abstract class Scope{
 		static if(language==psi) return true; // (in PSI, all data is classical: dependencies are not tracked)
 		return !!(decl in dependencies.dependencies);
 	}
+	final Scope dependencyScope(Declaration decl){ // (the dependencies of a merged scope are those of the scope it was merged into, e.g., for its last uses)
+		for(Scope sc=this;sc&&sc.dependenciesMerged;sc=sc.parentScope())
+			if(sc.parentScope()&&sc.parentScope().dependencyTracked(decl)) return sc.parentScope();
+		return this;
+	}
 	final Declaration trackingDecl(Declaration decl){ // (a variable of an enclosing function is tracked through its declaration outside of the function, as in `dependencyDecl`)
 		while(decl.splitFrom&&decl.scope_&&decl.scope_.getFunction()!is getFunction())
 			decl=decl.splitFrom;
@@ -1653,6 +1658,7 @@ abstract class Scope{
 	}do{
 		static if(language==psi) return Dependency(false); // (in PSI, all data is classical: dependencies are not tracked)
 		if(!dependencyTracked(decl)){
+			if(auto dsc=dependencyScope(decl)) if(dsc !is this) return dsc.dependencies.dependencies[decl];
 			auto cur=rnsymtab.get(decl.getId,null);
 			if(cur&&cur !is decl&&!cast(DeadDecl)cur) return getDefaultDependency(decl);
 			static if(language==silq) if(cast(DeadDecl)cur){ // (the variable was consumed here: its dependency is not tracked again)
@@ -1737,12 +1743,13 @@ abstract class Scope{
 		if(type&&type.isClassical) return true; // TODO: ensure classical variables have dependency `{}` instead?
 		if(decl.isToplevelDeclaration()) return true;
 		assert(decl.isSemCompleted()||cast(FunctionDef)decl&&type,text(decl," ",decl.sstate," ",type));
-		if(!dependencyTracked(decl)){
+		auto dsc=dependencyScope(decl);
+		if(!dsc.dependencyTracked(decl)){
 			if(decl.scope_&&decl.scope_.getFunction() !is getFunction()) // (a declaration of an enclosing function is tracked through its capture)
 				return !forceHere&&lastUses.canForget(decl,true,false)||!getDefaultDependency(decl).isTop;
 			addDefaultDependency(decl); // TODO: ideally can be removed
 		}
-		return !forceHere&&lastUses.canForget(decl,true,false)||dependencies.canForget(decl);
+		return !forceHere&&lastUses.canForget(decl,true,false)||dsc.dependencies.canForget(decl);
 	}
 	final bool canRecompute(Declaration decl){
 		if(decl.isSemError()) return false;
@@ -2191,8 +2198,10 @@ abstract class Scope{
 				symtabInsert(dm.mergedFrom[0]);
 			}else symtabInsert(dm);
 		}
-		foreach(sc;scopes)
+		foreach(sc;scopes){
 			sc.dependencies.clear();
+			sc.dependenciesMerged=true;
+		}
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(decl,ref dep;carryOverDependencies){
@@ -2711,6 +2720,7 @@ abstract class Scope{
 	LastUses lastUses;
 //private: // TODO
 	Dependencies dependencies;
+	bool dependenciesMerged=false; // (after a merge, the dependencies of a nested scope are those of the scope it was merged into)
 	DeclProps declProps;
 	MapX!(Id,Declaration) symtab;
 	MapX!(Id,Declaration) rnsymtab;
@@ -3152,6 +3162,16 @@ class CapturingScope(T): NestedScope{
 					}
 				}
 				replace(this);
+				static if(is(T==FunctionDef)){
+					// (the scopes of nested functions that are being analyzed, e.g., of a closure in a closure that takes over the
+					// capture, use the new version as well, but they keep tracking it through the declaration outside of their function)
+					void replaceNested(Scope csc){
+						csc.replaceDecl(meaningBefore,meaning);
+						foreach(sc;csc.activeNestedScopes) replaceNested(sc);
+					}
+					if(meaning) for(Scope sc=origin;sc&&sc !is this;sc=sc.parentScope())
+						if(cast(FunctionScope)sc) replaceNested(sc);
+				}
 				if(meaning) foreach(cid;decl.captures.get(pmeaning,null)) // (e.g., earlier constant captures, renamed when an enclosing function consumed its own capture)
 					if(cid !is id&&cid.meaning is pmeaning) cid.meaning=meaning;
 			}

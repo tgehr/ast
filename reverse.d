@@ -1638,6 +1638,34 @@ Expression stripElaborationCoercions(Expression e){ // re-derive pattern coercio
 	return e;
 }
 
+LetExp functionValue(FunctionDef fd){ // (the value that a function definition defines, `let { def fresh(…)…; } in fresh`)
+	auto fresh=freshName();
+	Expression.CopyArgs cargs={rename: new Expression.CopyArgs.Rename(fd, fresh) };
+	auto nfd=fd.copy(cargs);
+	if(nfd.body_&&!nfd.params.any!(p=>p.name&&p.name.id==fd.name.id)){ // (the recursive references that the renaming misses: those of a definition that is not analyzed yet, and those within lambdas, which are copied from their original definitions)
+		foreach(id;nfd.body_.freeIdentifiers) if(id.id==fd.name.id) id.id=fresh;
+		void updateLambdas(Expression e){
+			foreach(x;e.subexpressions){
+				if(auto le=cast(LambdaExp)x){
+					if(le.fd.body_) updateLambdas(le.fd.body_);
+					le.orig=le.fd.copy();
+				}else if(auto nested=cast(FunctionDef)x) if(nested.body_) updateLambdas(nested.body_);
+			}
+		}
+		updateLambdas(nfd.body_);
+	}
+	auto nname=new Identifier(fresh);
+	nname.loc=fd.name.loc;
+	nfd.name=nname;
+	auto stm=new CompoundExp([cast(Expression)nfd]);
+	stm.loc=fd.loc;
+	auto res=new Identifier(fresh);
+	res.loc=fd.loc;
+	auto r=new LetExp(stm,res);
+	r.loc=fd.loc;
+	return r;
+}
+
 Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null){
 	enum flags=LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode;
 	if(!e) return e;
@@ -1729,29 +1757,15 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 			sc.error("reversal of `moved` quantum variable capturing not supported yet",fd.loc);
 			return error();
 		}
-		if(captureAnnotation!=CaptureAnnotation.const_){ // no quantum captures, nothing to uncompute
-			auto te=new TupleExp([]);
-			te.type=unit;
-			te.loc=fd.loc;
-			Expression.CopyArgs cargs={ preserveSemantic: true };
-			return lowerDefine!flags(te,te.copy(cargs),fd.loc,sc,unchecked,noImplicitDup,defer);
-		}
 		assert(!!fd.name);
 		auto gid=new Identifier(fd.name.name);
 		gid.loc=fd.loc;
-		auto fresh=freshName();
-		Expression.CopyArgs cargs={rename: new Expression.CopyArgs.Rename(fd, fresh) };
-		auto nfd=fd.copy(cargs);
-		auto nname=new Identifier(fresh);
-		nname.loc=fd.name.loc;
-		nfd.name=nname;
-		auto recipeStm=new CompoundExp([cast(Expression)nfd]);
-		recipeStm.loc=fd.loc;
-		auto recipeRes=new Identifier(fresh);
-		recipeRes.loc=fd.loc;
-		auto recipe=new LetExp(recipeStm,recipeRes);
-		recipe.loc=fd.loc;
-		auto res=new ForgetExp(gid,recipe);
+		if(captureAnnotation!=CaptureAnnotation.const_){ // (no quantum captures, nothing to uncompute)
+			auto res=new ForgetExp(gid,null);
+			res.loc=fd.loc;
+			return res;
+		}
+		auto res=new ForgetExp(gid,functionValue(fd));
 		res.isStatement=true;
 		res.loc=fd.loc;
 		return res;

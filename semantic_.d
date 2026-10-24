@@ -1288,13 +1288,35 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
 	if(auto bsc=with_.trans.blscope_){
 		static if(language==silq) foreach(_,d;bsc.rnsymtab){
-			if(cast(DeadDecl)d||d.isSemError()||!cast(VarDecl)d||cast(Parameter)d) continue;
+			if(cast(DeadDecl)d||d.isSemError()||!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
 			auto origin=d;
 			while(origin.splitFrom) origin=origin.splitFrom;
-			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)) transLocals~=q(d.getId,isConstLocal(d));
+			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)) transLocals~=q(d.name.id,isConstLocal(d));
 		}
 		bsc.keepConstLocals=true;
 		sc.merge(false,bsc);
+	}
+	Declaration transLocal(Q!(Id,bool) local,Scope isc){
+		auto d=isc.peekSymtab(local[0],false);
+		if(!d) d=sc.peekSymtab(local[0],false);
+		if(!d||cast(DeadDecl)d||d.isSemError()) return null;
+		return d;
+	}
+	void forgetTransLocals(CompoundExp itrans,ref StmFlags flags){ // (a classical local that the inverse only checks, which cannot be forgotten after its last use, is forgotten at the end of the inverse)
+		static if(language==silq) foreach(local;transLocals){
+			if(local[1]) continue;
+			auto isc=itrans.blscope_;
+			auto d=transLocal(local,isc);
+			if(!d||isc.lastUses.canForget(d,false,false)) continue;
+			auto type=typeForDecl(d);
+			if(!type||!type.isClassical()) continue;
+			auto id=new Identifier(local[0]);
+			id.loc=d.loc;
+			auto fe=new ForgetExp(id,null);
+			fe.loc=d.loc;
+			itrans.s~=statementSemantic(fe,isc,flags);
+			propErr(itrans.s[$-1],itrans);
+		}
 	}
 	if(auto ret=mayReturn(with_.trans)){
 		sc.error("cannot return from within `with` transformation",ret.loc);
@@ -1364,7 +1386,10 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		if(!with_.itrans.isSemFinal()){
 			static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 			with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
-			if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
+			if(auto isc=with_.itrans.blscope_){
+				forgetTransLocals(with_.itrans,flags);
+				sc.merge(false,isc);
+			}
 		}
 	}else if(with_.trans.isSemCompleted()){
 		enum unchecked=false,noImplicitDup=true;
@@ -1373,15 +1398,18 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
 		auto nerrors=sc.handler.nerrors;
 		with_.itrans=compoundExpSemantic(with_.itrans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
-		if(with_.itrans.blscope_) sc.merge(false,with_.itrans.blscope_);
+		if(auto isc=with_.itrans.blscope_){
+			forgetTransLocals(with_.itrans,flags);
+			sc.merge(false,isc);
+		}
 		if(with_.itrans.isSemError()&&sc.handler.nerrors!=nerrors){
 			sc.note("unable to reverse with transformation",with_.itrans.loc);
 		}
 		propErr(with_.itrans,with_);
 	}
 	static if(language==silq) foreach(local;transLocals){
-		auto d=sc.rnsymtab.get(local[0],null);
-		if(!d||cast(DeadDecl)d||d.isSemError()) continue;
+		auto d=transLocal(local,sc);
+		if(!d) continue;
 		if(!local[1]){ // (e.g., only implicitly duplicated by the inverse)
 			if(sc.lastUses.canForget(d,true,false)) sc.lastUses.forget(d,false);
 			continue;
@@ -1424,14 +1452,14 @@ void registerConstCaptures(FunctionDef fd,Scope sc){
 	}
 }
 Expression statementSemanticImpl(FunctionDef fd,Scope sc,ref StmFlags flags,bool resetConst=true){
-	static if(language==silq) if(fd.name&&sc.getWithTransInverse()){ // (in the inverse of a `with` transformation, a definition of a function that is still defined uses that function, as a definition of a variable that is still defined checks its value) // TODO: get rid of this
+	static if(language==silq) if(fd.name&&!fd.scope_&&sc.getWithTransInverse()){ // (in the inverse of a `with` transformation, a definition of a function that is still defined checks its value, as for a variable)
 		auto decl=sc.lookupHere(fd.name,false,Lookup.probing,null);
-		if(decl&&!cast(DeadDecl)decl&&decl.canonicalSource !is fd&&cast(FunctionDef)decl.canonicalSource&&decl.scope_&&decl.scope_.getFunction() is sc.getFunction()){
-			auto r=new CompoundExp([]);
-			r.loc=fd.loc;
-			r.type=unit;
-			r.setSemCompleted();
-			return r;
+		if(decl&&!cast(DeadDecl)decl&&decl.scope_&&!sc.lastUses.canRedefine(decl)){
+			auto id=new Identifier(fd.name.id);
+			id.loc=fd.name.loc;
+			auto de=new DefineExp(id,functionValue(fd));
+			de.loc=fd.loc;
+			return statementSemantic(de,sc,flags,resetConst);
 		}
 	}
 	fd=functionDefSemantic(fd,sc);
@@ -5800,6 +5828,82 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		de.loc=ae.loc;
 		return statementSemantic(de,sc,flags);
 	}
+	static if(language==silq){
+		// as in a definition, a type annotation of the left-hand side applies to the assigned value (`(x:T) = e` assigns
+		// `e:T` to `x`): annotated components of a tuple apply to the components of a tuple expression, which are first
+		// defined separately if the value is not a tuple expression (or if one of its components is not)
+		static bool hasAnnotation(Expression lhs){
+			if(cast(TypeAnnotationExp)lhs) return true;
+			if(auto tpl=cast(TupleExp)lhs) return tpl.e.any!hasAnnotation;
+			return false;
+		}
+		static Expression unannotated(Expression lhs){
+			while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+			if(auto tpl=cast(TupleExp)lhs) foreach(ref e;tpl.e) e=unannotated(e);
+			return lhs;
+		}
+		static bool needsComponents(Expression lhs,Expression rhs){
+			bool annotated=false;
+			for(auto tae=cast(TypeAnnotationExp)lhs;tae;tae=cast(TypeAnnotationExp)lhs){
+				lhs=tae.e;
+				annotated=true;
+			}
+			auto ltpl=cast(TupleExp)lhs;
+			if(!ltpl||!hasAnnotation(ltpl)) return false;
+			auto rtpl=cast(TupleExp)rhs;
+			if(annotated||!rtpl) return true;
+			return rtpl.e.length==ltpl.e.length&&iota(ltpl.e.length).any!(i=>needsComponents(ltpl.e[i],rtpl.e[i]));
+		}
+		Expression[] componentDefs;
+		void moveAnnotations(ref Expression lhs,ref Expression rhs){
+			while(auto tae=cast(TypeAnnotationExp)lhs){
+				auto ntae=new TypeAnnotationExp(rhs,tae.t,tae.annotationType);
+				ntae.loc=rhs.loc;
+				lhs=tae.e;
+				rhs=ntae;
+			}
+			auto ltpl=cast(TupleExp)lhs;
+			if(!ltpl||!hasAnnotation(ltpl)) return;
+			auto rtpl=cast(TupleExp)rhs;
+			if(rtpl&&rtpl.e.length!=ltpl.e.length){ // (reported by the assignment)
+				lhs=unannotated(lhs);
+				return;
+			}
+			if(!rtpl||iota(ltpl.e.length).any!(i=>needsComponents(ltpl.e[i],rtpl.e[i]))){
+				Expression[] tmps,uses;
+				foreach(i;0..ltpl.e.length){
+					auto tmp=temporaryIdentifier(rhs.loc);
+					tmps~=tmp;
+					auto use=tmp.copy();
+					use.byRef=true;
+					uses~=use;
+				}
+				auto ttpl=new TupleExp(tmps);
+				ttpl.loc=rhs.loc;
+				auto de=new DefineExp(ttpl,rhs);
+				de.loc=ae.loc;
+				componentDefs~=de;
+				rtpl=new TupleExp(uses);
+				rtpl.loc=rhs.loc;
+				rhs=rtpl;
+			}
+			foreach(i;0..ltpl.e.length) moveAnnotations(ltpl.e[i],rtpl.e[i]);
+		}
+		moveAnnotations(ae.e1,ae.e2);
+		if(componentDefs.length){
+			auto nae=new AssignExp(ae.e1,ae.e2);
+			nae.loc=ae.loc;
+			Expression[] stms;
+			foreach(de;componentDefs) stms~=statementSemantic(de,sc,flags);
+			stms~=statementSemantic(nae,sc,flags);
+			auto ce=new CompoundExp(stms);
+			ce.loc=ae.loc;
+			ce.type=unit;
+			foreach(s;stms) propErr(s,ce);
+			if(!ce.isSemError()) ce.setSemCompleted();
+			return ce;
+		}
+	}
 	CompoundExp[] prologues,epilogues;
 	Expression tde=null;
 	static if(language==silq)
@@ -8214,8 +8318,9 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			if(meaning) cid.meaning=sc.split(meaning,cid);
 		}
 	}
-	auto direct=cast(Identifier)unwrap(idx.e)||cast(IndexExp)unwrap(idx.e); // (e.g., an element of a concatenation is not indexed in its operands)
-	idx.e=expressionSemantic(idx.e,direct?context.nestIndexed:context.nestConst);
+	auto agg=unwrap(idx.e);
+	auto composite=cast(CatExp)agg||cast(TupleExp)agg||cast(VectorExp)agg||cast(IteExp)agg||cast(LetExp)agg; // (e.g., an element of a concatenation is not indexed in its operands, while the result of a call is indexed as the result of any other call)
+	idx.e=expressionSemantic(idx.e,composite?context.nestConst:context.nestIndexed);
 	propErr(idx.e,idx);
 	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
 	if(!ne){

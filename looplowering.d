@@ -890,6 +890,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			it.ctx=ctx;
 		}
 	}
+	// whether an atom within the quantum conditional `k` changes a variable that its condition reads (e.g., lifted state
+	// that the branch updates): then `k` cannot be split into several conditionals, as they would evaluate the condition again
+	bool conditionChanged(size_t k){
+		foreach(ai,ref at;atoms) if(at.ites.canFind(k)) foreach(u;ites[k].info.uses) if(u in ainfos[ai].defs) return true;
+		return false;
+	}
+	size_t[size_t] hoistedFrom; // (the outermost quantum conditional that `hoistLocal` moved an atom out of)
 	bool hoistLocal(size_t q,Id t){
 		if(t in isCarried) return false;
 		size_t occ=0;
@@ -909,6 +916,19 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(u==t||u in isCarried) continue;
 				foreach(bj,ref b;atoms) if(b.ites.canFind(q)&&u in ainfos[bj].defs) return false;
 			}
+			auto c=atoms[ai].ites;
+			if(c[c.countUntil(q)..$].any!(k=>ites[k].isLoop)) return false; // (a definition within a loop of the conditional moves only with the loop)
+			// (moving the definition out of the middle of a conditional would split it into several conditionals)
+			foreach(k;c[c.countUntil(q)..$]){
+				if(!quantumIte(k)) continue;
+				bool before=false,after=false;
+				foreach(bj,ref b;atoms){
+					if(defs.canFind(bj)||!b.ites.canFind(k)) continue;
+					if(bj<ai) before=true;
+					else after=true;
+				}
+				if(before&&after) return false;
+			}
 		}
 		foreach(ai;defs){
 			auto c=atoms[ai].ites;
@@ -922,6 +942,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			atoms[ai].ites=nc;
 			atoms[ai].inElse=ne;
+			hoistedFrom[ai]=q;
 		}
 		return true;
 	}
@@ -961,7 +982,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				}
 			}
 			// (the moved classical controls are reachable in the original even where the quantum branch has amplitude zero)
-			bool ok=!cls.any!(m=>ites[m].isWith);
+			bool ok=!cls.any!(m=>ites[m].isWith)&&!qs.any!(k=>conditionChanged(k));
 			foreach(m;cls) foreach(u;ites[m].info.uses){
 				if(u in isCarried) continue;
 				foreach(bj,ref b;atoms){
@@ -1311,7 +1332,15 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto owner=new int[](nodes.length), condOf=new int[](nodes.length);
 		owner[]=-1;
 		condOf[]=-1;
+		size_t endOf(size_t j){
+			size_t cnt=0;
+			walkCond(ites[j].e,false,(Expression x,bool c){ cnt++; });
+			return pos[cast(const(void)*)ites[j].e]+cnt;
+		}
+		// positions of the definitions, in half-steps: an atom that `hoistLocal` moved out of quantum conditionals runs before
+		// the outermost one, or after it (then it counts as the end of that conditional)
 		MapX!(Id,size_t[]) defPos;
+		bool definedIn(Id v,size_t start,size_t end){ return defPos.get(v,[]).any!(d=>2*start<d&&d<2*end); }
 		foreach(ai,ref a;atoms) if(a.stm==i){
 			if(cast(const(void)*)a.e !in isExtractAtom) foreach(part;a.parts)
 				walkCond(part,false,(Expression x,bool c){
@@ -1319,8 +1348,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				});
 			auto key=cast(const(void)*)a.parts[0];
 			if(key !in pos) key=cast(const(void)*)replacedBy[key];
-			auto start=pos[key];
-			foreach(d;ainfos[ai].defs) defPos[d]=defPos.get(d,[])~start;
+			auto at=2*pos[key]+1;
+			if(auto q=ai in hoistedFrom){
+				auto after=atoms[0..ai].any!(b=>b.ites.canFind(*q));
+				at=after?2*endOf(*q)-1:2*pos[cast(const(void)*)ites[*q].e];
+			}
+			foreach(d;ainfos[ai].defs) defPos[d]=defPos.get(d,[])~at;
 		}
 		foreach(ai,ref a;atoms) if(a.stm==i&&cast(const(void)*)a.e in isExtractAtom) // (the arguments of an extracted call)
 			walkCond(a.parts[0],false,(Expression x,bool c){
@@ -1331,13 +1364,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				walkCond(h,false,(Expression x,bool c){
 					if(auto p=cast(const(void)*)x in pos) condOf[*p]=cast(int)k;
 				});
-		size_t endOf(size_t j){
-			size_t cnt=0;
-			walkCond(ites[j].e,false,(Expression x,bool c){ cnt++; });
-			return pos[cast(const(void)*)ites[j].e]+cnt;
-		}
 		size_t[2][] needBits;
-		bool place(size_t n,int Y,scope bool delegate(size_t,size_t) inside,out size_t level,out size_t wAt,out size_t rAt,out size_t rLevel,out bool slot){
+		bool place(size_t n,int Y,scope bool delegate(size_t,size_t) inside,bool classical,out size_t level,out size_t wAt,out size_t rAt,out size_t rLevel,out bool slot){
 			size_t[] chain;
 			size_t at;
 			if(owner[n]>=0){
@@ -1377,6 +1405,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					wAt=rAt;
 					break;
 				}
+				if(classical) return false; // (a slot cannot pass a classical value out of a quantum conditional)
 				slot=true;
 				foreach(d2;dd..chain.length){
 					auto k=chain[d2];
@@ -1423,7 +1452,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto n=pos[cast(const(void)*)we.cond];
 				size_t level,wAt,rAt,rLevel;
 				bool slot;
-				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<end)),level,wAt,rAt,rLevel,slot)) return null;
+				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) return null;
 				if(slot||level!=it.ctx.length||rLevel!=level) return null;
 				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,ℕt(true),null,n,null,wAt,rAt,level);
 				l.count=k;
@@ -1454,7 +1483,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto n=pos[cast(const(void)*)it.heads[0]];
 				size_t level,wAt,rAt,rLevel;
 				bool slot;
-				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<end)),level,wAt,rAt,rLevel,slot)) continue;
+				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) continue;
 				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,it.heads[0].type,null,n,null,wAt,rAt,level);
 				l.ite=k;
 				l.rLevel=rLevel;
@@ -1495,7 +1524,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				bool anchor(size_t n){
 					size_t level,wAt,rAt,rLevel;
 					bool slot;
-					if(!place(n,Y,(size_t start,size_t end)=>defPos.get(u,[]).any!(d=>start<=d&&d<end),level,wAt,rAt,rLevel,slot)) return false;
+					auto uty=u in isCarried?carriedType.get(u,null):types.get(u,null);
+					if(!place(n,Y,(size_t start,size_t end)=>definedIn(u,start,end),!uty||uty.isClassical(),level,wAt,rAt,rLevel,slot)) return false;
 					if(consume&&(slot||owner[n]<0||level!=atoms[owner[n]].ites.length||wAt!=owner[n])) return false;
 					bool viaDummy=false;
 					if(slot&&u !in isCarried){
@@ -1528,12 +1558,12 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							}
 							if(!same) continue;
 							auto first=g.reads[0];
-							if(defPos.get(u,[]).any!(d=>first<=d&&d<n)) continue;
+							if(definedIn(u,first,n)) continue;
 							auto cn=owner[n]>=0?atoms[owner[n]].ites:ites[condOf[n]].ctx;
 							bool redefined=false; // (by a later iteration of a loop that the shared read is outside of)
 							foreach(k;cn[min(g.rLevel,cn.length)..$]) if(ites[k].isLoop){
 								auto start=pos[cast(const(void)*)ites[k].e],end=endOf(k);
-								if(defPos.get(u,[]).any!(d=>start<=d&&d<end)) redefined=true;
+								if(definedIn(u,start,end)) redefined=true;
 							}
 							if(redefined) continue;
 							g.reads~=n;
@@ -1649,7 +1679,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto n=pos[cast(const(void)*)ites[j].heads[0]];
 			size_t level,wAt,rAt,rLevel;
 			bool slot;
-			if(!place(n,Z,(size_t start,size_t end)=>vars.any!(v=>defPos.get(v,[]).any!(d=>start<=d&&d<end)),level,wAt,rAt,rLevel,slot)) return null;
+			if(!place(n,Z,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) return null;
 			auto l=Log(Id.init,i,Z,Y,freshName(),freshName(),Id.init,ites[j].heads[0].type,null,n,null,wAt,rAt,level);
 			l.ite=j;
 			l.rLevel=rLevel;
