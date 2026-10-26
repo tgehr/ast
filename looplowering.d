@@ -5159,6 +5159,42 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		if(auto ret=cast(ReturnExp)x) foreach(c;erpReturns[erpKey(ret)].consumed) needsPlaceholder(c[0]);
 	});
 	if(!ok) return null;
+	// The code after a statement that contains a return is guarded, but the analysis joins the paths that return with the
+	// others: the variables that the paths that return do not have (defined in the guarded code, or consumed before the
+	// return) cannot be used after the guard (TODO: placeholders, as for the variables that the returns consume)
+	SetX!Id names(Expression[] stms){
+		SetX!Id r;
+		foreach(st;stms) visitStm(st,(Expression x){ if(auto id=cast(Identifier)x) r.insert(varName(id)); });
+		return r;
+	}
+	void checkGuards(Expression[] stms,Expression[] cont){
+		foreach(i,st;stms){
+			if(!containsReturn(st)) continue;
+			auto rest=stms[i+1..$];
+			auto later=names(cont);
+			foreach(r;rest) visitStm(r,(Expression x){
+				if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto id=cast(Identifier)y) if(varName(id) in later) ok=false; });
+			});
+			auto used=names(rest~cont),inStm=names([st]);
+			visitStm(st,(Expression x){
+				if(auto ret=cast(ReturnExp)x) if(auto consumed=erpKey(ret) in erpConsumedBeforeReturn)
+					foreach(n;*consumed) if(n in inStm&&n in used) ok=false;
+			});
+			if(auto ite=cast(IteExp)st){
+				checkGuards(ite.then.s,rest~cont);
+				if(ite.othw) checkGuards(ite.othw.s,rest~cont);
+			}else if(auto ce=cast(CompoundExp)st) checkGuards(ce.s,rest~cont);
+			else if(auto fe=cast(ForExp)st) checkGuards(fe.bdy.s,rest~cont);
+			else if(auto re=cast(RepeatExp)st) checkGuards(re.bdy.s,rest~cont);
+			else if(auto we=cast(WhileExp)st) checkGuards(we.bdy.s,rest~cont);
+			checkGuards(rest,cont);
+			break;
+		}
+	}
+	if(auto fe=cast(ForExp)loop) checkGuards(fe.bdy.s,[]);
+	else if(auto re=cast(RepeatExp)loop) checkGuards(re.bdy.s,[]);
+	else if(auto we=cast(WhileExp)loop) checkGuards(we.bdy.s,[]);
+	if(!ok) return null;
 	auto loc=loop.loc;
 	Expression.CopyArgs cargs;
 	Identifier mk(Id n){ auto r=new Identifier(n); r.loc=loc; return r; }
