@@ -4019,7 +4019,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		Q!(Id,Expression)[] replays; // (definitions of the body that are computed again after the loop, see `liftedExitDefinitions`)
 		if(auto xsc=loop.exitScope){ // (no exit if the body returns)
 			foreach(d;chain(xsc.mergedVars,loop.bdy.blscope_.mergedVars)) if(d.mergedInto.name) changed.insert(d.mergedInto.name.id);
-			if(!continuation) replays=liftedExitDefinitions(loop,sc,paramNames);
+			if(!continuation) replays=liftedExitDefinitions(loop,sc,paramNames,changed);
 			foreach(d;xsc.mergedVars){
 				auto name=d.mergedInto.name;
 				if(!name||name.id in paramNames||replays.canFind!(r=>r[0]==name.id)) continue;
@@ -4459,19 +4459,20 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),TypeAnnotationType.annotation));
 					}
 					auto vals=packed.map!pack.array;
-					Expression[] weakenings(){ // (of the parameters whose types mention the definitions that the branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
-						Expression[] r;
-						foreach(s;strongerExits) if(s[1].freeIdentifiers.any!(fv=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))){
-							auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==s[0]);
-							if(p.empty||!isSubtype(s[1],typeForDecl(p.front[1]))) continue; // (the type in the result is the parameter type, which the reset continues with)
-							auto use=mk(s[0]);
-							use.moved=true;
-							r~=at(new DefineExp(mk(s[0]),at(new TypeAnnotationExp(use,s[2].copy(cargsDefault),TypeAnnotationType.annotation))));
-						}
-						return r;
+					typeof(strongerExits) weakened; // (parameters whose types mention the definitions that the exit branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
+					foreach(s;strongerExits) if(s[1].freeIdentifiers.any!(fv=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))) weakened~=s;
+					Expression annotated(Id name,Expression type,TypeAnnotationType kind){
+						auto use=mk(name);
+						use.moved=true;
+						return at(new DefineExp(mk(name),at(new TypeAnnotationExp(use,type.copy(cargsDefault),kind))));
 					}
-					auto then=at(new CompoundExp(nrst.s~weakenings()~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
-					auto othw=at(new CompoundExp(weakenings()~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
+					Expression[] resetWeakenings; // (the reset continues with the parameter type)
+					foreach(s;weakened){
+						auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==s[0]);
+						if(!p.empty&&isSubtype(s[1],typeForDecl(p.front[1]))) resetWeakenings~=annotated(s[0],s[2],TypeAnnotationType.annotation);
+					}
+					auto then=at(new CompoundExp(nrst.s~resetWeakenings~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
+					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],TypeAnnotationType.annotation)).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
 					if(next.length){
 						auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
@@ -4489,7 +4490,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						coercions~=at(new DefineExp(e[0].copy(cargsDefault),at(new TypeAnnotationExp(mk(tmp),e[1].copy(cargsDefault),TypeAnnotationType.coercion))));
 					}
 					nbdy.s~=at(new DefineExp(at(new VectorExp([tupleOf(lhs)])),mk(v)));
-					nbdy.s~=coercions~exit;
+					nbdy.s~=coercions~weakened.map!(s=>annotated(s[0],s[1],TypeAnnotationType.coercion)).array~exit; // (as before the exit branch, e.g., for a continuation)
 				}
 			}
 			if(continuation) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
@@ -4759,7 +4760,7 @@ bool hasLoopWithReturn(Expression e){
 // after it as well, which the rest of the body and the condition do not change: they are computed again after the recursive function
 // returns instead of being returned (the result of the function is not lifted)
 static if(language==silq)
-Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames){
+Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames,ref SetX!Id changed){
 	Q!(Id,Expression)[] r;
 	auto xsc=loop.exitScope;
 	MapSX!(Id,Declaration) exitDecls;
@@ -4796,24 +4797,39 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 	writes(loop.cond);
 	foreach_reverse(i,st;stms){
 		scope(exit) writes(st);
-		auto de=cast(DefineExp)st;
-		auto id=de?cast(Identifier)de.e1:null;
-		if(!id||!id.meaning) continue;
-		auto name=varName(id);
+		Id name;
+		Expression value;
+		if(auto de=cast(DefineExp)st){
+			auto id=cast(Identifier)de.e1;
+			if(!id||!id.meaning) continue;
+			name=varName(id);
+			value=de.e2;
+		}else if(auto fd=cast(FunctionDef)st){
+			if(!fd.name||fd.isSemError()) continue;
+			name=fd.name.id;
+			value=fd;
+		}else continue;
 		auto decl=exitDecls.get(name,null);
 		if(!decl||name in paramNames||name in later||r.canFind!(x=>x[0]==name)) continue;
 		auto type=typeForDecl(decl);
 		if(!type) continue;
 		bool typeValue=isTypeTy(type)||isQNumeric(type); // (a use needs the value, e.g., `x coerce a` with `a:=𝔹^n`)
-		if(!typeValue&&(type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop)) continue;
+		bool dependentFunction=cast(FunTy)type&&type.isClassical()&&!weakenedExitType(type,changed); // (its type cannot be expressed in the result of the function)
+		if(!typeValue&&!dependentFunction&&(type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop)) continue;
+		if(cast(FunctionDef)value&&!dependentFunction) continue;
 		bool ok=true;
 		visitStm(loop.cond,(Expression x){ if(auto cid=cast(Identifier)x) if(varName(cid)==name) ok=false; });
-		foreach(fv;de.e2.freeIdentifiers){
+		foreach(fv;value.freeIdentifiers){
 			if(fv.meaning&&fv.meaning.isToplevelDeclaration()) continue;
 			auto v=varName(fv);
 			if(v==name||v in later||v !in paramNames&&v !in exitDecls) ok=false; // (`v==name`: the definition consumes the previous version)
 		}
-		if(ok) r=q(name,de.e2)~r;
+		if(!ok) continue;
+		if(auto fd=cast(FunctionDef)value){
+			import ast.reverse:functionValue;
+			value=functionValue(fd); // (`let { def fresh(…)…; } in fresh`)
+		}
+		r=q(name,value)~r;
 	}
 	return r;
 }

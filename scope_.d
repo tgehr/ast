@@ -1471,56 +1471,71 @@ abstract class Scope{
 	void message(lazy string msg, Location loc){handler.message(msg,loc);}
 
 	final bool close(T)(T loc)if(is(T==Scope)||is(T==ReturnExp)){
-		import ast.semantic_: unrealizable;
+		import ast.semantic_: unrealizable,typeConstBlocked;
 		bool errors=false;
-		foreach(_,d;rnsymtab.dup){
-			if(cast(DeadDecl)d) continue;
-			if(d.isSemError()) continue;
-			if(rnsymtab.get(d.getId,null) !is d) continue;
-			//if(d.scope_ !is this && !d.isLinear()) continue;
-			//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
-			if(d.scope_.getFunction() !is getFunction()) continue;
-			//d=split(d,null);
-			//assert(d.scope_ is this);
-			if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
-				d.setSemForceError();
-				continue;
-			}
-			if(!canForgetAppend(loc,d)){
-				if(!d.isSemError()){
-					bool done=false;
-					if(!canSplit(d)){
-						if(auto read=isConst(d)){
-							error(format("cannot forget `const` variable `%s`",d), d.loc);
-							note("variable was made `const` here", read.loc);
+		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
+		foreach(_,d;rnsymtab) pending~=d;
+		for(bool deferBlocked=true;pending.length;){
+			Declaration[] blocked; // (forgotten after the live variables whose types mention them, e.g., `n` after `y:=vector(n,0:!𝔹)`)
+			bool forgot=false;
+			foreach(d;pending){
+				if(cast(DeadDecl)d) continue;
+				if(d.isSemError()) continue;
+				if(rnsymtab.get(d.getId,null) !is d) continue;
+				//if(d.scope_ !is this && !d.isLinear()) continue;
+				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
+				if(d.scope_.getFunction() !is getFunction()) continue;
+				//d=split(d,null);
+				//assert(d.scope_ is this);
+				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)) {
+					d.setSemForceError();
+					continue;
+				}
+				if(!canForgetAppend(loc,d)){
+					if(deferBlocked&&typeConstBlocked(d,this)){
+						blocked~=d;
+						continue;
+					}
+					if(!d.isSemError()){
+						bool done=false;
+						if(!canSplit(d)){
+							if(auto read=isConst(d)){
+								error(format("cannot forget `const` variable `%s`",d), d.loc);
+								note("variable was made `const` here", read.loc);
+								errors=true;
+								done=true;
+							}else continue; // TODO: catch this early
+						}
+						if(!done) done=lastUses.betterUnforgettableError(d,this);
+						if(!done){
+							if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+							else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+							explainUnforgettable(d);
 							errors=true;
 							done=true;
-						}else continue; // TODO: catch this early
+						}
+						d.setSemForceError();
+					}else symtabRemove(d);
+					static if(is(typeof(loc):Expression)) loc.setSemForceError();
+				}else{
+					forgot=true;
+					if(auto split=rnsymtab.get(d.getId,null)) for(auto s=split.splitFrom;s;s=s.splitFrom) if(s is d){ symtabRemove(split); hidden~=split; break; }
+					Identifier use=null;
+					if(isConst(d)){
+						use=new Identifier(d.getName);
+						use.constLookup=false;
+						static if(is(T==Scope)) use.loc=d.loc;
+						else use.loc=loc.loc;
+						use.sstate=SemState.completed;
 					}
-					if(!done) done=lastUses.betterUnforgettableError(d,this);
-					if(!done){
-						if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
-						else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-						explainUnforgettable(d);
-						errors=true;
-						done=true;
-					}
-					d.setSemForceError();
-				}else symtabRemove(d);
-				static if(is(typeof(loc):Expression)) loc.setSemForceError();
-			}else{
-				Identifier use=null;
-				if(isConst(d)){
-					use=new Identifier(d.getName);
-					use.constLookup=false;
-					static if(is(T==Scope)) use.loc=d.loc;
-					else use.loc=loc.loc;
-					use.sstate=SemState.completed;
+					consume(d,use);
+					clearConsumed();
 				}
-				consume(d,use);
-				clearConsumed();
 			}
+			pending=blocked;
+			deferBlocked=forgot;
 		}
+		foreach(split;hidden) symtabInsert(split);
 		return errors;
 	}
 

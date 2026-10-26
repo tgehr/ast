@@ -5304,14 +5304,11 @@ Expression typeForDeclNoAnalyze(Declaration decl){
 private bool isLiveTypeDependent(Declaration d,Declaration decl){
 	if(cast(DeadDecl)d) return false;
 	if(d.isSemError()) return false;
-	if(d.mergedInto) return false; // consumed by merging; the merged declaration is checked separately
 	auto type=typeForDeclNoAnalyze(d);
 	if(!type) return false;
-	foreach(id;type.freeIdentifiers){
-		if(id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)
-			return true;
-	}
-	return false;
+	if(!type.freeIdentifiers.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)) return false;
+	if(d.mergedInto&&isLiveTypeDependent(d.mergedInto,decl)) return false; // consumed by merging; the merged declaration is checked separately (unless the merge weakens the type, e.g., for the next iteration of a loop)
+	return true;
 }
 Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 	foreach(_,d;rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
@@ -10629,6 +10626,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	static if(language==silq) erpBeforeReturn(ret,sc);
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	static if(language==silq) bool quantumControlled=sc.quantumControlled||!!(flags&StmFlags.quantumReturn);
+	static if(language==silq) auto typeConstBlockSave=sc.saveTypeConstBlocks();
 
 	bool widenReturnType(Expression type){
 		if(fd.ret&&isSubtype(type,fd.ret))
@@ -10700,7 +10698,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	if(ret.isSemError())
 		return ret;
-	static if(language==silq) sc.clearConsumed();
+	static if(language==silq){
+		sc.clearConsumed();
+		sc.releaseTypeConstBlocks(typeConstBlockSave,true); // (the value is converted to the return type, which does not mention local variables, e.g., `measure[𝔹^n](x)`)
+	}
 	if(sc.close(ret)){
 		sc.note("at function return",ret.loc);
 		ret.setSemError();
