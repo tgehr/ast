@@ -2767,6 +2767,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	bool fwdFailed=false;
 	SetX!Id droppedDefs; // (values that statements which are not part of the recomputation change)
 	bool anyKept(SliceNode[] ns){ return ns.any!(c=>S.kept[c.id]); }
+	int diverging(SliceNode n){ // (1 or 2: the branch of a classical conditional that diverges while the other one continues, which the recomputations run instead of the conditional)
+		if(n.kind!=K.ite||n.quantum||n.inR) return 0;
+		auto ite=cast(IteExp)n.e;
+		auto t=definitelyReturns(ite.then),e=ite.othw&&definitelyReturns(ite.othw);
+		return t==e?0:t?1:2;
+	}
 	Live backNode(SliceNode n,Live live){
 		Live back(SliceNode[] ns,Live l){
 			foreach_reverse(c;ns) l=backNode(c,l);
@@ -2807,7 +2813,8 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				return r;
 			}
 			case K.ite:{
-				auto lt=back(n.a,dupL(live)),le=back(n.b,dupL(live));
+				auto dv=diverging(n);
+				auto lt=back(n.a,dv==1?Live.init:dupL(live)),le=back(n.b,dv==2?Live.init:dupL(live));
 				if(!anyKept(n.a)&&!anyKept(n.b)) return live;
 				S.kept[n.id]=true;
 				auto r=joinL(lt,le);
@@ -2947,6 +2954,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(n.quantum||n.inR) foreach(u;n.consumed) avail.remove(u);
 				else dispose(n.consumed);
 				auto at=fwd(n.a,avail.dup),ae=fwd(n.b,avail.dup);
+				if(auto dv=diverging(n)) return dv==1?ae:at;
 				SetX!Id r;
 				foreach(u;at) if(u in ae) r.insert(u);
 				return r;
@@ -3188,7 +3196,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					foreach(c;keptParts(n,sl)) foreach(ce;c.extracted) other(n.id,LogKey.call,Id.init,ce.type,n.extracted.countUntil!((x,y)=>x is y)(ce));
 					break;
 				case K.ite:
-					if(!n.quantum&&!direct((cast(IteExp)n.e).cond)) other(n.id,LogKey.cond,Id.init,Bool(true));
+					if(!n.quantum&&!diverging(n)&&!direct((cast(IteExp)n.e).cond)) other(n.id,LogKey.cond,Id.init,Bool(true));
 					break;
 				case K.loop:
 					if(auto fe=cast(ForExp)n.e){
@@ -3726,6 +3734,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					}
 					case K.ite:{
 						auto ite=cast(IteExp)n.e;
+						if(auto dv=diverging(n)){
+							r~=emitS(dv==1?n.b:n.a,names);
+							break;
+						}
 						Expression cond;
 						auto inner=names;
 						if(!n.quantum&&!n.inR&&logAt(n,LogKey.cond)!=size_t.max){
@@ -4735,7 +4747,22 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 	auto xsc=loop.exitScope;
 	MapSX!(Id,Declaration) exitDecls;
 	foreach(d;xsc.mergedVars) if(d.mergedInto.name) exitDecls[d.mergedInto.name.id]=d.mergedInto;
-	auto stms=flattenStatementBlocks(loop.bdy.s.dup);
+	Expression[] continuing(Expression[] stms){ // (the statements of a branch whose other branch diverges run whenever the body continues after the `if`)
+		Expression[] r;
+		foreach(x;stms){
+			if(auto ite=cast(IteExp)x) if(ite.othw){
+				auto t=definitelyReturns(ite.then),o=definitelyReturns(ite.othw);
+				if(t!=o){
+					r~=ite.cond; // (for what it consumes)
+					r~=continuing((t?ite.othw:ite.then).s);
+					continue;
+				}
+			}
+			r~=x;
+		}
+		return r;
+	}
+	auto stms=continuing(flattenStatementBlocks(loop.bdy.s.dup));
 	SetX!Id later; // (names that the rest of the body or the condition change)
 	void writes(Expression e){
 		void lhs(Expression l){
