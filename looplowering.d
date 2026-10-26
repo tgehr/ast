@@ -869,6 +869,24 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		ainfos~=info;
 	}
+	MapX!(Id,Expression)[] prevTypes; // (the types of the versions that fresh definitions replace, see the forgets of classical variables below)
+	foreach(a,ref info;ainfos){
+		bool exclusive(size_t b){ // (in another branch of an enclosing `if`)
+			foreach(j;0..min(atoms[a].ites.length,atoms[b].ites.length)){
+				if(atoms[a].ites[j]!=atoms[b].ites[j]) return false;
+				if(atoms[a].inElse[j]!=atoms[b].inElse[j]) return true;
+			}
+			return false;
+		}
+		MapX!(Id,Expression) pt;
+		foreach(d;info.fresh){
+			Expression t=null;
+			foreach_reverse(b;0..a) if(d in ainfos[b].defs&&!exclusive(b)) if((t=ainfos[b].types.get(d,null))!is null) break;
+			if(!t) t=carriedType.get(d,null);
+			if(t) pt[d]=t;
+		}
+		prevTypes~=pt;
+	}
 	bool quantumIte(size_t j){
 		if(ites[j].isLoop||ites[j].isWith) return false;
 		auto c=ites[j].heads[0];
@@ -2208,7 +2226,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					extended.remove(u);
 				}
 				foreach(d;ainfos[a].fresh){ // (classical variables that the loop body forgets explicitly)
-					auto ty=ainfos[a].types.get(d,null);
+					auto ty=prevTypes[a].get(d,ainfos[a].types.get(d,null)); // (e.g., not `x:𝔹[]` in `y:=measure(x); x:=vector(0,…);`, whose type 𝔹^0 is classical)
 					if(!ty||!ty.isClassical()||d !in isCarried&&d !in bodyLocals&&d !in topLocals&&!open.any!(f=>d in f.locals)) continue;
 					auto fe=new ForgetExp(mkId(d),null);
 					fe.loc=loc;
@@ -3925,8 +3943,69 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		statementFreeVarsImpl(st,(Identifier y){ namesInLoop.insert(y.id); return 0; });
 	}
 	SetX!Id unchangedConst; // (variables that are only consumed by early returns, see `loopParams`)
-	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst);
+	SetX!Id consumedAfter,otherwiseAfter,freed; // (variables that the continuation consumes, see `consumedNames`, and those that `loopParams` passes for that reason)
+	foreach(st;continuation) consumedNames(st,consumedAfter,otherwiseAfter);
+	SetX!Id consumedInLoop,otherwiseInLoop;
+	consumedNames(loop.bdy,consumedInLoop,otherwiseInLoop);
+	static if(isDoWhile) if(loop.reset) consumedNames(loop.reset,consumedInLoop,otherwiseInLoop);
+	Declaration[] forgetBefore; // (see `loopParams`)
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst,continuation?&otherwiseAfter:null,&freed,&forgetBefore);
+	bool mentionsFreed(Expression t){ return t.freeIdentifiers.any!(id=>id.id in freed||id.meaning&&id.meaning.name&&id.meaning.name.id in freed); }
+	if(freed.length&&loopParams_[0].any!(p=>mentionsFreed(p[2]))){ // (`const` parameters cannot be coerced)
+		freed=SetX!Id.init;
+		forgetBefore=[];
+		loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst,null,null,&forgetBefore);
+	}
 	auto constParams=loopParams_[0], movedParams=state.origStateSnapshot.orderedByTypeMentions(loopParams_[1]); // (consumed by the call in this order)
+	if((continuation||isEmpty(loop))&&loop.bdy.blscope_){
+		// (the variables that the body forgets when it starts and that the condition and the continuation do not mention are
+		// not parameters, e.g., `x` in `repeat 1 { if c { return 0; } x:=…; return 1; }` after `measure(x)`: the function
+		// cannot forget them when its body is not a branch, and the caller forgets them)
+		SetX!Id dead,mentioned;
+		foreach(d;loop.bdy.blscope_.forgottenVarsOnEntry) if(d.name) dead.insert(d.name.id);
+		void mention(Expression e){ visitStm(e,(Expression x){ if(auto id=cast(Identifier)x) mentioned.insert(varName(id)); }); }
+		foreach(st;continuation) mention(st);
+		static if(is(T==WhileExp)||isDoWhile) mention(loop.cond);
+		bool isDead(Q!(Id,Declaration,Expression,bool) p){ return p[1].name&&p[1].name.id in dead&&p[1].name.id !in mentioned; }
+		if(dead.length){
+			constParams=constParams.filter!(p=>!isDead(p)).array;
+			movedParams=movedParams.filter!(p=>!isDead(p)).array;
+		}
+	}
+	// (the plain forgets before returns of the classical variables that the function does not take as moved parameters, e.g.,
+	// of `n` in `forget(x); forget(n);` with `x:𝔹^n` in the continuation, which it captures, are dropped: the caller forgets
+	// them)
+	SetX!Id dropped;
+	void drop(Id n){
+		if(n in otherwiseAfter||n in otherwiseInLoop||movedParams.any!(p=>p[1].name&&p[1].name.id==n)) return;
+		auto type=state.prevStateSnapshot.typeOfName(n);
+		if(type&&type.isClassical()) dropped.insert(n);
+	}
+	foreach(n;consumedAfter) drop(n);
+	foreach(n;consumedInLoop) drop(n);
+	if(dropped.length&&continuation){
+		Expression.CopyArgs cargs;
+		continuation=withoutForgets(continuation.map!(st=>st.copy(cargs)).array,dropped,true);
+	}
+	// (types of parameters cannot mention other parameters: the types that mention the parameters that `loopParams` adds
+	// for the continuation are weakened, and the values are coerced back at the start of the function)
+	Expression[] entryCoercions;
+	if(freed.length) foreach(ref p;movedParams){
+		auto type=typeForDecl(p[1]);
+		if(!type||!mentionsFreed(type)) continue;
+		auto w=weakenedExitType(type,freed);
+		if(!w) continue;
+		Expression.CopyArgs cargs;
+		auto use=new Identifier(p[1].name.id);
+		use.loc=p[1].loc;
+		use.moved=true;
+		auto coerced=new TypeAnnotationExp(use,p[2].copy(cargs),TypeAnnotationType.coercion);
+		coerced.loc=p[1].loc;
+		auto def=new DefineExp(new Identifier(p[1].name.id),coerced);
+		def.loc=def.e1.loc=p[1].loc;
+		entryCoercions~=def;
+		p[2]=w.copy(cargs);
+	}
 	// (the loop bounds are passed as `const` parameters as well)
 	Q!(Id,Declaration,Expression,bool) boundParam(Identifier name,Expression type){
 		auto decl=new VarDecl(name.copy());
@@ -4247,6 +4326,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	auto retName=new Identifier(freshName());
 	retName.loc=loop.loc;
 	auto nbdy=loop.bdy.copy(cargsDefault);
+	if(dropped.length) nbdy.s=withoutForgets(nbdy.s,dropped,false);
 	// (nested blocks used as statements share the enclosing scope, e.g., when the analysis wrapped a nested loop: flatten
 	// them, so that nested loops are in the same block as the statements after them and can take continuations)
 	nbdy.s=flattenStatementBlocks(nbdy.s);
@@ -4274,6 +4354,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 
 	static if(isDoWhile){
 		auto nrst=loop.reset.copy(cargsDefault);
+		if(dropped.length) nrst.s=withoutForgets(nrst.s,dropped,false);
 		nrst.s=flattenStatementBlocks(nrst.s);
 	}else if(!isCertainReturn){
 		if(continuation){
@@ -4454,7 +4535,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					Expression empty(){ return at(new TypeAnnotationExp(at(new VectorExp([])),arrayTy(ety).copy(cargsDefault),TypeAnnotationType.annotation)); }
 					Expression pack(Q!(Identifier,Expression,Expression) e){
 						auto id=e[0].copy(cargsDefault);
-						if(e[1]&&e[1].isClassical()) id.moved=true;
+						id.moved=true; // (also a lifted quantum value, which the analysis would otherwise `dup` for the reset branch, where it is still available)
 						if(e[2] is e[1]) return id;
 						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),TypeAnnotationType.annotation));
 					}
@@ -4466,17 +4547,21 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						use.moved=true;
 						return at(new DefineExp(mk(name),at(new TypeAnnotationExp(use,type.copy(cargsDefault),kind))));
 					}
-					Expression[] resetWeakenings; // (the reset continues with the parameter type)
+					Expression[] resetWeakenings,resetCoercions; // (the reset continues with the parameter type)
 					foreach(s;weakened){
 						auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==s[0]);
-						if(!p.empty&&isSubtype(s[1],typeForDecl(p.front[1]))) resetWeakenings~=annotated(s[0],s[2],TypeAnnotationType.annotation);
+						if(p.empty) continue;
+						auto ptype=typeForDecl(p.front[1]);
+						if(isSubtype(s[1],ptype)) resetWeakenings~=annotated(s[0],s[2],TypeAnnotationType.annotation);
+						else if(ptype) resetCoercions~=annotated(s[0],ptype,TypeAnnotationType.coercion); // (after the join with the exit branch, e.g., `x:𝔹^m` after `n:=m; x:=x coerce 𝔹^n;` in the body and `x:=vector(m,…)` in the reset)
 					}
+					if(!next.length) resetWeakenings=[]; // (not reached after a reset that returns, where they would refer to the variables of an enclosing function)
 					auto then=at(new CompoundExp(nrst.s~resetWeakenings~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
 					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],TypeAnnotationType.annotation)).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
 					if(next.length){
 						auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
-						auto cont=at(new CompoundExp([cast(Expression)at(new ForgetExp(mk(v),empty()))]~next));
+						auto cont=at(new CompoundExp([cast(Expression)at(new ForgetExp(mk(v),empty()))]~resetCoercions~next));
 						nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
 					}
 					Expression[] lhs,coercions;
@@ -4530,7 +4615,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		ret.loc=loop.loc;
 	}
 	auto cmpbdy=cast(CompoundExp)bdy;
-	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
+	auto fbdy=new CompoundExp((constParamDef?[cast(Expression)constParamDef]:[])~entryCoercions~(cmpbdy?cmpbdy.s:[bdy])~(ret?[ret]:[]));
 	fbdy.loc=bdy.loc;
 	// (the return type and the annotation are given explicitly where possible, avoiding a second analysis of the function)
 	Expression rret=null; // (inferred for a `do`-`while` loop, whose result includes definitions of the body)
@@ -4635,7 +4720,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		def.loc=def.e1.loc=loop.loc;
 		weakenings~=def;
 	}
-	Expression[] stmts=weakenings~[cast(Expression)fd];
+	Expression[] stmts=forgetBefore.map!((d){
+		auto id=new Identifier(d.name.id);
+		id.loc=loop.loc;
+		auto fe=new ForgetExp(id,null);
+		fe.loc=loop.loc;
+		return cast(Expression)fe;
+	}).array~weakenings~[cast(Expression)fd];
 	Expression forgetFunction(){ // (its type may mention variables that it captures, which may change after the loop)
 		auto fid=new Identifier(fi);
 		fid.loc=loop.loc;
@@ -4737,6 +4828,55 @@ void erpAssignIds(Expression a,Expression b){
 		xs[i].erpId=id;
 		ys[i].erpId=id;
 	}
+}
+// (variables that a statement consumes, syntactically: forgets, assignments and moves; `other`: those that it consumes
+// otherwise than by plain forgets, `forget(x)`, or defines)
+void consumedNames(Expression e,ref SetX!Id consumed,ref SetX!Id other){
+	void add(Expression x,bool plainForget){
+		if(auto id=cast(Identifier)x){
+			consumed.insert(varName(id));
+			if(!plainForget) other.insert(varName(id));
+		}else if(auto tpl=cast(TupleExp)x) foreach(c;tpl.e) add(c,plainForget);
+		else if(auto idx=cast(IndexExp)x) add(idx.e,false);
+	}
+	visitStm(e,(Expression x){
+		if(auto fe=cast(ForgetExp)x) add(fe.var,!fe.val);
+		else if(auto ae=cast(AAssignExp)x) add(ae.e1,false);
+		else if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto id=cast(Identifier)y) other.insert(varName(id)); });
+		else if(auto ce=cast(CallExp)x){
+			if(auto f=cast(Identifier)ce.e) if(f.id==Id.s!"move") add(ce.arg,false);
+		}else if(auto id=cast(Identifier)x) if(id.moved) add(id,false);
+	});
+}
+// (`stms` without the plain forgets of the variables `names` that are followed by a `return` on all paths; `returning`:
+// whether the code after `stms` returns)
+Expression[] withoutForgets(Expression[] stms,ref SetX!Id names,bool returning){
+	bool ret=returning||stms.length&&endsWithReturn(stms[$-1]);
+	bool dropped(Expression e){ auto id=cast(Identifier)e; return ret&&id&&varName(id) in names; }
+	Expression[] r;
+	foreach(st;stms){
+		if(auto fe=cast(ForgetExp)st){
+			if(!fe.val){
+				if(dropped(fe.var)) continue;
+				if(auto tpl=cast(TupleExp)fe.var){
+					tpl.e=tpl.e.filter!(c=>!dropped(c)).array;
+					if(!tpl.e.length) continue;
+				}
+			}
+		}else if(auto ce=cast(CompoundExp)st) ce.s=withoutForgets(ce.s,names,ret);
+		else if(auto ite=cast(IteExp)st){
+			ite.then.s=withoutForgets(ite.then.s,names,ret);
+			if(ite.othw) ite.othw.s=withoutForgets(ite.othw.s,names,ret);
+		}else if(auto fe=cast(ForExp)st) fe.bdy.s=withoutForgets(fe.bdy.s,names,ret);
+		else if(auto we=cast(WhileExp)st) we.bdy.s=withoutForgets(we.bdy.s,names,ret);
+		else if(auto re=cast(RepeatExp)st) re.bdy.s=withoutForgets(re.bdy.s,names,ret);
+		else static if(language==silq) if(auto dw=cast(DoWhileExp)st){
+			dw.bdy.s=withoutForgets(dw.bdy.s,names,ret);
+			if(dw.reset) dw.reset.s=withoutForgets(dw.reset.s,names,ret);
+		}
+		r~=st;
+	}
+	return r;
 }
 bool containsReturn(Expression e){
 	bool r=false;
@@ -5167,33 +5307,83 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		foreach(st;stms) visitStm(st,(Expression x){ if(auto id=cast(Identifier)x) r.insert(varName(id)); });
 		return r;
 	}
-	void checkGuards(Expression[] stms,Expression[] cont){
+	SetX!Id afterNames;
+	foreach(v;*after) afterNames.insert(v.name);
+	// (as are the variables in `later` that `stms` defines on paths that do not return without consuming them first, e.g.,
+	// `n` in `if c { return 0; } else { forget(n); } n:=1;` if it is available after the loop, or `n` in `if c { n:=1; }
+	// else { return 0; }` if the code after the statement uses it)
+	void definedFirst(Expression[] stms,ref SetX!Id consumed,ref SetX!Id later,bool loops){
+		void add(Expression e){
+			if(auto id=cast(Identifier)e) consumed.insert(varName(id));
+			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) add(c);
+		}
+		foreach(st;stms){
+			if(auto de=cast(DefineExp)st){
+				void define(Expression e){
+					if(auto id=cast(Identifier)e){ if(varName(id) in later&&varName(id) !in consumed) ok=false; }
+					else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) define(c);
+				}
+				define(de.e1);
+				add(de.e1);
+			}else if(auto fe=cast(ForgetExp)st) add(fe.var);
+			else if(auto ae=cast(AAssignExp)st) add(ae.e1);
+			else if(auto ite=cast(IteExp)st){
+				auto c1=consumed.dup,c2=consumed.dup;
+				bool r1=endsWithReturn(ite.then),r2=ite.othw&&endsWithReturn(ite.othw);
+				if(!r1) definedFirst(ite.then.s,c1,later,loops);
+				if(ite.othw&&!r2) definedFirst(ite.othw.s,c2,later,loops);
+				if(!r1) foreach(n;c1) consumed.insert(n);
+				if(!r2) foreach(n;c2) consumed.insert(n);
+			}else if(auto ce=cast(CompoundExp)st) definedFirst(ce.s,consumed,later,loops);
+			else if(!loops) continue;
+			else if(auto fe=cast(ForExp)st) definedFirst(fe.bdy.s,consumed,later,loops);
+			else if(auto re=cast(RepeatExp)st) definedFirst(re.bdy.s,consumed,later,loops);
+			else if(auto we=cast(WhileExp)st) definedFirst(we.bdy.s,consumed,later,loops);
+		}
+	}
+	// (`prefix`: the variables that the code before `stms` mentions; the variables after the loop that it does not mention
+	// may be forgotten when the loop body starts, e.g., if it only defines them again)
+	void checkGuards(Expression[] stms,Expression[] cont,SetX!Id prefix){
 		foreach(i,st;stms){
 			if(!containsReturn(st)) continue;
-			auto rest=stms[i+1..$];
+			auto rest=endsWithReturn(st)?[]:stms[i+1..$]; // (the rest is not reached)
 			auto later=names(cont);
 			foreach(r;rest) visitStm(r,(Expression x){
 				if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto id=cast(Identifier)y) if(varName(id) in later) ok=false; });
 			});
+			auto before=prefix.dup,upTo=prefix.dup;
+			foreach(n;names(stms[0..i])) before.insert(n);
+			foreach(n;names(stms[0..i+1])) upTo.insert(n);
+			SetX!Id carried;
+			foreach(n;afterNames) if(n in upTo) carried.insert(n);
+			SetX!Id consumed;
+			definedFirst(rest,consumed,carried,true);
+			auto usedLater=names(rest~cont);
+			foreach(n;carried) usedLater.insert(n);
+			SetX!Id consumedBefore;
+			definedFirst([st],consumedBefore,usedLater,false);
 			auto used=names(rest~cont),inStm=names([st]);
 			visitStm(st,(Expression x){
 				if(auto ret=cast(ReturnExp)x) if(auto consumed=erpKey(ret) in erpConsumedBeforeReturn)
 					foreach(n;*consumed) if(n in inStm&&n in used) ok=false;
 			});
 			if(auto ite=cast(IteExp)st){
-				checkGuards(ite.then.s,rest~cont);
-				if(ite.othw) checkGuards(ite.othw.s,rest~cont);
-			}else if(auto ce=cast(CompoundExp)st) checkGuards(ce.s,rest~cont);
-			else if(auto fe=cast(ForExp)st) checkGuards(fe.bdy.s,rest~cont);
-			else if(auto re=cast(RepeatExp)st) checkGuards(re.bdy.s,rest~cont);
-			else if(auto we=cast(WhileExp)st) checkGuards(we.bdy.s,rest~cont);
-			checkGuards(rest,cont);
+				foreach(n;names([ite.cond])) before.insert(n);
+				checkGuards(ite.then.s,rest~cont,before);
+				if(ite.othw) checkGuards(ite.othw.s,rest~cont,before);
+			}else if(auto ce=cast(CompoundExp)st) checkGuards(ce.s,rest~cont,before);
+			else if(auto fe=cast(ForExp)st) checkGuards(fe.bdy.s,rest~cont,before);
+			else if(auto re=cast(RepeatExp)st) checkGuards(re.bdy.s,rest~cont,before);
+			else if(auto we=cast(WhileExp)st) checkGuards(we.bdy.s,rest~cont,before);
+			checkGuards(rest,cont,upTo);
 			break;
 		}
 	}
-	if(auto fe=cast(ForExp)loop) checkGuards(fe.bdy.s,[]);
-	else if(auto re=cast(RepeatExp)loop) checkGuards(re.bdy.s,[]);
-	else if(auto we=cast(WhileExp)loop) checkGuards(we.bdy.s,[]);
+	SetX!Id condNames;
+	if(auto we=cast(WhileExp)loop) condNames=names([we.cond]);
+	if(auto fe=cast(ForExp)loop) checkGuards(fe.bdy.s,[],condNames);
+	else if(auto re=cast(RepeatExp)loop) checkGuards(re.bdy.s,[],condNames);
+	else if(auto we=cast(WhileExp)loop) checkGuards(we.bdy.s,[],condNames);
 	if(!ok) return null;
 	auto loc=loop.loc;
 	Expression.CopyArgs cargs;
@@ -5242,7 +5432,9 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 				r~=s;
 				continue;
 			}
+			bool returns=endsWithReturn(s);
 			r~=explicitStm(s);
+			if(returns) break; // (the rest is not reached)
 			auto rest=guard(stms[i+1..$]);
 			if(rest.length) r~=at(new IteExp(notDone(),at(new CompoundExp(rest)),null));
 			break;
@@ -5366,16 +5558,48 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	Expression.CopyArgs cargs;
 	SetX!Id used;
 	foreach(st;rest) statementFreeVarsImpl(st,(Identifier y){ used.insert(y.id); return 0; });
+	// (the variables that `s` defines and that the types of the parameters mention are passed as well, e.g., `n` for `x:𝔹^n`)
+	SetX!Id defined;
+	visitStm(s,(Expression x){ if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto id=cast(Identifier)y) defined.insert(varName(id)); }); });
+	for(bool changed=true;changed;){
+		changed=false;
+		foreach(v;vars){
+			if(v.name !in used||v.isConst) continue;
+			foreach(id;v.type.freeIdentifiers){
+				auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+				if(n in used||n !in defined||!vars.any!(w=>w.name==n&&!w.isConst)) continue;
+				used.insert(n);
+				changed=true;
+			}
+		}
+	}
 	Parameter[] params;
-	Expression[] args,prologue;
+	Expression[] args,prologue,coercions;
+	SetX!Id paramNames;
+	foreach(v;vars) if(v.name in used&&!v.isConst) paramNames.insert(v.name);
 	foreach(v;vars){
 		if(v.name !in used||v.isConst) continue;
 		auto pname=new Identifier(v.name);
 		pname.loc=s.loc;
+		auto type=v.type.copy(cargs);
+		// (types of parameters cannot mention other parameters: such a type is weakened, and the value is coerced back)
+		if(v.type.freeIdentifiers.any!(id=>id.id in paramNames||id.meaning&&id.meaning.name&&id.meaning.name.id in paramNames)){
+			if(auto w=weakenedExitType(v.type,paramNames)){
+				type=w.copy(cargs);
+				auto use=new Identifier(v.name);
+				use.loc=s.loc;
+				use.moved=true;
+				auto coerced=new TypeAnnotationExp(use,v.type.copy(cargs),TypeAnnotationType.coercion);
+				coerced.loc=s.loc;
+				auto def=new DefineExp(new Identifier(v.name),coerced);
+				def.loc=def.e1.loc=s.loc;
+				coercions~=def;
+			}
+		}
 		if(v.lifted){
 			auto tmp=new Identifier(freshName());
 			tmp.loc=s.loc;
-			auto param=new Parameter(true,tmp,v.type.copy(cargs));
+			auto param=new Parameter(true,tmp,type);
 			param.loc=s.loc;
 			params~=param;
 			auto dupe=new CallExp(new Identifier(Id.s!"dup"),tmp.copy(),false,false);
@@ -5384,7 +5608,7 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 			def.loc=s.loc;
 			prologue~=def;
 		}else{
-			auto param=new Parameter(false,pname,v.type.copy(cargs));
+			auto param=new Parameter(false,pname,type);
 			param.loc=s.loc;
 			params~=param;
 		}
@@ -5394,7 +5618,7 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	}
 	auto kname=new Identifier(freshName());
 	kname.loc=s.loc;
-	auto body_=new CompoundExp(prologue~rest);
+	auto body_=new CompoundExp(prologue~coercions~rest);
 	body_.loc=rest[0].loc;
 	auto fd=new FunctionDef(kname,params,true,null,body_);
 	fd.annotation=pure_;

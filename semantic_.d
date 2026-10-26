@@ -5359,6 +5359,12 @@ bool typeConstBlocked(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 bool typeConstBlocked(Declaration decl,Scope sc){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,sc);
 }
+bool typeConstBlockedInState(Declaration decl,MapX!(Id,Declaration) rnsymtab){ // (`rnsymtab` is a state of the scope of `decl`, which may differ from its current state, e.g., before a loop)
+	return decl.typeConstBlocker!is null||rnsymtab.byValue.any!(d=>isLiveTypeDependent(d,decl));
+}
+Declaration[] liveTypeDependentsInState(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+	return rnsymtab.byValue.filter!(d=>isLiveTypeDependent(d,decl)).array;
+}
 
 void typeConstBlockDecl(Declaration decl,Expression blocker,Scope sc)in{
 	assert(!!decl&&blocker&&sc);

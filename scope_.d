@@ -1315,7 +1315,7 @@ abstract class Scope{
 			return false;
 		}
 		import ast.semantic_:typeConstBlocked,typeConstBlockNote;
-		if(typeConstBlocked(meaning,this)){
+		if(!meaning.isConst&&typeConstBlocked(meaning,this)){ // (`const` declarations cannot be consumed even if their type dependents can be uncomputed, see below)
 			static if(language==silq){
 				if(!meaning.typeConstBlocker&&tryUncomputeTypeDependents(meaning,id))
 					return true;
@@ -2422,12 +2422,12 @@ abstract class Scope{
 		}
 		private bool isNonConstDecl(Declaration decl){ // TODO: get rid of code duplication?
 			if(!decl) return false;
-			import ast.semantic_:typeConstBlocked;
-			if(!decl||decl.isConst||typeConstBlocked(decl,rnsymtab)||isConst(decl))
+			import ast.semantic_:typeConstBlocked,typeConstBlockedInState;
+			if(!decl||decl.isConst||(rnsymtab.get(decl.getId,null) is decl?typeConstBlockedInState(decl,rnsymtab):typeConstBlocked(decl,rnsymtab))||isConst(decl))
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null, scope SetX!Id* unchangedConst=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null, scope SetX!Id* unchangedConst=null, scope SetX!Id* consumedAfter=null, scope SetX!Id* freed=null, scope Declaration[]* forgetBefore=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -2450,8 +2450,30 @@ abstract class Scope{
 				// loop scope, e.g. by an early `return` that has to forget them); they are not loop parameters
 				if(namesInLoop&&id !in *namesInLoop&&(!decl.name||decl.name.id !in *namesInLoop)) continue;
 				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
+				if(!mayChange&&forgetBefore&&namesInLoop&&type.isClassical()&&!decl.isConst&&!isConst(decl)&&decl.typeConstBlocker is null&&rnsymtab.get(decl.getId,null) is decl&&decl.splitInto.any!(d=>d.scope_ is loopScope)&&!unchangedOnContinuingPaths(decl,loopScope)){
+					// (changed on paths that continue the loop, blocked by live variables that the loop and its continuation do not
+					// mention, e.g., `x` in `x:=vector(n,…); for i in 0..2 { forget(n); n:=i; }`: they are forgotten before the loop,
+					// as by the first change, which makes them unavailable after it)
+					import ast.semantic_:liveTypeDependentsInState;
+					auto deps=liveTypeDependentsInState(decl,rnsymtab);
+					if(deps.length&&deps.all!((d){
+						auto dtype=typeForDecl(d);
+						return d.name&&d.name.id !in *namesInLoop&&dtype&&(dtype.isClassical()||dependencies.canForget(d));
+					})){
+						foreach(d;deps) if(!(*forgetBefore).canFind(d)) *forgetBefore~=d;
+						mayChange=true;
+					}
+				}
 				if(mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is loopScope);
 				if(!mayChange){
+					if(consumedAfter&&decl.name&&decl.name.id in *consumedAfter&&type.isClassical()&&!decl.isConst&&(cast(VarDecl)decl||cast(Parameter)decl)&&!decl.isToplevelDeclaration()&&!isTypeTy(type)&&!cast(FunTy)type){
+						// (consumed by the code after the loop, which becomes part of the function, e.g., `n` in `forget(x); forget(n);` with
+						// `x:𝔹^n`: the types of the parameters that mention it are weakened, see `lowerLoop`)
+						Expression.CopyArgs cargsMoved;
+						r[1]~=q(id,decl,type.copy(cargsMoved),true);
+						if(freed) freed.insert(decl.name.id);
+						continue;
+					}
 					if(!separateConstParams) continue;
 					if(!accessedDecls||decl.canonicalSource !in *accessedDecls) continue; // not captured
 					// (classical variables are passed as well: a function without captures is analyzed only once)
@@ -2479,6 +2501,11 @@ abstract class Scope{
 		Expression typeOf(Id id){
 			import ast.semantic_: typeForDecl;
 			if(auto decl=rnsymtab.get(id,null)) return typeForDecl(decl);
+			return null;
+		}
+		Expression typeOfName(Id name){
+			import ast.semantic_: typeForDecl;
+			foreach(_,decl;rnsymtab) if(!cast(DeadDecl)decl&&decl.name&&decl.name.id==name) return typeForDecl(decl);
 			return null;
 		}
 		// (a variable comes after the variables whose types mention it in this state)
