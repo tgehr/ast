@@ -2286,7 +2286,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		rst=compoundExpSemantic(rst,lsc,flags);
 		propErr(rst,dw);
 		resetReturns=definitelyReturns(rst);
-		if(resetReturns) rsc.closeUnreachable(lsc);
+		if(resetReturns) rsc.closeUnreachable(lsc,sc); // (bounded like the closing of the loop scope that follows, while the exit scope still gets the splits)
 		exitDrops=[];
 		if(!resetReturns) foreach(_,d;xsc.rnsymtab.dup){ // (they are not available after the loop, which allows the next iteration to forget them)
 			if(d.scope_ !is xsc||cast(DeadDecl)d||d.isSemError()||!d.splitFrom) continue;

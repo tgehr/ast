@@ -1195,7 +1195,7 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	r.copyAnalyzedFieldsFrom(fd);
 	r.ret=nret;
 	r.scope_=fd.scope_;
-	r.fscope_=new FunctionScope(r.scope_,r);
+	r.fscope_=new FunctionScope(r.scope_||!fd.fscope_?r.scope_:fd.fscope_.parent,r); // (a function analyzed in a type has no scope, but its body is nested in the scope of the analysis)
 	foreach(np;r.params) np.scope_=r.fscope_;
 	if(fd.ftype){
 		auto nftype=ftypeSubst.length?fd.ftype.substitute(ftypeSubst,ctx.tt):fd.ftype;

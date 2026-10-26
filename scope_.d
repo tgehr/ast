@@ -1509,14 +1509,15 @@ abstract class Scope{
 	}
 
 	bool diverges=false;
-	final bool closeUnreachable(Scope mergeScope){
+	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null){
 		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
 		diverges=true;
+		if(!consumptionScope) consumptionScope=mergeScope;
 		foreach(_,d;rnsymtab.dup){
 			if(cast(DeadDecl)d) continue;
-			if(d.isLinear()||d.scope_ is this){
+			if(d.isLinear()&&(!consumptionScope||!d.scope_||d.scope_.isNestedIn(consumptionScope))||d.scope_ is this){ // (variables of scopes that enclose the merge are not split into the branch, e.g., through the scope of a `let` expression)
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
 				clearConsumed();
