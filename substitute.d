@@ -574,6 +574,7 @@ struct BlockSubst{
 	MapSX!(Declaration,Declaration)* declMap;
 	bool changed=false;
 	TypeTransition* tt=null;
+	MapSX!(Id,Id)* renames=null; // (variables renamed by the twin of a function, see rescopeTwin)
 
 	bool wouldCapture(Id b){
 		foreach(k,v;subst) if(v.hasFreeVar(b)) return true;
@@ -586,7 +587,9 @@ struct BlockSubst{
 		return nn;
 	}
 	BlockSubst nested(){
-		return BlockSubst(subst.dup,forced.dup,taken,declMap,false,tt);
+		auto r=BlockSubst(subst.dup,forced.dup,taken,declMap,false,tt);
+		r.renames=renames;
+		return r;
 	}
 	Identifier bindVar(Identifier id,Expression vtype=null){
 		auto b=id.id;
@@ -595,6 +598,13 @@ struct BlockSubst{
 		else if(wouldCapture(b)) nb=freshName(b);
 		if(nb==b){
 			if(b in subst) subst.remove(b);
+			return id;
+		}
+		if(renames&&!cast(FunctionDef)id.meaning){ // (the twin gives all versions of the variable the new name, as their uses keep their meanings)
+			if(auto p=renames.getPtr(b)) nb=*p;
+			else (*renames)[b]=nb;
+			if(b in subst) subst.remove(b);
+			changed=true;
 			return id;
 		}
 		auto nid=remakeIdentifier(id,nb);
@@ -854,6 +864,23 @@ private Expression substStm(AAssignExp ae,ref BlockSubst ctx){
 	r.e2=ne2;
 	r.type=null;
 	r.sstate=SemState.initial;
+	auto base=ae.e1;
+	for(;;){
+		if(auto idx=cast(IndexExp)base) base=idx.e;
+		else if(auto fe=cast(FieldExp)base) base=fe.e;
+		else break;
+	}
+	if(auto id=cast(Identifier)base) if(id.id !in ctx.subst){ // (the updated variable keeps its versions, e.g., in a twin of a function in a type)
+		r.replacements=ae.replacements;
+		import std.algorithm: endsWith;
+		import ast.parser, ast.lexer;
+		static foreach(op;binaryOps){
+			static if(op.endsWith("←")&&op!="←"){
+				if(auto se=cast(BinaryExp!(Tok!op))ae)
+					if(se.operation) (cast(BinaryExp!(Tok!op))r).operation=useSubstitute(se.operation,ctx);
+			}
+		}
+	}
 	return finishStatement(r,ae,ctx);
 }
 static if(language==psi)
@@ -1124,6 +1151,8 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 	Identifier nname=fname;
 	if(fname&&bindNameInEnclosing) nname=ctx.bindVar(fname,fd.ftype);
 	auto bctx=ctx.nested();
+	MapSX!(Id,Id) renames;
+	if(!bctx.tt) bctx.renames=&renames;
 	if(fname&&!bindNameInEnclosing) nname=bctx.bindVar(fname,fd.ftype);
 	bool changed=nname !is fname;
 	auto nparams=fd.params.dup;
@@ -1141,6 +1170,7 @@ FunctionDef substituteFunctionDefImpl(FunctionDef fd,ref BlockSubst ctx,bool bin
 		auto pname=p.rename?p.rename:p.name;
 		Identifier npname=pname;
 		if(pname) npname=bctx.bindVar(pname,nvtype?nvtype:ndtype);
+		if(pname&&bctx.renames) if(auto q=renames.getPtr(pname.id)) npname=remakeIdentifier(pname,*q);
 		if(ndtype is p.dtype&&nvtype is p.vtype&&npname is pname) continue;
 		auto edtype=p.dtype?p.dtype.eval():null;
 		auto evtype=p.vtype?p.vtype.eval():null;
@@ -1217,6 +1247,7 @@ private struct LetRescope{
 private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockSubst bctx){
 	MapSX!(Declaration,Declaration) dmap;
 	MapSX!(Scope,Scope) smap;
+	MapSX!(Declaration,Declaration) replaced; // (the versions replaced by updates, by the versions they define)
 	Scope root=let?let.tpl.s.blscope_:fd.fscope_;
 	if(fd){
 		foreach(i,p;fd.params) dmap[p]=r.params[i];
@@ -1252,10 +1283,17 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		if(!cast(FunctionDef)d&&d.scope_&&inTwinned(d.scope_)){
 			auto vd=cast(VarDecl)d;
 			assert(vd,"rescopeTwin: unexpected declaration in substituted function body");
+			for(Declaration a=d;a;a=a.splitFrom?a.splitFrom:(a.mergedFrom.length?a.mergedFrom[0]:null)){
+				if(a.scope_&&!inTwinned(a.scope_)){ // (a version of a variable from outside the `let` or function)
+					auto m=mapDecl(a);
+					if(!m||m.canonicalSource !is a.canonicalSource) return null; // (substituted away, e.g., a captured variable by its value)
+					break;
+				}
+			}
 			auto nid=d.name?d.getId:Id(); // (as for the twin's parameters, renamed names become names)
 			bool inherited=false;
 			for(Declaration a=d;;){
-				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length==1?a.mergedFrom[0]:null);
+				auto nxt=a.splitFrom?a.splitFrom:(a.mergedFrom.length?a.mergedFrom[0]:replaced.get(a,null)); // (an update defines a version with the name of the version it replaces)
 				if(!nxt) break;
 				if(let&&nxt.scope_&&!inTwinned(nxt.scope_)){ // (a version of a variable from outside the `let`)
 					auto m=mapDecl(nxt);
@@ -1268,6 +1306,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 				a=nxt;
 			}
 			if(let&&!inherited&&d.name) nid=let.rename(d);
+			if(!let&&d.name&&bctx.renames) if(auto q=bctx.renames.getPtr(d.getId)) nid=*q;
 			auto nd=new VarDecl(d.name?new Identifier(nid):null);
 			nd.copyAnalyzedFieldsFrom(d);
 			dmap[d]=nd;
@@ -1291,6 +1330,17 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 	}
 	Scope[] blocks; // (enclosing blocks of the expression being copied)
 	FunctionDef[] nestedTwins;
+	void collectReplacements(Expression e){
+		foreach(se;e.subexpressions){
+			if(auto ae=cast(AAssignExp)se) foreach(x;ae.replacements) if(x.previous&&x.new_) replaced[x.new_]=x.previous;
+			if(auto de=cast(DefineExp)se) foreach(x;de.replacements) if(x.previous&&x.new_) replaced[x.new_]=x.previous;
+			FunctionDef nfd;
+			if(auto le=cast(LambdaExp)se) nfd=le.fd;
+			else nfd=cast(FunctionDef)se;
+			if(nfd&&nfd.body_) collectReplacements(nfd.body_);
+		}
+	}
+	collectReplacements(let?let.tpl:r.body_);
 	static struct FunctionUse{ Identifier id; Scope block; }
 	FunctionUse[] functionUses;
 	// the generic BinaryExp copy drops checker-computed fields
@@ -1498,6 +1548,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			auto mi=mapDecl(d.mergedInto);
 			if(!mi) continue;
 			auto nd=mapDecl(d);
+			if(!nd) continue;
 			nd.mergedInto=mi;
 			ns.mergedVars~=nd;
 		}

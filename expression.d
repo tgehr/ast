@@ -924,7 +924,7 @@ struct EqualityContext{
 		}
 		if((a.ret is null)!=(b.ret is null)) return false;
 		if(a.ret){
-			if(!a.ret.isEqualImpl(b.ret,this)) return false;
+			if(!a.ret.isEqualImpl(b.ret,this)&&(a.rret||b.rret)) return false; // (an inferred return type is determined by the body, e.g., more precisely in a substituted copy that is analyzed again)
 		}else{
 			if((a.rret is null)!=(b.rret is null)) return false;
 			if(a.rret&&!a.rret.isEqualImpl(b.rret,this)) return false;
@@ -1132,7 +1132,8 @@ class Identifier: Expression{
 				// expressions currently being compared (or the meanings
 				// descend from a common canonical source): they are equal
 				// iff their meanings are paired up (alpha-equivalence)
-				return ctx.lookup(meaning,r.meaning)&&isEqual(type,r.type,&ctx);
+				if(!ctx.lookup(meaning,r.meaning)) return false;
+				return ctx.isBound(meaning)||ctx.isBound(r.meaning)||isEqual(type,r.type,&ctx); // (the types of bound variables are determined by their definitions, e.g., more precisely in a substituted copy that is analyzed again)
 			}
 			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning) {
 				if(meaning) {
@@ -3187,6 +3188,27 @@ class LetExp: Expression{
 			});
 			return ok;
 		}
+		bool substitutable(Expression x){ // (a function that updates its copy of a variable is not substituted into, e.g., `λ(){ y+=1; return y; }`)
+			bool updates(Expression b,bool inFunction){
+				foreach(se;b.subexpressions){
+					if(inFunction) if(auto ae=cast(AAssignExp)se){
+						auto lhs=ae.e1;
+						for(;;){
+							if(auto idx=cast(IndexExp)lhs) lhs=idx.e;
+							else if(auto fe=cast(FieldExp)lhs) lhs=fe.e;
+							else break;
+						}
+						if(auto id=cast(Identifier)lhs) if(id.id in cur) return true;
+					}
+					FunctionDef fd;
+					if(auto le=cast(LambdaExp)se) fd=le.fd;
+					else fd=cast(FunctionDef)se;
+					if(fd&&fd.body_&&updates(fd.body_,true)) return true;
+				}
+				return false;
+			}
+			return !updates(x,false);
+		}
 		bool run(Expression[] ss){
 			foreach(x;ss){
 				if(auto ce=cast(CompoundExp)x){
@@ -3197,7 +3219,7 @@ class LetExp: Expression{
 					if(!de.e2.type||!de.e2.type.isClassical()) return false;
 					if(de.e2.getAnnotation()<pure_) return false;
 					if(!de.e2.isSemCompleted()||de.e2.isSemError()) return false;
-					if(!refersToLet(de.e2)) return false;
+					if(!refersToLet(de.e2)||!substitutable(de.e2)) return false;
 					auto rhs=cur.length?de.e2.substitute(cur):de.e2.eval();
 					if(auto id=cast(Identifier)de.e1){
 						cur[id.id]=rhs;
@@ -3255,7 +3277,7 @@ class LetExp: Expression{
 			}
 			return true;
 		}
-		if(!run(s.s)||!refersToLet(e)) return this;
+		if(!run(s.s)||!refersToLet(e)||!substitutable(e)) return this;
 		auto r=cur.length?e.substitute(cur):e.eval();
 		if(type&&r.type&&!isSubtype(r.type,type)) return this;
 		return r;
