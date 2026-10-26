@@ -2950,6 +2950,7 @@ class LambdaExp: Expression{
 class LetExp: Expression{
 	CompoundExp s;
 	Expression e;
+	bool analyzed=false; // (a copy of an analyzed `let` expression renames its variables whose names are taken where it is analyzed again)
 	this(CompoundExp s,Expression e){
 		this.s=s;
 		this.e=e;
@@ -3063,7 +3064,9 @@ class LetExp: Expression{
 				foreach(fd;copiedDefs) computeCapturesFromBody(fd);
 			}
 		}
-		return new LetExp(ns,ne);
+		auto r=new LetExp(ns,ne);
+		r.analyzed=analyzed;
+		return r;
 	}
 	Expression isForward(bool allowForgets=false){
 		if(s.blscope_) return null;
@@ -3142,7 +3145,7 @@ class LetExp: Expression{
 		return this is rhs; // TODO
 	}
 	override Expression evalImpl(){
-		if(auto fwd=isForward()) return fwd;
+		if(auto fwd=isForward()) return fwd.eval(); // (e.g., `let { a:=dup(n); } in a` is `n`)
 		// (classical definitions are substituted by name: a use whose name is bound must refer to a declaration of the
 		// `let`, as the name refers to an enclosing declaration again once the binding is consumed)
 		SetX!Declaration letDecls;
@@ -3209,6 +3212,18 @@ class LetExp: Expression{
 			}
 			return !updates(x,false);
 		}
+		Expression read(Expression x){ // (the value is read by each use, e.g., that of `k:=move(m)` with `m` of an enclosing `let`)
+			MapSX!(Id,Expression) reads;
+			foreach(id;x.freeIdentifiers){
+				if(id.constLookup||id.implicitDup||id.id in reads||!cast(VarDecl)id.meaning) continue;
+				Expression.CopyArgs cargs={preserveSemantic: true};
+				auto r=id.copy(cargs);
+				r.moved=false;
+				r.setConstLookup(true);
+				reads[id.id]=r;
+			}
+			return reads.length?x.substitute(reads):x;
+		}
 		bool run(Expression[] ss){
 			foreach(x;ss){
 				if(auto ce=cast(CompoundExp)x){
@@ -3220,7 +3235,7 @@ class LetExp: Expression{
 					if(de.e2.getAnnotation()<pure_) return false;
 					if(!de.e2.isSemCompleted()||de.e2.isSemError()) return false;
 					if(!refersToLet(de.e2)||!substitutable(de.e2)) return false;
-					auto rhs=cur.length?de.e2.substitute(cur):de.e2.eval();
+					auto rhs=read(cur.length?de.e2.substitute(cur):de.e2.eval());
 					if(auto id=cast(Identifier)de.e1){
 						cur[id.id]=rhs;
 						continue;
@@ -3683,8 +3698,8 @@ class ForgetExp: Expression{
 		if(nval is val) return this;
 		return new ForgetExp(var,nval);
 	}
-	override Annotation getAnnotation(){ // (forgetting a classical value has no effect)
-		if(!var.type||!var.type.isClassical()) return Annotation.none;
+	override Annotation getAnnotation(){ // (forgetting a classical value has no effect, and forgetting a quantum value uncomputes it, as in `qfree` functions)
+		if(!var.type) return Annotation.none;
 		return val?min(pure_,val.getAnnotation()):pure_;
 	}
 	mixin VariableFree; // TODO

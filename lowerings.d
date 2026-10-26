@@ -390,11 +390,9 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 		}
 		fd.addCapture(cur,id);
 	}
-	foreach(p;params){
-		assert(!!p.dtype);
-		foreach(id;p.dtype.freeVars)
+	foreach(arg;[e0,e1])
+		foreach(id;arg.type.freeVars) // (of the analyzed type: e.g., a lambda within the copy is not analyzed yet)
 			visId(id);
-	}
 	Declaration[] inserted;
 	foreach(capture;fd.capturedDecls){
 		if(capture.scope_.canInsert(capture.name.id)){
@@ -604,13 +602,13 @@ private Expression logicLowering(ALogicExp e,bool isOr,ExpSemContext context){ /
 	auto shortCircuit=toCompound(value),evaluated=toCompound(ne2);
 	auto ite=isOr?new IteExp(e.e1,shortCircuit,evaluated):new IteExp(e.e1,evaluated,shortCircuit);
 	ite.loc=e.loc;
-	if(!e.blscope_||!e.forgetScope) return expressionSemantic(ite,context);
-	// (the branches are the scopes the right operand was analyzed in, e.g., it may consume variables)
 	auto quantumControl=e.e1.type&&!e.e1.type.isClassical();
-	shortCircuit.blscope_=e.forgetScope;
-	evaluated.blscope_=e.blscope_;
+	if(e.blscope_&&e.forgetScope){ // (the branches are the scopes the right operand was analyzed in, e.g., it may consume variables)
+		shortCircuit.blscope_=e.forgetScope;
+		evaluated.blscope_=e.blscope_;
+	} // (otherwise, e.g., within a type, the branches have no scopes of their own, like those of an `if` expression used outside of its scope)
 	foreach(branch;[ite.then,ite.othw]){
-		branch.s[0]=branchSemantic(branch.s[0],context.nestScope(branch.blscope_,context.constResult),quantumControl);
+		branch.s[0]=branchSemantic(branch.s[0],context.nestScope(branch.blscope_?branch.blscope_:context.sc,context.constResult),quantumControl);
 		branch.type=branch.s[0].type;
 		propErr(branch.s[0],branch);
 		propErr(branch,ite);

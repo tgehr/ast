@@ -7681,7 +7681,52 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 	return expressionSemanticImplDefault(le,context);
 }
 
+static if(language==silq)
+void renameTakenLocals(LetExp le,Scope sc){ // (e.g., of a copy of the length of a vector type, as variables of the same names can be declared after the `let` expression)
+	import ast.substitute: collectBoundNamesImpl;
+	SetX!Id bound,used;
+	foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,bound);
+	void walk(Expression x,scope void delegate(Identifier) dg,bool renaming=false){
+		if(!x) return;
+		if(auto id=cast(Identifier)x) return dg(id);
+		if(auto lam=cast(LambdaExp)x){
+			if(renaming){ // (later copies are made from the renamed definition)
+				lam.orig=lam.orig.copy();
+				walk(lam.orig,dg,renaming);
+			}
+			return walk(lam.fd,dg,renaming);
+		}
+		if(auto fd=cast(FunctionDef)x){
+			if(fd.name) dg(fd.name);
+			foreach(p;fd.params){ if(p.name) dg(p.name); walk(p.dtype,dg,renaming); }
+			walk(fd.rret,dg,renaming);
+			return walk(fd.body_,dg,renaming);
+		}
+		if(auto fe=cast(ForExp)x){ walk(fe.var,dg,renaming); walk(fe.pattern,dg,renaming); }
+		if(auto we=cast(WithExp)x) walk(we.itrans,dg,renaming);
+		foreach(c;x.components) walk(c,dg,renaming);
+	}
+	walk(le,(Identifier id){ used.insert(id.id); });
+	bool taken(Id name){ return !sc.canInsert(name); }
+	SetX!Id free; // (a variable that the `let` expression redefines keeps its name, e.g., `q:=let { q:=X(q); } in q`)
+	le.freeVarsImpl((Identifier id){ free.insert(id.id); return 0; });
+	MapSX!(Id,Id) renames;
+	foreach(b;bound){
+		if(b in free||!taken(b)) continue;
+		auto nb=b;
+		do nb=nb.apos; while(taken(nb)||nb in used);
+		used.insert(nb);
+		renames[b]=nb;
+	}
+	if(!renames.length) return;
+	walk(le,(Identifier id){ if(!id.meaning) if(auto p=renames.getPtr(id.id)) id.id=*p; },true);
+}
+
 Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
+	static if(language==silq){
+		if(le.analyzed) renameTakenLocals(le,context.sc);
+		le.analyzed=true;
+	}
 	if(!le.isForward(true)||context.constResult||context.inType)
 		return generalLetExpSemantic(le,context);
 	auto de=cast(DefineExp)le.s.s[0];
