@@ -436,7 +436,7 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 	}
 	foreach(arg;args){
 		if(isEmpty(arg.type)){
-			arg.constLookup=context.constResult!=ConstResult.no;
+			arg.setConstLookup(context.constResult!=ConstResult.no); // (e.g., an operand that is read becomes an implicit `dup`)
 			if(original&&original.type){
 				arg=new TypeAnnotationExp(arg,original.type,TypeAnnotationType.annotation);
 				arg=expressionSemantic(arg,context);
@@ -610,7 +610,7 @@ private Expression logicLowering(ALogicExp e,bool isOr,ExpSemContext context){ /
 	shortCircuit.blscope_=e.forgetScope;
 	evaluated.blscope_=e.blscope_;
 	foreach(branch;[ite.then,ite.othw]){
-		branch.s[0]=branchSemantic(branch.s[0],expSemContext(branch.blscope_,context.constResult,context.inType),quantumControl);
+		branch.s[0]=branchSemantic(branch.s[0],context.nestScope(branch.blscope_,context.constResult),quantumControl);
 		branch.type=branch.s[0].type;
 		propErr(branch.s[0],branch);
 		propErr(branch,ite);

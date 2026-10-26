@@ -1318,8 +1318,8 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		if(auto pe=bctx.subst.getPtr(d.getId)){
 			// declarations lexically outer to the substituted function are
 			// substituted away; others (e.g. from inserted values) stay
-			auto outer=let?root:fd.scope_;
-			if(d.scope_&&outer&&outer.isNestedIn(d.scope_)){
+			auto outer=let?root:fd.scope_||!fd.fscope_?fd.scope_:fd.fscope_.parent; // (for a function analyzed in a type, the scope of the analysis, as for the twin)
+			if(d.scope_&&outer&&(outer.isNestedIn(d.scope_)||cast(TypeScope)outer)){ // (a `let` expression carried by a type finds its free variables by name)
 				if(auto id=cast(Identifier)*pe) if(id.meaning){
 					if(!let||id.meaning.canonicalSource is d.canonicalSource) return id.meaning; // (in a `let` expression, only the twin of the same variable is a renaming)
 				}

@@ -365,6 +365,7 @@ class FunctionDef: FixedPointDeclaration{
 	static if(language==silq){
 		SetX!Id consumingCaptures; // consumed classical captures
 		bool captureReanalysis=false;
+		Scope typeBoundary=null; // (of a closure within a type: the scope in which the analysis of the type started)
 	}
 	void addCapture(Declaration meaning,Identifier id)in{
 		assert(!!meaning&&(!meaning.isLinear||context&&context.vtype==contextTy(false)));

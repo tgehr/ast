@@ -5444,6 +5444,10 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 	if(!meaning||meaning.isSemError()) return false;
 	if(!checkNonConstDecl!("assign to","assigning to")(meaning,loc,sc,allowComponentConstBlocks,true))
 		return false;
+	static if(language==silq) if(consumesOutsideType(meaning,sc.letTypeBoundary())){ // (the assignment consumes the previous value)
+		sc.error(format("cannot consume `%s` in a type",meaning.name),loc);
+		return false;
+	}
 	auto type=typeForDeclAnalyzing(meaning);
 	if(!type){
 		sc.error("invalid forward reference",loc);
@@ -7488,8 +7492,9 @@ struct ExpSemContext{
 	ConstResult constResult;
 	InType inType;
 	InConst inConst;
+	Scope typeRoot=null; // (the scope in which the analysis of the enclosing type started)
 	static ExpSemContext forType(Scope sc) {
-		return ExpSemContext(sc, ConstResult.yes, InType.yes, InConst.yes);
+		return ExpSemContext(sc, ConstResult.yes, InType.yes, InConst.yes, sc);
 	}
 }
 auto expSemContext(Scope sc,ConstResult constResult,InType inType,InConst inConst=InConst.no){
@@ -7497,7 +7502,14 @@ auto expSemContext(Scope sc,ConstResult constResult,InType inType,InConst inCons
 	return ExpSemContext(sc,constResult,inType,inConst);
 }
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
-	with(context) return expSemContext(sc,newConstResult,inType,inConst);
+	auto r=expSemContext(context.sc,newConstResult,context.inType,context.inConst);
+	r.typeRoot=context.typeRoot;
+	return r;
+}
+auto nestScope(ref ExpSemContext context,Scope sc,ConstResult constResult,InConst inConst=InConst.no){ // (e.g., for a branch of an `if` expression within a type)
+	auto r=expSemContext(sc,constResult,context.inType,inConst);
+	r.typeRoot=context.typeRoot;
+	return r;
 }
 auto nestConst(ref ExpSemContext context){
 	return context.nest(ConstResult.yes);
@@ -7520,8 +7532,10 @@ auto nestType(ref ExpSemContext context){
 	return ExpSemContext.forType(context.sc);
 }
 
-Expression conditionSemantic(bool allowQuantum=false)(Expression parent, Expression e,Scope sc,InType inType){
-	e=expressionSemantic(e,expSemContext(sc,ConstResult.yes,inType));
+Expression conditionSemantic(bool allowQuantum=false)(Expression parent, Expression e,Scope sc,InType inType,Scope typeRoot=null){
+	auto context=expSemContext(sc,ConstResult.yes,inType);
+	context.typeRoot=typeRoot;
+	e=expressionSemantic(e,context);
 	static if(language==silq) sc.clearConsumed();
 	if(e.isSemCompleted() && !isSubtype(e.type,Bool(!allowQuantum))){
 		static if(language==silq){
@@ -7538,7 +7552,7 @@ CompoundExp branchBlockSemantic(CompoundExp branch, ExpSemContext context, bool 
 	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
 
 	assert(branch.s.length == 1);
-	branch.s[0] = branchSemantic(branch.s[0], expSemContext(branch.blscope_, context.constResult, context.inType), quantumControl);
+	branch.s[0] = branchSemantic(branch.s[0], context.nestScope(branch.blscope_, context.constResult), quantumControl);
 	static if(language==silq) branch.blscope_.clearConsumed();
 
 	branch.type=branch.s[0].type;
@@ -7567,7 +7581,7 @@ Expression branchSemantic(Expression branch,ExpSemContext context,bool quantumCo
 
 Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
-	ite.cond=conditionSemantic!true(ite, ite.cond, sc, inType);
+	ite.cond=conditionSemantic!true(ite, ite.cond, sc, inType, context.typeRoot);
 	if(ite.then.s.length!=1||ite.othw&&ite.othw.s.length!=1){
 		sc.error("branch of if expression must be single expression",ite.then.s.length!=1?ite.then.loc:ite.othw.loc);
 		ite.setSemError();
@@ -7717,6 +7731,7 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 		le.s.blscope_=new BlockScope(sc,restriction_,RestrictionCause(inType?le:null));
 	}
 	le.s.blscope_.isLetBody=true;
+	static if(language==silq) le.s.blscope_.typeBoundary=inType?context.typeRoot:null;
 	static if(language==silq){
 		Scope.OuterConstRead[] outerConstReads;
 		auto reblockConst=context.inConst&&!inType;
@@ -7730,7 +7745,7 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 		le.setSemError();
 	}
 	auto bsc=le.s.blscope_;
-	le.e=expressionSemantic(le.e,expSemContext(bsc?bsc:sc,context.constResult,context.inType,context.inConst));
+	le.e=expressionSemantic(le.e,context.nestScope(bsc?bsc:sc,context.constResult,context.inConst));
 	static if(language==silq) if(bsc) bsc.clearConsumed();
 	propErr(le.e,le);
 	le.type=le.e.type;
@@ -7813,6 +7828,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 		nfd=cast(FunctionDef)presemantic(nfd,sc);
 	}else assert(le.fd.scope_ is sc);
 	assert(!!nfd);
+	static if(language==silq) if(inType) nfd.typeBoundary=context.typeRoot;
 	le.fd=functionDefSemantic(nfd,sc);
 	assert(!!le.fd);
 	propErr(le.fd,le);
@@ -9460,7 +9476,7 @@ Expression handleLogic(string name,ALogicExp e,ref Expression e1,ref Expression 
 	// initialize scopes, to allow captures to be inserted
 	e.blscope_=new BlockScope(sc,restriction_,RestrictionCause(quantumControl?e:null));
 	e.forgetScope=new BlockScope(sc,restriction_,RestrictionCause(quantumControl?e:null));
-	e2=branchSemantic(e2,expSemContext(e.blscope_,ConstResult.yes,inType),quantumControl);
+	e2=branchSemantic(e2,context.nestScope(e.blscope_,ConstResult.yes),quantumControl);
 	static if(language==silq) e.blscope_.clearConsumed();
 	propErr(e1,e);
 	propErr(e2,e);
@@ -9534,12 +9550,18 @@ Expression concatType(Expression t1,Expression t2){
 		if(cast(ArrayTy)ntype||cast(VectorTy)ntype||cast(TupleTy)ntype)
 			return ntype;
 	}else{
+		auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
+		if(vt1&&vt2&&vt1.next==vt2.next){ // (the same as the tuple of the element types, which would have to be constructed)
+			auto add=new AddExp(vt1.num,vt2.num);
+			add.type=ℕt(true);
+			add.setSemCompleted();
+			return vectorTy(vt1.next,add.eval()); // TODO: evaluation context
+		}
 		auto tt1=t1.isTupleTy(),tt2=t2.isTupleTy();
 		if(tt1&&tt2){
 			return tupleTy(chain(iota(tt1.length).map!(i=>tt1[i]),
 					     iota(tt2.length).map!(i=>tt2[i])).array);
 		}
-		auto vt1=cast(VectorTy)t1,vt2=cast(VectorTy)t2;
 		if(vt1&&vt2){
 			if(auto netype=joinTypes(vt1.next,vt2.next)){
 				auto add=new AddExp(vt1.num,vt2.num);
@@ -9742,7 +9764,31 @@ Expression expressionSemanticImpl(WildcardExp we,ExpSemContext context){
 
 Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 	auto r=typeofOperandSemantic(ty,context);
-	if(r !is ty) context.sc.captureTypeDependencies(r); // (as if the resulting type was written explicitly)
+	if(r !is ty){ // (as if the resulting type was written explicitly)
+		auto sc=context.sc;
+		static if(language==silq){ // (its variables are accessed here, so later splits update them)
+			bool visible(Identifier id){ return id.meaning&&id.meaning.scope_&&!id.meaning.isToplevelDeclaration()&&sc.isNestedIn(id.meaning.scope_); }
+			MapSX!(Id,Expression) subst;
+			foreach(id;r.freeIdentifiers){
+				if(id.id in subst||!visible(id)) continue;
+				auto use=new Identifier(id.id);
+				use.loc=id.loc;
+				use.scope_=sc;
+				use.meaning=sc.getSplit(id.meaning);
+				use.type=id.type;
+				use.constLookup=true;
+				use.implicitDup=id.implicitDup;
+				use.setSemCompleted();
+				subst[id.id]=use;
+			}
+			if(subst.length){
+				r=r.substitute(subst);
+				foreach(id;r.freeIdentifiers)
+					if(visible(id)&&!id.typeofSuppressedCapture) sc.recordAccess(id,id.meaning);
+			}
+		}
+		sc.captureTypeDependencies(r);
+	}
 	return r;
 }
 private Expression typeofOperandSemantic(TypeofExp ty,ExpSemContext context){

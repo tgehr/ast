@@ -216,6 +216,11 @@ abstract class Scope{
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
 		static if(language==silq) if(blockedRedefinitionError(newDecl,oldDecl)) return false;
 		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
+			static if(language==silq) if(consumesOutsideType(oldDecl,letTypeBoundary())){ // (the previous version is forgotten)
+				if(!oldDecl.isSemError()&&!newDecl.isSemError()) error(format("cannot consume `%s` in a type",oldDecl.name),newDecl.name.loc);
+				newDecl.setSemError();
+				return false;
+			}
 			lastUses.forget(oldDecl,true);
 			return true;
 		}
@@ -1285,6 +1290,11 @@ abstract class Scope{
 		if(meaning.isPinned) return false;
 		return true;
 	}
+	static if(language==silq) final Scope letTypeBoundary(){ // (of the innermost `let` expression within a type that contains this scope in the same function)
+		for(auto bs=cast(BlockScope)this;bs;bs=cast(BlockScope)bs.parent)
+			if(bs.typeBoundary) return bs.typeBoundary;
+		return null;
+	}
 	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
@@ -1297,6 +1307,11 @@ abstract class Scope{
 				note("declared here",meaning.loc);
 				id.setSemForceError();
 			}
+			return false;
+		}
+		static if(language==silq) if(consumesOutsideType(meaning,letTypeBoundary())){ // (e.g., `forget(x)` in a `let` expression within a type)
+			if(!id.isSemError()) error(format("cannot consume `%s` in a type",meaning.name),id.loc);
+			id.setSemForceError();
 			return false;
 		}
 		import ast.semantic_:typeConstBlocked,typeConstBlockNote;
@@ -1384,6 +1399,11 @@ abstract class Scope{
 		auto fsc=typeofFrame();
 		if(!fsc||!fsc.isNestedIn(meaning.scope_)) return meaning; // (declared within the operand)
 		ident.typeofSuppressedCapture=true;
+		static if(language==silq) if(kind==Lookup.consuming&&consumesOutsideType(meaning,letTypeBoundary())){ // (as outside of the operand)
+			error(format("cannot consume `%s` in a type",meaning.name),ident.loc);
+			ident.setSemError();
+			return meaning;
+		}
 		static if(language==silq) if(!fsc.simulateTypeofConsumption(ident,meaning,kind,this,failures)) return null;
 		return meaning;
 	}
@@ -3169,6 +3189,12 @@ class CapturingScope(T): NestedScope{
 			bool consumed=!isConstLookup&&(meaning.isLinear()||id.byRef);
 			bool consumedClassical=false;
 			static if(language==silq&&is(T==FunctionDef)) if(!isConstLookup&&meaning.name&&(meaning.name.id in decl.consumingCaptures||id.moved)) consumed=consumedClassical=true;
+			static if(language==silq&&is(T==FunctionDef)) if(consumed&&consumesOutsideType(meaning,decl.typeBoundary?decl.typeBoundary:parent.letTypeBoundary())){
+				origin.error(format("cannot consume `%s` in a type",meaning.name),id.loc);
+				id.typeofSuppressedCapture=true; // (as within a product type)
+				id.setSemError();
+				return null;
+			}
 			static if(language==silq&&is(T==FunctionDef)) if(consumed&&id.typeofSuppressedCapture){ // (an enclosing `typeof` operand only simulates the capture)
 				if(!id.isSemError) decl.addCapture(meaning,id);
 				if(meaning.name) decl.consumingCaptures.insert(meaning.name.id);
@@ -3319,6 +3345,14 @@ class BlockScope: NestedScope{
 		if(restrictionCause_&&restriction_>=annotation) return restrictionCause_;
 		return super.restrictionCause(annotation);
 	}
+	static if(language==silq) Scope typeBoundary=null; // (of a `let` expression within a type: the scope in which the analysis of the type started)
+}
+
+static if(language==silq)
+bool consumesOutsideType(Declaration decl,Scope boundary){ // (a type cannot consume variables declared outside of it)
+	if(!boundary||!decl||decl.isToplevelDeclaration()) return false;
+	auto cs=decl.canonicalSource.scope_;
+	return cs&&(cs is boundary||!cs.isNestedIn(boundary));
 }
 
 class TypeScope: BlockScope{
