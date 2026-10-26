@@ -771,7 +771,11 @@ class VectorTy: Type, ITupleTy{
 		return false;
 	}
 	override bool isSubtypeImpl(Expression r,EqualityContext* ctx){
-		if(auto rarr=cast(ArrayTy)r) return isSubtype(next,rarr.next,ctx);
+		if(auto rarr=cast(ArrayTy)r){
+			if(auto nlit=num.asIntegerConstant())
+				if(nlit.get()==0) return true; // (as for an empty tuple, e.g., when the array type was made classical)
+			return isSubtype(next,rarr.next,ctx);
+		}
 		auto lvec=this,rvec=cast(VectorTy)r;
 		if(rvec){
 			if(!isEqual(num,rvec.num,ctx)) return false;

@@ -1027,7 +1027,8 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
 	def.loc=loc;
 	enum unchecked=false,noImplicitDup=true;
 	// let-pattern bodies are not analyzed; defer lowering of flipped defines to semantic analysis
-	auto r=new CompoundExp(reverseStatements(le.s.s,[cast(Expression)def],sc,unchecked,noImplicitDup,defer:true));
+	auto hoist=le.s.isSemCompleted(); // (the classical locals of an analyzed `let` are recomputed, as for a nested block, and the received values are checked against them)
+	auto r=new CompoundExp(reverseStatements(le.s.s,[cast(Expression)def],sc,unchecked,noImplicitDup,hoist,true,hoist?definedNames(def):null));
 	r.loc=loc;
 	return r;
 }

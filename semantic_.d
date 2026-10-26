@@ -7734,6 +7734,16 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	static if(language==silq) if(bsc) bsc.clearConsumed();
 	propErr(le.e,le);
 	le.type=le.e.type;
+	static if(language==silq) if(bsc&&le.type){ // (the type cannot mention the variables of the `let` expression, as for the merge of a block whose `const` locals a type mentions)
+		bool isLocal(Declaration d){ return !cast(DatDecl)d&&d.scope_&&d.scope_.isNestedIn(bsc)&&d.canonicalSource.scope_&&d.canonicalSource.scope_.isNestedIn(bsc); }
+		if(auto visible=eliminateVariables(le.type,&isLocal)) le.type=visible;
+		else foreach(id;le.type.freeIdentifiers){
+			if(!id.meaning||!isLocal(id.meaning)) continue;
+			sc.error(format("local variable `%s` appears in type `%s` of `let` expression (maybe declare `%s` in the enclosing scope?)",id.name,le.type,id.name),le.e.loc);
+			le.setSemError();
+			break;
+		}
+	}
 	static if(language==silq){
 		if(bsc){
 			foreach(_,d;bsc.rnsymtab.dup){
@@ -8105,6 +8115,12 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	if(id.type){
 		if(!subscribeToTypeUpdates(id.meaning,sc,id.loc))
 			id.setSemError();
+	}
+	static if(language==silq) if(sc&&id.type&&!id.isSemError()&&(isType(id)||isQNumeric(id))&&id.meaning.isSemFinal()&&id.meaning.canonicalSource.isSemFinal()){
+		if(auto init=id.getInitializer()){ // (a use of a type variable is replaced by its value, as if the value was written explicitly)
+			sc.pinMentions(init);
+			sc.captureTypeDependencies(init);
+		}
 	}
 	if(!isType(id)){
 		if(auto dsc=isInDataScope(id.meaning.scope_)){

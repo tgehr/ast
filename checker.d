@@ -150,6 +150,7 @@ class Checker {
 	this(ast_scope.NestedScope nscope, Checker parent = null) {
 		this.nscope = nscope;
 		this.parent = parent;
+		if(parent) inType = parent.inType;
 	}
 
 	void visExpr(ast_exp.Expression e) {
@@ -168,6 +169,9 @@ class Checker {
 
 	void visType(ast_exp.Expression e) {
 		assert(ast_ty.isType(e) || ast_ty.isQNumeric(e), format("expected type: %s", e));
+		auto prevInType = inType;
+		inType = true;
+		scope(exit) inType = prevInType;
 		visExprOnce(e);
 	}
 
@@ -247,6 +251,16 @@ class Checker {
 		foreach(name, val; vars) {
 			assert(!val, format("ERROR: Variable %s defined on %s not consumed", name.str, val.loc));
 		}
+	}
+
+	void forgetClassical() {
+		Id[] names;
+		foreach(name, val; vars) {
+			if(!val) continue;
+			auto ty = typeForDecl(val);
+			if(ty && !ast_ty.hasQuantumComponent(ty)) names ~= name;
+		}
+		foreach(name; names) vars[name] = null;
 	}
 
 	StmtResult implStmt(ast_exp.CompoundExp e) {
@@ -824,6 +838,7 @@ class Checker {
 				sub.getVar(decl, false, "forgottenVars (let)", e);
 			}
 			visMerge(sub, e);
+			if(inType || cast(ast_scope.TypeScope)e.s.blscope_) sub.forgetClassical(); // (the trailing expression of a `let` expression within a type may be the result of an evaluation, which can drop uses of classical variables)
 			sub.checkEmpty();
 		}
 	}
@@ -1422,6 +1437,7 @@ class Checker {
 	IdMap!(ast_decl.Declaration) vars;
 	bool strictScope = true;
 	bool scopeFree = false;
+	bool inType = false;
 	MapX!(void*,Unit) checked;
 	MapX!(void*,Unit) entryValues; // (see visCondForget)
 }
