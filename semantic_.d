@@ -7682,30 +7682,33 @@ Expression expressionSemanticImpl(LiteralExp le,ExpSemContext context){
 }
 
 static if(language==silq)
+void walkIdentifiers(Expression x,scope void delegate(Identifier) dg,bool renaming=false,Expression skip=null){ // (unanalyzed code, also within lambdas and local functions)
+	if(!x||x is skip) return;
+	if(auto id=cast(Identifier)x) return dg(id);
+	if(auto lam=cast(LambdaExp)x){
+		if(renaming){ // (later copies are made from the renamed definition)
+			lam.orig=lam.orig.copy();
+			walkIdentifiers(lam.orig,dg,renaming,skip);
+		}
+		return walkIdentifiers(lam.fd,dg,renaming,skip);
+	}
+	if(auto fd=cast(FunctionDef)x){
+		if(fd.name) dg(fd.name);
+		foreach(p;fd.params){ if(p.name) dg(p.name); walkIdentifiers(p.dtype,dg,renaming,skip); }
+		walkIdentifiers(fd.rret,dg,renaming,skip);
+		return walkIdentifiers(fd.body_,dg,renaming,skip);
+	}
+	if(auto fe=cast(ForExp)x){ walkIdentifiers(fe.var,dg,renaming,skip); walkIdentifiers(fe.pattern,dg,renaming,skip); }
+	if(auto we=cast(WithExp)x) walkIdentifiers(we.itrans,dg,renaming,skip);
+	foreach(c;x.components) walkIdentifiers(c,dg,renaming,skip);
+}
+
+static if(language==silq)
 void renameTakenLocals(LetExp le,Scope sc){ // (e.g., of a copy of the length of a vector type, as variables of the same names can be declared after the `let` expression)
 	import ast.substitute: collectBoundNamesImpl;
 	SetX!Id bound,used;
 	foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,bound);
-	void walk(Expression x,scope void delegate(Identifier) dg,bool renaming=false){
-		if(!x) return;
-		if(auto id=cast(Identifier)x) return dg(id);
-		if(auto lam=cast(LambdaExp)x){
-			if(renaming){ // (later copies are made from the renamed definition)
-				lam.orig=lam.orig.copy();
-				walk(lam.orig,dg,renaming);
-			}
-			return walk(lam.fd,dg,renaming);
-		}
-		if(auto fd=cast(FunctionDef)x){
-			if(fd.name) dg(fd.name);
-			foreach(p;fd.params){ if(p.name) dg(p.name); walk(p.dtype,dg,renaming); }
-			walk(fd.rret,dg,renaming);
-			return walk(fd.body_,dg,renaming);
-		}
-		if(auto fe=cast(ForExp)x){ walk(fe.var,dg,renaming); walk(fe.pattern,dg,renaming); }
-		if(auto we=cast(WithExp)x) walk(we.itrans,dg,renaming);
-		foreach(c;x.components) walk(c,dg,renaming);
-	}
+	alias walk=walkIdentifiers;
 	walk(le,(Identifier id){ used.insert(id.id); });
 	bool taken(Id name){ return !sc.canInsert(name); }
 	SetX!Id free; // (a variable that the `let` expression redefines keeps its name, e.g., `q:=let { q:=X(q); } in q`)
@@ -8526,7 +8529,14 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		auto id=new Identifier(crepls[replaceIndexLoc].name);
 		id.loc=idx.loc;
 		if(!context.constResult) id.byRef=true;
-		return expressionSemantic(id,context);
+		auto r=expressionSemantic(id,context);
+		if(auto rid=cast(Identifier)r) if(auto decl=rid.meaning){ // (e.g., a closure in the right-hand side)
+			while(decl.splitFrom) decl=decl.splitFrom;
+			auto outer=decl.scope_?decl.scope_.getFunction():null;
+			for(auto fd=sc.getFunction();fd&&fd !is outer;fd=fd.scope_?fd.scope_.getFunction():null)
+				fd.readsReplacedComponent=true;
+		}
+		return r;
 	}
 	if(isEmpty(idx.e.type)){
 		idx.type=bottom;

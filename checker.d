@@ -791,6 +791,10 @@ class Checker {
 
 		auto decl = e.meaning;
 		if(!decl) return; // TODO
+		if(inType) for(bool found = true; found;){ // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., the type of a variable declared before)
+			found = false;
+			foreach(d; decl.splitInto) if(nscope.isNestedIn(d.scope_)) { decl = d; found = true; break; }
+		}
 		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
 		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
 	}

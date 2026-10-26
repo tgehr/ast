@@ -366,6 +366,7 @@ class FunctionDef: FixedPointDeclaration{
 		SetX!Id consumingCaptures; // consumed classical captures
 		bool captureReanalysis=false;
 		Scope typeBoundary=null; // (of a closure within a type: the scope in which the analysis of the type started)
+		bool readsReplacedComponent=false; // (its source reads the component from the aggregate, see `LambdaExp.copyImpl`)
 	}
 	void addCapture(Declaration meaning,Identifier id)in{
 		assert(!!meaning&&(!meaning.isLinear||context&&context.vtype==contextTy(false)));

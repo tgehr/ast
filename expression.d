@@ -2906,6 +2906,7 @@ class LambdaExp: Expression{
 	}
 	override LambdaExp copyImpl(CopyArgs args){
 		if(args.preserveSemantic&&isSemCompleted()) return new LambdaExp(orig,fd); // (the copy is not analyzed again, e.g., a hoisted read of an aliased component)
+		static if(language==silq) if(fd.readsReplacedComponent&&isSemCompleted()) return new LambdaExp(fd.copy(args)); // (the analyzed definition reads the temporary that holds the component)
 		return new LambdaExp(orig);
 	}
 	override string toString(){

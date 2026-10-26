@@ -1030,7 +1030,20 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
 	auto hoist=le.s.isSemCompleted(); // (the classical locals of an analyzed `let` are recomputed, as for a nested block, and the received values are checked against them)
 	auto r=new CompoundExp(reverseStatements(le.s.s,[cast(Expression)def],sc,unchecked,noImplicitDup,hoist,true,hoist?definedNames(def):null));
 	r.loc=loc;
+	static if(language==silq) if(hoist) renameLocals(le,r,def.e2);
 	return r;
+}
+
+static if(language==silq)
+void renameLocals(LetExp le,Expression r,Expression skip){ // (the reversal of a `let` expression is not scoped like it, e.g., two `let` expressions with locals of the same name)
+	import ast.substitute: collectBoundNamesImpl;
+	auto src=le.copy();
+	SetX!Id bound,free;
+	foreach(stmt;src.s.s) collectBoundNamesImpl(stmt,bound);
+	src.freeVarsImpl((Identifier id){ free.insert(id.id); return 0; });
+	MapSX!(Id,Id) renames;
+	foreach(b;bound) if(b !in free) renames[b]=freshName();
+	if(renames.length) walkIdentifiers(r,(Identifier id){ if(!id.meaning) if(auto p=renames.getPtr(id.id)) id.id=*p; },true,skip);
 }
 
 private bool copyAttr(Id name) {

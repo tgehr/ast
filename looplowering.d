@@ -2415,9 +2415,9 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(s.isLetBody) return false; // (local to a `let` expression of the statement)
 		return true;
 	}
-	static bool recomputed(Identifier id){ // (quantum values and functions are recomputed, other classical values are logged)
+	static bool recomputed(Identifier id){ // (quantum values, functions and types are recomputed, other classical values are logged)
 		if(cast(FunctionDef)id.meaning||!id.type) return true;
-		return !id.type.isClassical()||!!cast(FunTy)id.type;
+		return !id.type.isClassical()||!!cast(FunTy)id.type||isTypeTy(id.type)||isQNumeric(id.type);
 	}
 	MapX!(Id,Declaration) invariantDecl; // (quantum variables that the loop reads)
 	bool consumes(Identifier id){ return isVar(id)&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup; }
@@ -2537,6 +2537,11 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(name !in n.ctypes) n.ctypes[name]=id.type;
 			}
 			return true;
+		});
+		visitStm(s,(Expression x){ // (the components of an annotation are the analyzed type, but copies refer to the type variables that it mentions)
+			if(auto tae=cast(TypeAnnotationExp)x) if(tae.t&&tae.t !is tae.type) visitStm(tae.t,(Expression y){
+				if(auto id=cast(Identifier)y) if(isVar(id)&&id.type&&(isTypeTy(id.type)||isQNumeric(id.type))) n.uses.insert(varName(id));
+			});
 		});
 	}
 	// analysis of an atom (with components for definitions of tuples of variables)
@@ -4425,6 +4430,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				}
 				Expression[] forgets; // (of recomputed definitions that the reset uses)
 				foreach(r;replays){
+					if(r[1].type&&r[1].type.isClassical()) continue;
 					bool used=false;
 					visitStm(loop.reset,(Expression x){ if(auto id=cast(Identifier)x) if(varName(id)==r[0]) used=true; });
 					if(used) forgets~=at(new ForgetExp(mk(r[0]),r[1].copy(cargsDefault)));
@@ -4453,8 +4459,19 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),TypeAnnotationType.annotation));
 					}
 					auto vals=packed.map!pack.array;
-					auto then=at(new CompoundExp(nrst.s~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
-					auto othw=at(new CompoundExp(forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
+					Expression[] weakenings(){ // (of the parameters whose types mention the definitions that the branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
+						Expression[] r;
+						foreach(s;strongerExits) if(s[1].freeIdentifiers.any!(fv=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))){
+							auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==s[0]);
+							if(p.empty||!isSubtype(s[1],typeForDecl(p.front[1]))) continue; // (the type in the result is the parameter type, which the reset continues with)
+							auto use=mk(s[0]);
+							use.moved=true;
+							r~=at(new DefineExp(mk(s[0]),at(new TypeAnnotationExp(use,s[2].copy(cargsDefault),TypeAnnotationType.annotation))));
+						}
+						return r;
+					}
+					auto then=at(new CompoundExp(nrst.s~weakenings()~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
+					auto othw=at(new CompoundExp(weakenings()~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
 					if(next.length){
 						auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
@@ -4786,7 +4803,9 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 		auto decl=exitDecls.get(name,null);
 		if(!decl||name in paramNames||name in later||r.canFind!(x=>x[0]==name)) continue;
 		auto type=typeForDecl(decl);
-		if(!type||type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop) continue;
+		if(!type) continue;
+		bool typeValue=isTypeTy(type)||isQNumeric(type); // (a use needs the value, e.g., `x coerce a` with `a:=𝔹^n`)
+		if(!typeValue&&(type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop)) continue;
 		bool ok=true;
 		visitStm(loop.cond,(Expression x){ if(auto cid=cast(Identifier)x) if(varName(cid)==name) ok=false; });
 		foreach(fv;de.e2.freeIdentifiers){
