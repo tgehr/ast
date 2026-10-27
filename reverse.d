@@ -1831,9 +1831,28 @@ Expression projection(Expression s,Scope sc,Id[] drop=null){ // (the classical p
 	return definedNames(res).length||changedNames(s).length?res:null;
 }
 
+static if(language==silq)
+bool hasExactInverse(ABinaryExp be){ // (classical updates that the reversal of a function reverts in place, e.g., `t+=c` or `t*=2`, but neither `t*=c`, which loses the value for `c=0`, nor updates of floating-point numbers)
+	auto num=isNumericTy(be.e1.type);
+	if(num==NumericType.ℝ||num==NumericType.ℂ) return false;
+	if(cast(AddAssignExp)be||cast(SubAssignExp)be||cast(BitXorAssignExp)be||cast(XorAssignExp)be) return true;
+	if(!cast(MulAssignExp)be&&!cast(DivAssignExp)be||num!=NumericType.ℕt&&num!=NumericType.ℤt&&num!=NumericType.ℚt) return false; // (e.g., `t*=2` loses the highest bit of `t:!uint[4]`)
+	auto val=be.e2.asIntegerConstant(true);
+	return val&&val.get()!=0;
+}
+
 struct NeedOld{ // (the variables of enclosing blocks whose versions before a statement its reversal would need, e.g., for `u:=dup(k); k+=u;` or for a conditional that changes a variable of its condition: an enclosing block may provide copies of them, see `reversal` in `reverseStatements`)
 	Id[] vars;
-	Q!(Id[],Location)[] errors; // (deferred errors of reversals of `if` statements and loops that change a variable of their condition or range)
+	Q!(Id[],Location,string)[] errors; // (deferred errors, e.g., of reversals of `if` statements and loops that change a variable of their condition or range)
+}
+
+static if(language==silq)
+bool readsOld(Expression s){ // (statements whose reversals can read copies of the versions of variables before them, see `NeedOld`)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return readsOld(ce.loweredFrom);
+	if(cast(IteExp)s||cast(RepeatExp)s) return true;
+	if(auto fe=cast(ForExp)s) return !!fe.aggr.isRange();
+	auto de=cast(DefineExp)s;
+	return de&&cast(LetExp)unwrap(de.e2);
 }
 
 Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null,Id[] copied=null,Id[]* excludedCopied=null,Id[] forgotten=null,NeedOld* needOld=null){
@@ -1887,13 +1906,29 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			if(!names.all!(n=>isLocal(n)&&usedUp(n)&&!given.canFind(n)&&!defined.canFind(n)&&!mentionedAfter.canFind(n))) continue;
 			dead[i]=iota(i+1,statements.length).all!(j=>dead[j]||noop(statements[j])||!names.any!(n=>mentionsOf[j].canFind(n)));
 		}
+		Id[] invariants; // (classical definitions that only read variables that no statement of the block changes, e.g., `v:=n+c`, can be recomputed first, such that statements that are reversed first may read them, see `early`)
+		auto changedAll=changed.joiner.array;
+		foreach(i,s;statements){
+			auto names=definedNames(s);
+			if(dead[i]||!names.length||changed[i].length||classifyStatement(s)!=ComputationClass.classical) continue;
+			if(names.any!(n=>changedAll.canFind(n)||given.canFind(n)||defined.canFind(n)||copied.canFind(n)||statements.count!(t=>definedNames(t).canFind(n))>1)) continue;
+			Id[] mentioned;
+			foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) if(!names.canFind(nameOf(id))) mentioned~=nameOf(id);
+			if(mentioned.any!(n=>changedAll.canFind(n)||defined.canFind(n)||local.canFind(n)&&!invariants.canFind(n))) continue;
+			invariants~=names;
+		}
 		foreach_reverse(i,s;statements){
 			if(dead[i]||!classicalUpToForgets(s)||definedNames(s).length||!changed[i].length||headerChanges[i].length) continue;
 			Id[] mentioned;
 			foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) mentioned~=nameOf(id);
 			auto read=mentioned.filter!(n=>!changed[i].canFind(n)).array;
-			if(mentioned.any!(n=>local.canFind(n))||changed[i].any!(n=>middle.any!(t=>reads(t,n)))||read.any!(n=>defined.canFind(n))) continue;
+			if(mentioned.any!(n=>local.canFind(n)&&!invariants.canFind(n))||changed[i].any!(n=>middle.any!(t=>reads(t,n)))||read.any!(n=>defined.canFind(n))) continue;
 			undoFirst[i]=iota(i+1,statements.length).all!(j=>undoFirst[j]||dead[j]||noop(statements[j])||!changed[i].any!(n=>reads(statements[j],n))&&!changed[j].any!(n=>read.canFind(n)));
+		}
+		auto early=new bool[](statements.length); // (the invariant definitions that the statements which are reversed first read, also indirectly)
+		foreach_reverse(i,s;statements){
+			auto names=definedNames(s);
+			if(names.length&&names.all!(n=>invariants.canFind(n))) early[i]=iota(i+1,statements.length).any!(j=>(undoFirst[j]||early[j])&&names.any!(n=>reads(statements[j],n)));
 		}
 		auto changedAfter=new Id[][](statements.length);
 		foreach_reverse(i;1..statements.length) changedAfter[i-1]=changedAfter[i]~(undoFirst[i]||dead[i]?[]:changed[i]);
@@ -1965,7 +2000,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			else if(projections[i]) alive~=definedNames(projections[i]);
 		}
 		auto oldVersions=new Id[2][][](statements.length); // (copies of the versions before a statement whose classical part is recomputed, for its reversal, see `NeedOld`)
-		void headerChangeError(Location loc){ sc.error("reversal of `if` statement or loop that changes a variable of its condition or range not supported yet",loc); }
+		enum headerChangeError="reversal of `if` statement or loop that changes a variable of its condition or range not supported yet";
 		Expression reversal(size_t i){
 			static if(language==silq) if(auto fe=cast(ForgetExp)statements[i]) if(fe.val) if(auto id=cast(Identifier)unwrap(fe.var)){
 				if(id.type&&id.type.isClassical()&&aliveAt[i].canFind(nameOf(id))){ // (the forgotten value is recomputed, it is checked)
@@ -1982,8 +2017,27 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					return r;
 				}
 			}
-			static if(language==silq) if(defer) if(auto be=cast(ABinaryExp)statements[i]) if(isOpAssignExp(be)) if(auto id=cast(Identifier)unwrap(be.e1)){
-				if(id.type&&id.type.isClassical()&&iota(i).any!(j=>readsBesidesUpdates(statements[j],nameOf(id)))){ // (`t=(t-c) coerce !ℕ` for `t+=c`: the reversals of earlier statements see the type from before the update)
+			static if(language==silq) if(auto be=cast(ABinaryExp)statements[i]) if(isOpAssignExp(be)) if(auto id=cast(Identifier)unwrap(be.e1)) if(id.type&&id.type.isClassical()&&!hasExactInverse(be)){ // (e.g., `t*=c`, which loses the value for `c=0`)
+				auto n=nameOf(id);
+				if(recomputed[i]&&undone[i]){ // (the version before it, which the recomputation saves, replaces the one after it, see `oldVersions`)
+					oldVersions[i]=[cast(Id[2])[n,freshName()]];
+					auto r=new CompoundExp([]);
+					r.loc=be.loc;
+					return r;
+				}
+				if(needOld&&!inner.canFind(n)){ // (an enclosing block may recompute it from the version before it, see `NeedOld`)
+					if(defer){ if(!needOld.vars.canFind(n)) needOld.vars~=n; } // (otherwise, it is reverted in place, see below)
+					else{
+						needOld.errors~=q(chain(only(n),blockedAt.joiner.filter!(m=>m!=n)).array,be.loc,"reversal of assignments not supported yet");
+						auto r=statements[i].copy();
+						r.setSemError();
+						return r;
+					}
+				}
+			}
+			static if(language==silq) if(auto be=cast(ABinaryExp)statements[i]) if(isOpAssignExp(be)) if(auto id=cast(Identifier)unwrap(be.e1)){
+				auto n=nameOf(id);
+				if(id.type&&id.type.isClassical()&&(defer||hasExactInverse(be))&&(iota(i).any!(j=>readsBesidesUpdates(statements[j],n))||!copied.canFind(n)&&!statements[0..i].any!(t=>definedNames(t).canFind(n)))){ // (`t=(t-c) coerce !ℕ` for `t+=c`: the reversals of earlier statements see the type from before the update, also those in enclosing blocks)
 					Expression val=null;
 					if(cast(AddAssignExp)be) val=new SubExp(be.e1.copy(),be.e2.copy());
 					else if(cast(SubAssignExp)be) val=new AddExp(be.e1.copy(),be.e2.copy());
@@ -2003,8 +2057,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			NeedOld need;
 			auto nerrors=sc.handler.nerrors;
 			auto r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,givenAfter(i)~projected,aliveAt[i],null,&need);
-			static if(language==silq) if(projections[i]&&(cast(IteExp)statements[i]||cast(DefineExp)statements[i]&&cast(LetExp)unwrap((cast(DefineExp)statements[i]).e2))){ // (not a loop, whose iterations would need different versions)
-				auto pc=chain(projectionChanges[i],definedNames(projections[i])).array;
+			static if(language==silq) if((projections[i]||recomputed[i]&&undone[i])&&readsOld(statements[i])){ // (also a recomputed statement that is reversed in place, e.g., a loop that a conditional in it changes, for earlier statements that read the versions before it)
+				auto pc=projections[i]?chain(projectionChanges[i],definedNames(projections[i])).array:chain(changed[i],definedNames(statements[i])).array;
 				Id[] old;
 				if(chain(need.vars,need.errors.map!(e=>e[0]).joiner).any!(n=>pc.canFind(n))) foreach(n;pc) if(!old.canFind(n)) old~=n; // (all of them, as the reversal of the statement may need more once it recomputes some, e.g., an update that it would otherwise reverse first)
 				if(old.length&&sc.handler.nerrors==nerrors){ // (versions before the statement that the projection changes: the reversal of the statement recomputes them on copies)
@@ -2017,8 +2071,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			foreach(e;need.errors){ // (deferred if an enclosing block may resolve it, also through the other needs of this block)
 				auto vars=e[0].filter!(n=>!inner.canFind(n)).array;
 				if(needOld) foreach(n;blockedAt.joiner) if(!vars.canFind(n)) vars~=n;
-				if(needOld&&vars.length) needOld.errors~=q(vars,e[1]);
-				else headerChangeError(e[1]);
+				if(needOld&&vars.length) needOld.errors~=q(vars,e[1],e[2]);
+				else sc.error(e[2],e[1]);
 			}
 			return r;
 		}
@@ -2027,8 +2081,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				auto loc=headers(statements[i])[0].loc;
 				Id[] missing; // (variables of enclosing blocks whose versions before the block may allow the reversal to recompute the classical part of the statement, also those that other statements of the block need)
 				foreach(n;chain(headerChanges[i],changed[i],changedAfter[i].filter!(n=>reads(statements[i],n)),blockedAt.joiner)) if(!hoistedAll.canFind(n)&&!inner.canFind(n)&&!missing.canFind(n)) missing~=n;
-				if(needOld&&missing.length) needOld.errors~=q(missing,loc); // (the reversal of an enclosing block may resolve it)
-				else headerChangeError(loc);
+				if(needOld&&missing.length) needOld.errors~=q(missing,loc,headerChangeError); // (the reversal of an enclosing block may resolve it)
+				else sc.error(headerChangeError,loc);
 				auto r=statements[i].copy();
 				r.setSemError();
 				return r;
@@ -2077,10 +2131,11 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				cpy.loc=var.loc;
 				classicalStatements~=cpy;
 			}
-			if(recomputed[i]) classicalStatements~=recomputation(statements[i],sc);
+			if(recomputed[i]&&!early[i]) classicalStatements~=recomputation(statements[i],sc);
 			else if(projections[i]) classicalStatements~=projections[i];
 		}
-		return undoneFirst~classicalStatements~middle~quantumStatements;
+		auto earlyStatements=iota(statements.length).filter!(i=>early[i]).map!(i=>recomputation(statements[i],sc)).array;
+		return earlyStatements~undoneFirst~classicalStatements~middle~quantumStatements;
 	}
 	return chain(middle,statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup,false,defer))).array;
 }
@@ -2172,10 +2227,10 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return lowerDefine!flags(ce,te,ce.loc,sc,unchecked,noImplicitDup,defer);
 	}
 	if(auto ce=cast(CompoundExp)e){
-		static if(language==silq) if(ce.loweredFrom) return reverseStatement(ce.loweredFrom,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		static if(language==silq) if(ce.loweredFrom) return reverseStatement(ce.loweredFrom,sc,unchecked,noImplicitDup,hoistClassical,defer,null,null,old,needOld);
 		auto hoist=hoistClassical||ce.blscope_&&!ce.isSemError(); // (classical locals of a nested block are recomputed in its reversal)
 		Id[] excludedOld;
-		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer,given,alive,old.map!(o=>o[0]).array,&excludedOld,forgottenNames(ce),needOld));
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer,given.filter!(n=>!old.canFind!(o=>o[0]==n)).array,alive,old.map!(o=>o[0]).array,&excludedOld,forgottenNames(ce),needOld)); // (it recomputes the variables in `old` on copies, also those whose versions after it the reversal received)
 		res.loc=ce.loc;
 		static if(language==silq) if(old.length) res.s=copiesOf(res,old,excludedOld,ce.loc,sc)~res.s;
 		foreach(s;res.s) propErr(s,res);
@@ -2298,11 +2353,12 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		assert(!!be);
 		if(!defer){ // no type information is available for unanalyzed statements
 			assert(!!be.e2.type);
-			if(be.e1.type.isClassical()){
-				sc.error("reversal of assignments not supported yet",be.loc);
-				return error();
-			}
-			if(!isInvertibleOpAssignExp(be)){
+			if(be.e1.type.isClassical()){ // (reverted in place, as in the reversal of a `let` expression, see `reversal` in `reverseStatements`)
+				if(!hasExactInverse(be)){
+					sc.error("reversal of assignments not supported yet",be.loc);
+					return error();
+				}
+			}else if(!isInvertibleOpAssignExp(be)){
 				if(be.e2.type.hasClassicalComponent()){
 					sc.error("reversal of assignments not supported yet",be.loc);
 					return error();
@@ -2351,13 +2407,65 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		sc.error("reversal not supported yet",e.loc);
 		return error();
 	}
+	static if(language==silq) Expression iterationsFromOld(Expression loop,CompoundExp lbdy,Identifier var,ForRange rng,Expression num){ // (each reversed iteration recomputes the versions before it from the versions before the loop, on copies, as its reversal reads them, see `NeedOld`)
+		void renameOld(Expression x){ walkIdentifiers(x,(Identifier id){ if(!id.meaning) foreach(o;old) if(id.id==o[0]) id.id=o[1]; },true); }
+		auto p=projection(loop,sc,changedNames(loop).filter!(n=>!old.canFind!(o=>o[0]==n)).array);
+		auto pbdy=cast(ForExp)p?(cast(ForExp)p).bdy:cast(RepeatExp)p?(cast(RepeatExp)p).bdy:null;
+		if(!pbdy) return null;
+		auto iold=old.map!(o=>cast(Id[2])[o[0],freshName()]).array;
+		auto bdy=cast(CompoundExp)reverseStatement(lbdy,sc,unchecked,noImplicitDup,hoistClassical,defer,null,null,iold,needOld);
+		assert(!!bdy);
+		Expression[] s;
+		foreach(k,o;old){
+			auto lhs=new Identifier(iold[k][1]),src=new Identifier(o[1]);
+			lhs.loc=src.loc=loop.loc;
+			auto rhs=new CallExp(getDup(loop.loc,sc),src,false,false);
+			rhs.loc=loop.loc;
+			auto cpy=new DefineExp(lhs,rhs);
+			cpy.loc=loop.loc;
+			s~=cpy;
+		}
+		walkIdentifiers(pbdy,(Identifier id){ if(!id.meaning) foreach(o;iold) if(id.id==o[0]) id.id=o[1]; },true);
+		if(var&&var.name=="_") var=null;
+		auto it=new Identifier(var?var.id:freshName());
+		it.loc=var?var.loc:loop.loc;
+		auto cur=new Identifier(it.id);
+		cur.loc=it.loc;
+		Expression first; // (the iterations before the current one)
+		if(rng){
+			auto nvar=new Identifier(freshName());
+			nvar.loc=it.loc;
+			if(var) walkIdentifiers(pbdy,(Identifier id){ if(!id.meaning&&id.id==var.id) id.id=nvar.id; },true);
+			auto left=rng.left.copy(),step=rng.step?rng.step.copy():null;
+			renameOld(left);
+			if(step) renameOld(step);
+			first=new ForExp(nvar,null,ForAggregate(ForRange(rng.leftExclusive,left,step,true,cur)),pbdy);
+		}else first=new RepeatExp(cur,pbdy);
+		first.loc=loop.loc;
+		s~=first;
+		auto nbdy=new CompoundExp(s~bdy.s);
+		nbdy.loc=bdy.loc;
+		ForRange range;
+		if(rng) range=rng.copyReversed();
+		else{
+			auto zero=constantExp(0);
+			zero.loc=num.loc;
+			range=ForRange(false,zero,null,true,num.copy()).copyReversed();
+		}
+		range.componentsImpl((Expression x){ renameOld(x); return 0; });
+		auto res=new ForExp(it,null,ForAggregate(range),nbdy);
+		res.loc=loop.loc;
+		propErr(bdy,res);
+		return res;
+	}
 	if(auto fe=cast(ForExp)e){
 		auto aggrRev=fe.aggr.copyReversed();
 		if(!aggrRev){
 			sc.error("reversal of aggregate not supported yet",fe.aggr.loc);
 			return error();
 		}
-		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		static if(language==silq) if(old.length&&!fe.pattern) if(auto r=iterationsFromOld(fe,fe.bdy,fe.var,fe.aggr.isRange(),null)) return r;
+		auto bdy=cast(CompoundExp)reverseStatement(fe.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer,null,null,null,needOld);
 		assert(!!bdy);
 		auto res=new ForExp(fe.var?fe.var.copy():null,fe.pattern?fe.pattern.copy():null,aggrRev,bdy);
 		res.loc=fe.loc;
@@ -2373,7 +2481,8 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		return error();
 	}
 	if(auto re=cast(RepeatExp)e){
-		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer);
+		static if(language==silq) if(old.length) if(auto r=iterationsFromOld(re,re.bdy,null,ForRange.init,re.num)) return r;
+		auto bdy=cast(CompoundExp)reverseStatement(re.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer,null,null,null,needOld);
 		assert(!!bdy);
 		auto res=new RepeatExp(re.num.copy(),bdy);
 		res.loc=re.loc;
