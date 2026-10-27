@@ -1137,6 +1137,7 @@ CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 				nsc.forgottenVars=nfv;
 				nsc.forgottenVarsOnEntry=nfve;
 				nsc.mergedVars=nmv;
+				nsc.substitutedFrom=ce.blscope_.substitutedFrom?ce.blscope_.substitutedFrom:ce.blscope_;
 				r.blscope_=nsc;
 			}
 		}
@@ -1279,6 +1280,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		auto ns=new BlockScope(mapScopeOfDecl(bs.parent),bs.restriction_,bs.restrictionCause_);
 		ns.isLoopBody=bs.isLoopBody;
 		smap[s]=ns;
+		if(bs.substitutedFrom&&bs.substitutedFrom !in smap) smap[bs.substitutedFrom]=ns; // (its declarations are declared in the scope that it substitutes)
 		bookkeeping~=Bookkeeping(bs,ns);
 		return ns;
 	}
@@ -1471,10 +1473,11 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			if(!ce.blscope_) return null;
 			blocks~=ce.blscope_;
 			scope(exit) blocks=blocks[0..$-1];
+			auto nbs=cast(BlockScope)mapScopeOfDecl(ce.blscope_); // (e.g., a block of a `let` expression within a statement is not visited by `walkStmts`; before the statements, whose declarations it declares)
 			Expression[] ns;
 			foreach(x;ce.s) ns~=x.copy(args);
 			auto r=new CompoundExp(ns);
-			r.blscope_=cast(BlockScope)mapScopeOfDecl(ce.blscope_); // (e.g., a block of a `let` expression within a statement is not visited by `walkStmts`)
+			r.blscope_=nbs;
 			r.erpId=ce.erpId;
 			fixup(r,ce);
 			return r;

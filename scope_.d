@@ -3419,6 +3419,7 @@ class BlockScope: NestedScope{
 		return super.restrictionCause(annotation);
 	}
 	static if(language==silq) Scope typeBoundary=null; // (of a `let` expression within a type: the scope in which the analysis of the type started)
+	BlockScope substitutedFrom=null; // (a copy that a substitution made to remap the declarations in the lists of the scope that still declares them, see substituteBlockCompound)
 }
 
 static if(language==silq)
