@@ -1424,6 +1424,7 @@ ComputationClass classifyStatement(Expression e){
 		}
 		if(auto we=cast(WithExp)e){
 			//return join(classifyExpression(we.trans,we.bdy));
+			static if(language==silq) if(we.subexpressions.all!(x=>(!x.type||x.type.isClassical())&&!cast(LambdaExp)x&&!cast(FunctionDef)x&&!cast(ReturnExp)x)) return classical; // (e.g., an update or a swap of components of a classical vector, which is recomputed like `t+=c`, see `changedNames` and `recomputation`)
 			return ComputationClass.quantum; // ok?
 		}
 		if(auto ret=cast(ReturnExp)e){
@@ -1670,14 +1671,22 @@ Expression[] headers(Expression s){ // (the condition of an `if` statement, the 
 
 Expression recomputation(Expression s,Scope sc){ // (the copy of a classical statement that the reversal of a block recomputes)
 	Expression.CopyArgs cargs;
+	Id[] inner; // (the variables of `with` statements, e.g., the components that they move out and write back)
 	static if(language==silq) cargs.mapExp=(Expression x,ref Expression.CopyArgs args){ // (reads the variables that it moves, such that the reversed statements see the same versions)
 		if(cast(FunctionDef)x) return x.copy();
-		if(auto id=cast(Identifier)x) if(id.moved){
+		if(auto we=cast(WithExp)x){
+			inner~=chain(definedNames(we.trans),definedNames(we.bdy)).array;
+			auto r=new WithExp(we.trans.copy(args),we.bdy.copy(args),we.isIndices);
+			if(we.itrans&&we.isIndices) r.itrans=we.itrans.copy(args); // (as for the reversal, see `reverseStatement`)
+			r.loc=we.loc;
+			return cast(Expression)r;
+		}
+		if(auto id=cast(Identifier)x) if(id.moved&&!inner.canFind(nameOf(id))){
 			auto r=id.copy();
 			r.moved=false;
 			return cast(Expression)r;
 		}
-		if(auto de=cast(DefineExp)x) if(isClassicalMove(de)){
+		if(auto de=cast(DefineExp)x) if(isClassicalMove(de)&&!de.e2.subexpressions.any!(y=>cast(Identifier)y&&inner.canFind(nameOf(cast(Identifier)y)))){
 			auto rhs=new CallExp(getDup(de.e2.loc,sc),de.e2.copy(args),false,false);
 			rhs.loc=de.e2.loc;
 			auto r=new DefineExp(de.e1.copy(args),rhs);
