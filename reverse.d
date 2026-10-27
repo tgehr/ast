@@ -1058,7 +1058,7 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc)in{
 			local~=definedNames(s);
 		}
 	}
-	auto r=new CompoundExp(reverseStatements(le.s.s,[cast(Expression)def],sc,unchecked,noImplicitDup,hoist,true,hoist?definedNames(def):null,null,copied,&excludedCopied));
+	auto r=new CompoundExp(reverseStatements(le.s.s,[cast(Expression)def],sc,unchecked,noImplicitDup,hoist,true,hoist?definedNames(def):null,null,copied,&excludedCopied,forgottenNames(le.s)));
 	r.loc=loc;
 	static if(language==silq) if(hoist){
 		renameLocals(le,r,def.e2);
@@ -1558,6 +1558,11 @@ Identifier[] definedIdentifiers(Expression e){ // (the variables that a definiti
 	return r;
 }
 Id nameOf(Identifier id){ return (id.meaning&&id.meaning.name?id.meaning.name:id).id; }
+Id[] forgottenNames(CompoundExp ce){ // (the variables that a block forgets at its end)
+	Id[] r;
+	static if(language==silq) if(ce.blscope_) foreach(d;ce.blscope_.forgottenVars) if(d.name) r~=d.name.id;
+	return r;
+}
 Id[] definedNames(Expression e){
 	if(auto ite=cast(IteExp)e){ // (the variables that both branches define)
 		auto othw=ite.othw?definedNames(ite.othw):[];
@@ -1685,20 +1690,27 @@ Expression recomputation(Expression s,Scope sc){ // (the copy of a classical sta
 }
 
 static if(language==silq)
-Expression projection(Expression s,Scope sc){ // (the classical part of an `if` statement, a loop or a `let` expression that is reversed, which the reversal recomputes)
-	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc);
+Expression projection(Expression s,Scope sc,Id[] drop=null){ // (the classical part of an `if` statement, a loop or a `let` expression that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop);
+	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
 	CompoundExp part(CompoundExp b){
 		Expression[] r;
 		foreach(s;mergeCompound(b.s)){
-			if(classifyStatement(s)==ComputationClass.classical) r~=recomputation(s,sc);
-			else if(auto p=projection(s,sc)) r~=p;
-			else if(changedNames(s).length) return null; // (the values that it changes would not be recomputed)
+			auto changes=changedNames(s);
+			auto changesDropped=changes.any!(n=>drop.canFind(n));
+			if(changesDropped&&changes.all!(n=>drop.canFind(n))&&!definedNames(s).length) continue;
+			if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
+				if(readsDropped(s)) return null;
+				r~=recomputation(s,sc);
+			}else if(auto p=projection(s,sc,drop)) r~=p;
+			else if(changes.length) return null; // (the values that it changes would not be recomputed)
 		}
 		auto res=new CompoundExp(r);
 		res.loc=b.loc;
 		return res;
 	}
 	Expression res;
+	if(headers(s).any!readsDropped) return null;
 	if(auto ite=cast(IteExp)s){
 		if(!ite.cond.type||!ite.cond.type.isClassical()) return null;
 		auto then=part(ite.then),othw=ite.othw?part(ite.othw):null;
@@ -1734,9 +1746,33 @@ Expression projection(Expression s,Scope sc){ // (the classical part of an `if` 
 			}
 		}
 		pair(de.e1,le.e);
-		if(!lhs.length) return null;
+		if(!lhs.length||readsDropped(le.e)) return null;
 		auto bdy=part(le.s);
 		if(!bdy) return null;
+		Id[] outer,local; // (variables of the enclosing block that the `let` expression changes, other than the results: the recomputation changes copies, as the reversal of the `let` expression copies the versions before it, see `lowerLetDefine`)
+		auto results=definedIdentifiers(de).map!nameOf.array;
+		foreach(t;mergeCompound(le.s.s)){
+			foreach(n;changedNames(t)) if(!local.canFind(n)&&!results.canFind(n)&&!outer.canFind(n)) outer~=n;
+			local~=definedNames(t);
+		}
+		if(outer.length){
+			MapSX!(Id,Id) renames;
+			Expression[] copies;
+			foreach(n;outer){
+				renames[n]=freshName();
+				auto cid=new Identifier(renames[n]),var=new Identifier(n);
+				cid.loc=var.loc=le.loc;
+				auto dup=new CallExp(getDup(le.loc,sc),var,false,false);
+				dup.loc=le.loc;
+				auto cpy=new DefineExp(cid,dup);
+				cpy.loc=le.loc;
+				copies~=cpy;
+			}
+			void rename(Identifier id){ if(!id.meaning) if(auto p=renames.getPtr(id.id)) id.id=*p; }
+			walkIdentifiers(bdy,&rename,true);
+			foreach(r;rhs) walkIdentifiers(r,&rename,true);
+			bdy.s=copies~bdy.s;
+		}
 		Expression tuple(Expression[] es){
 			if(es.length==1) return es[0];
 			auto tpl=new TupleExp(es);
@@ -1751,7 +1787,7 @@ Expression projection(Expression s,Scope sc){ // (the classical part of an `if` 
 	return definedNames(res).length||changedNames(s).length?res:null;
 }
 
-Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null,Id[] copied=null,Id[]* excludedCopied=null){
+Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope sc,bool unchecked,bool noImplicitDup,bool hoistClassical=false,bool defer=false,Id[] given=null,Id[] alive=null,Id[] copied=null,Id[]* excludedCopied=null,Id[] forgotten=null){
 	statements=mergeCompound(statements);
 	if(hoistClassical){ // (`given`: the variables whose values the reversal receives, e.g., the classical results of a function; `alive`: the variables that the reversal of an enclosing block recomputes; `copied`: the variables of an enclosing block whose changes are recomputed on copies, see `lowerLetDefine`)
 		auto defined=middle.map!definedNames.joiner.array; // (received after the recomputation, which they are checked against)
@@ -1763,18 +1799,56 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		auto local=chain(copied,statements.map!definedNames.joiner).array;
 		auto undoFirst=new bool[](statements.length); // (updates of variables of an enclosing block that no later statement mentions, e.g., in a branch: they are reversed first, such that the recomputed statements see the versions before them)
 		bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val&&fe.var.type&&fe.var.type.isClassical(); } // (its reversal does nothing, see `lowerDefine`)
+		bool classicalUpToForgets(Expression s){ // (also, e.g., an `if` statement whose branch forgets a classical variable at its last use)
+			if(noop(s)) return true;
+			static if(language==silq) if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return classicalUpToForgets(ce.loweredFrom);
+			if(auto ite=cast(IteExp)s) return ite.cond.type&&ite.cond.type.isClassical()&&chain(ite.then.s,ite.othw?ite.othw.s:[]).all!(t=>classicalUpToForgets(t));
+			if(auto fe=cast(ForExp)s) return fe.bdy.s.all!(t=>classicalUpToForgets(t));
+			if(auto re=cast(RepeatExp)s) return re.bdy.s.all!(t=>classicalUpToForgets(t));
+			return classifyStatement(s)==ComputationClass.classical;
+		}
+		bool onlyClassical(Expression s){ // (no quantum values, closures or calls other than to `dup`)
+			foreach(x;s.subexpressions){
+				if(x.type&&!x.type.isClassical()||cast(LambdaExp)x||cast(FunctionDef)x) return false;
+				if(auto ce=cast(CallExp)x) if(!ce.isSquare){
+					Expression f=ce.e;
+					if(auto sq=cast(CallExp)f) if(sq.isSquare) f=sq.e;
+					auto id=cast(Identifier)f;
+					if(!id||isPreludeSymbol(id)!="dup") return false;
+				}
+			}
+			return true;
+		}
+		auto dead=new bool[](statements.length); // (classical statements whose values no later statement uses, e.g., the definition of a local that is forgotten right after it, or a swap of the components of a local vector at its end: the reversal neither recomputes nor reverses them)
+		Id[] mentions(Expression e){ Id[] r; walkIdentifiers(e.copy(),(Identifier id){ r~=id.id; }); return r; } // (as the reversal mentions them, e.g., a type variable that the analysis substitutes into an annotation, or a capture of a local function)
+		auto mentionsOf=statements.map!mentions.array,mentionedAfter=middle.map!mentions.joiner.array;
+		bool forgetsIn(Expression s,Id n){ // (e.g., an `if` statement whose branch forgets it at its last use)
+			auto ite=cast(IteExp)s;
+			if(!ite) return false;
+			foreach(b;[ite.then,ite.othw]) if(b&&(forgottenNames(b).canFind(n)||b.s.any!(t=>noop(t)&&reads(t,n)||forgetsIn(t,n)))) return true;
+			return false;
+		}
 		foreach_reverse(i,s;statements){
-			if(classifyStatement(s)!=ComputationClass.classical||definedNames(s).length||!changed[i].length||headerChanges[i].length) continue;
+			auto names=chain(definedNames(s),changed[i]).array;
+			if(noop(s)||!names.length||!onlyClassical(s)) continue;
+			bool isLocal(Id n){ return copied.canFind(n)||statements[0..i+1].any!(t=>definedNames(t).canFind(n)); }
+			bool usedUp(Id n){ return usesUp(n,statements[i+1..$])||forgotten.canFind(n)||forgetsIn(s,n); } // (otherwise, it may be used after the block)
+			if(!names.all!(n=>isLocal(n)&&usedUp(n)&&!given.canFind(n)&&!defined.canFind(n)&&!mentionedAfter.canFind(n))) continue;
+			dead[i]=iota(i+1,statements.length).all!(j=>dead[j]||noop(statements[j])||!names.any!(n=>mentionsOf[j].canFind(n)));
+		}
+		foreach_reverse(i,s;statements){
+			if(dead[i]||!classicalUpToForgets(s)||definedNames(s).length||!changed[i].length||headerChanges[i].length) continue;
 			Id[] mentioned;
 			foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) mentioned~=nameOf(id);
 			auto read=mentioned.filter!(n=>!changed[i].canFind(n)).array;
 			if(mentioned.any!(n=>local.canFind(n))||changed[i].any!(n=>middle.any!(t=>reads(t,n)))||read.any!(n=>defined.canFind(n))) continue;
-			undoFirst[i]=iota(i+1,statements.length).all!(j=>undoFirst[j]||noop(statements[j])||!changed[i].any!(n=>reads(statements[j],n))&&!changed[j].any!(n=>read.canFind(n)));
+			undoFirst[i]=iota(i+1,statements.length).all!(j=>undoFirst[j]||dead[j]||noop(statements[j])||!changed[i].any!(n=>reads(statements[j],n))&&!changed[j].any!(n=>read.canFind(n)));
 		}
 		auto changedAfter=new Id[][](statements.length);
-		foreach_reverse(i;1..statements.length) changedAfter[i-1]=changedAfter[i]~(undoFirst[i]?[]:changed[i]);
+		foreach_reverse(i;1..statements.length) changedAfter[i-1]=changedAfter[i]~(undoFirst[i]||dead[i]?[]:changed[i]);
 		auto recomputed=new bool[](statements.length);
 		auto projections=new Expression[](statements.length); // (classical variables that a reversed `if` statement or loop defines for later statements or changes are recomputed as well)
+		auto projectionChanges=new Id[][](statements.length);
 		for(Id[] excluded;;){ // (variables that a reversed statement which is not recomputed changes, e.g., a loop with quantum statements: the statements that define them are reversed as well)
 			auto hoisted=copied.dup;
 			foreach(i,s;statements){
@@ -1785,18 +1859,23 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					return !chain(names,changes).any!(n=>excluded.canFind(n)||after.canFind(n)&&!defined.canFind(n)); // (the reversed definition checks the received value)
 				}
 				auto names=definedNames(s);
-				recomputed[i]=classifyStatement(s)==ComputationClass.classical&&valid(names,changed[i]);
+				recomputed[i]=!dead[i]&&classifyStatement(s)==ComputationClass.classical&&valid(names,changed[i]);
 				projections[i]=null;
-				static if(language==silq) if(!recomputed[i]) if(auto p=projection(s,sc)){
-					auto pnames=definedNames(p),pchanges=changed[i]; // (all of them, see `projection`)
-					if((pchanges.length||statements[i+1..$].any!(t=>pnames.any!(n=>reads(t,n))))&&valid(pnames,pchanges))
-						projections[i]=p;
+				static if(language==silq) if(!recomputed[i]&&!dead[i]){
+					auto drop=changed[i].filter!(n=>!hoisted.canFind(n)||after.canFind(n)&&!defined.canFind(n)).array; // (variables whose current versions the reversal changes in place, e.g., a variable of an enclosing block that a `let` expression returns, in a loop that also changes one that it consumes)
+					if(auto p=projection(s,sc,drop)){
+						auto pnames=definedNames(p),pchanges=changed[i].filter!(n=>!drop.canFind(n)).array; // (all of the others, see `projection`)
+						if((pchanges.length||statements[i+1..$].any!(t=>pnames.any!(n=>reads(t,n))))&&valid(pnames,pchanges)){
+							projections[i]=p;
+							projectionChanges[i]=pchanges;
+						}
+					}
 				}
 				if(recomputed[i]) hoisted~=names;
 				else if(projections[i]) hoisted~=definedNames(projections[i]);
 			}
-			bool needed(Id n){ return given.canFind(n)||chain(statements,middle).any!(t=>readsBesidesUpdates(t,n)); } // (otherwise, its values do not matter, e.g., a vector whose components are updated but not read)
-			auto more=iota(statements.length).filter!(i=>!recomputed[i]&&!projections[i]).map!(i=>changed[i]).joiner.filter!(n=>hoisted.canFind(n)&&!excluded.canFind(n)&&needed(n)).array;
+			bool needed(Id n){ return given.canFind(n)||middle.any!(t=>readsBesidesUpdates(t,n))||iota(statements.length).any!(j=>!dead[j]&&readsBesidesUpdates(statements[j],n)); } // (otherwise, its values do not matter, e.g., a vector whose components are updated but not read)
+			auto more=iota(statements.length).filter!(i=>!recomputed[i]&&!projections[i]&&!dead[i]).map!(i=>changed[i]).joiner.filter!(n=>hoisted.canFind(n)&&!excluded.canFind(n)&&needed(n)).array;
 			if(!more.length){
 				if(excludedCopied) *excludedCopied=excluded.filter!(n=>copied.canFind(n)).array;
 				break;
@@ -1805,14 +1884,14 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		}
 		Id[] checked;
 		foreach(i,s;statements){
-			auto names=recomputed[i]?chain(definedNames(s),changed[i]).array:projections[i]?chain(definedNames(projections[i]),changed[i]).array:[];
+			auto names=recomputed[i]?chain(definedNames(s),changed[i]).array:projections[i]?chain(definedNames(projections[i]),projectionChanges[i]).array:[];
 			checked~=names.filter!(n=>givenAfter(i).canFind(n)).array;
 		}
 		foreach(e;middle) foreach(id;definedIdentifiers(e)) if(checked.canFind(nameOf(id))) id.implicitDup=true;
 		auto undone=new bool[](statements.length); // (the reversal of an earlier statement reads the version before the change, also that of an update that is reversed itself)
 		for(bool more=true;more;){
 			more=false;
-			foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&changed[i].any!(n=>iota(i).any!(j=>(!recomputed[j]||undone[j])&&reads(statements[j],n))))
+			foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&changed[i].any!(n=>iota(i).any!(j=>!dead[j]&&(!recomputed[j]||undone[j])&&reads(statements[j],n))))
 				undone[i]=more=true;
 		}
 		auto hoistedAll=chain(copied,iota(statements.length).map!(i=>recomputed[i]?definedNames(statements[i]):projections[i]?definedNames(projections[i]):[]).joiner).array;
@@ -1892,7 +1971,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			else if(projections[i]) classicalStatements~=projections[i];
 		}
 		Expression[] undoneFirst=iota(statements.length).retro.filter!(i=>undoFirst[i]).map!reversed.array;
-		Expression[] quantumStatements=iota(statements.length).retro.filter!(i=>(!recomputed[i]||undone[i])&&!undoFirst[i]).map!reversed.array;
+		Expression[] quantumStatements=iota(statements.length).retro.filter!(i=>(!recomputed[i]||undone[i])&&!undoFirst[i]&&!dead[i]).map!reversed.array;
 		return undoneFirst~classicalStatements~middle~quantumStatements;
 	}
 	return chain(middle,statements.retro.map!(s=>reverseStatement(s,sc,unchecked,noImplicitDup,false,defer))).array;
@@ -1987,7 +2066,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 	if(auto ce=cast(CompoundExp)e){
 		static if(language==silq) if(ce.loweredFrom) return reverseStatement(ce.loweredFrom,sc,unchecked,noImplicitDup,hoistClassical,defer);
 		auto hoist=hoistClassical||ce.blscope_&&!ce.isSemError(); // (classical locals of a nested block are recomputed in its reversal)
-		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer,given,alive));
+		auto res=new CompoundExp(reverseStatements(ce.s,[],sc,unchecked,noImplicitDup,hoist,defer,given,alive,null,null,forgottenNames(ce)));
 		res.loc=ce.loc;
 		foreach(s;res.s) propErr(s,res);
 		static if(language==silq){
