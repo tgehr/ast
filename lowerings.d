@@ -387,6 +387,9 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 			while(cur.scope_ !is context.sc&&cur.splitFrom) // (e.g., the split of a parameter that is forgotten after its last use, in `vector(n,0:!𝔹)==vector(n,0:!𝔹)`)
 				cur=cur.splitFrom;
 			assert(cur.scope_ is context.sc);
+		}else for(bool found=true;found;){ // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., into the scope of a return that forgets it)
+			found=false;
+			foreach(d;cur.splitInto) if(context.sc.isNestedIn(d.scope_)){ cur=d; found=true; break; }
 		}
 		fd.addCapture(cur,id);
 	}

@@ -1260,6 +1260,10 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 	}
 	Expression.CopyArgs cargs={preserveSemantic:true};
 
+	static bool carried(Scope s){ // (also a `let` expression analyzed again within a type, see reanalyzeLet)
+		for(auto ns=cast(NestedScope)s;ns;ns=cast(NestedScope)ns.parent) if(cast(TypeScope)ns) return true;
+		return false;
+	}
 	Scope[] twinned=[root]; // (function scopes whose declarations are twinned)
 	bool inTwinned(Scope s){
 		foreach(t;twinned) if(s is t||t&&s.isNestedIn(t)) return true;
@@ -1324,7 +1328,7 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 			// declarations lexically outer to the substituted function are
 			// substituted away; others (e.g. from inserted values) stay
 			auto outer=let?root:fd.scope_||!fd.fscope_?fd.scope_:fd.fscope_.parent; // (for a function analyzed in a type, the scope of the analysis, as for the twin)
-			if(d.scope_&&outer&&(outer.isNestedIn(d.scope_)||cast(TypeScope)outer)){ // (a `let` expression carried by a type finds its free variables by name)
+			if(d.scope_&&outer&&(outer.isNestedIn(d.scope_)||carried(outer))){ // (a `let` expression carried by a type finds its free variables by name)
 				if(auto id=cast(Identifier)*pe) if(id.meaning){
 					if(!let||id.meaning.canonicalSource is d.canonicalSource) return id.meaning; // (in a `let` expression, only the twin of the same variable is a renaming)
 				}

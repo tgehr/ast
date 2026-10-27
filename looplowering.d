@@ -1199,7 +1199,27 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(u;ainfos[a].consumed) if(keepAlive(a,u)) return true;
 		return false;
 	}
-	bool dropped(size_t a,int X){ return X!=P&&dropOnDiv(a); }
+	// Likewise, the original loop body may update a classical variable from outside a quantum conditional only on a path
+	// that diverges: the loops without the diverging statement do not update it, as the path continues there.
+	bool classicalUpdateOnDiv(size_t a){
+		if(!atoms[a].div.on) return false;
+		auto c=atoms[a].ites;
+		ptrdiff_t q=-1;
+		foreach(x,k;c) if(quantumIte(k)) q=x;
+		if(q<0) return false;
+		foreach(d;ainfos[a].strong){
+			if(!isClassicalName(d,ainfos[a])) continue;
+			if(d in isCarried) return true;
+			bool local=false; // (defined in the branch of the conditional)
+			foreach(b;0..a){
+				auto x=atoms[b].ites.countUntil(c[q]);
+				if(x>=0&&atoms[b].inElse[x]==atoms[a].inElse[q]&&d in ainfos[b].fresh) local=true;
+			}
+			if(!local) return true;
+		}
+		return false;
+	}
+	bool dropped(size_t a,int X){ return X!=P&&(dropOnDiv(a)||classicalUpdateOnDiv(a)); }
 	// (a loop whose lifted state is computed by a single loop is still rewritten without its dead code: otherwise, the
 	// results of the recursive function it is lowered to would depend on the quantum variables the dead code reads)
 	auto counted=iota(atoms.length).filter!(a=>atomColor[a]>=0&&!dropped(a,atomColor[a])).map!(a=>atomColor[a]).array;
@@ -1720,19 +1740,17 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			addLog(l);
 		}
 	}
-	{ // (the logs are defined before the loop)
-		SetX!Id changed;
-		foreach(ref inf;ainfos) foreach(d;inf.defs) changed.insert(d);
-		static if(is(T==ForExp)) changed.insert(loop.loopVar.name.id);
-		foreach(ref l;logs){
-			if(!l.primary||!l.type) continue;
-			bool ok=true;
-			l.type.freeVarsImpl((Identifier id){
-				if(varName(id) in changed) ok=false;
-				return 0;
-			});
-			if(!ok) return null;
-		}
+	SetX!Id changedInLoop;
+	foreach(ref inf;ainfos) foreach(d;inf.defs) changedInLoop.insert(d);
+	static if(is(T==ForExp)) changedInLoop.insert(loop.loopVar.name.id);
+	foreach(ref l;logs){ // (the logs are defined before the loop)
+		if(!l.primary||!l.type) continue;
+		bool ok=true;
+		l.type.freeVarsImpl((Identifier id){
+			if(varName(id) in changedInLoop) ok=false;
+			return 0;
+		});
+		if(!ok) return null;
 	}
 	auto loc=loop.loc;
 	Identifier mkId(Id n){
@@ -1754,6 +1772,37 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto r=new CallExp(mkId(Id.s!"__dummy"),ty,false,false);
 		r.loc=loc;
 		return r;
+	}
+	Expression defaultOf(Expression ty){ // (a value of type `ty` for a path that the original loop does not continue on)
+		if(!ty) return null;
+		if(isQuantum(ty)&&!ty.isClassical()) return dummyOf(ty);
+		if(auto vt=cast(VectorTy)ty){
+			auto e=defaultOf(vt.next);
+			if(!e) return null;
+			auto args=new TupleExp([vt.num.copy(),e]);
+			args.loc=loc;
+			auto r=new CallExp(mkId(Id.s!"vector"),args,false,false);
+			r.loc=loc;
+			return r;
+		}
+		if(auto tpl=ty.isTupleTy()){
+			Expression[] es;
+			foreach(j;0..tpl.length){
+				auto e=defaultOf(tpl[j]);
+				if(!e) return null;
+				es~=e;
+			}
+			auto r=new TupleExp(es);
+			r.loc=loc;
+			return r;
+		}
+		if(cast(ArrayTy)ty){
+			auto r=new VectorExp([]);
+			r.loc=loc;
+			return annot(r,ty);
+		}
+		if(ty.isClassical()&&(isNumericTy(ty)!=NumericType.none||isFixedIntTy(ty))) return annot(LiteralExp.makeInteger(0),ty);
+		return null;
 	}
 	Expression dupOf(Expression e){
 		auto r=new CallExp(mkId(Id.s!"dup"),e,false,false);
@@ -1937,6 +1986,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				walkShallow(c,(Expression x){
 					if(auto we=cast(WithExp)x) if(we.itrans)
 						walkShallow(we.itrans,(Expression y){
+							if(auto le=cast(LambdaExp)y) le.orig=le.fd.copy(); // (as in the copy itself)
 							if(auto id=cast(Identifier)y) if(auto t=id.id in names) id.id=*t;
 						});
 				});
@@ -2049,6 +2099,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				CompoundExp block;
 				SetX!Id locals;
 				Expression[] thenPre,elsePre,after,post;
+				MapX!(Id,Expression) branchDefs; // (the variables that the branch defines and that are not defined before, with their types)
+				bool divCont; // (whether the other branch of a classical conditional diverges in the original loop, see `continuing`)
+				SetX!Id thenDefs; // (of the `then` branch, for the `else` branch)
+				Id[] pending; // (for an `else` branch that diverges in the original loop: defined at its end, see `continuing`)
+				MapX!(Id,Expression) pendingTypes;
 			}
 			Frame[] open;
 			Expression[] top;
@@ -2065,10 +2120,71 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				size_t ite;
 			}
 			Closed[Id] closedIn,extended;
-			void popFrame(){
+			bool divergesOtherwise(size_t k,bool inElse){ // (then this loop does not contain the diverging statements, which have no results: they are part of the main loop, see `colorAtoms`)
+				if(X==P||ites[k].isLoop||ites[k].isWith||quantumIte(k)) return false;
+				auto ite=cast(IteExp)ites[k].e;
+				auto other=inElse?ite.then:ite.othw;
+				return other&&definitelyReturns(other);
+			}
+			bool usedLater(Id u,size_t from){ // (by the atoms of this loop from `from` on, before they define `u` again)
+				foreach(b;from..atoms.length){
+					if(b in isPseudo||!keepIn(b,X)||dropped(b,X)) continue;
+					if(u in ainfos[b].uses) return true;
+					if(u in ainfos[b].defs) return false;
+				}
+				return false;
+			}
+			// The variables that a branch defines are available after the conditional in the original loop if the other
+			// branch diverges. This loop continues there (see `Div`): there, it defines those that it uses later with dummy
+			// values.
+			Id[] continuing(ref Frame f,size_t from,ref SetX!Id otherDefs){
+				Id[] r;
+				foreach(u,ty;f.branchDefs) if(u !in otherDefs&&usedLater(u,from)) r~=u;
+				r.sort!((a,b)=>a.str<b.str);
+				return r;
+			}
+			void defineContinuing(Id[] names,ref MapX!(Id,Expression) types,CompoundExp other,ref Frame f,bool contElse){
+				foreach(u;names){
+					auto ty=types.get(u,null);
+					auto v=defaultOf(ty);
+					if(v) ty.freeVarsImpl((Identifier id){
+						if(varName(id) in changedInLoop) v=null; // (the type depends on the path)
+						return 0;
+					});
+					if(!v){
+						ok=false;
+						continue;
+					}
+					other.s~=define(mkId(u),v);
+					if(open.length) open[$-1].locals.insert(u); // (`f` is closed: the enclosing block)
+					else topLocals.insert(u);
+					outOfScope.remove(u);
+					f.locals.remove(u);
+					if(!ty.isClassical()) extended[u]=Closed(cast(IteExp)f.copy,contElse,f.ite);
+				}
+			}
+			void popFrame(size_t from){
 				auto f=open[$-1];
 				open=open[0..$-1];
 				f.block.s~=f.post;
+				if(auto cite=cast(IteExp)f.copy){
+					if(f.pending.length){ // (the `then` branch continues)
+						SetX!Id defined;
+						foreach(u,ty;f.branchDefs) defined.insert(u);
+						defineContinuing(f.pending.filter!(u=>u !in defined).array,f.pendingTypes,f.block,f,false);
+					}
+					if(f.divCont){
+						SetX!Id none;
+						auto names=continuing(f,from,f.inElse?f.thenDefs:none);
+						if(names.length){
+							if(!cite.othw){
+								cite.othw=new CompoundExp([]);
+								cite.othw.loc=loc;
+							}
+							defineContinuing(names,f.branchDefs,f.inElse?cite.then:cite.othw,f,f.inElse);
+						}
+					}
+				}
 				if(ites[f.ite].isLoop) closedLoops[f.ite]=true;
 				else{
 					auto cl=closedLocals.get(f.ite,SetX!Id.init);
@@ -2099,10 +2215,20 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						if(ites[open[dd].ite].isLoop) ok=false;
 						foreach(n;open[dd].locals) outOfScope.insert(n);
 					}
-					popFrame();
+					popFrame(at);
 				}
 				if(toElse){
 					auto cite=cast(IteExp)open[d].copy;
+					SetX!Id thenDefs;
+					foreach(u,ty;open[d].branchDefs) thenDefs.insert(u);
+					if(open[d].divCont){
+						SetX!Id none;
+						open[d].pending=continuing(open[d],at,none);
+						open[d].pendingTypes=open[d].branchDefs;
+					}
+					open[d].thenDefs=thenDefs;
+					open[d].branchDefs=typeof(open[d].branchDefs).init;
+					open[d].divCont=divergesOtherwise(open[d].ite,true);
 					open[d].inElse=true;
 					open[d].locals=typeof(open[d].locals).init;
 					if(!cite.othw){
@@ -2175,6 +2301,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					cite.loc=ite.loc;
 					emit(cite);
 					open~=Frame(chain[d],inElse[d],cite,inElse[d]?othw:then);
+					open[$-1].divCont=divergesOtherwise(chain[d],inElse[d]);
 				}
 			}
 			foreach(a;0..atoms.length){
@@ -2248,13 +2375,22 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				}
 				foreach(dname;ainfos[a].defs){
 					outOfScope.remove(dname);
+					bool known=dname in isCarried||dname in bodyLocals||dname in topLocals;
+					foreach(ref f;open){
+						if(!known&&cast(IteExp)f.copy){
+							auto ty=ainfos[a].types.get(dname,null);
+							if(ty||dname !in f.branchDefs) f.branchDefs[dname]=ty;
+						}
+						if(dname in f.locals) known=true;
+					}
 					if(dname in isCarried||dname in topLocals||open.any!(f=>dname in f.locals)) continue;
 					if(open.length) open[$-1].locals.insert(dname);
 					else topLocals.insert(dname);
 				}
 				emit(cp(atoms[a].e));
 			}
-			while(open.length) popFrame();
+			auto next=atoms.length-atoms.find!(t=>t.stm>i).length; // (the first atom of the next statement)
+			while(open.length) popFrame(next);
 			if(!ok||versionCopyFailed) return null;
 			bdy~=top;
 			foreach(d;topLocals) bodyLocals.insert(d);
@@ -3438,6 +3574,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		walkShallow(c,(Expression x){
 			if(auto we=cast(WithExp)x) if(we.itrans)
 				walkShallow(we.itrans,(Expression y){
+					if(auto le=cast(LambdaExp)y) le.orig=le.fd.copy(); // (as in the copy itself: later copies are made from the renamed definition)
 					if(auto id=cast(Identifier)y) if(auto t=id.id in names) id.id=*t;
 				});
 		});
@@ -4129,6 +4266,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto returnTpl=new TupleExp(cast(Expression[])ids(constMovedParams.filter!(p=>p[3]&&p[0] !in unchangedConst).array,true));
 		returnTpl.loc=loop.loc;
 	}
+	SetX!Id replayedParams; // (carried variables whose values at the exit are computed again after the loop instead of being returned)
 	static if(isDoWhile){ // (the definitions of the body that are available after the loop are returned as well)
 		Q!(Identifier,Expression,Expression)[] exitLocals; // (name, type, type in the result of the function)
 		SetX!Id paramNames,changed; // (`changed`: names of the values that the loop defines or changes)
@@ -4136,7 +4274,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		Q!(Id,Expression)[] replays; // (definitions of the body that are computed again after the loop, see `liftedExitDefinitions`)
 		if(auto xsc=loop.exitScope){ // (no exit if the body returns)
 			foreach(d;chain(xsc.mergedVars,loop.bdy.blscope_.mergedVars)) if(d.mergedInto.name) changed.insert(d.mergedInto.name.id);
-			if(!continuation) replays=liftedExitDefinitions(loop,sc,paramNames,changed);
+			if(!continuation){
+				SetX!Id movedNames;
+				foreach(p;movedParams) movedNames.insert(p[1].name.id);
+				replays=liftedExitDefinitions(loop,sc,paramNames,changed,&movedNames);
+				foreach(r;replays) if(r[0] in movedNames) replayedParams.insert(r[0]);
+				if(replayedParams.length) returnTpl.e=returnTpl.e.filter!(e=>!(cast(Identifier)e&&(cast(Identifier)e).id in replayedParams)).array;
+			}
 			foreach(d;xsc.mergedVars){
 				auto name=d.mergedInto.name;
 				if(!name||name.id in paramNames||replays.canFind!(r=>r[0]==name.id)) continue;
@@ -4152,7 +4296,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		Q!(Id,Expression,Expression)[] strongerExits; // (parameters that the body defines with a stronger type: name, type, type in the result of the function)
 		if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars){
 			auto name=d.mergedInto.name;
-			if(!name) continue;
+			if(!name||name.id in replayedParams) continue;
 			auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==name.id);
 			if(p.empty) continue;
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
@@ -4683,7 +4827,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto defTpl=new TupleExp(cast(Expression[])ids(movedParams,true));
 		defTpl.loc=movedTpl.loc;
 	}else{
-		auto defTpl=new TupleExp(cast(Expression[])chain(resultConstTmpNames.map!(id=>id.copy(cargsDefault)),ids(movedParams,true)).array);
+		auto defTpl=new TupleExp(cast(Expression[])chain(resultConstTmpNames.map!(id=>id.copy(cargsDefault)),ids(movedParams.filter!(p=>p[1].name.id !in replayedParams).array,true)).array);
 		defTpl.loc=loop.loc;
 	}
 	Expression[] exitCoercions,exitCoercionTypes; // (of the weakened definitions of the body, and of the quantum ones, which the function may compute classically)
@@ -4941,7 +5085,7 @@ bool hasLoopWithReturn(Expression e){
 // after it as well, which the rest of the body and the condition do not change: they are computed again after the recursive function
 // returns instead of being returned (the result of the function is not lifted)
 static if(language==silq)
-Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames,ref SetX!Id changed){
+Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames,ref SetX!Id changed,SetX!Id* movedNames=null){
 	Q!(Id,Expression)[] r;
 	auto xsc=loop.exitScope;
 	MapSX!(Id,Declaration) exitDecls;
@@ -4991,7 +5135,7 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 			value=fd;
 		}else continue;
 		auto decl=exitDecls.get(name,null);
-		if(!decl||name in paramNames||name in later||r.canFind!(x=>x[0]==name)) continue;
+		if(!decl||name in paramNames&&!(movedNames&&name in *movedNames)||name in later||r.canFind!(x=>x[0]==name)) continue; // (a carried variable as well: its version at the exit is the definition)
 		auto type=typeForDecl(decl);
 		if(!type) continue;
 		bool typeValue=isTypeTy(type)||isQNumeric(type); // (a use needs the value, e.g., `x coerce a` with `a:=𝔹^n`)
@@ -5215,6 +5359,9 @@ void erpBeforeReturn(ReturnExp ret,Scope sc){
 		}
 		if(cast(FunctionScope)c) break;
 	}
+	// (in any iteration of the analysis of the loops: the rewritten loops are analyzed with the same iterations, e.g., only
+	// the first one forgets `y:𝔹^n` at `n+=1` if the body weakens the type of `y`)
+	if(auto prev=erpKey(ret) in erpConsumedBeforeReturn) foreach(n;*prev) consumed.insert(n);
 	erpConsumedBeforeReturn[erpKey(ret)]=consumed;
 	Q!(Id,Expression)[] types;
 	SetX!Id typed;

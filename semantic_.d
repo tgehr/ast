@@ -3331,6 +3331,20 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype,ninit));
 		propErr(e,tpl);
 	}
+	static if(!isPresemantic) static if(language==silq) foreach(e;tpl.e){ // (a later component can update the type of the aggregate of an earlier one, e.g., `(x[3],x[k]):=(x[k],x[3])` with `x:!𝔹×!ℕ×!ℕ×!ℕ`, which the second one makes `!ℕ^4`)
+		auto idx=cast(IndexExp)e;
+		if(!idx||!idx.byRef||idx.isSemError()) continue;
+		auto id=getIdFromIndex(idx);
+		if(!id||!id.meaning||id.type==typeForDecl(id.meaning)) continue;
+		id.type=id.typeFromMeaning;
+		void updateIndexTypes(IndexExp idx){
+			if(auto nidx=cast(IndexExp)idx.e) updateIndexTypes(nidx);
+			idx.type=indexType(idx.e.type,idx.a);
+			if(!idx.type) idx.setSemError();
+		}
+		updateIndexTypes(idx);
+		propErr(idx,tpl);
+	}
 	static if(!isPresemantic){
 		auto sc=context.sc;
 		if(context.type){
@@ -8151,7 +8165,16 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		}
 	}else{
 		if(inOwnParameterTypes()) return id;
-		if(sc) id.meaning=sc.getSplit(id.meaning); // (e.g., a copy of a type that mentions a variable that was split into this scope after the type was analyzed)
+		if(sc){
+			id.meaning=sc.getSplit(id.meaning); // (e.g., a copy of a type that mentions a variable that was split into this scope after the type was analyzed)
+			auto fun=sc.getFunction();
+			if(cast(VarDecl)id.meaning&&fun&&fun.sstate==SemState.started){ // (or merged, e.g., after an `if` statement or for the next iteration of a loop: the current version, if it has the same value; the symbol table has the current versions only during the analysis of the function, e.g., not when the backend analyzes the target of an assignment again)
+				auto probe=new Identifier(id.meaning.getId);
+				probe.loc=id.loc;
+				auto cur=sc.lookup(probe,true,false,Lookup.probing,null);
+				if(cur&&cur !is id.meaning&&!cast(DeadDecl)cur&&cur.isDerivedFrom(id.meaning)) id.meaning=sc.getSplit(cur);
+			}
+		}
 		setConstResult(id,context);
 		setImplicitDup();
 		if(sc) sc.recordAccess(id,id.meaning);
@@ -8328,6 +8351,7 @@ bool hoistAliasedConstRead(Scope hsc,IndexExp idx,Scope sc){ // TODO: replace wi
 	auto name=freshName();
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	Expression.CopyArgs cargs={preserveSemantic: true};
+	cargs.mapExp=(Expression e,ref Expression.CopyArgs args)=>e is idx?null:e; // (the temporary replaces the lookup, and the definition takes over its analyzed operands, e.g., a later split of a variable into this scope updates them, and the block of a `let` expression keeps its scope)
 	auto rhs=dupExp(idx.copy(cargs),idx.loc,context);
 	rhs.loc=idx.loc;
 	auto tid=temporaryIdentifier(name,idx.loc);
@@ -9844,6 +9868,7 @@ Expression expressionSemanticImpl(TypeofExp ty,ExpSemContext context){
 				r=r.substitute(subst);
 				foreach(id;r.freeIdentifiers)
 					if(visible(id)&&!id.typeofSuppressedCapture) sc.recordAccess(id,id.meaning);
+				sc.recordCapturers(r);
 			}
 		}
 		sc.captureTypeDependencies(r);

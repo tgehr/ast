@@ -791,12 +791,17 @@ class Checker {
 
 		auto decl = e.meaning;
 		if(!decl) return; // TODO
-		if(inType) for(bool found = true; found;){ // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., the type of a variable declared before)
+		if(inType) decl = currentSplit(decl);
+		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
+		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
+	}
+
+	ast_decl.Declaration currentSplit(ast_decl.Declaration decl) { // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., the type of a variable declared before)
+		for(bool found = true; found;){
 			found = false;
 			foreach(d; decl.splitInto) if(nscope.isNestedIn(d.scope_)) { decl = d; found = true; break; }
 		}
-		// assert(e.type is decl.vtype, format("Different types: %s != %s", e.type, decl.vtype));
-		return getVar(decl, e.constLookup||e.implicitDup, "identifier", e);
+		return decl;
 	}
 
 	void implExpr(ast_exp.LetExp e) {
@@ -904,6 +909,7 @@ class Checker {
 		foreach(i, decl; capturedDecls) {
 			auto ty = typeForDecl(decl);
 			bool keep = isBorrow || !fd.isConsumedCapture(fd.capturedDecls[i]);
+			if(inType) decl = currentSplit(decl); // (e.g., a closure in the return type of a function, substituted at a call)
 			getVar(decl, keep, "capture", causeExpr);
 		}
 	}

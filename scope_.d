@@ -471,6 +471,16 @@ abstract class Scope{
 			updateDeclProps(meaning).capturers~=capturer;
 		}
 	}
+	final void recordCapturers(Expression type){ // (the closures in a type whose uses are recorded as accesses: their captures are renamed with the uses, e.g., to later splits)
+		foreach(se;type.subexpressions){
+			FunctionDef fd;
+			if(auto le=cast(LambdaExp)se) fd=le.fd;
+			else fd=cast(FunctionDef)se;
+			if(!fd) continue;
+			foreach(decl;fd.capturedDecls) recordCapturer(fd,decl);
+			if(fd.body_) recordCapturers(fd.body_);
+		}
+	}
 	private final Identifier isConstHere(Declaration decl){
 		if(auto r=declProps.tryGet(decl))
 			if(r.constBlock.length)
@@ -1563,8 +1573,10 @@ abstract class Scope{
 				clearConsumed();
 			}else symtabRemove(d);
 		}
-		if(mergeScope)
+		if(mergeScope){
+			if(auto fsc=cast(FunctionScope)this) foreach(decl;fsc.fd.capturedDecls) mergeScope.recordCapturer(fsc.fd,decl); // (the merged uses of the captured variables are renamed with the captures, e.g., uses with meanings from a copy)
 			mergeScope.mergeDeclProps(this.declProps,this.componentConstBlocks);
+		}
 		return false;
 	}
 
@@ -2333,14 +2345,18 @@ abstract class Scope{
 	protected bool insertCaptureImpl(Identifier id,Declaration meaning,Expression type,Scope outermost){ return true; }
 
 	protected void captureTypeDependencyImpl(Identifier id,Declaration meaning,Scope origin){}
+	protected void captureTypeCapturersImpl(Expression type){}
 	final void captureTypeDependencies(Expression type){ // (e.g., the type of a `typeof` operand, whose uses of outer variables do not capture)
+		Scope[] capturing;
 		foreach(free;type.freeVars){
 			auto meaning=free.meaning;
 			if(!meaning||!meaning.scope_||meaning.isToplevelDeclaration()||!isNestedIn(meaning.scope_)) continue;
 			Scope[] chain;
 			for(Scope s=this;s&&s !is meaning.scope_;s=s.parentScope()) chain~=s;
 			foreach_reverse(s;chain) s.captureTypeDependencyImpl(free,meaning,this);
+			foreach(s;chain) if(!capturing.canFind(s)) capturing~=s;
 		}
+		foreach(s;capturing) s.captureTypeCapturersImpl(type);
 	}
 
 	abstract FunctionDef getFunction();
@@ -3104,6 +3120,9 @@ class CapturingScope(T): NestedScope{
 	protected override void captureTypeDependencyImpl(Identifier id,Declaration meaning,Scope origin){
 		if(!typeofOperand) addCapture(id,meaning,Lookup.constant,origin);
 	}
+	protected override void captureTypeCapturersImpl(Expression type){
+		if(!typeofOperand) parent.recordCapturers(type);
+	}
 	protected Declaration addCapture(Identifier id,Declaration meaning,Lookup kind,Scope origin){
 		if(kind==Lookup.probing) return null;
 		if(!meaning) return null;
@@ -3188,6 +3207,7 @@ class CapturingScope(T): NestedScope{
 			if(free.meaning)
 				addCapture(free,free.meaning,Lookup.constant,origin);
 		}
+		parent.recordCapturers(type);
 		import ast.semantic_:typeConstBlocked;
 		bool isConstDecl=meaning.isConst||typeConstBlocked(meaning,origin)||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstDecl;
