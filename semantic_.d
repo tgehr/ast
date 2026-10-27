@@ -2815,6 +2815,12 @@ struct DefineLhsContext{
 	Expression type;
 	Expression initializer;
 }
+static if(language==silq)
+Expression definedValue(Expression e){ // (the known value of a variable that `e` defines, a deterministic classical number, in terms of variables without known values, see `knownValueOf`)
+	if(!hasKnownValueType(e)||e.getAnnotation()<deterministic||hasBinders(e)) return null;
+	auto r=knownForm(e,null);
+	return r is e?e.eval():r;
+}
 auto defineLhsContext(ExpSemContext expSem,Expression type,Expression initializer){
 	return DefineLhsContext(expSem,type,initializer);
 }
@@ -3105,6 +3111,7 @@ Expression defineLhsSemanticImpl(Identifier id,DefineLhsContext context){
 				if(context.initializer){
 					assert(!vd.initializer||vd.initializer is context.initializer);
 					vd.initializer=context.initializer;
+					static if(language==silq) if(!vd.isToplevelDeclaration()) vd.knownValue=definedValue(vd.initializer);
 				}
 			}
 		}
@@ -6151,7 +6158,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
 			return updateVars(tae.e,rhs,stage);
 		}
-		return updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
+		updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
+		static if(language==silq) if(stage==Stage.defineVars) if(auto id=cast(Identifier)lhs) if(id.meaning) // (the new version, see `knownValueOf`)
+			if(auto var=cast(VarDecl)defined.get(id.meaning.getId,null)) var.knownValue=definedValue(rhs);
 	}
 	updateVars(ae.e1,ae.e2,Stage.collectDeps);
 	updateVars(ae.e1,ae.e2,Stage.consumeLhs);
@@ -6381,6 +6390,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			auto origId=id.meaning.name.id;
 			assert(!var);
 			var=addVar(origId,ce.type?ce.type:typeForDecl(id.meaning),be.loc,sc,be); // (error recovery: keep the type if the operation does not type check)
+			static if(language==silq) if(auto nvd=cast(VarDecl)var) nvd.knownValue=definedValue(ce); // (the new version, see `knownValueOf`)
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			if(var.scope_ is sc){
 				sc.addDependency(var,dependency);

@@ -312,6 +312,7 @@ abstract class Expression: Node{
 		auto r=cast(Expression)o;
 		if(!r) return false;
 		EqualityContext ctx;
+		ctx.syntactic=true; // (judgmental equality, see `isEqual`)
 		return isEqualImpl(r,ctx);
 	}
 	bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
@@ -836,6 +837,7 @@ struct Id {
 
 struct EqualityContext{
 	private MapSX!(Declaration,Declaration) mapL, mapR;
+	bool syntactic=false; // (without the known values of variables, as for `==`, see `knownValuesEqual`)
 	private static Declaration source(Declaration d){
 		return d?d.canonicalSource:d;
 	}
@@ -846,6 +848,7 @@ struct EqualityContext{
 		EqualityContext r;
 		r.mapL=mapR;
 		r.mapR=mapL;
+		r.syntactic=syntactic;
 		return r;
 	}
 	bool lookup(Declaration l,Declaration r){
@@ -980,7 +983,89 @@ bool isEqual(Expression a,Expression b,EqualityContext* ctx){
 		auto ea=a.eval(),eb=b.eval();
 		if(ea !is a||eb !is b) return ea.isEqualImpl(eb,*ctx);
 	}
+	static if(language==silq) return knownValuesEqual(a,b,*ctx);
+	else return false;
+}
+
+static if(language==silq)
+bool knownValuesEqual(Expression a,Expression b,ref EqualityContext ctx){ // (with the values that the definitions of variables determine, e.g., `n+1` and `4` after `n:=3`, see `knownValueOf`)
+	if(ctx.syntactic||!hasKnownValueType(a)||!hasKnownValueType(b)) return false;
+	auto ka=knownForm(a,&ctx),kb=knownForm(b,&ctx);
+	if(ka is a&&kb is b||!sameLoopContexts(ka,kb,ctx)) return false;
+	auto syntactic=ctx.syntactic;
+	ctx.syntactic=true; // (the known values are already substituted)
+	scope(exit) ctx.syntactic=syntactic;
+	return isEqual(ka,kb,&ctx);
+}
+static if(language==silq)
+bool sameLoopContexts(Expression a,Expression b,ref EqualityContext ctx){ // (a use in a loop of a variable from outside the loop stands for another variable than its uses outside the loop, as for `--remove-loops`, which passes it as a parameter)
+	import ast.declaration:VarDecl,loopContext;
+	import ast.type:freeIdentifiers;
+	Declaration[] sources;
+	Scope[][] contexts;
+	foreach(e;[a,b]) foreach(id;e.freeIdentifiers){
+		auto vd=cast(VarDecl)id.meaning;
+		if(!vd||vd.isToplevelDeclaration()||ctx.isBound(vd)) continue;
+		auto source=vd.canonicalSource;
+		Scope[] loops;
+		if(!loopContext(id.scope_,source.scope_,loops)) return false;
+		auto i=sources.countUntil!(d=>d is source);
+		if(i<0){ sources~=source; contexts~=loops; }
+		else if(!equal!((x,y)=>x is y)(contexts[i],loops)) return false;
+	}
+	return true;
+}
+static if(language==silq)
+bool hasKnownValueType(Expression e){ // (a classical integer, see `knownValueOf`)
+	if(!e||!e.isSemCompleted()||!e.type||!e.type.isClassical()) return false;
+	auto nt=isNumericTy(e.type);
+	return nt!=NumericType.none&&nt<=NumericType.ℤt;
+}
+static if(language==silq)
+bool hasBinders(Expression e){ // (substitution does not avoid capture)
+	import ast.type:ProductTy;
+	foreach(x;e.subexpressions) if(cast(LambdaExp)x||cast(LetExp)x||cast(FunctionDef)x||cast(ProductTy)x) return true;
 	return false;
+}
+static if(language==silq)
+Expression knownForm(Expression e,EqualityContext* ctx){ // (`e` with the known values of the variables that it mentions, e.g., `4` for `n+1` after `n:=3`, see `knownValueOf`)
+	import ast.declaration:knownValueOf,acrossLoop;
+	import ast.type:freeIdentifiers;
+	if(!e.isSemCompleted()||hasBinders(e)) return e;
+	MapSX!(Id,Expression) subst;
+	SetX!Id other;
+	foreach(id;e.freeIdentifiers){
+		auto v=id.meaning&&!(ctx&&ctx.isBound(id.meaning))&&!acrossLoop(id.scope_,id.meaning.scope_)?knownValueOf(id.meaning):null; // (not for a use in a loop of a variable from outside the loop, whose later iterations may see another value)
+		if(!v) other.insert(id.id);
+		else if(auto p=subst.getPtr(id.id)){ if(!isEqual(*p,v,null)) other.insert(id.id); }
+		else subst[id.id]=v;
+	}
+	foreach(x;other) subst.remove(x); // (the same name for another variable)
+	if(!subst.length||!foldable(e,subst)) return e;
+	return e.substitute(subst);
+}
+static if(language==silq)
+bool foldable(Expression e,ref MapSX!(Id,Expression) subst){ // (the evaluation after the substitution computes no huge numbers, e.g., not `2^n` after `n:=10^8`)
+	enum limit=1<<12;
+	ulong bits(Expression e,bool substituted=false){ // (an upper bound for the length of the value, or for its constant parts)
+		if(auto id=cast(Identifier)e){
+			if(!substituted) if(auto v=subst.getPtr(id.id)) return bits(*v,true);
+			return 0;
+		}
+		if(auto c=e.asIntegerConstant()) return 64*c.get().ulongLength;
+		if(auto p=cast(BinaryExp!(Tok!"^"))e){
+			auto k=p.e2.asIntegerConstant();
+			if(!substituted) if(auto id=cast(Identifier)p.e2) if(auto v=subst.getPtr(id.id)) k=(*v).asIntegerConstant();
+			if(!k) return bits(p.e1,substituted);
+			if(k.get()>limit) return limit+1;
+			return min(bits(p.e1,substituted)*k.get().toLong(),limit+1)+bits(p.e2,substituted);
+		}
+		if(auto m=cast(BinaryExp!(Tok!"·"))e) return bits(m.e1,substituted)+bits(m.e2,substituted);
+		ulong r=0;
+		foreach(x;e.components) r=max(r,bits(x,substituted));
+		return min(r+1,limit+1);
+	}
+	return bits(e)<=limit;
 }
 
 class Identifier: Expression{

@@ -1,6 +1,7 @@
 // Written in the D programming language
 // License: http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0
 module ast.conversion;
+import astopt;
 import ast.expression,ast.type;
 import ast.declaration:Variance;
 import ast.lexer:Tok;
@@ -49,7 +50,8 @@ class ImplosionCoercion: Conversion{
 bool isNoOpConversion(Expression from,Expression to)in{
 	assert(isType(from)&&isType(to));
 }do{
-	return from==to;
+	static if(language==silq) return isEqual(from,to,null); // (judgmental equality, e.g., `!uint[n]` and `!uint[3]` after `n:=3`)
+	else return from==to;
 }
 
 class NoOpConversion: Conversion{
@@ -68,7 +70,7 @@ class TransitiveConversion: Conversion{
 	Conversion a,b;
 	override string toString(){ return text(typeid(this),"{",a,"; ",b,"}"); }
 	this(Conversion a,Conversion b)in{
-		assert(a&&b&&a.to==b.from);
+		assert(a&&b&&isNoOpConversion(a.to,b.from));
 	}do{
 		this.a=a;
 		this.b=b;
@@ -77,7 +79,7 @@ class TransitiveConversion: Conversion{
 }
 
 Conversion trans(Conversion a,Conversion b)in{
-	assert(a&&b&&a.to==b.from);
+	assert(a&&b&&isNoOpConversion(a.to,b.from));
 }do{
 	if(!a||!b) return null;
 	if(isNoOpConversion(a.from,a.to)) return b;
@@ -244,7 +246,7 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 		}else if(next.all) return true;
 	}
 	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-	if(vec1&&vec2&&vec1.num==vec2.num){
+	if(vec1&&vec2&&isEqual(vec1.num,vec2.num,null)){ // (judgmental equality, e.g., `n` and `3` after `n:=3`)
 		if(auto next=typeExplicitConversion!witness(vec1.next,vec2.next,annotationType)){
 			static if(witness){
 				enum checkLength=false;
@@ -260,18 +262,24 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			}else return true;
 		}
 	}
-	if(tpl1&&vec2&&LiteralExp.makeInteger(tpl1.length)==vec2.num){ // TODO: redundant?
+	if(tpl1&&vec2&&isEqual(LiteralExp.makeInteger(tpl1.length),vec2.num,null)){ // TODO: redundant?
 		auto next=iota(tpl1.length).map!(i=>typeExplicitConversion!witness(tpl1[i],vec2.next,annotationType));
 		static if(witness){
 			auto elements=next.array;
-			if(elements.all!(x=>!!x)) return new TupleConversion(from,to,elements);
+			if(elements.all!(x=>!!x)){
+				auto nvec2=vectorTy(vec2.next,tpl1.length); // (e.g., for `!𝔹^n` after `n:=3`)
+				return trans(new TupleConversion(from,nvec2,elements),new NoOpConversion(nvec2,to));
+			}
 		}else if(next.all) return true;
 	}
-	if(vec1&&tpl2&&vec1.num==LiteralExp.makeInteger(tpl2.length)){ // TODO: redundant?
+	if(vec1&&tpl2&&isEqual(vec1.num,LiteralExp.makeInteger(tpl2.length),null)){ // TODO: redundant?
 		auto next=iota(tpl2.length).map!(i=>typeExplicitConversion!witness(vec1.next,tpl2[i],annotationType));
 		static if(witness){
 			auto elements=next.array;
-			if(elements.all!(x=>!!x)) return new TupleConversion(from,to,elements);
+			if(elements.all!(x=>!!x)){
+				auto nvec1=vectorTy(vec1.next,tpl2.length); // (e.g., for `!𝔹^n` after `n:=3`)
+				return trans(new NoOpConversion(from,nvec1),new TupleConversion(nvec1,to,elements));
+			}
 		}else if(next.all) return true;
 	}
 	if(annotationType==TypeAnnotationType.coercion){

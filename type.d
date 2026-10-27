@@ -531,6 +531,8 @@ class TupleTy: Type,ITupleTy{
 			return all!(i=>isSubtype(ltup.types[i],rtup[i],ctx))(iota(ltup.types.length));
 		auto rarr=cast(ArrayTy)r;
 		if(rarr) return all!(i=>isSubtype(ltup.types[i],rarr.next,ctx))(iota(ltup.types.length));
+		static if(language==silq) if(auto rvec=cast(VectorTy)r) if(!rtup&&isEqual(LiteralExp.makeInteger(ltup.types.length),rvec.num,ctx)) // (e.g., `!𝔹^n` after `n:=3`)
+			return all!(i=>isSubtype(ltup.types[i],rvec.next,ctx))(iota(ltup.types.length));
 		return false;
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){
@@ -786,6 +788,8 @@ class VectorTy: Type, ITupleTy{
 		auto ltup=this.isTupleTy(),rtup=r.isTupleTy();
 		if(ltup&&rtup&&ltup.length==rtup.length)
 			return all!(i=>isSubtype(ltup[i],rtup[i]))(iota(ltup.length));
+		static if(language==silq) if(!ltup&&rtup&&isEqual(num,LiteralExp.makeInteger(rtup.length),ctx)) // (e.g., `!𝔹^n` after `n:=3`)
+			return all!(i=>isSubtype(next,rtup[i],ctx))(iota(rtup.length));
 		return false;
 	}
 	override Expression combineTypesImpl(Expression r,bool meet){

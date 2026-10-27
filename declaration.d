@@ -189,6 +189,7 @@ class VarDecl: Declaration{
 	// semantic information
 	Expression vtype;
 	Expression initializer;
+	Expression knownValue; // (see `knownValueOf`)
 	DefineExp definition;
 	Expression typeSource; // (for diagnostics) the loop or assignment that determines the type of the variable, e.g., `x = n/2`
 	VarDecl loweredFrom; // (for diagnostics) the variable after the loop in the analysis before the loop was lowered
@@ -196,6 +197,51 @@ class VarDecl: Declaration{
 	Identifier outOfScopeCause;
 	bool replaceType;
 	Identifier outOfScopeDup;
+}
+
+Expression knownValueOf(Declaration d){ // (the value that the definition of a classical variable determines, e.g., `3` for `n:=3` or for `m:=n` after it, see `knownValuesEqual`)
+	MapX!(Declaration,Expression) memo; // (merges that share their predecessors)
+	Expression rec(Declaration d){
+		auto vd=cast(VarDecl)d;
+		if(!vd) return null;
+		if(vd.knownValue||vd.initializer) return vd.knownValue;
+		if(d in memo) return memo[d];
+		memo[d]=null;
+		Expression r=null;
+		auto source=vd.canonicalSource;
+		if(source !is vd){ // (no path changes it, e.g., in a branch, or after a loop that does not change it)
+			if(!acrossLoop(vd.scope_,source.scope_)) r=rec(source);
+		}else if(!vd.splitFrom&&vd.mergedFrom.length&&!vd.mergedFrom.any!(m=>acrossLoop(m.scope_,vd.scope_))){ // (not, e.g., after a loop that changes it)
+			r=rec(vd.mergedFrom[0]);
+			if(r) foreach(m;vd.mergedFrom[1..$]){
+				auto v=rec(m);
+				if(!v||!isEqual(r,v,null)){ r=null; break; }
+			}
+		}
+		memo[d]=r;
+		return r;
+	}
+	return rec(d);
+}
+
+bool loopContext(Scope use,Scope decl,out Scope[] loops){ // (the bodies of the loops that contain `use` but not `decl`, or `false` if the scopes are not related)
+	if(!use||!decl) return false;
+	Scope[] ancestors;
+	for(auto sc=decl;sc;sc=sc.parentScope()) ancestors~=sc;
+	static bool isLoopBody(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isLoopBody; }
+	for(auto sc=use;sc;sc=sc.parentScope()){
+		auto i=ancestors.countUntil!(x=>x is sc);
+		if(i>=0){
+			loops~=ancestors[0..i].filter!isLoopBody.array;
+			return true;
+		}
+		if(isLoopBody(sc)) loops~=sc;
+	}
+	return false;
+}
+bool acrossLoop(Scope a,Scope b){
+	Scope[] loops;
+	return !loopContext(a,b,loops)||loops.length!=0;
 }
 
 class Parameter: VarDecl{
