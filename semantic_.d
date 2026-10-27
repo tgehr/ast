@@ -1558,6 +1558,7 @@ struct FixedPointIterState{
 		auto restrictionCause=restriction_&&prevBdy?findQuantumReturn(prevBdy,false):RestrictionCause.init;
 		restrictionCause.laterIterations=true;
 		forgetScope=new BlockScope(sc,restriction_,restrictionCause);
+		forgetScope.isLoopEntry=true;
 		loopScope=new BlockScope(sc,restriction_,restrictionCause);
 		loopScope.isLoopBody=true;
 		return loopScope;
@@ -2367,8 +2368,8 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	dw.bdy=bdy;
 	dw.cond=ncond;
 	dw.reset=rst;
-	if(xsc) foreach(_,d;xsc.rnsymtab) // (the versions at the exit are only forgotten after the loop)
-		if(d.scope_ is xsc) if(auto lu=xsc.lastUses.get(d,true)) lu.pin();
+	if(xsc) foreach(_,d;xsc.rnsymtab) // (the versions at the exit are only forgotten after the loop, the versions before it can still be forgotten before it, e.g., when the analysis of an enclosing loop continues without them)
+		if(d.scope_ is xsc) if(auto lu=xsc.lastUses.get(d,true)) lu.pinHere();
 	if(xsc&&sc.mergeLoopExit(xsc)) dw.setSemError();
 	dw.exitScope=xsc;
 	if(xsc) xsc.forgottenVarsOnEntry=xsc.forgottenVarsOnEntry.filter!(d=>!exitDrops.canFind(d)).array; // (already forgotten in the body)

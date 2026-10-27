@@ -1475,8 +1475,10 @@ abstract class Scope{
 		bool errors=false;
 		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
 		foreach(_,d;rnsymtab) pending~=d;
-		for(bool deferBlocked=true;pending.length;){
-			Declaration[] blocked; // (forgotten after the live variables whose types mention them, e.g., `n` after `y:=vector(n,0:!𝔹)`)
+		SetX!Declaration blockedAtStart; // (forgotten after the live variables whose types mention them, e.g., `n` after `y:=vector(n,0:!𝔹)`)
+		foreach(d;pending) if(!cast(DeadDecl)d&&!d.isSemError()&&typeConstBlocked(d,this)) blockedAtStart.insert(d);
+		for(bool deferBlocked=true,firstPass=true;pending.length;firstPass=false){
+			Declaration[] blocked;
 			bool forgot=false;
 			foreach(d;pending){
 				if(cast(DeadDecl)d) continue;
@@ -1491,11 +1493,14 @@ abstract class Scope{
 					d.setSemForceError();
 					continue;
 				}
-				if(!canForgetAppend(loc,d)){
-					if(deferBlocked&&typeConstBlocked(d,this)){
-						blocked~=d;
-						continue;
-					}
+				if(deferBlocked&&(firstPass&&d in blockedAtStart||typeConstBlocked(d,this))){
+					blocked~=d;
+					continue;
+				}
+				// (a blocked variable is forgotten here, after the variables whose types mention it, rather than at its last use,
+				// which may precede their forgets, e.g., `n` at the end in `x:=vector(n,0:𝔹); if c { return 0; } else { m:=x.length;
+				// for i in 0..2 { y:=vector(n,0:𝔹); } } return 1;`, which forgets `x`)
+				if(!(d in blockedAtStart?canForgetAppend(loc,d,false)||canForgetAppend(loc,d):canForgetAppend(loc,d))){
 					if(!d.isSemError()){
 						bool done=false;
 						if(!canSplit(d)){
@@ -1801,7 +1806,7 @@ abstract class Scope{
 		return decl;
 	}
 	Declaration[] forgottenVars;
-	final bool canForgetAppend(T)(T cause,Declaration decl)if(is(T==Scope)||is(T==ReturnExp))in{
+	final bool canForgetAppend(T)(T cause,Declaration decl,bool atLastUse=true)if(is(T==Scope)||is(T==ReturnExp))in{
 		//assert(decl.scope_ is this,text(decl," ",decl.scope_," ",typeid(decl)));
 	}do{
 		if(cast(DeadDecl)decl) return true;
@@ -1815,7 +1820,7 @@ abstract class Scope{
 				if(lu.loopGuard) return true;
 			return false;
 		}
-		if(lastUses.canForget(decl,true,false,earlyReturn)&&!(earlyReturn&&atLoopGuard())){
+		if(atLastUse&&lastUses.canForget(decl,true,false,earlyReturn)&&!(earlyReturn&&atLoopGuard())){
 			lastUses.forget(decl,false,earlyReturn);
 			return true;
 		}
@@ -2427,7 +2432,7 @@ abstract class Scope{
 				return false;
 			return true;
 		}
-		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null, scope SetX!Id* unchangedConst=null, scope SetX!Id* consumedAfter=null, scope SetX!Id* freed=null, scope Declaration[]* forgetBefore=null)in{
+		Q!(Id,Declaration,Expression,bool)[][2] loopParams(NestedScope loopScope, scope MapX!(Declaration,Declaration)* mustBeConstFromDummies=null, bool separateConstParams=true, scope SetX!Declaration* accessedDecls=null, scope SetX!Id* namesInLoop=null, scope SetX!Id* unchangedConst=null, scope SetX!Id* consumedAfter=null, scope SetX!Id* freed=null, scope Declaration[]* forgetBefore=null, NestedScope exitScope=null)in{
 			assert(!!loopScope);
 		}do{ // (name,decl,type,mayChange)
 			typeof(return) r;
@@ -2450,7 +2455,7 @@ abstract class Scope{
 				// loop scope, e.g. by an early `return` that has to forget them); they are not loop parameters
 				if(namesInLoop&&id !in *namesInLoop&&(!decl.name||decl.name.id !in *namesInLoop)) continue;
 				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
-				if(!mayChange&&forgetBefore&&namesInLoop&&type.isClassical()&&!decl.isConst&&!isConst(decl)&&decl.typeConstBlocker is null&&rnsymtab.get(decl.getId,null) is decl&&decl.splitInto.any!(d=>d.scope_ is loopScope)&&!unchangedOnContinuingPaths(decl,loopScope)){
+				if(!mayChange&&forgetBefore&&namesInLoop&&type.isClassical()&&!decl.isConst&&!isConst(decl)&&decl.typeConstBlocker is null&&rnsymtab.get(decl.getId,null) is decl&&decl.splitInto.any!(d=>d.scope_ is loopScope)&&!unchangedOnContinuingPaths(decl,loopScope,exitScope)){
 					// (changed on paths that continue the loop, blocked by live variables that the loop and its continuation do not
 					// mention, e.g., `x` in `x:=vector(n,…); for i in 0..2 { forget(n); n:=i; }`: they are forgotten before the loop,
 					// as by the first change, which makes them unavailable after it)
@@ -2487,7 +2492,7 @@ abstract class Scope{
 				bool isConstParamDecl=false;
 				if(canForget&&!type.isClassical()){
 					isConstParamDecl=mustBeConstFromDummies?decl.getId in mustBeConst:true;
-					if(mayChange&&unchangedConst&&unchangedOnContinuingPaths(decl,loopScope)){
+					if(mayChange&&unchangedConst&&unchangedOnContinuingPaths(decl,loopScope,exitScope)){
 						isConstParamDecl=true;
 						unchangedConst.insert(id);
 					}
@@ -2525,10 +2530,15 @@ abstract class Scope{
 			}
 			return ordered;
 		}
-		static bool unchangedOnContinuingPaths(Declaration decl,NestedScope loopScope){
+		static bool unchangedOnContinuingPaths(Declaration decl,NestedScope loopScope,NestedScope exitScope){
 			Declaration split=null;
 			foreach(d;decl.splitInto) if(d.scope_ is loopScope) split=d;
 			if(!split) return false;
+			if(loopScope.diverges){ // (no path continues the loop, e.g., the reset of a `do`-`while` loop returns: its exit follows the body)
+				if(!exitScope) return true;
+				auto atExit=exitScope.rnsymtab.get(split.getId,null);
+				return atExit&&atExit.isDerivedFrom(split);
+			}
 			auto current=loopScope.rnsymtab.get(split.getId,null);
 			return current&&current.isDerivedFrom(split);
 		}
@@ -3364,6 +3374,7 @@ class BlockScope: NestedScope{
 	Annotation restriction_;
 	RestrictionCause restrictionCause_;
 	bool isLoopBody=false;
+	bool isLoopEntry=false; // (merged with the loop body for the state at the start of an iteration: its forgets happen before the loop)
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)

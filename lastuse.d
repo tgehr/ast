@@ -257,6 +257,11 @@ final class LastUse{
 		kind=Kind.constPinned;
 		if(splitFrom) splitFrom.pin();
 	}
+	void pinHere(){ // (not the versions it is split from)
+		if(forwardTo) forwardTo.pinHere();
+		if(isConsumption()) return;
+		kind=Kind.constPinned;
+	}
 
 	private void removeFromUnusedSiblings(){
 		auto nsc=cast(NestedScope)scope_;
@@ -638,6 +643,10 @@ final class LastUse{
 				if(lu.splitFrom.getForgettability(forceConsumed,earlyReturn)==Forgettability.none) return false;
 		return true;
 	}
+	bool atLoopEntry(){
+		auto bs=cast(BlockScope)scope_;
+		return bs&&bs.isLoopEntry;
+	}
 	bool isLastSplitSibling(){
 		auto nsc=cast(NestedScope)scope_;
 		assert(!!nsc);
@@ -659,6 +668,7 @@ final class LastUse{
 		if(typeConstBlocked(decl,scope_)) return Forgettability.none;
 		if(forwardTo) return forwardTo.getForgettability(forceConsumed,earlyReturn);
 		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
+		if(kind.among(Kind.consumption,Kind.capture)) return Forgettability.none; // (their uses can be in nested scopes, e.g., the consumption of the version in a loop body)
 		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
 		final switch(kind)with(Kind){
 			case definition:
@@ -670,7 +680,7 @@ final class LastUse{
 			case lazySplit:
 				assert(!!splitFrom);
 				auto r=Forgettability.none;
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop)
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop||atLoopEntry())
 					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn));
 				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl)&&canForgetBeforeLoops(forceConsumed,earlyReturn))
 					r=Forgettability.forgettable;
@@ -779,7 +789,7 @@ final class LastUse{
 				assert(0); // always forwarded
 			case lazySplit:
 				assert(!!splitFrom);
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop){
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop||atLoopEntry()){
 					if(splitFrom.canForget(forceConsumed,earlyReturn)){
 						if(earlyReturn&&dep.isTop) // (forgotten before the split because of the early return)
 							splitFrom.decl.forgottenBeforeEarlyReturn=earlyReturn;
