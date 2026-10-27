@@ -3972,7 +3972,10 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	static if(isDoWhile) auto exitScope=loop.exitScope;
 	else NestedScope exitScope=null;
 	Declaration[] forgetBefore; // (see `loopParams`)
-	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst,continuation?&otherwise:null,&freed,&forgetBefore,exitScope);
+	// (without a continuation, the consumptions of a loop that no path continues, e.g., of `n` in `forget(x); n+=1;` in a
+	// `do`-`while` loop whose reset returns: the function returns `n`)
+	auto consumedOtherwise=continuation?&otherwise:loop.bdy.blscope_.diverges?&otherwiseInLoop:null;
+	auto loopParams_=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,state.dummyAnalysisRan&&!continuation?&state.mustBeConstFromDummies:null,separateConstParams,&accessedDecls,&namesInLoop,&unchangedConst,consumedOtherwise,&freed,&forgetBefore,exitScope);
 	bool mentionsFreed(Expression t){ return t.freeIdentifiers.any!(id=>id.id in freed||id.meaning&&id.meaning.name&&id.meaning.name.id in freed); }
 	bool freeable(Q!(Id,Declaration,Expression,bool) p,bool isConst){ // (see `entryCoercions`: `const` parameters that the function does not copy cannot be coerced)
 		auto type=typeForDecl(p[1]);
@@ -4147,7 +4150,6 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		}
 		sort!((a,b)=>a[0].id.str<b[0].id.str)(exitLocals);
 		Q!(Id,Expression,Expression)[] strongerExits; // (parameters that the body defines with a stronger type: name, type, type in the result of the function)
-		Q!(Id,Expression)[] weakerExits; // (parameters whose types at the exit are not subtypes of their types: name, parameter type)
 		if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars){
 			auto name=d.mergedInto.name;
 			if(!name) continue;
@@ -4155,7 +4157,6 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			if(p.empty) continue;
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
 			if(!type||!ptype||type==ptype) continue;
-			if(!isSubtype(type,ptype)) weakerExits~=q(name.id,ptype);
 			auto rtype=isSubtype(type,ptype)?ptype:joinTypes(type,ptype); // (the parameter type can be stronger, e.g., `do{ x+=1; }while c{ x=0:!𝔹; }`)
 			if(rtype&&rtype!=type) strongerExits~=q(name.id,type,rtype);
 		}
@@ -4526,8 +4527,9 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	Expression bdy;
 	static if(isDoWhile){{
 		// `B; if c{}else{ exit } R; return f(…);`, or, with quantum definitions of the body that are available after the loop,
-		// `B; if c{ R; v:=[]; }else{ v:=[(x₁,…,xₙ)]; } if v.length=0{ forget(v=[]); return f(…); } [(x₁,…,xₙ)]:=v; exit`
-		// (the reset does not forget values in a branch while its sibling consumes what they depend on)
+		// `B; if c{ R; return f(…); }else{ v:=[(x₁,…,xₙ)]; } [(x₁,…,xₙ)]:=v; exit`
+		// (the reset does not forget values in a branch while its sibling consumes what they depend on, and loops in the reset
+		// continue with the next iteration)
 		if(!isCertainReturn){ // (otherwise, the condition and the reset are not reached)
 			auto contr=new ReturnExp(ce); // (the reset continues with the next iteration)
 			contr.loc=ce.loc;
@@ -4568,8 +4570,6 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						packed~=rest[i];
 						rest=rest[0..i]~rest[i+1..$];
 					}
-					Expression ety=packed.length==1?packed[0][2]:tupleTy(packed.map!(e=>e[2]).array);
-					Expression empty(){ return at(new TypeAnnotationExp(at(new VectorExp([])),arrayTy(ety).copy(cargsDefault),TypeAnnotationType.annotation)); }
 					Expression pack(Q!(Identifier,Expression,Expression) e){
 						auto id=e[0].copy(cargsDefault);
 						id.moved=true; // (also a lifted quantum value, which the analysis would otherwise `dup` for the reset branch, where it is still available)
@@ -4584,24 +4584,9 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						use.moved=true;
 						return at(new DefineExp(mk(name),at(new TypeAnnotationExp(use,type.copy(cargsDefault),kind))));
 					}
-					Expression[] resetWeakenings,resetCoercions; // (the reset continues with the parameter type)
-					foreach(s;weakened){
-						auto p=chain(movedParams,constParams.filter!(p=>p[3])).find!(p=>p[1].name.id==s[0]);
-						if(p.empty) continue;
-						auto ptype=typeForDecl(p.front[1]);
-						if(isSubtype(s[1],ptype)) resetWeakenings~=annotated(s[0],s[2],TypeAnnotationType.annotation);
-						else if(ptype) resetCoercions~=annotated(s[0],ptype,TypeAnnotationType.coercion); // (after the join with the exit branch, e.g., `x:𝔹^m` after `n:=m; x:=x coerce 𝔹^n;` in the body and `x:=vector(m,…)` in the reset)
-					}
-					foreach(w;weakerExits) if(!weakened.any!(s=>s[0]==w[0])) resetCoercions~=annotated(w[0],w[1],TypeAnnotationType.coercion); // (as is a parameter that the body weakens, e.g., `x` in `x:=x:!𝔹[];` with `x:=vector(k,…)` in the reset)
-					if(!next.length) resetWeakenings=[]; // (not reached after a reset that returns, where they would refer to the variables of an enclosing function)
-					auto then=at(new CompoundExp(nrst.s~resetWeakenings~[cast(Expression)at(new DefineExp(mk(v),empty()))]));
+					auto then=at(new CompoundExp(nrst.s~next)); // (only the exit branch joins with the code after the `if`)
 					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],TypeAnnotationType.annotation)).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
-					if(next.length){
-						auto len=at(new FieldExp(mk(v),mk(Id.s!"length")));
-						auto cont=at(new CompoundExp([cast(Expression)at(new ForgetExp(mk(v),empty()))]~resetCoercions~next));
-						nbdy.s~=at(new IteExp(at(new EqExp(len,at(LiteralExp.makeInteger(0)))),cont,null));
-					}
 					Expression[] lhs,coercions;
 					foreach(e;packed){
 						if(e[2] is e[1]){
@@ -5655,10 +5640,20 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 }
 // builds `def k(params){ rest }` and the call `return k(args)` (in `tail`)
 Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Expression[] tail){
-	import ast.substitute:statementFreeVarsImpl;
+	import ast.substitute:statementFreeVarsImpl,defineLhsBoundVarsImpl;
 	Expression.CopyArgs cargs;
-	SetX!Id used;
-	foreach(st;rest) statementFreeVarsImpl(st,(Identifier y){ used.insert(y.id); return 0; });
+	SetX!Id used; // (not those that `rest` defines before it reads them, e.g., `x` in `x:=vector(0,…); n:=x.length;`)
+	{
+		SetX!Id definedBefore;
+		void visitRest(Expression[] stms){
+			foreach(st;stms){
+				if(auto ce=cast(CompoundExp)st) if(!ce.blscope_){ visitRest(ce.s); continue; }
+				statementFreeVarsImpl(st,(Identifier y){ if(y.id !in definedBefore) used.insert(y.id); return 0; });
+				if(auto de=cast(DefineExp)st) defineLhsBoundVarsImpl(de.e1,(Identifier y){ definedBefore.insert(y.id); return 0; });
+			}
+		}
+		visitRest(rest);
+	}
 	// (the variables that `s` defines and that the types of the parameters mention are passed as well, e.g., `n` for `x:𝔹^n`)
 	SetX!Id defined;
 	visitStm(s,(Expression x){ if(auto de=cast(DefineExp)x) visitStm(de.e1,(Expression y){ if(auto id=cast(Identifier)y) defined.insert(varName(id)); }); });

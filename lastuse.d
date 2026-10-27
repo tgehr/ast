@@ -255,7 +255,6 @@ final class LastUse{
 		if(isConsumption()) return;
 		//imported!"util.io".writeln("PINNING: ",this);
 		kind=Kind.constPinned;
-		if(splitFrom) splitFrom.pin();
 	}
 	void pinHere(){ // (not the versions it is split from)
 		if(forwardTo) forwardTo.pinHere();

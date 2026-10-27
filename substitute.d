@@ -741,6 +741,11 @@ private Expression substLhs(CallExp ce,ref BlockSubst ctx){
 	return finishStatement(r,ce,ctx);
 }
 private Expression substLhs(LetExp le,ref BlockSubst ctx){
+	if(ctx.tt){ // (e.g., the value of a branch of an `if` expression in a type: as for the type itself, the declarations get twins in the scopes of the type)
+		auto r=ttTransitionLet(le,ctx.subst,ctx.tt);
+		if(r !is le) ctx.changed=true;
+		return r;
+	}
 	auto nctx=ctx.nested();
 	foreach(stmt;le.s.s) collectBoundNamesImpl(stmt,*nctx.taken);
 	auto ns=substituteBlockCompound(le.s,nctx);
