@@ -458,6 +458,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						if(id.type&&!id.type.isClassical())
 							strongDef(vname(id));
 				});
+				if(we.isIndices) foreach(st;we.trans.s) if(auto de=cast(DefineExp)st){ // (the write-back of an index assignment also updates a classical aggregate, e.g., `arr` for `arr[0]=5`)
+					Expression r=de.e2;
+					while(auto ie=cast(IndexExp)r) r=ie.e;
+					if(auto id=cast(Identifier)r) if(id.type&&id.type.isClassical()) strongDef(vname(id));
+				}
 			}else if(auto ae=cast(AAssignExp)x){
 				Expression lhs=ae.e1;
 				while(cast(IndexExp)lhs) lhs=(cast(IndexExp)lhs).e;
@@ -1007,6 +1012,27 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(t;need) hoistLocal(q,t);
 	}
 	refreshCtl();
+	// Moving quantum controls into a loop splits the quantum conditionals into several, before, within and after the loop:
+	// before the loop, they cannot consume variables from outside of them without defining them again, e.g., `b` in
+	// `if a { b:=X(b); for j in 0..2 { b:=X(b); } b:=X(b); }`, whose intermediate version the loop updates.
+	bool splitsAt(size_t[] c,size_t qi,size_t li){
+		foreach(q;c[qi..li]){
+			if(!quantumIte(q)) continue;
+			SetX!Id pending;
+			foreach(bj,ref b;atoms){
+				if(bj>=ites[c[li]].first) break;
+				if(!b.ites.canFind(q)||b.ites.any!(k=>ites[k].isLoop&&ites[k].ctx.canFind(q)&&k!=c[li]&&!ites[c[li]].ctx.canFind(k))) continue; // (other loops restore the variables in each iteration)
+				foreach(u;ainfos[bj].consumed){
+					bool outer=u in isCarried;
+					foreach(e;0..bj) if(!atoms[e].ites.canFind(q)&&u in ainfos[e].defs) outer=true;
+					if(outer) pending.insert(u);
+				}
+				foreach(d;ainfos[bj].strong) pending.remove(d);
+			}
+			if(pending.length) return false;
+		}
+		return true;
+	}
 	foreach(ai,ref a;atoms){
 		for(;;){
 			auto c=a.ites;
@@ -1019,6 +1045,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				}
 			}
 			if(qi==size_t.max) break;
+			while(li>qi&&(!ites[c[li]].isLoop||!splitsAt(c,qi,li))) li--; // (or into an enclosing loop, e.g., the loop around the definitions)
+			if(li==qi) break;
 			size_t[] cls,qs;
 			bool[] clsE,qsE;
 			foreach(x;qi..li+1){
@@ -1215,17 +1243,22 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(u;ainfos[a].consumed) if(keepAlive(a,u)) return true;
 		return false;
 	}
-	// Likewise, the original loop body may update a classical variable from outside a quantum conditional only on a path
-	// that diverges: the loops without the diverging statement do not update it, as the path continues there.
+	// Likewise, the original loop body may update a loop-carried classical variable, or a classical variable from outside a
+	// quantum conditional, only on a path that diverges: the loops without the diverging statement do not update it, as the
+	// path continues there (e.g., the update could change its type after the loop, or it could be under quantum control).
+	SetX!Id classicalUpdates(size_t a){
+		SetX!Id r;
+		foreach(d;ainfos[a].strong) if(isClassicalName(d,ainfos[a])) r.insert(d);
+		return r;
+	}
 	bool classicalUpdateOnDiv(size_t a){
 		if(!atoms[a].div.on) return false;
 		auto c=atoms[a].ites;
 		ptrdiff_t q=-1;
 		foreach(x,k;c) if(quantumIte(k)) q=x;
-		if(q<0) return false;
-		foreach(d;ainfos[a].strong){
-			if(!isClassicalName(d,ainfos[a])) continue;
+		foreach(d;classicalUpdates(a)){
 			if(d in isCarried) return true;
+			if(q<0) continue;
 			bool local=false; // (defined in the branch of the conditional, also by this atom, e.g., `x:=dup(i)` before an `assert(false)`)
 			foreach(b;0..a+1){
 				auto x=atoms[b].ites.countUntil(c[q]);
@@ -1271,6 +1304,23 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(a,ref at;atoms){
 			if(!at.ites.canFind(k)||atomColor[a]==owner||owner==SHARED) continue;
 			foreach(u;ainfos[a].uses) if(u in ti.defs&&u !in ti.strong) return null;
+		}
+	}
+	// (the main loop gets the values of the other loops, which drop such an update: on the diverging path, it cannot use the
+	// updated variable, e.g., `print(s)` after `s+=1` before an `assert(false)`)
+	foreach(a;0..atoms.length){
+		if(atomColor[a]==SHARED||inX(a,P)||!classicalUpdateOnDiv(a)) continue;
+		auto updates=classicalUpdates(a);
+		bool usesUpdate(ref StmInfo info){
+			foreach(d;updates) if(d in info.uses) return true;
+			return false;
+		}
+		auto ctx=atoms[a].ites;
+		foreach(b;a+1..atoms.length){
+			auto bctx=atoms[b].ites;
+			if(!keepAtom(b,P)||bctx.length<ctx.length||bctx[0..ctx.length]!=ctx||atoms[b].inElse[0..ctx.length]!=atoms[a].inElse) continue;
+			if(usesUpdate(ainfos[b])) return null;
+			foreach(k;bctx[ctx.length..$]) if(usesUpdate(ites[k].info)) return null;
 		}
 	}
 	bool iteHas(size_t k,int X){
@@ -2932,12 +2982,29 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	SetX!Id[] regionLocal=new SetX!Id[](nodes.length); // (classical variables that a quantum region defines)
 	foreach(n;nodes) if(n.region) foreach(d;n.cfresh) regionLocal[n.region.id].insert(d);
+	int diverging(SliceNode n){ // (1 or 2: the branch of a classical conditional that diverges while the other one continues, which the recomputations run instead of the conditional, also in a quantum region, where the main loop runs the conditional; 1: the body of a loop that diverges, e.g., `for j in 0..3 { forget(b); assert(false); }`, as the code after the loop only runs if it has no iterations, which the recomputations skip)
+		if(n.kind==K.loop){
+			if(auto fe=cast(ForExp)n.e) return definitelyReturns(fe.bdy);
+			if(auto re=cast(RepeatExp)n.e) return definitelyReturns(re.bdy);
+			if(auto we=cast(WhileExp)n.e) return definitelyReturns(we.bdy);
+			return 0;
+		}
+		if(n.kind!=K.ite||n.quantum) return 0;
+		auto ite=cast(IteExp)n.e;
+		auto t=definitelyReturns(ite.then),e=ite.othw&&definitelyReturns(ite.othw);
+		return t==e?0:t?1:2;
+	}
 	// consumption within statements (for statements that are not part of a recomputation)
 	SetX!Id[] subConsumed=new SetX!Id[](nodes.length);
 	SetX!Id consumedIn(SliceNode n){
 		auto r=n.kind==K.with_?SetX!Id.init:n.consumed.dup; // (the inverse of a transformation restores what it consumes)
 		foreach(u;n.xconsumed) r.insert(u);
-		foreach(c;n.a~n.b) foreach(u;consumedIn(c)) r.insert(u);
+		auto dv=diverging(n);
+		foreach(i,c;n.a~n.b){
+			auto cr=consumedIn(c);
+			if(dv==(i<n.a.length?1:2)) continue; // (the path does not continue, e.g., `b` in `if i>=10 { b:=X(b); assert(false); }`)
+			foreach(u;cr) r.insert(u);
+		}
 		subConsumed[n.id]=r.dup;
 		return r;
 	}
@@ -2967,12 +3034,6 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	bool fwdFailed=false;
 	SetX!Id droppedDefs; // (values that statements which are not part of the recomputation change)
 	bool anyKept(SliceNode[] ns){ return ns.any!(c=>S.kept[c.id]); }
-	int diverging(SliceNode n){ // (1 or 2: the branch of a classical conditional that diverges while the other one continues, which the recomputations run instead of the conditional)
-		if(n.kind!=K.ite||n.quantum||n.inR) return 0;
-		auto ite=cast(IteExp)n.e;
-		auto t=definitelyReturns(ite.then),e=ite.othw&&definitelyReturns(ite.othw);
-		return t==e?0:t?1:2;
-	}
 	Live backNode(SliceNode n,Live live){
 		Live back(SliceNode[] ns,Live l){
 			foreach_reverse(c;ns) l=backNode(c,l);
@@ -3018,7 +3079,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(!anyKept(n.a)&&!anyKept(n.b)) return live;
 				S.kept[n.id]=true;
 				auto r=joinL(lt,le);
-				if(n.quantum||n.inR){ // (otherwise, the condition is logged)
+				if(n.quantum||n.inR&&!dv){ // (otherwise, the condition is logged or not evaluated)
 					foreach(u;n.uses) r.q.insert(u);
 					foreach(u;n.cuses) if(!available(u)) r.c.insert(u);
 				}
@@ -3029,6 +3090,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				return r;
 			}
 			case K.loop:{
+				if(diverging(n)) return live;
 				static if(language==silq) if(cast(DoWhileExp)n.e){ // (`a`: the body, after which the loop exits, `b`: the reset)
 					auto lx=dupL(live); // (needed after the body)
 					if(n.inR){ // (otherwise, the number of iterations is logged)
@@ -3151,10 +3213,11 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				foreach(d;n.defs) if(d !in n.consumed||d in n.strong) avail.insert(d);
 				return avail;
 			case K.ite:{
-				if(n.quantum||n.inR) foreach(u;n.consumed) avail.remove(u);
+				auto dv=diverging(n);
+				if(n.quantum||n.inR&&!dv) foreach(u;n.consumed) avail.remove(u);
 				else dispose(n.consumed);
 				auto at=fwd(n.a,avail.dup),ae=fwd(n.b,avail.dup);
-				if(auto dv=diverging(n)) return dv==1?ae:at;
+				if(dv) return dv==1?ae:at;
 				SetX!Id r;
 				foreach(u;at) if(u in ae) r.insert(u);
 				return r;

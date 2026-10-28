@@ -2529,12 +2529,11 @@ abstract class Scope{
 				}
 				bool canForget=type.isClassical()||dependencies.canForget(decl);
 				bool isConstParamDecl=false;
-				if(canForget&&!type.isClassical()){
+				if(canForget&&!type.isClassical())
 					isConstParamDecl=mustBeConstFromDummies?decl.getId in mustBeConst:true;
-					if(mayChange&&unchangedConst&&unchangedOnContinuingPaths(decl,loopScope,exitScope)){
-						isConstParamDecl=true;
-						unchangedConst.insert(id);
-					}
+				if(canForget&&mayChange&&unchangedConst&&unchangedOnContinuingPaths(decl,loopScope,exitScope)){ // (also a classical variable, e.g., `s` in `if j>=10 { s+=1; assert(false); }`: the loop does not return it, which it could not do under a quantum `if`)
+					isConstParamDecl=true;
+					unchangedConst.insert(id);
 				}
 				Expression.CopyArgs cargs;
 				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
