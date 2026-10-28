@@ -1228,6 +1228,23 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 }
 
 static if(language==silq)
+bool redefineReplacedAggregates(Expression[] reads,Expression parent,Scope sc){ // (the current versions of the aggregates whose components `reads` borrow are consumed by the write-back, whose writes update the types in place, see `defineLhsSemantic`)
+	ArrayConsumer consumer;
+	foreach(e;reads){
+		auto de=cast(DefineExp)e;
+		assert(!!de,text(e," ",typeid(e)));
+		auto idx=cast(IndexExp)unwrap(de.e2);
+		assert(idx.byRef);
+		Expression.CopyArgs cargs={preserveSemantic:true};
+		auto nidx=idx.copy(cargs);
+		if(auto id=getIdFromIndex(nidx)) useCurrentVersion(id,sc); // (e.g., the body may have split and merged it, or written another component of it)
+		consumer.consumeArray(nidx,expSemContext(sc,ConstResult.no,InType.no));
+	}
+	consumer.redefineArrays(parent,sc); // TODO: fix
+	return !consumer.failed;
+}
+
+static if(language==silq)
 Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq){
 		auto nacr=sc.aliasedConstReads.length;
@@ -1285,6 +1302,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	with_.trans=compoundExpSemantic(with_.trans, sc, flags, Annotation.mfree, blscope: !with_.isIndices, resetConst: !with_.isIndices, restrictionCause: RestrictionCause(with_));
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=null;
+	static if(language==silq)
+	if(with_.isIndices&&!with_.trans.isSemError()) promoteQuantumReadAggregates(with_.trans.s,with_.trans,sc); // (as for the replacement of components it is lowered from, see `buildIndexReplacements`, e.g., in a copy of a loop body that is lowered)
 	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
 	if(auto bsc=with_.trans.blscope_){
 		static if(language==silq) foreach(_,d;bsc.rnsymtab){
@@ -1359,22 +1378,12 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		with_.bdy.setSemForceError();
 	}
 	propErr(with_.trans,with_);
-	ArrayConsumer consumer;
+	bool consumerFailed=false;
 	if(with_.isIndices&&with_.sstate!=SemState.error){
-		foreach(e;with_.trans.s){
-			auto de=cast(DefineExp)e;
-			assert(!!de,text(e," ",typeid(e)));
-			auto idx=cast(IndexExp)unwrap(de.e2);
-			assert(idx.byRef);
-			Expression.CopyArgs cargs={preserveSemantic:true};
-			auto nidx=idx.copy(cargs);
-			static if(language==silq) if(auto id=getIdFromIndex(nidx)) useCurrentVersion(id,sc); // (as for the write-back of the original `with` statement, see `buildIndexReplacements`: e.g., the body may have split and merged it, or written another component of it)
-			consumer.consumeArray(nidx,expSemContext(sc,ConstResult.no,InType.no));
-		}
-		consumer.redefineArrays(with_,sc); // TODO: fix
-		if(consumer.failed) with_.setSemForceError();
+		consumerFailed=!redefineReplacedAggregates(with_.trans.s,with_,sc);
+		if(consumerFailed) with_.setSemForceError();
 	}
-	if(consumer.failed){
+	if(consumerFailed){
 		if(with_.itrans) foreach(id;with_.itrans.freeIdentifiers)
 			if(auto meaning=lookupMeaning(id,Lookup.probing,sc,false,null))
 				if(!meaning.isToplevelDeclaration()) meaning.setSemForceError();
@@ -1423,6 +1432,9 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq)
 	if(haveWithTransReplacements){
 		sc.resetLocalComponentReplacements();
+		if(!with_.isSemError())
+			foreach_reverse(prologue;prologues) // (as before the inverse of a `with` statement that a replacement is lowered to, see `isIndices`: e.g., the version of the aggregate that the body accesses keeps its type)
+				if(!prologue.isSemError()&&!redefineReplacedAggregates(prologue.s,with_,sc)) with_.setSemForceError();
 		if(!with_.isSemError()){
 			auto r=lowerIndexReplacement(prologues,epilogues,with_,sc,flags);
 			propErr(with_.bdy,r);
@@ -4007,6 +4019,92 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 	return buildIndexReplacements(creplss,sc,flags,prologues,epilogues,loc);
 }
 
+void replacePromotedMeanings(Expression e,ref MapX!(Declaration,Declaration) replacements,Scope sc){
+	if(auto id=cast(Identifier)e){
+		if(!id.meaning) return; // (e.g., an unnested component replacement is analyzed when it is written back)
+		auto prev=id.meaning;
+		auto new_=replacements.get(prev,prev);
+		id.meaning=new_;
+		propErr(new_,id.meaning);
+		id.type=id.typeFromMeaning;
+		assert(id.type||id.isSemError());
+		return;
+	}
+	if(auto idx=cast(IndexExp)e){
+		if(auto rid=getIdFromIndex(idx)) if(!rid.meaning) return;
+		replacePromotedMeanings(idx.e,replacements,sc);
+		propErr(idx.e,e);
+		propErr(idx.a,e);
+		if(idx.e.type&&idx.a.type)
+			idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
+		if(!idx.type) idx.setSemError();
+		assert(idx.type||idx.isSemError());
+		return;
+	}
+	if(auto le=cast(LetExp)e){
+		if(auto lef=le.isForward(true)){
+			replacePromotedMeanings(lef,replacements,sc);
+			propErr(lef,le);
+			le.type=lef.type;
+			assert(le.type||le.isSemError());
+		}
+		return;
+	}
+}
+
+MapX!(Declaration,Declaration) promoteQuantumReadAggregates(Expression[] reads,CompoundExp prologue,Scope sc){ // promote aggregate to quantum for by-ref quantum reads
+	MapX!(Declaration,Declaration) replacements;
+	foreach(read;reads){
+		if(!read) continue;
+		auto de=cast(DefineExp)read;
+		assert(!!de);
+		auto idx=cast(IndexExp)de.e2;
+		for(auto le=cast(LetExp)de.e2;!idx&&le;){ // (e.g., nested again by the analysis of a copy, for a component of type `⊥`)
+			auto lef=le.isForward(true);
+			idx=cast(IndexExp)lef;
+			le=cast(LetExp)lef;
+		}
+		if(!idx||!idx.byRef){
+			sc.error("component is already being replaced",de.loc);
+			de.setSemForceError();
+			prologue.setSemForceError();
+			continue;
+		}
+		bool anyQuantum=false,quantumTuple=false; // (a tuple that a quantum index selects from is promoted to a vector, e.g., `𝔹×𝔹` to `𝔹^2`)
+		for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e){
+			if(idx2.a.type.isClassical()) continue;
+			anyQuantum=true;
+			quantumTuple|=!!cast(TupleTy)idx2.e.type;
+		}
+		if(anyQuantum){
+			auto cid=getIdFromIndex(idx);
+			assert(!!cid);
+			auto prev=cid.meaning?cast(VarDecl)replacements.get(cid.meaning,cid.meaning):null;
+			if(prev&&prev.vtype&&(!prev.vtype.isQuantum||quantumTuple)){
+				auto type=updatedType(idx,idx.type,prev is cid.meaning?null:prev.vtype);
+				assert(!!type);
+				if(prev is cid.meaning||!isEqual(prev.vtype,type,null)){
+					if(auto meaning=sc.consume(prev,cid,idx)){
+						assert(meaning is prev);
+						auto dep=getDependency(cid,sc);
+						auto var=addVar(meaning.name.id,type,idx.loc,sc);
+						var.promotedFrom=meaning;
+						sc.deriveVersion(meaning,var);
+						sc.addDependency(var,dep);
+						idx.replacements~=AAssignExp.Replacement(meaning,var);
+						replacements[cid.meaning]=var;
+						sc.declProps.moveComponentReplacements(meaning,var);
+						sc.lastUses.definition(var,de);
+					}
+				}
+			}
+		}
+		if(replacements.length)
+			replacePromotedMeanings(de.e2,replacements,sc);
+	}
+	return replacements;
+}
+
 bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
 	foreach(crepls;creplss){
 		assert(crepls.length);
@@ -4034,89 +4132,11 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 		sc.restoreLocalComponentReplacements(creplsCtx2); // TODO: get rid of this
 		prologue.loc=loc;
 		if(prologue.isSemCompleted()){
-			MapX!(Declaration,Declaration) replacements;
-			void replaceMeaning(Expression e){
-				if(auto id=cast(Identifier)e){
-					if(!id.meaning) return; // (e.g., an unnested component replacement is analyzed when it is written back)
-					auto prev=id.meaning;
-					auto new_=replacements.get(prev,prev);
-					id.meaning=new_;
-					propErr(new_,id.meaning);
-					id.type=id.typeFromMeaning;
-					assert(id.type||id.isSemError());
-					return;
-				}
-				if(auto idx=cast(IndexExp)e){
-					if(auto rid=getIdFromIndex(idx)) if(!rid.meaning) return;
-					replaceMeaning(idx.e);
-					propErr(idx.e,e);
-					propErr(idx.a,e);
-					if(idx.e.type&&idx.a.type)
-						idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
-					if(!idx.type) idx.setSemError();
-					assert(idx.type||idx.isSemError());
-					return;
-				}
-				if(auto le=cast(LetExp)e){
-					if(auto lef=le.isForward(true)){
-						replaceMeaning(lef);
-						propErr(lef,le);
-						le.type=lef.type;
-						assert(le.type||le.isSemError());
-					}
-					return;
-				}
-			}
-			foreach(i,read;reads){ // promote aggregate to quantum for by-ref quantum reads
-				if(!read) continue;
-				auto de=cast(DefineExp)read;
-				assert(!!de);
-				auto idx=cast(IndexExp)de.e2;
-				if(!idx){
-					if(auto le=cast(LetExp)de.e2){
-						if(auto lef=le.isForward(true))
-							idx=cast(IndexExp)lef;
-					}
-				}
-				if(!idx||!idx.byRef){
-					sc.error("component is already being replaced",de.loc);
-					de.setSemForceError();
-					prologue.setSemForceError();
-					continue;
-				}
-				bool anyQuantum=false;
-				for(auto idx2=idx;idx2;idx2=cast(IndexExp)idx2.e)
-					anyQuantum|=!idx2.a.type.isClassical();
-				if(anyQuantum){
-					auto cid=getIdFromIndex(idx);
-					assert(!!cid);
-					auto prev=cid.meaning?cast(VarDecl)replacements.get(cid.meaning,cid.meaning):null;
-					if(prev&&prev.vtype&&!prev.vtype.isQuantum){
-						auto type=updatedType(idx,idx.type,prev is cid.meaning?null:prev.vtype);
-						assert(!!type);
-						if(prev is cid.meaning||!isEqual(prev.vtype,type,null)){
-							if(auto meaning=sc.consume(prev,cid,idx)){
-								assert(meaning is prev);
-								auto dep=getDependency(cid,sc);
-								auto var=addVar(meaning.name.id,type,idx.loc,sc);
-								var.promotedFrom=meaning;
-								sc.deriveVersion(meaning,var);
-								sc.addDependency(var,dep);
-								idx.replacements~=AAssignExp.Replacement(meaning,var);
-								replacements[cid.meaning]=var;
-								sc.declProps.moveComponentReplacements(meaning,var);
-								sc.lastUses.definition(var,de);
-							}
-						}
-					}
-				}
-				if(replacements.length)
-					replaceMeaning(de.e2);
-			}
+			auto replacements=promoteQuantumReadAggregates(reads,prologue,sc);
 			if(replacements.length){
 				foreach(crepl;crepls){
-					replaceMeaning(crepl.write);
-					replaceMeaning(crepl.read);
+					replacePromotedMeanings(crepl.write,replacements,sc);
+					replacePromotedMeanings(crepl.read,replacements,sc);
 				}
 			}
 		}

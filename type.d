@@ -568,8 +568,9 @@ class TupleTy: Type,ITupleTy{
 	}
 	override Expression getQuantum(){
 		auto ntypes=types.map!(x=>x.getQuantum()).array;
-		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
-		return null;
+		if(!all!(x=>x !is null)(ntypes)) return null;
+		if(iota(types.length).all!(i=>ntypes[i] is types[i])) return this; // (e.g., `𝔹×𝔹`, which `tupleTy` would make `𝔹^2`)
+		return tupleTy(ntypes);
 	}
 	override bool mayBeClassical(){ return types.all!(x=>x.mayBeClassical()); }
 	override bool mayBeQuantum(){ return types.all!(x=>x.mayBeQuantum()); }
