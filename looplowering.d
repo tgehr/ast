@@ -1226,8 +1226,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(d;ainfos[a].strong){
 			if(!isClassicalName(d,ainfos[a])) continue;
 			if(d in isCarried) return true;
-			bool local=false; // (defined in the branch of the conditional)
-			foreach(b;0..a){
+			bool local=false; // (defined in the branch of the conditional, also by this atom, e.g., `x:=dup(i)` before an `assert(false)`)
+			foreach(b;0..a+1){
 				auto x=atoms[b].ites.countUntil(c[q]);
 				if(x>=0&&atoms[b].inElse[x]==atoms[a].inElse[q]&&d in ainfos[b].fresh) local=true;
 			}
@@ -2118,6 +2118,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				MapX!(Id,Expression) branchDefs; // (the variables that the branch defines and that are not defined before, with their types)
 				bool divCont; // (whether the other branch of a classical conditional diverges in the original loop, see `continuing`)
 				SetX!Id thenDefs; // (of the `then` branch, for the `else` branch)
+				SetX!Id thenLocals; // (defined at the top level of the `then` branch, for the `else` branch)
 				Id[] pending; // (for an `else` branch that diverges in the original loop: defined at its end, see `continuing`)
 				MapX!(Id,Expression) pendingTypes;
 			}
@@ -2201,12 +2202,18 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						}
 					}
 				}
+				SetX!Id merged; // (defined at the top level of both branches: available after the conditional, e.g., a version of a quantum variable, see `renameBlock`)
+				if(f.inElse) foreach(n;f.locals) if(n in f.thenLocals) merged.insert(n);
 				if(ites[f.ite].isLoop) closedLoops[f.ite]=true;
 				else{
 					auto cl=closedLocals.get(f.ite,SetX!Id.init);
-					foreach(n;f.locals) cl.insert(n);
+					foreach(n;f.locals) if(n !in merged) cl.insert(n);
 					closedLocals[f.ite]=cl;
-					if(quantumIte(f.ite)) foreach(n;f.locals) closedIn[n]=Closed(cast(IteExp)f.copy,f.inElse,f.ite);
+					if(quantumIte(f.ite)) foreach(n;f.locals) if(n !in merged) closedIn[n]=Closed(cast(IteExp)f.copy,f.inElse,f.ite);
+				}
+				foreach(n;merged){
+					if(open.length) open[$-1].locals.insert(n);
+					else topLocals.insert(n);
 				}
 				if(auto cite=cast(IteExp)f.copy){
 					if(f.thenPre.length) cite.then.s=f.thenPre~cite.then.s;
@@ -2243,6 +2250,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						open[d].pendingTypes=open[d].branchDefs;
 					}
 					open[d].thenDefs=thenDefs;
+					open[d].thenLocals=open[d].locals;
 					open[d].branchDefs=typeof(open[d].branchDefs).init;
 					open[d].divCont=divergesOtherwise(open[d].ite,true);
 					open[d].inElse=true;

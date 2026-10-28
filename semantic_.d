@@ -4102,6 +4102,7 @@ MapX!(Declaration,Declaration) promoteQuantumReadAggregates(Expression[] reads,C
 		if(replacements.length)
 			replacePromotedMeanings(de.e2,replacements,sc);
 	}
+	if(replacements.length) sc.clearConsumed(); // (as after the reads, which are statements: e.g., the transformation of a `with` statement is analyzed in a nested scope, which would keep the dependency of the consumed version)
 	return replacements;
 }
 
