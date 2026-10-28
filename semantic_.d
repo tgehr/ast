@@ -1366,9 +1366,9 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			assert(idx.byRef);
 			Expression.CopyArgs cargs={preserveSemantic:true};
 			auto nidx=idx.copy(cargs);
-			static if(language==silq) if(auto id=getIdFromIndex(nidx)) if(id.meaning){ // (e.g., the body may have split and merged the aggregate)
+			static if(language==silq) if(auto id=getIdFromIndex(nidx)) if(id.meaning){ // (the current version of the aggregate, as for the write-back of the original `with` statement, see `buildIndexReplacements`: e.g., the body may have split and merged it, or written another component of it)
 				auto current=sc.peekSymtab(id.meaning.getId,true);
-				if(current&&current!is id.meaning&&!cast(DeadDecl)current&&current.isDerivedFrom(id.meaning)){
+				if(current&&current!is id.meaning&&!cast(DeadDecl)current&&current.name.id==id.meaning.name.id){
 					id.meaning=current;
 					id.type=id.typeFromMeaning;
 				}
@@ -7132,8 +7132,10 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 										}
 										return false;
 									}
-									foreach(j;0..min(i,ft.nargs)) // (the number of arguments can be wrong)
+									foreach(j;0..min(i,ft.nargs)){ // (the number of arguments can be wrong)
 										if(mentions(ft.argTy(j))) return true;
+										if(ft.argTy(j).freeIdentifiers.any!(id=>!id.meaning)&&mentions(tpl.e[j].type)) return true; // (a parameter that the call infers from the type of the argument, e.g., `k` for `foo(vector(n,0),…)` with `foo[k:!ℕ](xs:𝔹^k,t:!ℕ)`)
+									}
 									if(mentions(fun.type)) return true;
 									if(mentions(ft.cod)) return true;
 									return false;

@@ -3317,7 +3317,7 @@ class LetExp: Expression{
 					continue;
 				}
 				if(auto de=cast(DefineExp)x){
-					if(!de.e2.type||!de.e2.type.isClassical()) return false;
+					if(!de.e2.type||!de.e2.type.isClassical()||isEmpty(de.e2.type)) return false; // (e.g., `x coerce ⊥` has no value)
 					if(de.e2.getAnnotation()<pure_) return false;
 					if(!de.e2.isSemCompleted()||de.e2.isSemError()) return false;
 					if(!refersToLet(de.e2)||!substitutable(de.e2)) return false;
