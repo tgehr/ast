@@ -210,12 +210,28 @@ private void linkLoweredVariables(Scope sc,ref MapX!(Id,Declaration) before){
 	foreach(id,d;before)
 		if(auto dd=cast(DeadDecl)d) if(id !in sc.rnsymtab) sc.symtabInsert(dd); // (explains uses of a variable that the loop does not produce)
 }
+// whether a `return` can end an iteration of a `while` loop in `e` for all basis states, i.e., it is not in a quantum
+// conditional of the body of the loop that does not definitely return (the code after one is reachable for the other basis states)
+private bool whileStopsAtReturn(Expression e){
+	bool r=false;
+	visitStm(e,(Expression x){
+		auto we=cast(WhileExp)x;
+		if(r||!we) return;
+		visitStmSkip(we.bdy,(Expression y){
+			if(r) return false;
+			if(auto ite=cast(IteExp)y) if(ite.cond.type&&!ite.cond.type.isClassical()&&!definitelyReturns(ite)) return false;
+			if(cast(ReturnExp)y) r=true;
+			return !r;
+		});
+	});
+	return r;
+}
 Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(is(T==ForExp)){
 		auto range=loop.aggr.isRange;
 		if(!range||!loop.loopVar) return null;
 	}
-	if(loop.noSplit) return null;
+	if(loop.noSplit||whileStopsAtReturn(loop)) return null; // (the copies of a `while` loop evaluate its condition: they would run its iterations after the return, e.g., forever for `while true { …; return x; }` under quantum control from outside of the loop)
 	static if(language==silq) if(containsDoWhile(loop.bdy)) return null;
 	enum NONE=-3,LSH=-2,SHARED=-1;
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
@@ -1818,7 +1834,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stmts~=define(mkId(hi),annot(range.right,range.right.type));
 	}else static if(is(T==RepeatExp)){
 		auto num=freshName();
-		stmts~=define(mkId(num),annot(loop.num,loop.num.type)); // (not evaluated again, see `lowerLoopImpl`)
+		if(!isEmpty(loop)) stmts~=define(mkId(num),annot(loop.num,loop.num.type)); // (not evaluated again, see `lowerLoopImpl`)
 	}else{
 		auto num=freshName();
 		stmts~=define(mkId(num),annot(LiteralExp.makeInteger(0),ℕt(true)));
@@ -2395,7 +2411,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			bdy~=top;
 			foreach(d;topLocals) bodyLocals.insert(d);
 		}
-		if(readsLogs){
+		if(readsLogs&&!(bdy.length&&endsWithReturn(bdy[$-1]))){ // (otherwise, the increment would follow a `return`, e.g., in `repeat 2 { …; return x; }`)
 			auto inc=new AddAssignExp(mkId(counter),LiteralExp.makeInteger(1));
 			inc.loc=loc;
 			bdy~=inc;
@@ -2421,7 +2437,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				nr.noSplit=true;
 				nl=nr;
 			}
-		}else auto nl=new RepeatExp(mkId(num),nbdy);
+		}else auto nl=new RepeatExp(isEmpty(loop)?loop.num.copy():mkId(num),nbdy); // (a positive constant: the loop with the `return` does not exit normally either)
 		nl.loc=loc;
 		static if(!is(T==WhileExp)) nl.noSplit=true;
 		stmts~=nl;
