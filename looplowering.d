@@ -4073,33 +4073,35 @@ private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,
 		auto id=cast(Identifier)e;
 		return id&&id.meaning&&id.meaning.name&&id.meaning.name.id in aggregates;
 	}
-	static struct Component{ Id aggregate; IndexExp access; Id name; }
-	Component[] components;
-	size_t[const(void)*] componentOf;
+	SetX!Id changed; // (the indices of the borrowed components do not change within the loop)
+	visitStm(loop,(Expression x){
+		if(auto id=cast(Identifier)x) if(!id.constLookup&&!id.implicitDup) changed.insert(varName(id));
+		if(auto fe=cast(ForExp)x) if(fe.var) changed.insert(fe.var.id);
+	});
+	bool fixedIndex(Expression index){ return index.type&&index.type.isClassical()&&index.isDeterministic()&&!index.freeIdentifiers.any!(id=>varName(id) in changed); }
+	IndexExp[][] accesses; // (the components accessed, as the index expressions from the aggregate outward)
 	WithExp[] isIndicesWiths;
 	bool bad=false;
-	void access(IndexExp ie){
-		auto aggregate=(cast(Identifier)unwrap(ie.e)).meaning.name.id;
-		foreach(i,c;components){
-			if(c.aggregate!=aggregate) continue;
-			if(guaranteedSameLocations(c.access,ie,ie.loc,sc,InType.no)){
-				componentOf[cast(const(void)*)ie]=i;
-				return;
-			}
-			if(!guaranteedDifferentLocations(c.access,ie,ie.loc,sc,InType.no)){
-				bad=true;
-				return;
-			}
-		}
-		componentOf[cast(const(void)*)ie]=components.length;
-		components~=Component(aggregate,ie,freshName());
-	}
 	void walk(Expression e){
 		if(!e||bad) return;
-		if(auto ie=cast(IndexExp)e) if(isAggregate(unwrap(ie.e))){
-			access(ie);
-			walk(ie.a);
-			return;
+		if(auto ie=cast(IndexExp)e){
+			IndexExp[] path;
+			Expression base=ie;
+			for(auto j=ie;j;j=cast(IndexExp)unwrap(base)){
+				path=j~path;
+				base=j.e;
+			}
+			if(isAggregate(unwrap(base))){
+				size_t k=0;
+				while(k<path.length&&fixedIndex(path[k].a)) k++; // (e.g., `x[1]` for `x[1][i]` where `i` changes)
+				if(!k){
+					bad=true;
+					return;
+				}
+				accesses~=path[0..k];
+				foreach(j;path) walk(j.a);
+				return;
+			}
 		}
 		if(isAggregate(e)){ // (accessed as a whole)
 			bad=true;
@@ -4128,16 +4130,47 @@ private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,
 		foreach(c;e.components) walk(c);
 	}
 	walk(loop);
-	if(bad||!components.length) return null;
-	SetX!Id changed; // (the indices of the components do not change within the loop)
-	visitStm(loop,(Expression x){
-		if(auto id=cast(Identifier)x) if(!id.constLookup&&!id.implicitDup) changed.insert(varName(id));
-		if(auto fe=cast(ForExp)x) if(fe.var) changed.insert(fe.var.id);
-	});
-	foreach(c;components){
-		auto index=c.access.a;
-		if(!index.type||!index.type.isClassical()||!index.isDeterministic()||index.freeIdentifiers.any!(id=>varName(id) in changed)) return null;
+	if(bad||!accesses.length) return null;
+	// the borrowed components: the accesses that overlap are borrowed together, as their common prefix (e.g., `x[1]` for
+	// `x[1][0]` and `x[1]`)
+	static struct Component{ Id aggregate; IndexExp[] path; Id name; }
+	Component[] components;
+	auto componentIndex=new size_t[](accesses.length);
+	Id aggregateOf(IndexExp[] path){ return varName(cast(Identifier)unwrap(path[0].e)); }
+	int compare(IndexExp[] p,IndexExp[] q){ // (1: overlapping, 0: disjoint, -1: unknown)
+		auto d=min(p.length,q.length);
+		if(guaranteedSameLocations(p[d-1],q[d-1],loop.loc,sc,InType.no)) return 1;
+		return guaranteedDifferentLocations(p[d-1],q[d-1],loop.loc,sc,InType.no)?0:-1;
 	}
+	foreach(i,path;accesses){
+		componentIndex[i]=components.length;
+		foreach(j,ref c;components){
+			if(c.aggregate!=aggregateOf(path)) continue;
+			auto r=compare(c.path,path);
+			if(r<0) return null;
+			if(r==0) continue;
+			c.path=c.path[0..min($,path.length)];
+			componentIndex[i]=j;
+			break;
+		}
+		if(componentIndex[i]==components.length) components~=Component(aggregateOf(path),path,freshName());
+	}
+	for(bool merged=true;merged;){ // (components whose prefixes became overlapping)
+		merged=false;
+		Lmerge: foreach(i;0..components.length) foreach(j;i+1..components.length){
+			if(components[i].aggregate!=components[j].aggregate) continue;
+			auto r=compare(components[i].path,components[j].path);
+			if(r<0) return null;
+			if(r==0) continue;
+			components[i].path=components[i].path[0..min($,components[j].path.length)];
+			foreach(ref k;componentIndex) if(k==j) k=i; else if(k>j) k--;
+			components=components[0..j]~components[j+1..$];
+			merged=true;
+			break Lmerge;
+		}
+	}
+	size_t[const(void)*] componentOf; // (the nodes of the accesses that the borrowed components replace)
+	foreach(i,path;accesses) componentOf[cast(const(void)*)path[components[componentIndex[i]].path.length-1]]=componentIndex[i];
 	// (the writes of the components that the loop accesses, see `lowerIndexReplacement`, are writes of the borrowed values instead)
 	bool[const(void)*] flattened;
 	foreach(we;isIndicesWiths){
@@ -4172,8 +4205,12 @@ private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,
 	if(remains) return null;
 	Expression[] borrows;
 	foreach(c;components){
-		Expression.CopyArgs dargs;
-		borrows~=at(new DefineExp(at(new Identifier(c.name)),at(new IndexExp(at(new Identifier(c.aggregate)),c.access.a.copy(dargs)))));
+		Expression component=at(new Identifier(c.aggregate));
+		foreach(ie;c.path){
+			Expression.CopyArgs dargs;
+			component=at(new IndexExp(component,ie.a.copy(dargs)));
+		}
+		borrows~=at(new DefineExp(at(new Identifier(c.name)),component));
 	}
 	auto with_=at(new WithExp(at(new CompoundExp(borrows)),at(new CompoundExp([cast(Expression)nloop]))));
 	auto lowered=at(new CompoundExp([cast(Expression)with_]));

@@ -2926,6 +2926,7 @@ private:
 class WithTransTrial{ // silq: token identifying one activation of the trial analysis of a `with` transformation (whose effects on scopes not belonging to the trial are rolled back)
 	bool active=true;
 	SetX!Declaration accessedAggregates; // variables accessed as a whole (not only through components) in the transformation (see `accessRoot`)
+	IndexExp[] accessedComponents; // components accessed as a whole in the transformation (e.g., `x[1]` in `dup(x[1])`, but not in `x[1][0]`)
 	SetX!Id liftedComponents; // replacement candidates for consumed components of lifted aggregates (which could be duplicated)
 	SetX!Id rereadComponents; // replacement candidates whose component is read again in the transformation
 }

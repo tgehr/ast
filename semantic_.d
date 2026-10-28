@@ -3268,9 +3268,9 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 					foreach(vcrepl;sc.versionComponentReplacements(id.meaning)){
 						auto crepl=vcrepl[1];
 						if(!crepl.write||crepl.write.isSemError()) continue;
-						if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,InType.no)) continue;
+						if(guaranteedDisjointComponents(crepl.write,idx,idx.loc,sc,InType.no)) continue;
 						if(!idx.isSemError()){
-							if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,InType.no))
+							if(guaranteedOverlappingComponents(crepl.write,idx,idx.loc,sc,InType.no))
 								sc.error("indices refer to same value in reassignment",idx.loc);
 							else sc.error("indices may refer to same value in reassignment",idx.loc);
 							sc.note("other index is here",crepl.write.loc);
@@ -4312,6 +4312,7 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		auto idx=cast(IndexExp)crepl.write;
 		if(!idx||crepl.name !in trial.liftedComponents) return true;
 		if(crepl.name in trial.rereadComponents) return false;
+		if(trial.accessedComponents.any!(e=>numIndexes(e)<numIndexes(idx)&&guaranteedOverlappingComponents(idx,e,e.loc,sc,InType.no))) return false; // (e.g., `dup(x[1])` and `t:=x[1][0]`, as `dup(x)` and `t:=x[1]`)
 		auto id=getIdFromIndex(idx);
 		return !id||!id.meaning||accessRoot(id.meaning) !in trial.accessedAggregates;
 	}).array;
@@ -5063,7 +5064,7 @@ size_t numIndexes(Expression e){
 	return 0;
 }
 
-bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+private Expression[2] componentsAtSameDepth(Expression e1,Expression e2){ // (the components of the aggregates of `e1` and `e2` that contain them, at the depth of the less deeply nested one)
 	Expression[2] e=[unwrap(e1),unwrap(e2)];
 	size_t[2] d=[numIndexes(e[0]),numIndexes(e[1])];
 	foreach(k;0..2){
@@ -5074,7 +5075,15 @@ bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope
 			d[k]--;
 		}
 	}
+	return e;
+}
+bool guaranteedDisjointComponents(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
+	auto e=componentsAtSameDepth(e1,e2);
 	return guaranteedDifferentLocations(e[0],e[1],loc,sc,inType);
+}
+bool guaranteedOverlappingComponents(Expression e1,Expression e2,Location loc,Scope sc,InType inType){ // (e.g., `x[1]` and `x[1][0]`)
+	auto e=componentsAtSameDepth(e1,e2);
+	return guaranteedSameLocations(e[0],e[1],loc,sc,inType);
 }
 
 
@@ -5169,8 +5178,8 @@ void checkIndexReplacement(Expression be,Scope sc){
 				auto idx2=indicesToReplace[j];
 				// (scope will handle this)
 				if(idx2.isSemError()) continue;
-				if(!guaranteedDifferentLocations(idx1,idx2,be.loc,sc,inType)){
-					if(guaranteedSameLocations(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
+				if(!guaranteedDisjointComponents(idx1,idx2,be.loc,sc,inType)){
+					if(guaranteedOverlappingComponents(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
 					else sc.error("indices may refer to same value in reassignment",idx2.loc);
 					sc.note("other index is here",idx1.loc);
 					idx2.setSemError();
@@ -8413,7 +8422,8 @@ static if(language==silq)
 bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,IndexExp idx,Scope sc,InType inType,ConstResult constResult)in{
 	assert(!!crepl.write);
 }do{
-	if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType)) return false;
+	bool indexed=constResult==ConstResult.indexed; // (e.g., `x[1]` in `x[1][1]` while `x[1][0]` is being replaced: the enclosing lookup is checked)
+	if(indexed?guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,inType):guaranteedDisjointComponents(crepl.write,idx,idx.loc,sc,inType)) return false;
 	static if(language==silq)
 	if(constResult==ConstResult.yes||constResult==ConstResult.indexed)
 		if(!sc.getWithTransBody())
@@ -8426,7 +8436,7 @@ bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,Index
 				}
 			}
 	if(!crepl.write.isSemError()&&!idx.isSemError()){
-		if(guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType)){
+		if(indexed?guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType):guaranteedOverlappingComponents(crepl.write,idx,idx.loc,sc,inType)){
 			sc.error("lookup of index refers to consumed value",idx.loc);
 		}else sc.error("lookup of index may refer to consumed value",idx.loc);
 		if(crepl.read) // should always be non-null
@@ -8478,6 +8488,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		bool replaceIndex=false;
 		size_t replaceIndexLoc=size_t.max;
 		auto cid=getIdFromIndex(idx);
+		if(cid&&cid.meaning&&!idx.byRef&&context.constResult!=ConstResult.indexed)
+			if(auto trial=sc.getWithTransTrial()) trial.accessedComponents~=idx;
 		auto creplDecl=cid?cid.meaning:null;
 		auto crepls=creplDecl?sc.componentReplacements(creplDecl):[];
 		if(!crepls.length&&creplDecl&&sc.getWithTransBody()){ // TODO: needed?
