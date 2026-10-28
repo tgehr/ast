@@ -4057,6 +4057,139 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	return statementSemantic(lowered,sc,flags);
 }
 
+static if(language==silq)
+// (the function of a loop in the body of a `with` statement cannot take an aggregate whose components it replaces, e.g., `x`
+// in `with{ t:=x[1]; }do{ repeat 2 { t⊕=x[2]; } }`: the loop is lowered within a `with` statement that borrows the components
+// that it accesses instead, here `with{ c:=x[2]; }do{ repeat 2 { t⊕=c; } }`)
+private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
+	if(loopContainsReturn(loop)) return null;
+	SetX!Id aggregates;
+	visitStm(loop,(Expression x){
+		if(auto id=cast(Identifier)x) if(id.meaning&&id.meaning.name&&sc.versionComponentReplacements(id.meaning).length)
+			aggregates.insert(id.meaning.name.id);
+	});
+	if(!aggregates.length) return null;
+	bool isAggregate(Expression e){
+		auto id=cast(Identifier)e;
+		return id&&id.meaning&&id.meaning.name&&id.meaning.name.id in aggregates;
+	}
+	static struct Component{ Id aggregate; IndexExp access; Id name; }
+	Component[] components;
+	size_t[const(void)*] componentOf;
+	WithExp[] isIndicesWiths;
+	bool bad=false;
+	void access(IndexExp ie){
+		auto aggregate=(cast(Identifier)unwrap(ie.e)).meaning.name.id;
+		foreach(i,c;components){
+			if(c.aggregate!=aggregate) continue;
+			if(guaranteedSameLocations(c.access,ie,ie.loc,sc,InType.no)){
+				componentOf[cast(const(void)*)ie]=i;
+				return;
+			}
+			if(!guaranteedDifferentLocations(c.access,ie,ie.loc,sc,InType.no)){
+				bad=true;
+				return;
+			}
+		}
+		componentOf[cast(const(void)*)ie]=components.length;
+		components~=Component(aggregate,ie,freshName());
+	}
+	void walk(Expression e){
+		if(!e||bad) return;
+		if(auto ie=cast(IndexExp)e) if(isAggregate(unwrap(ie.e))){
+			access(ie);
+			walk(ie.a);
+			return;
+		}
+		if(isAggregate(e)){ // (accessed as a whole)
+			bad=true;
+			return;
+		}
+		if(auto we=cast(WithExp)e) if(we.isIndices&&we.itrans){ // (copied with the inverse, see `WithExp.copyImpl`)
+			walk(we.trans);
+			walk(we.bdy);
+			walk(we.itrans);
+			isIndicesWiths~=we;
+			return;
+		}
+		if(auto fd=cast(FunctionDef)e){
+			foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) walk(id);
+			return;
+		}
+		if(auto fe=cast(ForExp)e){
+			if(auto r=fe.aggr.isRange){
+				walk(r.left);
+				walk(r.step);
+				walk(r.right);
+			}else if(auto c=fe.aggr.isContainer) walk(c.e);
+			walk(fe.bdy);
+			return;
+		}
+		foreach(c;e.components) walk(c);
+	}
+	walk(loop);
+	if(bad||!components.length) return null;
+	SetX!Id changed; // (the indices of the components do not change within the loop)
+	visitStm(loop,(Expression x){
+		if(auto id=cast(Identifier)x) if(!id.constLookup&&!id.implicitDup) changed.insert(varName(id));
+		if(auto fe=cast(ForExp)x) if(fe.var) changed.insert(fe.var.id);
+	});
+	foreach(c;components){
+		auto index=c.access.a;
+		if(!index.type||!index.type.isClassical()||!index.isDeterministic()||index.freeIdentifiers.any!(id=>varName(id) in changed)) return null;
+	}
+	// (the writes of the components that the loop accesses, see `lowerIndexReplacement`, are writes of the borrowed values instead)
+	bool[const(void)*] flattened;
+	foreach(we;isIndicesWiths){
+		bool[2] accessed=false;
+		foreach(k,s;chain(we.trans.s,we.itrans.s).enumerate){
+			auto de=cast(DefineExp)s;
+			auto ie=de?cast(IndexExp)unwrap(k<we.trans.s.length?de.e2:de.e1):null;
+			accessed[ie&&cast(const(void)*)ie in componentOf]=true;
+		}
+		if(accessed[1]&&accessed[0]) return null;
+		if(accessed[1]) flattened[cast(const(void)*)we]=true;
+	}
+	auto loc=loop.loc;
+	T at(T)(T e){ e.loc=loc; return e; }
+	Expression.CopyArgs cargs;
+	cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+		if(auto ie=cast(IndexExp)e) if(auto i=cast(const(void)*)ie in componentOf){
+			auto id=new Identifier(components[*i].name);
+			id.loc=ie.loc;
+			return cast(Expression)id;
+		}
+		if(auto we=cast(WithExp)e) if(cast(const(void)*)we in flattened){
+			auto r=new CompoundExp(chain(we.trans.s,we.bdy.s,we.itrans.s).map!(s=>s.copy(args)).array);
+			r.loc=we.loc;
+			return cast(Expression)r;
+		}
+		return null;
+	};
+	auto nloop=loop.copy(cargs);
+	bool remains=false;
+	visitStm(nloop,(Expression x){ if(auto id=cast(Identifier)x) if(id.id in aggregates) remains=true; });
+	if(remains) return null;
+	Expression[] borrows;
+	foreach(c;components){
+		Expression.CopyArgs dargs;
+		borrows~=at(new DefineExp(at(new Identifier(c.name)),at(new IndexExp(at(new Identifier(c.aggregate)),c.access.a.copy(dargs)))));
+	}
+	auto with_=at(new WithExp(at(new CompoundExp(borrows)),at(new CompoundExp([cast(Expression)nloop]))));
+	auto lowered=at(new CompoundExp([cast(Expression)with_]));
+	auto before=sc.rnsymtab.dup;
+	scope(success) linkLoweredVariables(sc,before);
+	sc.restoreStateSnapshot(state.origStateSnapshot);
+	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
+		import util.io:stderr;
+		stderr.writeln(loop);
+		stderr.writeln("-component-borrowing→");
+		stderr.writeln(lowered);
+	}
+	auto result=statementSemantic(lowered,sc,flags);
+	if(result.isSemError()) sc.note("loop not yet supported by loop lowering pass",result.loc);
+	return result;
+}
 Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
 	assert(loop.isSemCompleted());
 }do{
@@ -4069,6 +4202,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	else enum isDoWhile=false;
 	static if(language==silq) bool singleIteration=!loopContainsReturn(loop)&&definitelyReturns(loop.bdy); // (the body does not complete an iteration)
 	else enum singleIteration=false;
+	static if(language==silq) if(auto r=borrowAccessedComponents(loop,state,sc,flags)) return r;
 	if(!singleIteration){
 		if(auto r=sliceLoop(loop,state,sc,flags)) return r;
 		static if(!isDoWhile) if(auto r=splitLoop(loop,state,sc,flags)) return r;

@@ -972,12 +972,33 @@ abstract class Scope{
 			r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
 		return r;
 	}
-	final DeclProp.ComponentReplacement* blockingComponentReplacement(Declaration decl){
-		for(auto d=decl;d;d=d.splitFrom){
-			auto blocking=componentReplacements(d).find!(crepl=>crepl.blocksAggregate);
-			if(!blocking.empty) return blocking.front;
+	// the component replacements of the versions of the aggregate that `decl` derives from, which also apply to it (through
+	// splits, merges, promotions and writes of other components, e.g., to `x` after `x[2]:=X(x[2]);` in the body of
+	// `with{ t:=x[1]; }do{ … }`), with the versions they are registered for
+	final Q!(Declaration,DeclProp.ComponentReplacement*)[] versionComponentReplacements(Declaration decl){
+		typeof(return) r=[];
+		Declaration[] visited;
+		void add(Declaration version_){
+			for(auto d=version_;d;d=d.splitFrom){ // (the replacements may move to a split, see `DeclProps.replaceDecl`)
+				if(visited.canFind(d)) continue;
+				visited~=d;
+				foreach(crepl;componentReplacements(d)) r~=q(d,crepl);
+			}
 		}
-		return null;
+		add(decl);
+		foreach(version_;decl.replacementVersions) add(version_);
+		return r;
+	}
+	final void deriveVersion(Declaration from,Declaration into){ // (`into` is a version of the aggregate `from`, see `versionComponentReplacements`)
+		void add(Declaration version_){
+			if(componentReplacements(version_).length&&!into.replacementVersions.canFind(version_)) into.replacementVersions~=version_; // (e.g., not the versions of the earlier writes of components that have completed)
+		}
+		foreach(version_;from.replacementVersions) add(version_);
+		add(from);
+	}
+	final DeclProp.ComponentReplacement* blockingComponentReplacement(Declaration decl){
+		auto blocking=versionComponentReplacements(decl).find!(vcrepl=>vcrepl[1].blocksAggregate);
+		return blocking.empty?null:blocking.front[1];
 	}
 	final bool blockedRedefinitionError(Declaration newDecl,Declaration oldDecl){
 		auto blocking=blockingComponentReplacement(oldDecl);
@@ -1152,6 +1173,7 @@ abstract class Scope{
 		assert(splitFrom.scope_ !is splitInto.scope_);
 		splitFrom.splitInto~=splitInto;
 		splitInto.splitFrom=splitFrom;
+		deriveVersion(splitFrom,splitInto);
 		splitVars~=splitInto;
 	}
 	final void resetSplits(Declaration decl){
@@ -1913,6 +1935,7 @@ abstract class Scope{
 		mergedInto.mergedFrom~=mergedFrom;
 		mergedFrom.mergedInto=mergedInto;
 		mergedInto.resetCanonicalSource();
+		deriveVersion(mergedFrom,mergedInto);
 		mergedVars~=mergedFrom;
 	}
 
@@ -3217,7 +3240,7 @@ class CapturingScope(T): NestedScope{
 		}
 		static if(language==silq)
 		if(type.hasQuantumComponent()){
-			if(origin.componentReplacements(meaning).length){
+			if(origin.versionComponentReplacements(meaning).length){
 				origin.lastUses.definition(meaning,null);
 				return null; // not captured, will be replaced (TODO: ok?)
 			}

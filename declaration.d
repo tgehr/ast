@@ -67,6 +67,7 @@ abstract class Declaration: Expression{
 	Declaration[] mergedFrom=[];
 	Declaration mergedInto=null;
 	Declaration promotedFrom=null; // if this declaration quantum-promotes another one, the original declaration
+	Declaration[] replacementVersions=[]; // the versions of an aggregate that this version derives from while components of them are being replaced (see `Scope.versionComponentReplacements`)
 	EarlyForgottenDecl earlyForgotten=null; // if consumption was speculative early forget
 	DefinitionSources definitionSources; // (what the dependency is formed from)
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch

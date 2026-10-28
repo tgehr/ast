@@ -1326,8 +1326,10 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq)
 	if(haveWithTransReplacements&&!with_.isSemError()){
 		foreach(crepl;sc.localComponentReplacements())
-			if(crepl.write)
+			if(crepl.write){
+				if(auto id=getIdFromIndex(crepl.write)) useCurrentVersion(id,sc); // (e.g., the transformation may write another component after it borrows this one: the splits of the borrowed version are not reset)
 				refreshWithTransReplMeanings(crepl.write,sc);
+			}
 		auto bodyCrepls=sc.localComponentReplacements();
 		auto blocks=convertedAggregateBlocks(sc);
 		finishIndexReplacement(with_,sc,&with_.replacements);
@@ -1366,13 +1368,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			assert(idx.byRef);
 			Expression.CopyArgs cargs={preserveSemantic:true};
 			auto nidx=idx.copy(cargs);
-			static if(language==silq) if(auto id=getIdFromIndex(nidx)) if(id.meaning){ // (the current version of the aggregate, as for the write-back of the original `with` statement, see `buildIndexReplacements`: e.g., the body may have split and merged it, or written another component of it)
-				auto current=sc.peekSymtab(id.meaning.getId,true);
-				if(current&&current!is id.meaning&&!cast(DeadDecl)current&&current.name.id==id.meaning.name.id){
-					id.meaning=current;
-					id.type=id.typeFromMeaning;
-				}
-			}
+			static if(language==silq) if(auto id=getIdFromIndex(nidx)) useCurrentVersion(id,sc); // (as for the write-back of the original `with` statement, see `buildIndexReplacements`: e.g., the body may have split and merged it, or written another component of it)
 			consumer.consumeArray(nidx,expSemContext(sc,ConstResult.no,InType.no));
 		}
 		consumer.redefineArrays(with_,sc); // TODO: fix
@@ -3269,14 +3265,8 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				}
 				static if(language==silq)
 				if(r&&(sc.getWithTransBody()||sc.getWithTransTransformation())){
-					auto creplDecl=id.meaning;
-					auto crepls=sc.componentReplacements(creplDecl);
-					if(!crepls.length)
-						for(auto d=creplDecl.splitFrom;d&&!crepls.length;d=d.splitFrom){
-							creplDecl=d;
-							crepls=sc.componentReplacements(creplDecl);
-						}
-					foreach(crepl;crepls){
+					foreach(vcrepl;sc.versionComponentReplacements(id.meaning)){
+						auto crepl=vcrepl[1];
 						if(!crepl.write||crepl.write.isSemError()) continue;
 						if(guaranteedDifferentLocations(crepl.write,idx,idx.loc,sc,InType.no)) continue;
 						if(!idx.isSemError()){
@@ -3936,6 +3926,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 							cid.meaning=sc.consume(cid.meaning,cid);
 							auto dep=getDependency(cid,sc);
 							auto var=addVar(cid.meaning.name.id,type,cidx.loc,sc);
+							sc.deriveVersion(cid.meaning,var);
 							sc.addDependency(var,dep);
 							var.scope_=sc;
 							sc.lastUses.definition(var,be);
@@ -4109,6 +4100,7 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 								auto dep=getDependency(cid,sc);
 								auto var=addVar(meaning.name.id,type,idx.loc,sc);
 								var.promotedFrom=meaning;
+								sc.deriveVersion(meaning,var);
 								sc.addDependency(var,dep);
 								idx.replacements~=AAssignExp.Replacement(meaning,var);
 								replacements[cid.meaning]=var;
@@ -4150,6 +4142,13 @@ bool buildIndexReplacements(Scope.DeclProp.ComponentReplacement[][] creplss,Scop
 }
 
 static if(language==silq){
+void useCurrentVersion(Identifier id,Scope sc){ // of an aggregate whose components are replaced (e.g., after a split and a merge of it, or after a write of another of its components)
+	if(!id.meaning) return;
+	auto current=sc.peekSymtab(id.meaning.getId,true);
+	if(!current||current is id.meaning||cast(DeadDecl)current||current.name.id!=id.meaning.name.id) return;
+	id.meaning=current;
+	id.type=id.typeFromMeaning;
+}
 void refreshWithTransReplMeanings(Expression e,Scope sc){
 	if(auto id=cast(Identifier)e){
 		id.meaning=sc.updateDecl(id.meaning);
@@ -4338,8 +4337,8 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 	}).array;
 	if(!crepls.length) return false;
 	if(trans.blscope_){ // a component of a variable declared within the transformation, or at an index declared within it, can only be borrowed after the declaration
-		bool declaredInTrans(Declaration decl){
-			for(auto s=decl?decl.scope_:null;s;s=s.parentScope())
+		bool declaredInTrans(Declaration decl){ // (not a split of a variable from outside of it, e.g., into the scope of the transformation by a later consumption)
+			for(auto s=decl?decl.canonicalSource.scope_:null;s;s=s.parentScope())
 				if(s is trans.blscope_) return true;
 			return false;
 		}
@@ -4408,8 +4407,13 @@ bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref 
 		}
 	}
 	if(unsupported.length) return false;
+	void useCurrentVersions(){ // (the trial analysis may have split the aggregate into the scope of the transformation, e.g., when it consumes the aggregate after borrowing the component)
+		foreach(crepl;crepls) if(crepl.write) if(auto id=getIdFromIndex(crepl.write)) useCurrentVersion(id,sc);
+	}
+	useCurrentVersions();
 	auto creplss=groupWithTransReplacements(crepls);
 	auto r=buildIndexReplacements(creplss,sc,flags,prologues,epilogues,with_.loc);
+	useCurrentVersions();
 	foreach(crepl;crepls){
 		if(crepl.write){
 			refreshWithTransReplMeanings(crepl.write,sc);
@@ -5137,6 +5141,7 @@ struct ArrayConsumer{
 		foreach(origId,id;ids.map!(t=>t)){
 			if(id&&id.meaning&&id.type&&origId !in added){
 				auto var=addVar(origId,id.type,parent.loc,sc);
+				sc.deriveVersion(id.meaning,var);
 				static if(language==silq)
 					sc.inheritConstBlocks(id.meaning,var);
 				if(origId in consumed){
@@ -5492,10 +5497,10 @@ bool checkAssignable(Declaration meaning,Location loc,Scope sc,bool isReversible
 		if(auto fsc=cast(FunctionScope)csc){
 			// TODO: what needs to be done to lift this restriction?
 			// TODO: method calls are also implicit assignments.
-			auto crepls=meaning.scope_.componentReplacements(meaning);
+			auto crepls=meaning.scope_.versionComponentReplacements(meaning);
 			if(crepls.length){
 				sc.error(format("cannot access aggregate `%s` while its components are being replaced",meaning.getName),loc);
-				if(crepls[0].location) sc.note("replaced component is here",crepls[0].location.loc);
+				if(crepls[0][1].location) sc.note("replaced component is here",crepls[0][1].location.loc);
 				return false;
 			}else{
 				sc.error("cannot assign to variable in closure context",loc);
@@ -6112,6 +6117,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 									}
 								}
 								auto var=addVar(origId,ntype,lhs.loc,sc,ae);
+								if(indexed) sc.deriveVersion(consumed[decl],var);
 								if(var.scope_ is sc){
 									if(ntype.isClassical) sc.addDefaultDependency(var);
 									else sc.addDependency(var,ntype.isClassical?Dependency(false):dependencies[decl]);
@@ -8144,13 +8150,13 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			if(id.meaning&&id.meaning.name&&context.constResult!=ConstResult.indexed)
 				if(auto trial=sc.getWithTransTrial()) trial.accessedAggregates.insert(accessRoot(id.meaning));
 			if(id.meaning && !id.meaning.isSemError()) {
-				auto crepls=sc.componentReplacements(id.meaning);
+				auto crepls=sc.versionComponentReplacements(id.meaning);
 				auto blocking=sc.blockingComponentReplacement(id.meaning);
-				if(crepls.length||blocking){
+				if(crepls.length){
 					avoidCapture=true;
 					if(context.constResult!=ConstResult.indexed||blocking){
 						sc.error(format("cannot access aggregate `%s` while its components are being replaced",id.meaning.getName),id.loc);
-						auto crepl=blocking?blocking:crepls[0];
+						auto crepl=blocking?blocking:crepls[0][1];
 						if(crepl.location) sc.note("replaced component is here",crepl.location.loc);
 						id.setSemError();
 					}
@@ -8506,7 +8512,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			}
 		}
 		if(!replaceIndex){
-			foreach(i,crepl;crepls){
+			foreach(vcrepl;sc.versionComponentReplacements(cid.meaning)){ // (e.g., also the components of `x` that an enclosing `with` statement borrows after a write of another component in its body)
+				auto version_=vcrepl[0],crepl=vcrepl[1];
 				if(crepl.write){
 					auto rid=getIdFromIndex(crepl.write);
 					assert(rid && rid.meaning);
@@ -8514,18 +8521,17 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 					if(!sameScope&&rid.scope_&&cid.scope_)
 						if(rid.scope_.getFunction()&&rid.scope_.getFunction() is cid.scope_.getFunction())
 							sameScope=true;
-					if(rid.meaning is creplDecl&&cid.scope_&&!sameScope&&cid.meaning is creplDecl&&creplDecl.scope_&&cid.scope_.getFunction() !is creplDecl.scope_.getFunction()){ // (a closure does not capture the aggregate, only replaced components)
+					if(rid.meaning is version_&&cid.scope_&&!sameScope&&cid.meaning.scope_&&cid.scope_.getFunction() !is cid.meaning.scope_.getFunction()){ // (a closure does not capture the aggregate, only replaced components)
 						if(!idx.isSemError()&&!crepl.write.isSemError()){
-							sc.error(format("cannot capture aggregate `%s` while its components are being replaced",creplDecl.getName),cid.loc);
+							sc.error(format("cannot capture aggregate `%s` while its components are being replaced",version_.getName),cid.loc);
 							sc.note("replaced component is here",crepl.write.loc);
 						}
 						idx.setSemError();
 						break;
 					}
-					if(rid.meaning is creplDecl && cid.scope_ && sameScope){
+					if(rid.meaning is version_ && cid.scope_ && sameScope){
 						cid.constLookup=true;
-						assert(cid.type==rid.type);
-						assert(creplDecl is rid.meaning);
+						assert(cid.meaning !is version_||cid.type==rid.type);
 						if(indexReplacementAliasError(crepl,idx,sc,inType,context.constResult)){
 							static if(language==silq)
 								if(auto trial=sc.getWithTransTrial()) if(crepl.name in trial.liftedComponents)
