@@ -10848,7 +10848,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 Expression typeSemantic(Expression expr, Scope sc, bool allowQNumeric=false)in{assert(!!expr&&!!sc);}do{
 	if(expr.isSemError()) return null;
 	assert(expr.isSemCompleted());
-	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return unwrap(expr.eval());
+	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))){
+		auto e=expr.eval(),r=unwrap(e);
+		return isType(r)||allowQNumeric&&isQNumeric(r)?r:e; // (not a value of type `⊥`, e.g., `0` in `0 coerce ⊥`)
+	}
 	if(!isType(expr)&&!(allowQNumeric&&isQNumeric(expr))){
 		if(!allowQNumeric&&isQNumeric(expr)){
 			sc.error(format("quantum `%s` cannot be used as a type",expr),expr.loc);

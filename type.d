@@ -568,9 +568,8 @@ class TupleTy: Type,ITupleTy{
 	}
 	override Expression getQuantum(){
 		auto ntypes=types.map!(x=>x.getQuantum()).array;
-		if(!all!(x=>x !is null)(ntypes)) return null;
-		if(iota(types.length).all!(i=>ntypes[i] is types[i])) return this; // (e.g., `𝔹×𝔹`, which `tupleTy` would make `𝔹^2`)
-		return tupleTy(ntypes);
+		if(all!(x=>x !is null)(ntypes)) return tupleTy(ntypes);
+		return null;
 	}
 	override bool mayBeClassical(){ return types.all!(x=>x.mayBeClassical()); }
 	override bool mayBeQuantum(){ return types.all!(x=>x.mayBeQuantum()); }
@@ -581,8 +580,9 @@ class TupleTy: Type,ITupleTy{
 	override Expression evalImpl(){
 		assert(isTypeTy(type) || isQNumericTy(type));
 		auto ntypes=types.map!(t=>t.eval()).array;
-		if(iota(types.length).all!(i => ntypes[i] is types[i])) return this;
-		return tupleTy(ntypes);
+		auto r=tupleTy(ntypes); // (e.g., a product type of the source, `𝔹×𝔹` is `𝔹^2`)
+		if(cast(TupleTy)r&&iota(types.length).all!(i => ntypes[i] is types[i])) return this;
+		return r;
 	}
 }
 

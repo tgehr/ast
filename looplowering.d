@@ -5132,6 +5132,17 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		static if(is(T==WhileExp)) id.loc=loop.cond.loc;
 		else id.loc=loop.loc;
 	}
+	foreach(ref arg;paramTpl2.e){ // (an argument of an empty type, e.g., a variable of type `⊥` before the unreachable loop, has the type of the parameter, as after the analysis of the loop: otherwise, the call of the `qfree` function on it would be classical)
+		auto id=cast(Identifier)arg;
+		if(!id) continue;
+		auto p=constMovedParams.find!(p=>p[1].name.id==id.id);
+		if(p.empty) continue;
+		auto ty=state.origStateSnapshot.typeOf(p.front[0]);
+		if(!ty||!isEmpty(ty)||isEmpty(p.front[2])) continue;
+		auto tae=new TypeAnnotationExp(id,p.front[2].copy(cargsDefault),TypeAnnotationType.annotation);
+		tae.loc=id.loc;
+		arg=tae;
+	}
 	Expression[] weakenings; // (of the lifted variables whose types mention variables that the call consumes while they are live)
 	foreach(p;constParams){
 		if(!p[3]) continue;
@@ -5611,7 +5622,8 @@ void erpBeforeReturn(ReturnExp ret,Scope sc){
 			if(!d.name||d.name.id in decided) continue;
 			decided.insert(d.name.id);
 			auto cd=cast(ConsumedDecl)d;
-			if(cd&&typeid(cd) is typeid(ConsumedDecl)&&!cd.use.moved&&!cd.use.byRef&&cd.use.type&&cd.use.type.isClassical())
+			bool captured=cd&&cd.use.meaning&&cd.use.meaning.scope_&&cd.use.meaning.scope_.getFunction() !is fun; // (by a nested function that consumes it, e.g., `λ(){ return move(x); }`)
+			if(cd&&typeid(cd) is typeid(ConsumedDecl)&&!cd.use.moved&&!cd.use.byRef&&cd.use.type&&cd.use.type.isClassical()&&!captured)
 				continue; // (the rewritten loop still uses it, so its analysis `dup`s it)
 			if(cast(DeadDecl)d) consumed.insert(d.name.id);
 		}
