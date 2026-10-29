@@ -862,6 +862,10 @@ bool fitsInto(ℤ v,FixedIntTy fit,out ℤ lo,out ℤ hi){
 /// (`concrete`: whether `to` does not depend on unknown parameters, so sizes can be compared and conversions suggested)
 void explainMismatch(Scope sc,Expression e,Expression from,Expression to,Location loc,bool concrete=true,int depth=0){
 	if(!from||!to||depth>4) return;
+	static if(language==silq) if(!depth){
+		import ast.semantic_:explainOpaqueTypeVariables;
+		explainOpaqueTypeVariables(sc,from,to);
+	}
 	if(e&&!e.type) e=null;
 	Expression fromSize,toSize;
 	string what;

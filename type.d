@@ -81,6 +81,7 @@ enum NumericType{
 
 NumericType isNumericTy(Expression t){
 	if(!t) return NumericType.none;
+	t=unfoldTypeVariable(t);
 	auto ty = cast(NumericTy)t;
 	if(!ty) return NumericType.none;
 	return ty.nty;
@@ -97,6 +98,7 @@ struct FixedIntTy {
 
 FixedIntTy isFixedIntTy(Expression e){
 	assert(e&&e.isSemEvaluated());
+	e=unfoldTypeVariable(e);
 	auto ce=cast(CallExp)e;
 	if(!ce || !ce.isSquare) return FixedIntTy();
 	auto bits=ce.arg;
@@ -138,6 +140,7 @@ struct ℤmodTy{
 
 ℤmodTy isℤmodTy(Expression e){
 	assert(e&&e.isSemEvaluated());
+	e=unfoldTypeVariable(e);
 	auto ce=cast(CallExp)e;
 	if(!ce||!ce.isSquare) return ℤmodTy();
 	auto id=cast(Identifier)ce.e;
@@ -162,6 +165,14 @@ bool isFloat(Expression e){ return preludeNumericTypeName(e)=="float"; }
 bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
 bool isSubtype(Expression lhs,Expression rhs,EqualityContext* ctx=null){
+	if(isSubtypeShallow(lhs,rhs,ctx)) return true;
+	static if(language==silq) if(lhs&&rhs){ // (through the values of type variables, see `unfoldTypeVariables`)
+		auto ul=unfoldTypeVariables(lhs),ur=unfoldTypeVariables(rhs);
+		if(ul !is lhs||ur !is rhs) return isSubtypeShallow(ul,ur,ctx);
+	}
+	return false;
+}
+private bool isSubtypeShallow(Expression lhs,Expression rhs,EqualityContext* ctx){
 	if(!lhs||!rhs) return false;
 	assert(lhs.isSemEvaluated());
 	assert(rhs.isSemEvaluated());
@@ -185,6 +196,12 @@ Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumer
 	if(isEmpty(lhs)) return meet?lhs:rhs;
 	if(isEmpty(rhs)) return meet?rhs:lhs;
 	auto result = l.combineTypesImpl(r,meet);
+	static if(language==silq) if(!result){ // (through the values of type variables, see `unfoldTypeVariables`)
+		if(isSubtype(l,r)) return meet?lhs:rhs;
+		if(isSubtype(r,l)) return meet?rhs:lhs;
+		auto ul=unfoldTypeVariables(l),ur=unfoldTypeVariables(r);
+		if(ul !is l||ur !is r) result=ul.combineTypesImpl(ur,meet);
+	}
 	if(!allowQNumeric && isQNumeric(result)) return null;
 	return result;
 }
@@ -1839,6 +1856,10 @@ Expression eliminateVariables(Expression type,scope bool delegate(Declaration) e
 		return false;
 	}
 	if(!mentions(type)) return type;
+	static if(language==silq){ // (an eliminated type variable stands for its value, see `typeVariableValue`)
+		auto u=unfoldTypeVariables(type,eliminated);
+		if(u !is type) return eliminateVariables(u,eliminated);
+	}
 	if(auto vt=cast(VectorTy)type){
 		auto next=eliminateVariables(vt.next,eliminated);
 		if(!next) return null;

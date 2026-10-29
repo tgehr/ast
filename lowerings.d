@@ -151,8 +151,9 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	if(isEmpty(args[0].type)!=isEmpty(args[1].type)) // (compared at the type of the other operand, as in `cmpType`, e.g., `x==(1,)[2]`)
 		args=annotateEmpty(args,(isEmpty(args[0].type)?args[1]:args[0]).type,context);
 	auto e0=args[0],e1=args[1];
-	if(!cast(TupleTy)e0.type&&!cast(ArrayTy)e0.type&&!cast(VectorTy)e0.type){
-		assert(!cast(TupleTy)e1.type&&!cast(ArrayTy)e1.type&&!cast(VectorTy)e1.type);
+	auto ty0=unfoldTypeVariables(e0.type),ty1=unfoldTypeVariables(e1.type); // (see `iterate`)
+	if(!cast(TupleTy)ty0&&!cast(ArrayTy)ty0&&!cast(VectorTy)ty0){
+		assert(!cast(TupleTy)ty1&&!cast(ArrayTy)ty1&&!cast(VectorTy)ty1);
 		return makeFunctionCall(OB.comparison,name,original,args,loc,context);
 	}
 	Expression makeConst(bool b){
@@ -257,7 +258,8 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 			assert(!!r.type,text(p," ",t," ",i," ",r," ",r.type));
 			return r;
 		}
-		auto tt0=p0.type.isTupleTy(),tt1=p1.type.isTupleTy();
+		auto ty0=unfoldTypeVariables(p0.type),ty1=unfoldTypeVariables(p1.type); // (the structure of the values of type variables, e.g., `!V` after `V:=𝔹^2`)
+		auto tt0=ty0.isTupleTy(),tt1=ty1.isTupleTy();
 		if(tt0&&tt1&&(cast(TupleTy)tt0||cast(TupleTy)tt1)){
 			if(tt0.length!=tt1.length&&(cast(EqExp)original||cast(NeqExp)original)){
 				ret(body_,makeConst(!!cast(NeqExp)original),true);
@@ -268,7 +270,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 				i0.loc=loc;
 				auto i1=LiteralExp.makeInteger(i);
 				i1.loc=loc;
-				auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+				auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
 				iterate(body_,np0,np1);
 			}
 			if(tt0.length!=tt1.length){
@@ -281,10 +283,10 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 			return;
 		}
 		Expression next0=null,next1=null;
-		if(auto vt0=cast(VectorTy)p0.type) next0=vt0.next;
-		else if(auto at0=cast(ArrayTy)p0.type) next0=at0.next;
-		if(auto vt1=cast(VectorTy)p1.type) next1=vt1.next;
-		else if(auto at1=cast(ArrayTy)p1.type) next1=at1.next;
+		if(auto vt0=cast(VectorTy)ty0) next0=vt0.next;
+		else if(auto at0=cast(ArrayTy)ty0) next0=at0.next;
+		if(auto vt1=cast(VectorTy)ty1) next1=vt1.next;
+		else if(auto at1=cast(ArrayTy)ty1) next1=at1.next;
 		void doComparison(ref Expression[] body_,Expression p0,Expression p1){
 			auto cond=new NeqExp(p0.copy(cargs),p1.copy(cargs));
 			cond.loc=loc;
@@ -335,7 +337,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 				i1.loc=loc;
 				i1.type=ℤt(true);
 				// TODO: in principle runtime indexing could fail for tuples even if comparable to non-tuple
-				auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+				auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
 				Expression[] s;
 				iterate(s,np0,np1);
 				auto forBdy=new CompoundExp(s);
@@ -356,7 +358,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 					i0.loc=loc;
 					auto i1=LiteralExp.makeInteger(i);
 					i1.loc=loc;
-					auto np0=makeIndex(p0.copy(cargs),p0.type,i0),np1=makeIndex(p1.copy(cargs),p1.type,i1);
+					auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
 					iterate(s,np0,np1);
 					auto then=new CompoundExp(s);
 					then.loc=loc;

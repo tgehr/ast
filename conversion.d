@@ -864,6 +864,14 @@ class ParameterizedSubtypeConversion: Conversion{
 +/
 
 Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
+	if(auto r=typeExplicitConversionImpl!witness(from,to,annotationType)) return r;
+	static if(language==silq) if(from&&to){ // (through the values of type variables, see `unfoldTypeVariables`)
+		auto ufrom=unfoldTypeVariables(from),uto=unfoldTypeVariables(to);
+		if(ufrom !is from||uto !is to) return typeExplicitConversionImpl!witness(ufrom,uto,annotationType);
+	}
+	return typeof(return).init;
+}
+private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
 	static if(witness){
 		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);

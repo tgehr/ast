@@ -231,7 +231,12 @@ abstract class Expression: Node{
 	}
 
 	final bool unify(Expression rhs,ref MapSX!(Id,UnificationResult) subst, bool meet){
-		return unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet) || isSubtype(rhs,this);
+		if(unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet) || isSubtype(rhs,this)) return true;
+		static if(language==silq){
+			auto ur=unfoldTypeVariables(rhs);
+			if(ur !is rhs) return unify(ur,subst,meet);
+		}
+		return false;
 	}
 	abstract bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet);
 
@@ -458,6 +463,7 @@ class TypeAnnotationExp: Expression{
 		if(annotationType == TypeAnnotationType.annotation && isSubtype(ne.type, type) || ne.type == type) { // (otherwise, the annotation converts, e.g., `vector(0,0:𝔹):𝔹[]`: `𝔹^0` is classical)
 			return ne;
 		}
+		if(isTypeTy(type) && isSubtype(ne.type, type)) return ne; // (a conversion of a type to a wider kind is the type itself, e.g., `𝔹 as *`)
 		if(annotationType==TypeAnnotationType.conversion||annotationType==TypeAnnotationType.coercion)
 			if(auto v=classicalIntConstant(ne))
 				if(auto w=fitToType(v.get,type))
@@ -983,8 +989,14 @@ bool isEqual(Expression a,Expression b,EqualityContext* ctx){
 		auto ea=a.eval(),eb=b.eval();
 		if(ea !is a||eb !is b) return ea.isEqualImpl(eb,*ctx);
 	}
-	static if(language==silq) return knownValuesEqual(a,b,*ctx);
-	else return false;
+	static if(language==silq){
+		if(knownValuesEqual(a,b,*ctx)) return true;
+		if(!ctx.syntactic&&a.isSemCompleted()&&b.isSemCompleted()&&a.type&&b.type&&(isTypeTy(a.type)||isQNumeric(a))&&(isTypeTy(b.type)||isQNumeric(b))){ // (through the values of type variables, but not for judgmental equality, which distinguishes the variables, see `unfoldTypeVariables`)
+			auto ua=unfoldTypeVariables(a),ub=unfoldTypeVariables(b);
+			if(ua !is a||ub !is b) return isEqual(ua,ub,ctx);
+		}
+		return false;
+	}else return false;
 }
 
 static if(language==silq)
@@ -1044,6 +1056,55 @@ Expression knownForm(Expression e,EqualityContext* ctx){ // (`e` with the known 
 	if(!subst.length||!foldable(e,subst)) return e;
 	return e.substitute(subst);
 }
+Expression definitionValue(Declaration meaning,bool typeVariable){ // (see `Identifier.getInitializer` and `typeVariableValue`)
+	auto vd=cast(VarDecl)meaning;
+	if(!vd) return null;
+	if(!vd.initializer) if(auto source=cast(VarDecl)vd.canonicalSource) vd=source; // (e.g., the version merged from the scope of a `with` transformation has the value of its definition)
+	if(vd.definition) if(auto td=cast(FixedPointDeclaration)vd.definition.toplevel) if(!td.typeFinal) return null;
+	if(!vd.scope_&&!vd.isSemFinal()) return null;
+	assert(vd.isSemFinal());
+	auto init=vd.initializer;
+	if(vd.isSemError()||!init) return null;
+	if(init.type&&vd.vtype&&!isSubtype(init.type,vd.vtype)) return null; // (e.g., the value before a coercion, as for `x` in `(x coerce ⊥)~y:=…`)
+	auto local=!cast(TopScope)vd.scope_;
+	if(typeVariable?!local||!isTypeTy(vd.vtype):local&&!isQNumeric(vd.vtype)) return null;
+	return init.eval();
+}
+static if(language==silq)
+Expression typeVariableValue(Declaration decl){ // (the value of a local type variable, which it depends on as on its type, see `isLiveTypeDependent`)
+	auto vd=cast(VarDecl)decl;
+	if(!vd) return null;
+	if(!vd.initializer) if(auto source=cast(VarDecl)vd.canonicalSource) vd=source;
+	if(!vd.isSemFinal()) return null; // (e.g., being analyzed)
+	return definitionValue(decl,true);
+}
+static if(language==silq)
+Expression unfoldTypeVariable(Expression e){ // (the value of `e` if it is a local type variable, for the structure of the type, through the type variables that it mentions, e.g., `𝔹^n` for `t` after `s:=𝔹; t:=s^n;`, see `typeVariableValue`)
+	auto id=cast(Identifier)e;
+	if(!id) return e;
+	auto v=id.typeVariableValue();
+	if(!v) return e;
+	if(id.classical) v=v.getClassical();
+	if(!v) return e;
+	return unfoldTypeVariables(v);
+}
+else Expression unfoldTypeVariable(Expression e){ return e; }
+static if(language==silq)
+Expression unfoldTypeVariables(Expression e,scope bool delegate(Declaration) which=null){ // (`e` with the values of the local type variables that it mentions, e.g., `𝔹^n` for `t` after `t:=𝔹^n`, see `typeVariableValue`; `which`: only those)
+	import ast.type:freeIdentifiers;
+	if(!e||!e.isSemCompleted()) return e;
+	MapSX!(Id,Expression) subst;
+	SetX!Id other;
+	foreach(id;e.freeIdentifiers){
+		auto v=!which||id.meaning&&which(id.meaning)?id.typeVariableValue():null;
+		if(!v) other.insert(id.id);
+		else if(auto p=subst.getPtr(id.id)){ if(*p !is v) other.insert(id.id); }
+		else subst[id.id]=v;
+	}
+	foreach(x;other) subst.remove(x); // (the same name for another variable)
+	if(!subst.length) return e;
+	return unfoldTypeVariables(e.substitute(subst).eval(),which); // (the values can mention other type variables)
+}
 static if(language==silq)
 bool foldable(Expression e,ref MapSX!(Id,Expression) subst){ // (the evaluation after the substitution computes no huge numbers, e.g., not `2^n` after `n:=10^8`)
 	enum limit=1<<12;
@@ -1097,6 +1158,7 @@ class Identifier: Expression{
 			static if(language==silq){
 				r.outerWanted=outerWanted;
 				r.classical=classical;
+				r.opaqueTypeVariable=opaqueTypeVariable;
 			}
 			if(args.mapDecl){
 				auto oldmeaning=r.meaning;
@@ -1111,6 +1173,7 @@ class Identifier: Expression{
 			if(args.preserveMeanings&&!args.isBound(meaning)){
 				r.meaning=meaning;
 				r.scope_=scope_; // TODO: make unnecessary
+				static if(language==silq) r.opaqueTypeVariable=opaqueTypeVariable;
 			}
 			static if(language==silq){
 				r.outerWanted=outerWanted;
@@ -1311,6 +1374,10 @@ class Identifier: Expression{
 
 	override Annotation getAnnotation(){ return pure_; }
 
+	static if(language==silq) override ITupleTy isTupleTy(){
+		auto v=unfoldTypeVariable(this);
+		return v !is this?v.isTupleTy():null;
+	}
 	override Expression evalImpl(){
 		if(auto init=getInitializer()) {
 			return init;
@@ -1339,23 +1406,18 @@ class Identifier: Expression{
 			return init.isTotal();
 		return true;
 	}
-	Expression getInitializer(){
+	Expression getInitializer(){ // (the value of a top-level variable or of a local of a quantum numeric type, which its uses stand for; a local type variable keeps its value, see `typeVariableValue`)
+		auto init=definitionValue(false);
+		return init&&classical?init.getClassical():init;
+	}
+	static if(language==silq)
+	Expression typeVariableValue(){ // (the value of a local type variable, e.g., `𝔹^n` for `t` after `t:=𝔹^n`: the variable keeps it at run time, the analysis looks through it, see `unfoldTypeVariables`)
+		if(opaqueTypeVariable) return null;
+		return definitionValue(true);
+	}
+	private Expression definitionValue(bool typeVariable){
 		if(byRef) return null; // TODO: why is this suddenly needed?
-		auto vd=cast(VarDecl)meaning;
-		if(!vd) return null;
-		if(!vd.initializer) if(auto source=cast(VarDecl)vd.canonicalSource) vd=source; // (e.g., the version merged from the scope of a `with` transformation has the value of its definition)
-		if(vd.definition) if(auto td=cast(FixedPointDeclaration)vd.definition.toplevel) if(!td.typeFinal) return null;
-		if(!vd.scope_&&!vd.isSemFinal()) return null;
-		assert(vd.isSemFinal());
-		auto init=vd.initializer;
-		if(vd.isSemError()||!init) return null;
-		if(init.type&&vd.vtype&&!isSubtype(init.type,vd.vtype)) return null; // (e.g., the value before a coercion, as for `x` in `(x coerce ⊥)~y:=…`)
-		if(cast(TopScope)vd.scope_ || isTypeTy(vd.vtype) || isQNumeric(vd.vtype)){
-			init = init.eval();
-			return classical?init.getClassical():init;
-		} else {
-			return null;
-		}
+		return .definitionValue(meaning,typeVariable);
 	}
 	// semantic information:
 	override void setConstLookup(bool constLookup){
@@ -1372,6 +1434,7 @@ class Identifier: Expression{
 	static if(language==silq){
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
+		bool opaqueTypeVariable=false; // (a use of a local type variable whose value mentions a version that is no longer available, e.g., `t` after `t:=𝔹^n; n+=1;`, see `typeVariableValue`)
 	}
 	else enum classical=false;
 	Identifier[] recaptures;

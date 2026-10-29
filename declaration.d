@@ -789,12 +789,12 @@ class EarlyForgottenDecl: DeadDecl{
 	}
 	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
 		import std.format:format;
-		import ast.semantic_:typeForDecl;
+		import ast.semantic_:typeDependency;
 		if(reportVia) return reportVia.reportUndefinedIdentifier(id,sc);
 		if(isSemError()) return true;
 		setSemForceError();
 		sc.error(format("cannot %s `const` %s `%s`",action,consumed.kind,use),use.loc);
-		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",consumed.name,typeForDecl(decl),decl.kind,decl.getName),decl.loc);
+		sc.note(format("`%s` cannot be consumed because the %s of live %s `%s` depends on it",consumed.name,typeDependency(decl,consumed),decl.kind,decl.getName),decl.loc);
 		return true;
 	}
 	override void explain(string kind,Scope sc){

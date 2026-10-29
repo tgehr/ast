@@ -948,7 +948,8 @@ bool isBuiltIn(FieldExp fe)in{
 	assert(fe.e.isSemCompleted());
 }do{
 	if(fe.f.meaning) return false;
-	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type||cast(VariadicTy)fe.e.type){
+	auto ety=unfoldTypeVariable(fe.e.type); // (the structure of the value of a type variable)
+	if(cast(ArrayTy)ety||cast(VectorTy)ety||cast(TupleTy)ety||cast(VariadicTy)ety){
 		if(fe.f.name=="length"){
 			return true;
 		}
@@ -960,7 +961,8 @@ Expression builtIn(FieldExp fe,Scope sc)in{
 	assert(fe.e.isSemCompleted());
 }do{
 	if(fe.f.meaning) return null;
-	if(cast(ArrayTy)fe.e.type||cast(VectorTy)fe.e.type||cast(TupleTy)fe.e.type||cast(VariadicTy)fe.e.type){
+	auto ety=unfoldTypeVariable(fe.e.type); // (the structure of the value of a type variable)
+	if(cast(ArrayTy)ety||cast(VectorTy)ety||cast(TupleTy)ety||cast(VariadicTy)ety){
 		if(fe.f.name=="length"){
 			fe.type=ℕt(true); // no superpositions over arrays with different lengths
 			return fe;
@@ -1373,6 +1375,21 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransBody=null;
 	if(with_.bdy.blscope_) sc.merge(false,with_.bdy.blscope_);
+	static if(language==silq) if(transLocals.length){ // (the inverse consumes the type variables of the transformation: the types of the variables of the body stand for their values instead, see `unfoldTypeVariables`)
+		bool transTypeVariable(Declaration d){
+			if(!d.name||!transLocals.any!(local=>local[0]==d.name.id)) return false;
+			auto vd=cast(VarDecl)d;
+			return vd&&vd.vtype&&isTypeTy(vd.vtype);
+		}
+		foreach(_,d;sc.rnsymtab){
+			auto vd=cast(VarDecl)d;
+			if(!vd||cast(DeadDecl)d||!vd.vtype||transTypeVariable(vd)) continue;
+			auto ntype=unfoldTypeVariables(vd.vtype,&transTypeVariable);
+			if(ntype is vd.vtype) continue;
+			vd.vtype=ntype;
+			sc.updateType(vd);
+		}
+	}
 	if(auto ret=mayReturn(with_.bdy)){
 		sc.error("early return in `with` body must be last statement",ret.loc);
 		with_.bdy.setSemForceError();
@@ -3359,9 +3376,10 @@ Expression defineLhsSemanticImpl(SliceExp slc,DefineLhsContext context){
 }
 
 Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
-	auto at=cast(ArrayTy)context.type;
-	auto vt=cast(VectorTy)context.type;
-	auto tt=!at&&!vt&&context.type?context.type.isTupleTy:null;
+	auto ctype=unfoldTypeVariable(context.type); // (the structure of the value of a type variable)
+	auto at=cast(ArrayTy)ctype;
+	auto vt=cast(VectorTy)ctype;
+	auto tt=!at&&!vt&&ctype?ctype.isTupleTy:null;
 	Expression[] es=[];
 	if(auto te=cast(TupleExp)context.initializer) es=te.e;
 	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
@@ -3422,9 +3440,10 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 }
 Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 	// TODO: do we even keep this?
-	auto at=cast(ArrayTy)context.type;
-	auto vt=cast(VectorTy)context.type;
-	auto tt=!at&&!vt&&context.type?context.type.isTupleTy:null;
+	auto ctype=unfoldTypeVariable(context.type); // (the structure of the value of a type variable)
+	auto at=cast(ArrayTy)ctype;
+	auto vt=cast(VectorTy)ctype;
+	auto tt=!at&&!vt&&ctype?ctype.isTupleTy:null;
 	Expression[] es=[];
 	if(auto te=cast(TupleExp)context.initializer) es=te.e;
 	if(auto ve=cast(VectorExp)context.initializer) es=ve.e;
@@ -3642,7 +3661,9 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 		   (!l1||l1.isSemCompleted()&&isSubtype(l1.type,ℕt(true)))&&
 		   (!l2||l2.isSemCompleted()&&isSubtype(l2.type,ℕt(true)))
 		){
-			if(auto vt=cast(VectorTy)context.type){
+			static if(language==silq) auto rtype=unfoldTypeVariables(context.type); // (the structure of the value of a type variable, e.g., `!ℕ[]` for `V` after `V:=!ℕ[]`)
+			else auto rtype=context.type;
+			if(auto vt=cast(VectorTy)rtype){
 				if(l1){
 					if(!l2){
 						auto sub=new NSubExp(vt.num,l1);
@@ -3663,11 +3684,11 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 					}
 					ntype2=vectorTy(vt.next,l2.eval());
 				}
-			}else if(auto at=cast(ArrayTy)context.type){
-				ntype1=ntype2=context.type;
+			}else if(auto at=cast(ArrayTy)rtype){
+				ntype1=ntype2=rtype;
 				if(l1) ntype1=vectorTy(at.next,l1.eval());
 				if(l2) ntype2=vectorTy(at.next,l2.eval());
-			}else if(auto tt=context.type.isTupleTy){
+			}else if(auto tt=rtype.isTupleTy){
 				size_t mid;
 				bool ok=false;
 				if(!ok&&l1){
@@ -5393,14 +5414,40 @@ Expression typeForDeclNoAnalyze(Declaration decl){
 	return null;
 }
 
+private bool mentionsVersionOf(Expression e,Declaration decl){
+	return e.freeIdentifiers.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource);
+}
 private bool isLiveTypeDependent(Declaration d,Declaration decl){
 	if(cast(DeadDecl)d) return false;
 	if(d.isSemError()) return false;
 	auto type=typeForDeclNoAnalyze(d);
 	if(!type) return false;
-	if(!type.freeIdentifiers.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)) return false;
+	if(!mentionsVersionOf(type,decl)){
+		static if(language==silq){ // (or the values of the type variables that it mentions, e.g., `x:t` after `t:=𝔹^n`, see `unfoldTypeVariables`)
+			auto utype=unfoldTypeVariables(type);
+			if(utype is type||!mentionsVersionOf(utype,decl)) return false;
+		}else return false;
+	}
 	if(d.mergedInto&&isLiveTypeDependent(d.mergedInto,decl)) return false; // consumed by merging; the merged declaration is checked separately (unless the merge weakens the type, e.g., for the next iteration of a loop)
 	return true;
+}
+static if(language==silq)
+Expression typeVariableDependency(Declaration decl){ // (the value of a type variable through the values of the type variables that it mentions, e.g., `𝔹^n` for `t` after `s:=𝔹^n; t:=s;`, which can consume `s`)
+	auto value=typeVariableValue(decl);
+	return value?unfoldTypeVariables(value):null;
+}
+static if(language==silq)
+bool typeVariableValueUnavailable(Declaration decl,Scope sc){ // (the value of a type variable mentions a version that is no longer available at `sc`, e.g., `t` after `t:=𝔹^n; n+=1;`, whose uses then do not look through it)
+	auto value=typeVariableDependency(decl);
+	return value&&value.freeIdentifiers.any!(id=>id.meaning&&unavailableAt(id.meaning,sc));
+}
+string typeDependency(Declaration dependent,Declaration decl){ // (the type of `dependent` that depends on `decl`, see `isLiveTypeDependent`)
+	auto type=typeForDecl(dependent);
+	static if(language==silq) if(type&&!mentionsVersionOf(type,decl)){
+		auto utype=unfoldTypeVariables(type);
+		if(utype !is type) return format("type `%s` (`%s`)",type,utype);
+	}
+	return format("type `%s`",type);
 }
 Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 	foreach(_,d;rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
@@ -5477,7 +5524,7 @@ bool isAssignable(Declaration meaning,Scope sc){
 
 void typeConstBlockNote(Declaration decl,Scope sc){
 	if(auto dependent=liveTypeDependent(decl,sc)){
-		sc.note(format("`%s` cannot be consumed because the type `%s` of live %s `%s` depends on it",decl.name,typeForDecl(dependent),dependent.kind,dependent.getName),dependent.loc);
+		sc.note(format("`%s` cannot be consumed because the %s of live %s `%s` depends on it",decl.name,typeDependency(dependent,decl),dependent.kind,dependent.getName),dependent.loc);
 		return;
 	}
 	if(decl.typeConstBlocker){
@@ -5631,6 +5678,13 @@ Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)i
 }do{
 	Expression rec(Expression baseTy,Expression[] indices){
 		if(!indices.length) return rhsty;
+		static if(language==silq){ // (the structure of the value of a type variable, which remains the type if the write does not change it)
+			auto ubase=unfoldTypeVariable(baseTy);
+			if(ubase !is baseTy){
+				auto r=rec(ubase,indices);
+				return r&&isEqual(r,ubase,null)?baseTy:r;
+			}
+		}
 		Expression impl(){
 			bool quantumIndex=!indices[0].type.isClassical;
 			enum maxExpandedVector=1<<20; // TODO: track symbolically instead
@@ -5686,6 +5740,7 @@ Expression updatedType(Expression baseTy,Expression[] indices,Expression rhsty)i
 Expression checkIndex(Expression aty,Expression index,IndexExp idx,Scope sc)in{
 	assert(!idx||aty is idx.e.type && index is idx.a);
 }do{
+	aty=unfoldTypeVariable(aty); // (the structure of the value of a type variable)
 	Expression check(Expression next,Expression index,Expression indexTy,Location indexLoc){
 		if(isBasicIndexType(indexTy)){
 			if(!indexTy.isClassical()&&next.hasClassicalComponent()){
@@ -6095,7 +6150,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 					foreach(i,exp;tpl.e)
 						checkCompat(exp,tt[i]);
 				}
-			}else if(auto at=cast(ArrayTy)type){
+			}else if(auto at=cast(ArrayTy)unfoldTypeVariable(type)){
 				foreach(exp;tpl.e)
 					checkCompat(exp,at.next);
 			}else{
@@ -8264,6 +8319,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	}
 	id.id=id.meaning.getId;
 	propErr(id.meaning,id);
+	static if(language==silq) id.opaqueTypeVariable=sc&&typeVariableValueUnavailable(id.meaning,sc);
 	id.type=id.typeFromMeaning;
 	if(!id.type && !id.isSemError()){
 		auto fd=cast(FunctionDef)id.meaning;
@@ -8359,16 +8415,17 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 		}else return noMember();
 	}else if(auto r=builtIn(fe,sc)){
 		if(fe.f.name=="length"&&fe.e.isTotal()){
-			if(auto vt=cast(VectorTy)fe.e.type){
+			auto ety=unfoldTypeVariable(fe.e.type); // (the structure of the value of a type variable)
+			if(auto vt=cast(VectorTy)ety){
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=vt.num.copy(cargs);
 				len.loc=fe.loc;
 				return expressionSemantic(len,context);
-			}else if(auto tt=cast(TupleTy)fe.e.type){
+			}else if(auto tt=cast(TupleTy)ety){
 				auto len=LiteralExp.makeInteger(tt.length);
 				len.loc=fe.loc;
 				return expressionSemantic(len,context);
-			}else if(auto vt=cast(VariadicTy)fe.e.type){
+			}else if(auto vt=cast(VariadicTy)ety){
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=new FieldExp(vt.next.copy(cargs),new Identifier(Id.s!"length"));
 				len.loc=fe.loc;
@@ -8728,10 +8785,11 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	}
 	if(sl.isSemError())
 		return sl;
-	auto at=cast(ArrayTy)sl.e.type;
-	auto vt=cast(VectorTy)sl.e.type;
-	auto tt=cast(TupleTy)sl.e.type;
-	if(auto vart=cast(VariadicTy)sl.e.type){
+	auto ety=unfoldTypeVariable(sl.e.type); // (the structure of the value of a type variable)
+	auto at=cast(ArrayTy)ety;
+	auto vt=cast(VectorTy)ety;
+	auto tt=cast(TupleTy)ety;
+	if(auto vart=cast(VariadicTy)ety){
 		Expression.CopyArgs cargs={ preserveSemantic: true };
 		auto tsl=new SliceExp(vart.next.copy(cargs),sl.l.copy(cargs),sl.r.copy(cargs));
 		tsl.loc=sl.loc;
@@ -9186,9 +9244,25 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 				sc.error(format("punning type `%s` to `%s` not supported",tae.e.type,tae.type),tae.loc);
 				break;
 		}
+		static if(language==silq) explainOpaqueTypeVariables(sc,tae.e.type,tae.type);
 		tae.setSemError();
 	}
 	return tae;
+}
+static if(language==silq)
+void explainOpaqueTypeVariables(Scope sc,Expression[] types...){ // (the uses of type variables that do not look through them, see `typeVariableValueUnavailable`)
+	SetX!Declaration done;
+	foreach(type;types) if(type) foreach(id;type.freeIdentifiers){
+		if(!id.opaqueTypeVariable||!id.meaning||id.meaning in done) continue;
+		done.insert(id.meaning);
+		auto value=typeVariableDependency(id.meaning);
+		if(!value) continue;
+		foreach(fv;value.freeIdentifiers){
+			if(!fv.meaning||!unavailableAt(fv.meaning,id.scope_?id.scope_:sc)) continue;
+			sc.note(format("the value `%s` of `%s` mentions `%s`, which is no longer available here",value,id.name,fv.name),id.loc);
+			break;
+		}
+	}
 }
 
 Expression arithmeticType(bool preserveBool,bool preserveZstar=false)(Expression t1, Expression t2){
@@ -9411,6 +9485,7 @@ Expression bitAndType(Expression t1, Expression t2){
 }
 
 Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
+	static if(language==silq) t1=unfoldTypeVariables(t1),t2=unfoldTypeVariables(t2); // (the structure of the values of type variables, e.g., `!ℕ[]` for `A` after `A:=!ℕ[]`)
 	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
 	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
@@ -9477,7 +9552,8 @@ private Expression handleUnary(alias determineType)(string name,Expression e,ref
 	propErr(e1,e);
 	if(e.isSemError())
 		return e;
-	e.type=determineType(e1.type);
+	static if(language==silq) e.type=determineType(unfoldTypeVariables(e1.type)); // (the structure of the value of a type variable, e.g., `!ℤmod[5]` for `V` after `V:=!ℤmod[5]`)
+	else e.type=determineType(e1.type);
 	if(!e.type){
 		context.sc.error(format("incompatible type `%s` for `%s`",e1.type,name),e.loc);
 		e.setSemError();
@@ -9587,7 +9663,8 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 		assert(e.isSemError());
 		return e;
 	}
-	e.type = determineType(e1.type, e2.type);
+	static if(language==silq) e.type = determineType(unfoldTypeVariables(e1.type), unfoldTypeVariables(e2.type)); // (as for unary operators)
+	else e.type = determineType(e1.type, e2.type);
 	if(!e.type){
 		sc.error(format("incompatible types `%s` and `%s` for %s",e1.type,e2.type,name),e.loc);
 		explainIncompatibleOperands(sc,e1,e2,name);
@@ -9769,7 +9846,8 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	propErr(ce.e2,ce);
 	if(ce.isSemError())
 		return ce;
-	ce.type=concatType(ce.e1.type,ce.e2.type);
+	static if(language==silq) ce.type=concatType(unfoldTypeVariables(ce.e1.type),unfoldTypeVariables(ce.e2.type)); // (as for other operators)
+	else ce.type=concatType(ce.e1.type,ce.e2.type);
 	if(!ce.type){
 		sc.error(format("incompatible types `%s` and `%s` for ~",ce.e1.type,ce.e2.type),ce.loc);
 		ce.setSemError();
@@ -10255,6 +10333,16 @@ Expression expressionSemantic(Expression expr,ExpSemContext context){
 }
 
 
+static if(language==silq)
+bool unavailableAt(Declaration decl,Scope sc){ // (a version of a local variable that is consumed, updated or out of scope at `sc`, e.g., the parameter `n` after `m:=move(n)`, which the value of a type variable can mention, see `typeVariableValueUnavailable`)
+	auto vd=cast(VarDecl)decl;
+	if(!vd||vd.isToplevelDeclaration()) return false;
+	for(Scope c=sc;c;c=c.parentScope()){
+		if(auto cur=c.rnsymtab.get(vd.getId,null)) return cast(DeadDecl)cur||cur.canonicalSource !is vd.canonicalSource;
+		if(c is vd.scope_) return true;
+	}
+	return true;
+}
 bool isBodyLocal(FunctionDef fd,Declaration decl){ // (a variable of the body of `fd`, which the type of `fd` cannot mention)
 	auto bsc=fd.body_?fd.body_.blscope_:null;
 	if(!bsc||cast(DatDecl)decl) return false;
@@ -10754,7 +10842,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			//imported!"util.io".writeln("NOT INFERRING: ",fd);
 			return false;
 		}
-		static if(language==silq) if(type) if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions)
+		static if(language==silq) if(type) if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
 			if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
 		if(!fd.ret){
 			fd.ret=type;
@@ -10884,10 +10972,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 Expression typeSemantic(Expression expr, Scope sc, bool allowQNumeric=false)in{assert(!!expr&&!!sc);}do{
 	if(expr.isSemError()) return null;
 	assert(expr.isSemCompleted());
-	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))){
-		auto e=expr.eval(),r=unwrap(e);
-		return isType(r)||allowQNumeric&&isQNumeric(r)?r:e; // (not a value of type `⊥`, e.g., `0` in `0 coerce ⊥`)
-	}
+	if(isType(expr)||(allowQNumeric&&isQNumeric(expr))) return expr.eval();
 	if(!isType(expr)&&!(allowQNumeric&&isQNumeric(expr))){
 		if(!allowQNumeric&&isQNumeric(expr)){
 			sc.error(format("quantum `%s` cannot be used as a type",expr),expr.loc);

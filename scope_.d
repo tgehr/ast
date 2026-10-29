@@ -2110,7 +2110,12 @@ abstract class Scope{
 				foreach(id;type.freeIdentifiers) if(id.meaning&&id.meaning in goneConstLocals) return id.meaning;
 			return null;
 		}
+		Expression unfoldBranchTypeVariables(Expression type){ // (the type variables of the branches stand for their values, which their merged versions do not keep, see `typeVariableValue`)
+			static if(language==silq) if(type) return unfoldTypeVariables(type,(Declaration d)=>d.scope_&&scopes.any!(sc=>d.scope_.isNestedIn(sc)));
+			return type;
+		}
 		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
+			type=unfoldBranchTypeVariables(type);
 			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
 		}
 		foreach(psym;rnsymtab.dup){
@@ -2182,9 +2187,18 @@ abstract class Scope{
 						auto ot=typeForDecl(osym),st=typeForDecl(sym);
 						if(!ot) ot=st;
 						if(!st) st=ot;
+						static if(language==silq) auto uot=unfoldBranchTypeVariables(ot),ust=unfoldBranchTypeVariables(st);
 						if(mergeTypeSubst.length){ // compare types after, not before, merging the variables they mention
 							if(ot) ot=ot.substitute(mergeTypeSubst);
 							if(st) st=st.substitute(mergeTypeSubst);
+							static if(language==silq){
+								if(uot) uot=uot.substitute(mergeTypeSubst);
+								if(ust) ust=ust.substitute(mergeTypeSubst);
+							}
+						}
+						static if(language==silq) if(uot&&ust&&(uot !is ot||ust !is st)&&joinTypes(uot,ust)){ // (the type variables of the branches stand for their values if that joins the types, e.g., `x:w` after `w:=𝔹^3` in one branch and `w:=𝔹^n` in the other, whose merged version does not keep a value, see `typeVariableValue`; otherwise, the merged version keeps them apart, e.g., `a:T` after `T:=!𝔹` in one branch and `T:=!ℚ` in the other)
+							ot=uot;
+							st=ust;
 						}
 						bool trivialSplit=sym.canonicalSource is osym.canonicalSource;
 						if(ot&&st){
@@ -2526,8 +2540,14 @@ abstract class Scope{
 				if(auto bs=cast(BlockScope)s) if(bs.isLetBody){ letScope=bs; break; }
 			SetX!Declaration inTypes; // (types of parameters cannot depend on other parameters)
 			if(separateConstParams) foreach(id,decl;rnsymtab)
-				if(auto type=typeForDecl(decl))
+				if(auto type=typeForDecl(decl)){
 					foreach(tid;type.freeIdentifiers) if(tid.meaning) inTypes.insert(tid.meaning.canonicalSource);
+					static if(language==silq){ // (nor on the variables that the values of type variables mention, e.g., `n` for `x:t` after `t:=𝔹^n`, or for `t` itself, see `unfoldTypeVariables`)
+						import ast.semantic_: typeVariableDependency;
+						foreach(e;only(unfoldTypeVariables(type),typeVariableDependency(decl)))
+							if(e) foreach(tid;e.freeIdentifiers) if(tid.meaning) inTypes.insert(tid.meaning.canonicalSource);
+					}
+				}
 			foreach(id,decl;rnsymtab){
 				auto type=typeForDecl(decl);
 				if(!type) continue;
@@ -3274,6 +3294,15 @@ class CapturingScope(T): NestedScope{
 		foreach(free;type.freeVars){
 			if(free.meaning)
 				addCapture(free,free.meaning,Lookup.constant,origin);
+		}
+		static if(language==silq){ // (and the variables that the values of type variables mention, through which the closure can look, see `unfoldTypeVariables`)
+			import ast.semantic_:typeVariableDependency,typeVariableValueUnavailable;
+			auto utype=unfoldTypeVariables(type);
+			auto value=typeVariableValueUnavailable(meaning,origin)?null:typeVariableDependency(meaning);
+			foreach(e;only(utype !is type?utype:null,value))
+				if(e) foreach(free;e.freeVars)
+					if(free.meaning)
+						addCapture(free,free.meaning,Lookup.constant,origin);
 		}
 		parent.recordCapturers(type);
 		import ast.semantic_:typeConstBlocked;

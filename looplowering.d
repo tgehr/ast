@@ -4964,10 +4964,12 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				}else{
 					auto v=freshName();
 					Expression tupleOf(Expression[] es){ return es.length==1?es[0]:at(new TupleExp(es)); }
+					Expression unfolded(Expression t){ return unfoldTypeVariables(t,(Declaration d)=>d.name&&d.name.id in changed); } // (the type variables of the body stand for their values, which mention the definitions that are defined again, e.g., `n` in `x:a` after `a:=𝔹^n`)
+					bool mentions(Expression t,scope bool delegate(Identifier) dg){ return t.freeIdentifiers.any!dg||unfolded(t).freeIdentifiers.any!dg; }
 					// (the branch consumes the definitions, which are defined again after it: a definition precedes those its type mentions)
-					typeof(exitLocals) packed,rest=exitLocals.dup;
+					typeof(exitLocals) packed,rest=exitLocals.filter!(e=>!e[1]||!isTypeTy(e[1])).array; // (but not the type variables, which keep their values, e.g., `a` for `x:a`, see `typeVariableValue`)
 					while(rest.length){
-						auto i=rest.countUntil!(x=>!rest.any!(y=>y[1]&&y[1].freeIdentifiers.any!(fv=>fv.id==x[0].id)));
+						auto i=rest.countUntil!(x=>!rest.any!(y=>y[1]&&mentions(y[1],(Identifier fv)=>fv.id==x[0].id)));
 						if(i<0) i=0;
 						packed~=rest[i];
 						rest=rest[0..i]~rest[i+1..$];
@@ -4980,7 +4982,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					}
 					auto vals=packed.map!pack.array;
 					typeof(strongerExits) weakened; // (parameters whose types mention the definitions that the exit branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
-					foreach(s;strongerExits) if(s[1].freeIdentifiers.any!(fv=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))) weakened~=s;
+					foreach(s;strongerExits) if(mentions(s[1],(Identifier fv)=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))) weakened~=s;
 					Expression annotated(Id name,Expression type,TypeAnnotationType kind){
 						auto use=mk(name);
 						use.moved=true;
@@ -4997,10 +4999,10 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						}
 						auto tmp=freshName();
 						lhs~=mk(tmp);
-						coercions~=at(new DefineExp(e[0].copy(cargsDefault),at(new TypeAnnotationExp(mk(tmp),e[1].copy(cargsDefault),TypeAnnotationType.coercion))));
+						coercions~=at(new DefineExp(e[0].copy(cargsDefault),at(new TypeAnnotationExp(mk(tmp),unfolded(e[1]).copy(cargsDefault),TypeAnnotationType.coercion))));
 					}
 					nbdy.s~=at(new DefineExp(at(new VectorExp([tupleOf(lhs)])),mk(v)));
-					nbdy.s~=coercions~weakened.map!(s=>annotated(s[0],s[1],TypeAnnotationType.coercion)).array~exit; // (as before the exit branch, e.g., for a continuation)
+					nbdy.s~=coercions~weakened.map!(s=>annotated(s[0],unfolded(s[1]),TypeAnnotationType.coercion)).array~exit; // (as before the exit branch, e.g., for a continuation)
 				}
 			}
 			if(continuation) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
@@ -5216,12 +5218,17 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				}
 			}
 		}
-		stmts~=inDependencyOrder(constCoercions~exitCoercions,constCoercionTypes~exitCoercionTypes);
+		Expression[] early,earlyValues,late; // (the replays that the types of the coercions mention come before them, e.g., `a` in `x:=x coerce a;` after `a:=𝔹^n`)
 		static if(isDoWhile) foreach(r;replays){
 			auto rdef=new DefineExp(new Identifier(r[0]),r[1].copy(cargsDefault));
 			rdef.loc=rdef.e1.loc=loop.loc;
-			stmts~=rdef;
+			if((constCoercionTypes~exitCoercionTypes).any!(t=>t.freeIdentifiers.any!(id=>id.id==r[0]||id.meaning&&id.meaning.name&&id.meaning.name.id==r[0]))){
+				early~=rdef;
+				earlyValues~=r[1];
+			}else late~=rdef;
 		}
+		stmts~=inDependencyOrder(constCoercions~exitCoercions~early,constCoercionTypes~exitCoercionTypes~earlyValues);
+		stmts~=late;
 		stmts~=forgetFunction();
 	}
 	if(continuation){
@@ -5435,6 +5442,7 @@ Expression weakenedExitType(Expression t,ref SetX!Id changed){
 			if(id.id in changed||id.meaning&&id.meaning.name&&id.meaning.name.id in changed) return true;
 		return false;
 	}
+	t=unfoldTypeVariables(t,(Declaration d)=>d.name&&d.name.id in changed); // (through the type variables of the body, e.g., `x:a` after `a:=𝔹^n`)
 	Expression rec(Expression t){
 		if(!mentionsChanged(t)) return t;
 		if(auto ft=isFixedIntTy(t)) return t.isClassical()?(ft.isSigned?ℤt(true):ℕt(true)):null;
