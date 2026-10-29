@@ -5469,7 +5469,7 @@ struct LoopContinuation{
 		auto e=block[i];
 		if(!astopt.removeLoops||!isLoopStatement(e)) return false;
 		if(i+1>=block.length) return false;
-		bool returns=endsWithReturn(block[$-1])&&containsReturn(e);
+		bool returns=block[i+1..$].any!endsWithReturn&&containsReturn(e);
 		// the code after an infinite loop is unreachable; it is dropped by the lowering (only the type of a `for` loop is never empty)
 		if(!returns&&cast(ForExp)e) return false;
 		stms=block[i+1..$];
@@ -6147,18 +6147,29 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	tail=[ret];
 	return fd;
 }
-// syntactic check whether a statement always ends in a `return`
+// syntactic check whether a statement always ends in a `return` (or does not complete otherwise, e.g., `assert(false)`)
 bool endsWithReturn(Expression e){
 	if(cast(ReturnExp)e) return true;
-	if(auto ae=cast(AssertExp)e){
-		if(ae.e.type) return isFalse(ae.e);
-		if(auto id=cast(Identifier)ae.e) return id.id==Id.s!"false"; // not yet analyzed
-		if(auto le=cast(LiteralExp)ae.e) return le.lit.type==Tok!"0"&&le.lit.str=="0";
-		return false;
-	}
-	if(auto ce=cast(CompoundExp)e) return ce.s.length&&endsWithReturn(ce.s[$-1]);
+	if(auto ae=cast(AssertExp)e) return literalIs!(v=>v==0)(ae.e);
+	if(auto ce=cast(CompoundExp)e) return ce.s.any!endsWithReturn; // (the statements after the one that does not complete are not reached)
 	if(auto ite=cast(IteExp)e) return ite.othw&&endsWithReturn(ite.then)&&endsWithReturn(ite.othw);
+	// (loops that only exit by a `return`, as for `definitelyReturns`, e.g., `while true { … }`)
+	if(auto we=cast(WhileExp)e) return literalIs!(v=>v!=0)(we.cond);
+	if(auto re=cast(RepeatExp)e) return literalIs!(v=>v>0)(re.num)&&endsWithReturn(re.bdy);
+	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return endsWithReturn(dw.bdy)||literalIs!(v=>v!=0)(dw.cond);
 	return false;
+}
+// (also if `e` is not yet analyzed, e.g., `false`)
+private bool literalIs(alias pred)(Expression e){
+	if(!e.type){
+		if(auto id=cast(Identifier)e){
+			if(id.id==Id.s!"true") return pred(ℤ(1));
+			if(id.id==Id.s!"false") return pred(ℤ(0));
+		}
+		if(!cast(LiteralExp)e) return false;
+	}
+	auto v=e.asIntegerConstant();
+	return v&&pred(v.get());
 }
 
 // splices nested blocks used as statements (which are analyzed in the enclosing scope) into the enclosing block
