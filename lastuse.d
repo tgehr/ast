@@ -657,7 +657,12 @@ final class LastUse{
 				ndecl=decl.splitFrom;
 			ndecl=ssc.getSplit(ndecl);
 			//imported!"util.io".writeln("CHECKING SIBLINGS: ",ssc.forgottenVarsOnEntry," ",decl," ",ndecl," ",ssc.forgottenVarsOnEntry.canFind(ndecl)," ",ssc.forgottenVarsOnEntry.canFind(decl)," ",decl.scope_ is this," ",decl.splitFrom," ",decl.splitFrom&&decl.splitFrom.scope_ is nsc.parent);
-			if(!ssc.forgottenVarsOnEntry.canFind(ndecl)) return false;
+			if(ssc.forgottenVarsOnEntry.canFind(ndecl)) continue;
+			if(auto bs=cast(BlockScope)ssc) if(bs.isLoopBody&&bs.diverges){ // (a loop body that diverges without using the variable, which `closeUnreachable` only drops)
+				auto slu=ssc.lastUses.lastUses.get(ndecl,null);
+				if(slu&&slu.kind==Kind.lazySplit&&!slu.forwardTo&&!slu.use) continue;
+			}
+			return false;
 		}
 		return true;
 	}

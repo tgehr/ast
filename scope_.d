@@ -1587,8 +1587,40 @@ abstract class Scope{
 		allowMerge=false;
 		diverges=true;
 		if(!consumptionScope) consumptionScope=mergeScope;
-		foreach(_,d;rnsymtab.dup){
-			if(cast(DeadDecl)d) continue;
+		// (a variable is consumed before the variables that its dependency mentions: consuming a variable from outside of the
+		// branch splits it into the other branches, where the variables that are not split yet would lose their dependency on it)
+		Declaration[] decls;
+		size_t[const(void)*] index;
+		foreach(_,d;rnsymtab) if(!cast(DeadDecl)d){
+			index[cast(const(void)*)d]=decls.length;
+			decls~=d;
+		}
+		size_t[] mentioned(Declaration d){ // (the variables of the scope that the dependency of `d` mentions)
+			for(Scope sc=this;sc;sc=sc.parentScope()){
+				if(!sc.dependencyTracked(d)) continue;
+				auto dep=sc.dependencies.dependencies[d];
+				size_t[] r;
+				if(!dep.isTop) foreach(x;dep.dependencies) if(auto j=cast(const(void)*)x in index) if(decls[*j] !is d) r~=*j;
+				return r;
+			}
+			return null;
+		}
+		auto dependents=new size_t[](decls.length);
+		foreach(d;decls) foreach(j;mentioned(d)) dependents[j]++;
+		Declaration[] ordered;
+		auto done=new bool[](decls.length);
+		for(bool progress=true;progress;){
+			progress=false;
+			foreach(i,d;decls){
+				if(done[i]||dependents[i]) continue;
+				done[i]=true;
+				progress=true;
+				ordered~=d;
+				foreach(j;mentioned(d)) dependents[j]--;
+			}
+		}
+		foreach(i,d;decls) if(!done[i]) ordered~=d;
+		foreach(d;ordered){
 			if(d.isLinear()&&(!consumptionScope||!d.scope_||d.scope_.isNestedIn(consumptionScope))||d.scope_ is this){ // (variables of scopes that enclose the merge are not split into the branch, e.g., through the scope of a `let` expression)
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
@@ -1772,6 +1804,14 @@ abstract class Scope{
 		}
 	}
 	Identifier consumingUse;
+	final void continueDependencies(Declaration decl,Declaration ndecl){ // (`ndecl` has the value of `decl`, which it replaces)
+		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
+		consumedDepLog[decl]=getDependency(decl).dup;
+		dependencies.dependencies.remove(decl);
+		foreach(k,ref v;dependencies.dependencies) if(k !is ndecl) v.replace(decl,ndecl);
+		controlDependency.replace(decl,ndecl);
+		foreach(ref tt;trackedTemporaries) tt.dep.replace(decl,ndecl);
+	}
 	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
@@ -2111,7 +2151,8 @@ abstract class Scope{
 				auto dep=getDependency(sym);
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
-				pushDependencies(sym,false);
+				if(scopes.length==1) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`)
+				else pushDependencies(sym,false);
 				if(sym.isSemError())
 					var.setSemForceError();
 				sym=var;
@@ -2932,6 +2973,7 @@ class WithTransTrial{ // silq: token identifying one activation of the trial ana
 
 class NestedScope: Scope{
 	Scope parent;
+	private bool splitForDivergingSibling=false; // (a sibling that diverges consumes a variable from outside, see `closeUnreachable`: the variables of this scope keep depending on its split here, as merges ignore the sibling)
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){
 		this.parent=parent;
@@ -2971,7 +3013,7 @@ class NestedScope: Scope{
 			result=ndecl;
 			if(type){
 				symtabRemove(odecl);
-				if(dependencyTracked(odecl)){
+				if(dependencyTracked(odecl)&&!splitForDivergingSibling){
 					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
 					auto prevConsumingUse=consumingUse;
 					consumingUse=use;
@@ -3028,7 +3070,10 @@ class NestedScope: Scope{
 						}
 						continue;
 					}
-					if(auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting)){
+					sc.splitForDivergingSibling=diverges;
+					auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting);
+					sc.splitForDivergingSibling=false;
+					if(cdecl){
 						if(parent.getFunction() is sc.getFunction()){
 							if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
 								sc.removeDependency(odecl);

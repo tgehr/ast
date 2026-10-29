@@ -1483,6 +1483,10 @@ class UnaryExp(TokenType op): AUnaryExp{
 				if(auto v=ne.asIntegerConstant()){
 					return LiteralExp.makeInteger(v.get());
 				}
+			}else static if(op==Tok!"¬"){
+				if(type.isClassical()) if(auto v=ne.asIntegerConstant()){
+					return LiteralExp.makeBoolean(v.get()==0);
+				}
 			}
 		}
 		if(ne is e) return this;
@@ -2181,7 +2185,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 			if(auto tpl2=cast(TupleExp)e2){ ok2=true; es2=tpl2.e; }
 			if(auto vec2=cast(VectorExp)e2){ ok2=true; es2=vec2.e; }
 			if(ok1 && ok2) return new TupleExp(es1 ~ es2);
-		} else static if(util.among(op, Tok!"+", Tok!"-", Tok!"sub", Tok!"·", Tok!"^", Tok!"=", Tok!"≠")){
+		} else static if(util.among(op, Tok!"+", Tok!"-", Tok!"sub", Tok!"·", Tok!"^", Tok!"=", Tok!"≠", Tok!"<", Tok!"≤", Tok!">", Tok!"≥", Tok!"div", Tok!"%", Tok!"&", Tok!"|", Tok!"⊕", Tok!"∧", Tok!"∨", Tok!"⊻", Tok!"&&", Tok!"||")){
 			static if(util.among(op, Tok!"+", Tok!"-", Tok!"·", Tok!"=", Tok!"≠")) if(type && (isFixedIntTy(e1.type) || isFixedIntTy(e2.type))) {
 				if(auto v1=classicalIntConstant(ne1)) if(auto v2=classicalIntConstant(ne2)){
 					static if(op==Tok!"="||op==Tok!"≠"){

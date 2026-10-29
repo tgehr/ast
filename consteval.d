@@ -377,6 +377,45 @@ Expression evalNumericSum(TokenType op)(Location loc, Expression ne1, Expression
 	return null;
 }
 
+Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"<" || op == Tok!"≤" || op == Tok!">" || op == Tok!"≥") {
+	if(v1 && v2) {
+		static if(op == Tok!"<") return make(v1.get() < v2.get());
+		else static if(op == Tok!"≤") return make(v1.get() <= v2.get());
+		else static if(op == Tok!">") return make(v1.get() > v2.get());
+		else return make(v1.get() >= v2.get());
+	}
+	if(ne1.isDeterministic() && ne1 == ne2) {
+		return make(op == Tok!"≤" || op == Tok!"≥");
+	}
+	return null;
+}
+
+Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"div" || op == Tok!"%" || op == Tok!"&" || op == Tok!"|" || op == Tok!"⊕") {
+	if(!v1 || !v2) return null;
+	static if(op == Tok!"div" || op == Tok!"%") if(v2.get() == 0) return null; // (division by zero fails at run time)
+	static if(op == Tok!"div") return make(floordiv(v1.get(), v2.get()));
+	else static if(op == Tok!"%") return make(floormod(v1.get(), v2.get()));
+	else static if(op == Tok!"&") return make(v1.get() & v2.get());
+	else static if(op == Tok!"|") return make(v1.get() | v2.get());
+	else return make(v1.get() ^ v2.get());
+}
+
+Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"∧" || op == Tok!"∨" || op == Tok!"⊻" || op == Tok!"&&" || op == Tok!"||") {
+	static if(op == Tok!"&&" || op == Tok!"||") {
+		if(v1) { // (the right operand is only evaluated if needed)
+			static if(op == Tok!"&&") return v1.get() != 0 ? ne2 : make(0);
+			else return v1.get() != 0 ? make(1) : ne2;
+		}
+		return null;
+	} else {
+		if(!v1 || !v2) return null;
+		bool b1 = v1.get() != 0, b2 = v2.get() != 0;
+		static if(op == Tok!"∧") return make(b1 && b2);
+		else static if(op == Tok!"∨") return make(b1 || b2);
+		else return make(b1 != b2);
+	}
+}
+
 Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!ℤ v1, Expression ne2, Maybe!ℤ v2) if(op == Tok!"=" || op == Tok!"≠") {
 	if(v1 && v2) {
 		return make((v1.get() == v2.get()) ^ (op != Tok!"="));

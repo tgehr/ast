@@ -1788,10 +1788,28 @@ Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,Bloc
 	}
 	return result;
 }
-Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates,BlockScope loopScope=null,BlockScope forgetScope=null){
+// anchor the variables that the discarded analysis of a lowered loop uses but the lowered code does not (`restoreSnapshot` pins their last uses)
+Declaration[] discardedLoopForgetCandidates(Scope sc){
+	alias LastUse=imported!"ast.lastuse".LastUse;
+	Declaration[] result;
+	foreach(_,decl;sc.rnsymtab){
+		if(cast(DeadDecl)decl||decl.isSemError()) continue;
+		if(decl.isToplevelDeclaration()) continue;
+		auto lastUse=sc.lastUses.lastUses.get(decl,null);
+		if(!lastUse||!lastUse.discarded||lastUse.kind!=LastUse.Kind.constPinned) continue;
+		if(!sc.canSplit(decl)) continue;
+		if(!sc.dependencyTracked(decl)) continue;
+		if(sc.getDependency(decl).isTop) continue;
+		result~=decl;
+	}
+	return result;
+}
+Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates,BlockScope loopScope=null,BlockScope forgetScope=null,bool lowered=false){
 	CompoundExp wrapper=null;
 	void anchor(Declaration decl){
-		if(sc.rnsymtab.get(decl.getId,null) !is decl) return;
+		auto cur=sc.rnsymtab.get(decl.getId,null);
+		if(!cur||cur !is decl&&!cur.isDerivedFrom(decl)) return;
+		decl=cur; // (e.g., the version merged from the path that skips a loop whose body diverges)
 		if(decl.isSemError()) return;
 		if(sc.lastUses.canForget(decl,true,false)) return;
 		auto use=new Identifier(decl.getName);
@@ -1815,6 +1833,7 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 	}
 	foreach(decl;candidates) anchor(decl);
 	foreach(decl;pinnedLoopMergeForgetCandidates(sc,loopScope,forgetScope)) anchor(decl);
+	if(lowered) foreach(decl;discardedLoopForgetCandidates(sc)) anchor(decl);
 	return wrapper?wrapper:loopExp;
 }
 // Common tail for one iteration of a loop (for/while/repeat).
@@ -2098,7 +2117,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	if(fe.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(fe,state,sc,flags);
 	if(result.isSemCompleted())
-		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is fe);
 	return result;
 }
 
@@ -2207,7 +2226,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	if(we.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(we,state,sc,flags);
 	if(result.isSemCompleted())
-		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is we);
 	return result;
 }
 
@@ -2255,7 +2274,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	if(re.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(re,state,sc,flags);
 	if(result.isSemCompleted())
-		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is re);
 	return result;
 }
 
@@ -2393,7 +2412,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	if(dw.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(dw,state,sc,flags);
 	if(result.isSemCompleted())
-		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope);
+		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is dw);
 	return result;
 }
 
@@ -10038,6 +10057,7 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	auto captureAnnotation=fa.captureAnnotation;
 	if(!captureAnnotation) captureAnnotation=CaptureAnnotation.const_;
 	fa.type=typeOfProductTy(fa.isConst,fa.names,fa.dom,fa.cod,fa.isSquare,fa.isTuple,captureAnnotation,fa.annotation,fa.isClassical_);
+	static if(language==silq) if(!context.inType&&!fa.isSemError()) sc.pinMentions(fa); // (the value of the type reads the variables that its parameter types and its result type mention)
 	return fa;
 }
 
