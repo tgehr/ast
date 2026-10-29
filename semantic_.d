@@ -3248,11 +3248,24 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				if(auto id=getIdFromIndex(idx)){
 					if(auto nt=updatedType(idx,context.type)){
 						if(auto vd=cast(VarDecl)id.meaning){
-							if(nt.isClassical) sc.removeDependency(vd);
-							vd.vtype=nt; // TODO: introduce new declarations to make types match in identifiers?
+							if(vd.vtype&&!isEqual(vd.vtype,nt,null)&&sc.rnsymtab.get(vd.getId,null) is vd&&sc.lastUses.get(vd,true)){ // (a new version of the aggregate with the type after the write, e.g., `x[0]:=H(x[0])` for `x:!𝔹×!𝔹`)
+								if(auto meaning=sc.consume(vd,id)){
+									auto dep=getDependency(id,sc);
+									auto var=addVar(meaning.name.id,nt,context.initializer?context.initializer.loc:idx.loc,sc);
+									sc.deriveVersion(meaning,var);
+									if(nt.isClassical) sc.addDefaultDependency(var);
+									else sc.addDependency(var,dep);
+									sc.declProps.moveComponentReplacements(meaning,var);
+									sc.lastUses.definition(var,idx); // (the enclosing statement defines it again, see `recordArrayDefinitions`)
+									id.meaning=var;
+									propErr(var,id);
+								}
+							}else{
+								if(nt.isClassical) sc.removeDependency(vd);
+								vd.vtype=nt;
+								if(nt.isClassical) sc.addDefaultDependency(vd);
+							}
 							id.type=id.typeFromMeaning;
-							if(nt.isClassical) sc.addDefaultDependency(vd);
-							//context.sc.updateType(vd);
 							void updateIndexTypes(IndexExp idx){
 								if(auto nidx=cast(IndexExp)idx.e)
 									updateIndexTypes(nidx);
@@ -3359,11 +3372,14 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 		e=defineLhsSemantic!isPresemantic(e,context.nest(context.constResult,ttype,ninit));
 		propErr(e,tpl);
 	}
-	static if(!isPresemantic) static if(language==silq) foreach(e;tpl.e){ // (a later component can update the type of the aggregate of an earlier one, e.g., `(x[3],x[k]):=(x[k],x[3])` with `x:!𝔹×!ℕ×!ℕ×!ℕ`, which the second one makes `!ℕ^4`)
+	static if(!isPresemantic) static if(language==silq) foreach(e;tpl.e){ // (a later component can make a new version of the aggregate of an earlier one, e.g., `(x[3],x[k]):=(x[k],x[3])` with `x:!𝔹×!ℕ×!ℕ×!ℕ`, which the second one makes `!ℕ^4`: the earlier one also writes that version)
 		auto idx=cast(IndexExp)e;
 		if(!idx||!idx.byRef||idx.isSemError()) continue;
 		auto id=getIdFromIndex(idx);
-		if(!id||!id.meaning||id.type==typeForDecl(id.meaning)) continue;
+		if(!id||!id.meaning) continue;
+		auto cur=context.sc.rnsymtab.get(id.meaning.getId,null);
+		if(!cur||cur is id.meaning||cast(DeadDecl)cur) continue;
+		id.meaning=cur;
 		id.type=id.typeFromMeaning;
 		void updateIndexTypes(IndexExp idx){
 			if(auto nidx=cast(IndexExp)idx.e) updateIndexTypes(nidx);

@@ -720,7 +720,7 @@ class Checker {
 		auto sube = cast(ast_exp.Identifier) e.e;
 		assert(!!sube, format("TODO: LHS index expression [[ %s ]] on %s bottom not identifier", e, e.loc));
 		auto decl = sube.meaning;
-		// assert(sube.type == typeForDecl(decl), format("LHS indexed identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, sube.type, typeForDecl(decl))); // (can mismatch due to multiple updates)
+		assert(sube.type == typeForDecl(decl), format("LHS indexed identifier type mismatch: [[ %s ]] on %s; type %s != decl type %s", e, e.loc, sube.type, typeForDecl(decl)));
 		if(decl.getId !in vars || vars[decl.getId] is null) {
 			defineVar(decl, "LHS", e);
 		} else {
