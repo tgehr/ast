@@ -7062,6 +7062,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	static if(isRhs){
 		ce.e=expressionSemantic(ce.e,context.nestCalled);
 		static if(language==silq) if(isBuiltInCall(ce)==BuiltIn.move) return moveSemantic(ce,context);
+		static if(language==silq) if(!context.inType&&!cast(Identifier)ce.e) holdValue(ce.e,context.sc); // (while the arguments are evaluated)
 	}else static if(!isPresemantic){
 		ce.e=expressionSemantic(ce.e,context.expSem.nestCalled);
 	}else{
@@ -7266,7 +7267,16 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}
 				}
 				if(!tpl.isSemError()){
-					static if(isRhs&&language==silq) auto callArgSave=sc.saveTypeConstBlocks();
+					static if(isRhs&&language==silq){
+						auto callArgSave=sc.saveTypeConstBlocks();
+						Declaration[] heldArgBlocks; // (see `holdValue`)
+						ExpSemContext[] argContexts;
+						bool acceptsWeakened(size_t j,Expression weak){ // (an argument whose parameter type is not inferred from it, e.g., `𝔹[]` for `x:𝔹^n` in `foo(x,move(n))` with `foo(xs:𝔹[],t:!ℕ)`, see `weakenHeld`)
+							if(j>=ft.nargs||tpl.e.length!=ft.nargs) return false;
+							auto pty=ft.argTy(j);
+							return !pty.freeIdentifiers.any!(id=>!id.meaning)&&!pty.hasAnyFreeVar(ft.names)&&isSubtype(weak,pty);
+						}
+					}
 					foreach(i,ref exp;tpl.e){
 						auto realIsConst=(ft.nargs==tpl.e.length?ft.isConst[i]:defaultIsConst);
 						static if(isRhs&&language==silq){
@@ -7285,7 +7295,9 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 									foreach(j;0..min(i,ft.nargs)){ // (the number of arguments can be wrong)
 										if(mentions(ft.argTy(j))) return true;
 										if(ft.argTy(j).freeIdentifiers.any!(id=>!id.meaning)&&mentions(tpl.e[j].type)) return true; // (a parameter that the call infers from the type of the argument, e.g., `k` for `foo(vector(n,0),…)` with `foo[k:!ℕ](xs:𝔹^k,t:!ℕ)`)
+										if(j<ft.names.length&&ft.cod.hasFreeVar(ft.names[j])&&tpl.e[j].freeVars.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)) return true; // (the return type depends on the argument, e.g., `m` for `vector(m,…)`, see `checkArg`)
 									}
+									if(heldArgBlocks.canFind!(d=>d is decl)) return true;
 									if(mentions(fun.type)) return true;
 									if(mentions(ft.cod)) return true;
 									return false;
@@ -7304,8 +7316,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						}
 						exp=argSemantic(exp,ncontext);
 						static if(isRhs) checkArg(i,exp);
+						static if(isRhs&&language==silq){
+							argContexts~=ncontext;
+							if(!inType&&i+1<tpl.e.length) heldArgBlocks~=holdValue(exp,sc,(Expression weak)=>acceptsWeakened(i,weak)); // (the blocks of its subexpressions are filtered above)
+						}
 						propErr(exp,tpl);
 					}
+					static if(isRhs&&language==silq) if(!inType) foreach(j,ref exp;tpl.e) exp=weakenHeld(exp,argContexts[j],(Expression weak)=>acceptsWeakened(j,weak));
 				}
 				if(!tpl.isSemError()){
 					if(ft.nargs!=tpl.length){
@@ -8634,7 +8651,12 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		}
 	}
 	auto index=idx.a;
+	static if(language==silq){
+		auto holdAggregate=!inType&&!idx.isSemError()&&!getIdFromIndex(idx); // (e.g., a vector literal, see `holdValue`)
+		if(holdAggregate) holdValue(idx.e,sc);
+	}
 	idx.a=expressionSemantic(idx.a,context.nestConst);
+	static if(language==silq) if(holdAggregate) idx.e=weakenHeld(idx.e,composite?context.nestConst:context.nestIndexed);
 	propErr(idx.a,idx);
 	explainSliceSyntax(idx,index,sc); // e.g., `x[1:3]` instead of `x[1..3]`
 	if(idx.isSemError())
@@ -8801,10 +8823,12 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	auto sc=context.sc;
 	sl.e=expressionSemantic(sl.e,context.nestConst);
 	propErr(sl.e,sl);
+	static if(language==silq) if(!context.inType) holdValue(sl.e,sc);
 	sl.l=expressionSemantic(sl.l,context.nestConst);
 	propErr(sl.l,sl);
 	sl.r=expressionSemantic(sl.r,context.nestConst);
 	propErr(sl.r,sl);
+	static if(language==silq) if(!context.inType) sl.e=weakenHeld(sl.e,context.nestConst);
 	if(sl.isSemError())
 		return sl;
 	bool boundsInType(){ // (the type of the slice can mention the bounds only if they do not consume variables)
@@ -8959,10 +8983,12 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 }
 
 Expression expressionSemanticImpl(TupleExp tpl,ExpSemContext context){
-	foreach(ref exp;tpl.e){
+	foreach(i,ref exp;tpl.e){
 		exp=expressionSemantic(exp,context);
 		propErr(exp,tpl);
+		static if(language==silq) if(!context.inType&&i+1<tpl.e.length) holdValue(exp,context.sc);
 	}
+	static if(language==silq) if(!context.inType) foreach(ref exp;tpl.e) exp=weakenHeld(exp,context);
 	if(!tpl.isSemError()){
 		tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
 	}
@@ -8975,6 +9001,7 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 	foreach(i,ref exp;vec.e){
 		exp=expressionSemantic(exp,context);
 		propErr(exp,vec);
+		static if(language==silq) if(!context.inType&&i+1<vec.e.length) holdValue(exp,sc);
 		auto nt = joinTypes(t, exp.type);
 		if(!nt&&tok){
 			if(exp.type){
@@ -8993,6 +9020,20 @@ Expression expressionSemanticImpl(VectorExp vec,ExpSemContext context){
 			vec.setSemError();
 			tok=false;
 		}else t=nt;
+	}
+	static if(language==silq) if(!context.inType&&tok){
+		bool weakened=false;
+		foreach(ref exp;vec.e){
+			auto weak=weakenHeld(exp,context);
+			if(weak is exp) continue;
+			exp=weak;
+			weakened=true;
+		}
+		if(weakened){
+			Expression nt=bottom;
+			foreach(exp;vec.e) if(nt) nt=exp.type?joinTypes(nt,exp.type):null;
+			if(nt) t=nt;
+		}
 	}
 	if(vec.e.length && t){
 		if(vec.e[0].type) vec.type=vectorTy(t, vec.e.length);
@@ -9699,7 +9740,9 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			return expressionSemantic(r, context);
 		}
 	}
+	static if(language==silq) if(!context.inType) holdValue(e1,sc);
 	e2 = expressionSemantic(e2, context.nestConst);
+	static if(language==silq) if(!context.inType) e1=weakenHeld(e1,context.nestConst);
 	propErr(e2, e);
 	if(!e1.type || !e2.type) {
 		assert(e.isSemError());
@@ -9883,7 +9926,9 @@ Expression concatType(Expression t1,Expression t2){
 Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	ce.e1=expressionSemantic(ce.e1,context);
+	static if(language==silq) if(!context.inType) holdValue(ce.e1,sc);
 	ce.e2=expressionSemantic(ce.e2,context);
+	static if(language==silq) if(!context.inType) ce.e1=weakenHeld(ce.e1,context);
 	propErr(ce.e1,ce);
 	propErr(ce.e2,ce);
 	if(ce.isSemError())
@@ -10384,6 +10429,41 @@ bool unavailableAt(Declaration decl,Scope sc){ // (a version of a local variable
 		if(c is vd.scope_) return true;
 	}
 	return true;
+}
+static if(language==silq){
+private bool eliminableFrom(Expression type,Declaration decl,scope bool delegate(Expression) accepts){ // (see `eliminateVariables`)
+	auto weak=eliminateVariables(type,(Declaration d)=>d.canonicalSource is decl.canonicalSource);
+	return weak&&(!accepts||accepts(weak));
+}
+/// `held` is a value that is held while later expressions are evaluated: the variables that its type mentions are blocked, unless the type can be weakened to eliminate them when they are consumed (see `weakenHeld`), e.g., `n` in `(x,move(n))` for `x:uint[n]`, but not for `x:𝔹^n` (the type-const blocks of its subexpressions stay, e.g., for `(vector(n,0:𝔹),move(n))`); a borrowed quantum variable blocks all of them, as it cannot be forgotten before they are consumed (see `tryUncomputeTypeDependents`), e.g., `x` in `(x,move(n))[0]`
+Declaration[] holdValue(Expression held,Scope sc,scope bool delegate(Expression) accepts=null){
+	if(held.isSemError()||!held.type) return [];
+	auto hid=cast(Identifier)held;
+	auto borrowed=hid&&hid.constLookup&&!held.type.isClassical();
+	Declaration[] blocked;
+	foreach(id;held.type.freeIdentifiers){
+		auto decl=id.meaning;
+		if(!cast(VarDecl)decl||decl.isConst||decl.isToplevelDeclaration()||blocked.canFind!(d=>d is decl)) continue;
+		if(!borrowed&&eliminableFrom(held.type,decl,accepts)) continue;
+		typeConstBlockDecl(decl,held,sc);
+		blocked~=decl;
+	}
+	return blocked;
+}
+/// the value `held`, held while later expressions were evaluated, converted to a type that does not mention the variables that they consumed (see `holdValue`), e.g., `x:𝔹[]` in `(x,move(n))` for `x:𝔹^n`
+Expression weakenHeld(Expression held,ExpSemContext context,scope bool delegate(Expression) accepts=null){
+	auto sc=context.sc;
+	if(held.isSemError()||!held.type) return held;
+	bool consumed(Declaration decl){ // (a variable of an enclosing scope, not, e.g., one that the type of an instance of a generic function mentions, see `unavailableAt`)
+		for(auto c=sc;c;c=c.parentScope()) if(c is decl.scope_) return unavailableAt(decl,sc);
+		return false;
+	}
+	auto weak=eliminateVariables(held.type,&consumed);
+	if(!weak||weak is held.type||accepts&&!accepts(weak)) return held; // (the others are not consumed, see `holdValue`)
+	auto r=new TypeAnnotationExp(held,weak,TypeAnnotationType.annotation);
+	r.loc=held.loc;
+	return expressionSemantic(r,context);
+}
 }
 bool isBodyLocal(FunctionDef fd,Declaration decl){ // (a variable of the body of `fd`, which the type of `fd` cannot mention)
 	auto bsc=fd.body_?fd.body_.blscope_:null;
