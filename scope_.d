@@ -1931,10 +1931,8 @@ abstract class Scope{
 		if(dep.lostAt.sstate==SemState.started) dep.lostAt.setSemError(); // (being looked up: no additional note that the lookup caused the error)
 	}
 	final void explainUnforgettable(Declaration decl){
-		if(auto lu=lastUses.get(decl,true)){
-			while(lu.forwardTo) lu=lu.forwardTo;
-			if(lu.dep.isTop&&lu.dep.lostVar) return explainUnknownDependency(decl,lu.dep);
-		}
+		if(auto lu=lastUses.get(decl,true))
+			if(auto llu=LastUse.lostDependency(lu)) return explainUnknownDependency(decl,llu.dep);
 		if(dependencyTracked(decl)) explainUnknownDependency(decl,getDependency(decl));
 	}
 	static if(language==silq)

@@ -326,6 +326,14 @@ final class LastUse{
 				if(auto r=cancelUse(nlu)) return r;
 		return null;
 	}
+	static LastUse lostDependency(LastUse lu){ // (a last use, also of a version in a branch of a merge, whose dependency was lost through a known consumption, e.g., `x⊕=y` in `t:=x⊕c; if k==1 { u:=dup(t); x⊕=y; }`)
+		while(lu.forwardTo) lu=lu.forwardTo;
+		if(lu.dep.isTop&&lu.dep.lostVar) return lu;
+		foreach(nsc;lu.nestedScopes)
+			if(auto nlu=nsc.lastUses.get(versionIn(lu.decl,nsc),true))
+				if(auto r=lostDependency(nlu)) return r;
+		return null;
+	}
 	private bool forgottenOutside(){ // (by the same forget in an enclosing scope)
 		if(!use) return false;
 		for(auto lu=this;;){

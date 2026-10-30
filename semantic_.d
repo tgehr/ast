@@ -6467,6 +6467,9 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			}else if(!isReversible&&!(language==psi&&indexed)){ // (in PSI, indexed aggregates are updated, not forgotten)
 				assert(!!id.meaning&&!id.constLookup);
 				sc.lastUses.synthesizedForget(id.meaning,id,sc,be);
+			}else static if(language==silq) if(!indexed&&id.meaning&&!id.meaning.isSemError()){ // (the update consumes the old version, as a call that defines the new one from it does: e.g., the forgets in a branch of values that depend on it are checked against the consumption, see `updateDependenciesOnConsumption`)
+				assert(!id.constLookup&&!id.implicitDup);
+				sc.lastUses.consumption(id.meaning,id,sc);
 			}
 		}else if(auto idx=cast(IndexExp)lhs){
 			checkULhs(idx.e,true);
