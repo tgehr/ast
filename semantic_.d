@@ -7976,6 +7976,14 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 					d.setSemForceError();
 					continue;
 				}
+				if(auto crepls=bsc.versionComponentReplacements(d)){ // (the new version of an aggregate whose components are being replaced, e.g., `x` in `x[3]:=let { y:=X(x[3]); x[2]:=X(x[2]); } in y`)
+					sc.error(format("cannot consume aggregate `%s` while its components are being replaced",d.getName),d.loc);
+					if(crepls[0][1].location) sc.note("replaced component is here",crepls[0][1].location.loc);
+					sc.note("consumed at the end of `let` expression",le.loc);
+					d.setSemForceError();
+					le.setSemForceError();
+					continue;
+				}
 				if(!bsc.canForgetAppend(d)){
 					if(!d.isSemError()){
 						bool done=bsc.lastUses.betterUnforgettableError(d,bsc);
@@ -8117,6 +8125,16 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 			if(auto meaning=sc.lookup(id,false,true,Lookup.probing,&failures)){
 				/+if(!checkNonConstDecl!("forget","forgetting")(meaning,id.loc,sc)) // TODO: improve diagnostic
 				 return false;+/
+				static if(language==silq) if(auto crepls=sc.versionComponentReplacements(meaning)){ // (as for other uses of the aggregate, e.g., `forget(x)` within `x[i]:=let { … } in …`)
+					if(!meaning.isSemError()){
+						sc.error(format("cannot access aggregate `%s` while its components are being replaced",meaning.getName),id.loc);
+						auto blocking=sc.blockingComponentReplacement(meaning);
+						auto crepl=blocking?blocking:crepls[0][1];
+						if(crepl.location) sc.note("replaced component is here",crepl.location.loc);
+					}
+					id.setSemError();
+					return false;
+				}
 				if(!sc.checkConsumable(id,meaning)){
 					id.setSemError();
 					return false;
@@ -10843,8 +10861,16 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			//imported!"util.io".writeln("NOT INFERRING: ",fd);
 			return false;
 		}
-		static if(language==silq) if(type) if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
-			if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
+		static if(language==silq) if(type){
+			if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
+				if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
+			foreach(id;type.freeIdentifiers){ // (e.g., `n` in `uint[n]` after `move(n)`, as the parameters that a declared return type mentions are `const`)
+				if(!id.meaning||isBodyLocal(fd,id.meaning)||!unavailableAt(id.meaning,sc)) continue;
+				if(!ret.isSemError()) sc.error(format("type `%s` of return value depends on `%s`, which is no longer available here",type,id.name),ret.e.loc);
+				ret.setSemError();
+				break;
+			}
+		}
 		if(!fd.ret){
 			fd.ret=type;
 			setFtype(fd,true);

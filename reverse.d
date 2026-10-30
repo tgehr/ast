@@ -1434,7 +1434,25 @@ FunctionDef reverseFunction(FunctionDef fd)in{
 		argRet.loc=argExp.loc;
 		auto given=(retDef?definedNames(retDef):[])~(retDefReplaced?[rpname]:[]);
 		auto received=r.constIndices.filter!(i=>!!fd.params[i].name).map!(i=>fd.params[i].name.id).array; // (parameters of the reversed function as well)
-		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~reverseStatements(fbody_.s[0..$-1]~retForgets,retDef?[retDef]:[],bfd.fscope_,unchecked,noImplicitDup,true,false,given,received))~[argRet];
+		Id[] copied,excludedCopied; // (classical parameters that the function changes or returns: the reversal recomputes them on copies, as the variables of an enclosing block in `lowerLetDefine`)
+		static if(language==silq) foreach(i;r.constIndices) if(auto p=fd.params[i].name) if(!fd.params[i].isConst){
+			auto stmts=fbody_.s[0..$-1];
+			if(stmts.any!(s=>s.subexpressions.any!(x=>cast(DefineExp)x&&definedNames(x).canFind(p.id)&&!changedNames(x).canFind(p.id)))) continue; // (another variable of the same name)
+			if(given.canFind(p.id)||stmts.any!(s=>changedNames(s).canFind(p.id))) copied~=p.id;
+		}
+		auto nerrors=sc.handler.nerrors;
+		auto rev=new CompoundExp(reverseStatements(fbody_.s[0..$-1]~retForgets,retDef?[retDef]:[],bfd.fscope_,unchecked,noImplicitDup,true,false,given,received.filter!(n=>!copied.canFind(n)).array,copied,&excludedCopied));
+		rev.loc=fbody_.loc;
+		if(sc.handler.nerrors==nerrors) foreach(n;excludedCopied) if(!given.canFind(n)){ // (its changes are reversed in place, but the reversal does not receive the version at the end, e.g., if the classical part of a `with` statement reads a variable that the reversal changes in place, see `projection`)
+			auto changing=mergeCompound(fbody_.s[0..$-1]).map!uncomputed.joiner.filter!(s=>changedNames(s).canFind(n)&&classifyStatement(s)!=ComputationClass.classical).array; // (as in `reverseStatements`)
+			auto s=changing.find!(s=>!projection(s,bfd.fscope_));
+			if(s.empty) s=changing;
+			sc.error(format("reversal of change of classical parameter `%s` that is not returned not supported yet",n),s.empty?fd.loc:s.front.loc);
+			enforce(0,text("errors while reversing function"));
+		}
+		static if(language==silq) auto copies=copiesOf(rev,copied.map!(n=>cast(Id[2])[n,n]).array,excludedCopied,fd.loc,result.fscope_); // (an excluded one is reversed in place from the version that the reversal receives)
+		else Expression[] copies=[];
+		body_.s=mergeCompound((constUnpack?[constUnpack]:[])~copies~rev.s)~[argRet];
 	}
 	static if(__traits(hasMember,astopt,"dumpReverse")) if(astopt.dumpReverse){
 		import util.io:stderr;
@@ -1642,6 +1660,20 @@ Id[] definedNames(Expression e){
 	return definedIdentifiers(e).map!nameOf.array;
 }
 
+Expression[] transStatements(WithExp we){ // (also those of nested blocks, e.g., `a:=t` for the component `t` that an enclosing `with` statement borrows in `with { a:=v[0]; } do { … }`)
+	Expression[] r;
+	void rec(Expression[] ss){
+		foreach(s;ss){
+			auto ce=cast(CompoundExp)s;
+			static if(language==silq) if(ce&&ce.loweredFrom) ce=null;
+			if(ce) rec(ce.s);
+			else r~=s;
+		}
+	}
+	rec(we.trans.s);
+	return r;
+}
+
 Id[] changedNames(Expression e){ // (the classical variables that a statement changes, e.g., `t+=c` or `(y,t):=let { t+=c; … } in (z,t)`, other than the ones that it defines)
 	Id[] r,local;
 	void rec(Expression e){
@@ -1657,7 +1689,7 @@ Id[] changedNames(Expression e){ // (the classical variables that a statement ch
 		if(auto we=cast(WithExp)e){ // (the inverse restores what the transformation changes)
 			auto defined=definedNames(we.bdy);
 			foreach(n;chain(changedNames(we.bdy),defined)){
-				auto des=we.trans.s.map!(x=>cast(DefineExp)x).filter!(de=>de&&definedNames(de).canFind(n));
+				auto des=transStatements(we).map!(x=>cast(DefineExp)x).filter!(de=>de&&definedNames(de).canFind(n));
 				if(!des.empty){ foreach(de;des) if(auto b=base(de.e2)) r~=b; } // (the inverse writes back the component that the body changes or defines again, e.g., for `a[i]+=c` or a swap)
 				else if(!defined.canFind(n)) r~=n;
 			}
@@ -1698,7 +1730,7 @@ bool readsBesidesUpdates(Expression e,Id name){ // (whether a statement reads a 
 		if(auto fe=cast(ForgetExp)e) if(!fe.val) return false; // (its reversal does not need the value)
 		if(auto we=cast(WithExp)e){
 			auto updated=chain(changedNames(we.bdy),definedNames(we.bdy)).array;
-			foreach(x;we.trans.s){
+			foreach(x;transStatements(we)){
 				auto de=cast(DefineExp)x;
 				if(de&&definedNames(de).any!(n=>updated.canFind(n))){ if(rec(de.e2,true)) return true; } // (a component that the inverse writes back, see `changedNames`)
 				else if(rec(x)) return true;
@@ -1738,9 +1770,8 @@ Expression[] headers(Expression s){ // (the condition of an `if` statement, the 
 	return [];
 }
 
-Expression recomputation(Expression s,Scope sc){ // (the copy of a classical statement that the reversal of a block recomputes)
+Expression recomputation(Expression s,Scope sc,Id[] inner=null){ // (the copy of a classical statement that the reversal of a block recomputes; `inner`: the variables of `with` statements, also of enclosing ones, e.g., the components that they move out and write back)
 	Expression.CopyArgs cargs;
-	Id[] inner; // (the variables of `with` statements, e.g., the components that they move out and write back)
 	static if(language==silq) cargs.mapExp=(Expression x,ref Expression.CopyArgs args){ // (reads the variables that it moves, such that the reversed statements see the same versions)
 		if(cast(FunctionDef)x) return x.copy();
 		if(auto we=cast(WithExp)x){
@@ -1768,11 +1799,12 @@ Expression recomputation(Expression s,Scope sc){ // (the copy of a classical sta
 }
 
 static if(language==silq)
-Expression projection(Expression s,Scope sc,Id[] drop=null){ // (the classical part of an `if` statement, a loop or a `let` expression that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read)
-	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop);
+Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // (the classical part of an `if` statement, a loop, a `with` statement or a `let` expression that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner);
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
-	CompoundExp part(CompoundExp b,Expression result=null){
+	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){
 		Expression[] r;
+		auto vars=inner~more;
 		auto ss=mergeCompound(b.s);
 		bool unused(size_t j){ // (local variables that it defines or changes, which no later statement reads other than to forget them, e.g., a definition that reads a dropped variable)
 			auto names=chain(definedNames(ss[j]),changedNames(ss[j])).array;
@@ -1790,8 +1822,8 @@ Expression projection(Expression s,Scope sc,Id[] drop=null){ // (the classical p
 					if(unused(j)) continue;
 					return null;
 				}
-				r~=recomputation(s,sc);
-			}else if(auto p=projection(s,sc,drop)) r~=p;
+				r~=recomputation(s,sc,vars);
+			}else if(auto p=projection(s,sc,drop,vars)) r~=p;
 			else if(changes.length){ // (the values that it changes would not be recomputed)
 				if(unused(j)) continue;
 				return null;
@@ -1816,6 +1848,19 @@ Expression projection(Expression s,Scope sc,Id[] drop=null){ // (the classical p
 		auto bdy=part(re.bdy);
 		if(!bdy) return null;
 		res=new RepeatExp(re.num.copy(),bdy);
+	}else if(auto we=cast(WithExp)s){ // (the classical parts of the transformation and the body, e.g., `with { } do { k*=2; }` for `with { a:=xs[j]; } do { k*=2; a:=H(a); }`)
+		auto changes=changedNames(we.bdy);
+		if(changedNames(we).any!(n=>drop.canFind(n)&&!changes.canFind(n))) return null; // (a classical component that the inverse writes back)
+		auto more=chain(definedNames(we.trans),definedNames(we.bdy)).array;
+		auto trans=part(we.trans,we.bdy,more),bdy=part(we.bdy,null,more);
+		if(!trans||!bdy) return null;
+		auto r=new WithExp(trans,bdy);
+		if(we.isIndices&&trans.s.length){ // (a classical component that it moves out and writes back)
+			if(trans.s.length!=transStatements(we).length) return null;
+			r.isIndices=true;
+			if(we.itrans) r.itrans=we.itrans.copy();
+		}
+		res=r;
 	}else if(auto de=cast(DefineExp)s){ // (the classical results of a `let` expression, e.g., `k:=let { k+=1; } in k` for `(y,k):=let { k+=1; z:=X(x); } in (z,k)`)
 		auto le=cast(LetExp)unwrap(de.e2);
 		if(!le) return null;
@@ -1892,6 +1937,55 @@ bool hasExactInverse(ABinaryExp be){ // (classical updates that the reversal of 
 struct NeedOld{ // (the variables of enclosing blocks whose versions before a statement its reversal would need, e.g., for `u:=dup(k); k+=u;` or for a conditional that changes a variable of its condition: an enclosing block may provide copies of them, see `reversal` in `reverseStatements`)
 	Id[] vars;
 	Q!(Id[],Location,string)[] errors; // (deferred errors, e.g., of reversals of `if` statements and loops that change a variable of their condition or range)
+}
+
+static if(language==silq){
+private Expression narrowing(Id n,Expression ty,Location loc){ // (`n=n coerce ty`: the reversals of earlier statements expect the type before a statement whose merge widens it, e.g., `!ℕ` for `j` in `if c { j-=1; }`)
+	auto lhs=new Identifier(n),var=new Identifier(n);
+	lhs.loc=var.loc=loc;
+	auto cv=new TypeAnnotationExp(var,ty.copy(),TypeAnnotationType.coercion);
+	cv.loc=loc;
+	auto r=new AssignExp(lhs,cv);
+	r.loc=loc;
+	return r;
+}
+private bool closed(Expression ty){ foreach(id;freeIdentifiers(ty)) return false; return true; }
+private Declaration mergedVersion(CompoundExp[] blocks,Id n){ // (the version after an `if` statement or a loop, which merges those of the branches or iterations)
+	foreach(b;blocks) if(b&&b.blscope_){
+		foreach(d;b.blscope_.splitVars) if(d.getId==n&&d.mergedInto) return d.mergedInto;
+		foreach(d;b.blscope_.mergedVars) if(d.getId==n&&d.mergedInto) return d.mergedInto;
+	}
+	return null;
+}
+private Expression typeBefore(CompoundExp[] blocks,Id n){ // (of the version before an `if` statement or a loop, which the branches or iterations split)
+	foreach(b;blocks) if(b&&b.blscope_) foreach(d;b.blscope_.splitVars) if(d.getId==n&&d.splitFrom) return typeForDecl(d.splitFrom);
+	return null;
+}
+Expression[] branchNarrowings(IteExp ite,CompoundExp b,Id[] names){ // (to the types of the versions that a branch merges, at the start of its reversal)
+	Expression[] r;
+	if(b.blscope_) foreach(n;names){
+		auto m=mergedVersion([ite.then,ite.othw],n);
+		if(!m) continue;
+		auto from=m.mergedFrom.find!(d=>d.scope_&&d.scope_.isNestedIn(b.blscope_));
+		auto ty=from.empty?typeBefore([ite.then,ite.othw],n):typeForDecl(from.front),merged=typeForDecl(m);
+		if(ty&&merged&&closed(ty)&&ty!=merged) r~=narrowing(n,ty,b.loc);
+	}
+	return r;
+}
+Expression[] statementNarrowings(Expression s,Id[] names){ // (to the types before a loop or an `if` statement without `else`, after its reversal)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) s=ce.loweredFrom;
+	CompoundExp b;
+	if(auto ite=cast(IteExp)s){ if(!ite.othw) b=ite.then; }
+	else if(auto fe=cast(ForExp)s) b=fe.bdy;
+	else if(auto re=cast(RepeatExp)s) b=re.bdy;
+	Expression[] r;
+	if(b) foreach(n;names){
+		auto before=typeBefore([b],n),m=mergedVersion([b],n);
+		auto after=m?typeForDecl(m):null;
+		if(before&&after&&closed(before)&&before!=after) r~=narrowing(n,before,s.loc);
+	}
+	return r;
+}
 }
 
 static if(language==silq)
@@ -2564,7 +2658,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		auto projections=new Expression[](statements.length); // (classical variables that a reversed `if` statement or loop defines for later statements or changes are recomputed as well)
 		auto projectionChanges=new Id[][](statements.length);
 		auto blockedAt=new Id[][](statements.length); // (variables of an enclosing block that a statement which is not recomputed reads before a later statement changes them, see `NeedOld`)
-		for(Id[] excluded;;){ // (variables that a reversed statement which is not recomputed changes, e.g., a loop with quantum statements: the statements that define them are reversed as well)
+		Id[] excluded; // (variables that a reversed statement which is not recomputed changes, e.g., a loop with quantum statements: the statements that define them are reversed as well)
+		for(;;){
 			auto hoisted=copied.dup;
 			foreach(i,s;statements){
 				auto after=givenAfter(i);
@@ -2603,7 +2698,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			}
 			excluded~=more;
 		}
-		Id[] checked;
+		Id[] checked=copied.filter!(n=>!excluded.canFind(n)&&given.canFind(n)).array; // (also a copy that no statement changes, e.g., of a classical parameter that a function returns, see `reverseFunction`)
 		foreach(i,s;statements){
 			auto names=recomputed[i]?chain(definedNames(s),changed[i]).array:projections[i]?chain(definedNames(projections[i]),projectionChanges[i]).array:[];
 			checked~=names.filter!(n=>givenAfter(i).canFind(n)).array;
@@ -2722,11 +2817,16 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			}
 			return reversal(i);
 		}
-		Expression[] undoneFirst=iota(statements.length).retro.filter!(i=>undoFirst[i]).map!reversed.array;
+		Expression[] narrowed(size_t i){ // (with conversions to the types before the statement, see `narrowing`)
+			auto r=[reversed(i)];
+			static if(language==silq) if(!oldVersions[i].length) r~=statementNarrowings(statements[i],changed[i]);
+			return r;
+		}
+		Expression[] undoneFirst=iota(statements.length).retro.filter!(i=>undoFirst[i]).map!narrowed.joiner.array;
 		Expression[] quantumStatements;
 		foreach_reverse(i;0..statements.length){
 			if(recomputed[i]&&!undone[i]||undoFirst[i]||dead[i]) continue;
-			quantumStatements~=reversed(i);
+			quantumStatements~=narrowed(i);
 			static if(language==silq) foreach(o;oldVersions[i]){ // (the version before the statement replaces the one after it)
 				auto loc=statements[i].loc;
 				auto var=new Identifier(o[0]),lhs=new Identifier(o[0]),rhs=new Identifier(o[1]);
@@ -2871,6 +2971,11 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		assert(!!then);
 		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive,old,needOld);
 		assert(!!othw==!!ite.othw);
+		static if(language==silq){ // (the reversal of a branch starts from the version that the merge widens, see `narrowing`)
+			auto names=changedNames(ite);
+			then.s=branchNarrowings(ite,ite.then,names)~then.s;
+			if(othw) othw.s=branchNarrowings(ite,ite.othw,names)~othw.s;
+		}
 		auto cond=reevaluationCopy(ite.cond);
 		if(old.length) walkIdentifiers(cond,(Identifier id){ if(!id.meaning) foreach(o;old) if(id.id==o[0]) id.id=o[1]; }); // (the condition reads the versions before the statement)
 		auto res=new IteExp(cond,then,othw);

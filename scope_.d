@@ -895,8 +895,10 @@ abstract class Scope{
 		foreach(decl,ref prop;declProps.props){
 			auto nconstBlock=lookupSnapshot(decl);
 			if(prop.constBlock.length&&prop.constBlock!=nconstBlock){
-				recordOuterConstReads(decl,prop.constBlock.filter!(read=>!nconstBlock.canFind(read)));
-				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+				auto reads=prop.constBlock;
+				recordOuterConstReads(decl,reads.filter!(read=>!nconstBlock.canFind(read)));
+				prop.constBlock=nconstBlock; // (the forget after the last use follows the reads that end here, e.g., both in `t⊕t`)
+				recordResetConst(decl,reads[$-1],parent,isStatement,inType);
 			}
 			prop.constBlock=nconstBlock;
 		}
@@ -928,9 +930,10 @@ abstract class Scope{
 	final bool resetConst(ref Expression parent,bool isStatement,bool inType){
 		foreach(decl,ref prop;declProps.props){
 			if(prop.constBlock.length){
-				recordOuterConstReads(decl,prop.constBlock);
-				recordResetConst(decl,prop.constBlock[$-1],parent,isStatement,inType);
+				auto reads=prop.constBlock;
+				recordOuterConstReads(decl,reads);
 				prop.constBlock=[];
+				recordResetConst(decl,reads[$-1],parent,isStatement,inType);
 			}
 		}
 		auto success=checkTrackedTemporaries(trackedTemporaries,parent);
@@ -1330,6 +1333,11 @@ abstract class Scope{
 			if(bs.typeBoundary) return bs.typeBoundary;
 		return null;
 	}
+	static if(language==silq) final Scope typeBoundary(){ // (also of a closure within a type, e.g., for a variable that it captures after the first consumption in it failed)
+		if(auto r=letTypeBoundary()) return r;
+		if(auto fd=getFunction()) return fd.typeBoundary;
+		return null;
+	}
 	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
@@ -1344,7 +1352,7 @@ abstract class Scope{
 			}
 			return false;
 		}
-		static if(language==silq) if(consumesOutsideType(meaning,letTypeBoundary())){ // (e.g., `forget(x)` in a `let` expression within a type)
+		static if(language==silq) if(consumesOutsideType(meaning,typeBoundary())){ // (e.g., `forget(x)` in a `let` expression within a type)
 			if(!id.isSemError()) error(format("cannot consume `%s` in a type",meaning.name),id.loc);
 			id.setSemForceError();
 			return false;
@@ -3523,10 +3531,16 @@ class BlockScope: NestedScope{
 }
 
 static if(language==silq)
-bool consumesOutsideType(Declaration decl,Scope boundary){ // (a type cannot consume variables declared outside of it)
+bool consumesOutsideType(Declaration decl,Scope boundary){ // (a type cannot consume variables declared outside of it, also through the versions that splits and merges derive from them)
 	if(!boundary||!decl||decl.isToplevelDeclaration()) return false;
-	auto cs=decl.canonicalSource.scope_;
-	return cs&&(cs is boundary||!cs.isNestedIn(boundary));
+	bool outside(Declaration d){
+		auto cs=d.canonicalSource.scope_;
+		if(cs&&(cs is boundary||!cs.isNestedIn(boundary))) return true;
+		if(d.splitFrom&&outside(d.splitFrom)) return true;
+		foreach(m;d.mergedFrom) if(outside(m)) return true; // (e.g., after a branch that consumed it)
+		return false;
+	}
+	return outside(decl);
 }
 
 class TypeScope: BlockScope{
