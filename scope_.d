@@ -1592,7 +1592,7 @@ abstract class Scope{
 	}
 
 	bool diverges=false;
-	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null){
+	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,bool delegate(Declaration) mentions=null){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`)
 		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
@@ -1632,6 +1632,7 @@ abstract class Scope{
 		}
 		foreach(i,d;decls) if(!done[i]) ordered~=d;
 		foreach(d;ordered){
+			if(mentions&&d.scope_&&d.scope_ !is this&&!mentions(d)){ symtabRemove(d); continue; } // (the conditional abort leaves it unsplit, as `assert` does, so that the backend can still uncompute values that depend on it at their last uses, e.g., `o:=dup(x)` in `if c { assert(false); } forget(o);`)
 			if(d.isLinear()&&(!consumptionScope||!d.scope_||d.scope_.isNestedIn(consumptionScope))||d.scope_ is this){ // (variables of scopes that enclose the merge are not split into the branch, e.g., through the scope of a `let` expression)
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);
@@ -2014,10 +2015,10 @@ abstract class Scope{
 	}do{
 		return merge(quantumControl,false,scopes);
 	}
-	final bool mergeLoop(bool returns,NestedScope forgetScope,NestedScope loopScope)in{
+	final bool mergeLoop(bool returns,NestedScope forgetScope,NestedScope loopScope,bool delegate(Declaration) mentions=null)in{
 		assert(equal(activeNestedScopes,only(forgetScope,loopScope)));
 	}do{
-		if(returns) loopScope.closeUnreachable(this);
+		if(returns) loopScope.closeUnreachable(this,null,mentions);
 		return merge(false,!returns,forgetScope,loopScope);
 	}
 	final bool mergeLoopExit(BlockScope exitScope)in{ // (the exit scope is nested in the loop scope of the last iteration)
@@ -2304,6 +2305,18 @@ abstract class Scope{
 		if(mergeTypeSubst.length) foreach(sym;producedOuter[numProducedOuter..$]){ // (the types of the merged variables mention the merged versions, independently of the order of merging)
 			auto vd=cast(VarDecl)sym;
 			if(vd&&vd.vtype&&vd.scope_ is this) vd.vtype=vd.vtype.substitute(mergeTypeSubst);
+		}
+		static if(language==silq) if(scopes.length==1){ // (versions merged after branches that diverge do not depend on each other, as for merges of several branches: the backend uncomputes a value right after its last use, here its merge, which comes after the splits of the others, e.g., of `x` for `o:=dup(x)` in `if c { y:=x&o; forget(y); assert(false); } forget(o);`)
+			auto merged=producedOuter[numProducedOuter..$];
+			foreach(m;merged) if(dependencyTracked(m)){
+				auto dep=getDependency(m).dup;
+				foreach(i;0..merged.length){
+					if(dep.isTop||!merged.any!(n=>n !is m&&n in dep.dependencies)) break;
+					foreach(n;merged) if(n !is m&&n in dep.dependencies) dep.replace(n,getDependency(n));
+				}
+				if(merged.any!(n=>n in dep.dependencies)) dep=Dependency(true);
+				dependencies.dependencies[m]=dep;
+			}
 		}
 		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged)
 			changed=false;

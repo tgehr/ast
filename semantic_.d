@@ -1145,7 +1145,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	propErr(ite.othw,ite);
 	foreach(branch;only(ite.then,ite.othw)){
 		if(definitelyReturns(branch))
-			branch.blscope_.closeUnreachable(sc);
+			branch.blscope_.closeUnreachable(sc,null,mentionsOf(branch));
 	}
 	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
 	auto diverges=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
@@ -1854,6 +1854,11 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 	if(lowered) foreach(decl;discardedLoopForgetCandidates(sc)) anchor(decl);
 	return wrapper?wrapper:loopExp;
 }
+bool delegate(Declaration) mentionsOf(Expression e){ // (the variables that a branch or a loop body that diverges mentions, see `closeUnreachable`)
+	bool[Id] names;
+	foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) names[id.meaning?id.meaning.getId:id.id]=true;
+	return (Declaration d)=>!!(d.getId in names);
+}
 // Common tail for one iteration of a loop (for/while/repeat).
 bool finalizeLoopIteration(
 	ref FixedPointIterState state,
@@ -1870,7 +1875,7 @@ bool finalizeLoopIteration(
 	auto returns=definitelyReturns(bdy)||noNextIteration;
 	auto bsc=bdy.blscope_;
 	constForgets=loopConstForgetCandidates(sc,bsc);
-	if(sc.mergeLoop(returns,state.forgetScope,bsc)){
+	if(sc.mergeLoop(returns,state.forgetScope,bsc,noNextIteration?null:mentionsOf(bdy))){
 		sc.note("possibly consumed in "~kind~" loop", loopExp.loc);
 		loopExp.setSemError();
 	}
