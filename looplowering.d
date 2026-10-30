@@ -2506,13 +2506,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		stmts~=fe;
 	}
 	// the code after a loop with quantum-controlled returns follows the main loop, which is lowered with it as its continuation
-	auto cont=hasQuantumReturn?sc.loopContinuation.take(loop,!isEmpty(loop)):null;
+	auto cont=hasQuantumReturn&&!isEmpty(loop)?sc.loopContinuation.take(loop,true):null; // (not after a loop that does not exit normally, see `lowerLoop`)
 	stmts~=cont;
 	auto split=new CompoundExp(stmts);
 	split.loc=loc;
 	auto before=sc.rnsymtab.dup;
 	scope(success) linkLoweredVariables(sc,before);
-	sc.restoreStateSnapshot(state.origStateSnapshot);
+	restoreBeforeLoop(loop,state,sc);
 	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
 		import util.io:stderr;
 		stderr.writeln(loop);
@@ -4118,7 +4118,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	lowered.loc=loc;
 	auto before=sc.rnsymtab.dup;
 	scope(success) linkLoweredVariables(sc,before);
-	sc.restoreStateSnapshot(state.origStateSnapshot);
+	restoreBeforeLoop(loop,state,sc);
 	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
 		import util.io:stderr;
 		stderr.writeln(loop);
@@ -4287,7 +4287,7 @@ private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,
 	auto lowered=at(new CompoundExp([cast(Expression)with_]));
 	auto before=sc.rnsymtab.dup;
 	scope(success) linkLoweredVariables(sc,before);
-	sc.restoreStateSnapshot(state.origStateSnapshot);
+	restoreBeforeLoop(loop,state,sc);
 	static if(__traits(hasMember,astopt,"dumpLoops")) if(astopt.dumpLoops){
 		import util.io:stderr;
 		stderr.writeln(loop);
@@ -4298,12 +4298,52 @@ private Expression borrowAccessedComponents(T)(T loop,FixedPointIterState state,
 	if(result.isSemError()) sc.note("loop not yet supported by loop lowering pass",result.loc);
 	return result;
 }
-Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags)in{
+Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags,scope Declaration[] constForgets)in{
 	assert(loop.isSemCompleted());
 }do{
+	static if(language==silq){ // (the code after a loop that does not exit normally is dropped, see `restoreBeforeLoop`)
+		auto restriction=sc.loopContinuation.restriction,resetConst=sc.loopContinuation.resetConst;
+		if(auto stms=isEmpty(loop)?sc.loopContinuation.take(loop):null)
+			state.unreachable=new UnreachableCode(stms,constForgets.dup,restriction,resetConst,flags);
+	}
 	auto r=lowerLoopImpl(loop,state,sc,flags);
-	static if(language==silq) if(auto ce=cast(CompoundExp)r) if(!loopContainsReturn(loop)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+	static if(language==silq){
+		if(auto ce=cast(CompoundExp)r) if(!loopContainsReturn(loop)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+		if(auto u=state.unreachable){
+			assert(u.analyzed);
+			sc.loopContinuation.used=true; // (after analyzing `r`)
+			flags|=u.flags;
+			if(u.error) r.setSemForceError(); // (as for the block)
+		}
+		if(r.isSemError()&&isEmpty(loop)) r.type=bottom; // (the lowered loop does not exit normally either, also if its analysis fails, e.g., for a variable that the code after the loop marks as erroneous)
+	}
 	return r;
+}
+static if(language==silq)
+final class UnreachableCode{
+	Expression[] stms;
+	Declaration[] constForgets;
+	Annotation restriction;
+	bool resetConst;
+	StmFlags flags;
+	bool analyzed=false,error=false;
+	this(Expression[] stms,Declaration[] constForgets,Annotation restriction,bool resetConst,StmFlags flags){
+		this.stms=stms;
+		this.constForgets=constForgets;
+		this.restriction=restriction;
+		this.resetConst=resetConst;
+		this.flags=flags;
+	}
+}
+// (before the analysis of a lowered loop: the code after a loop that does not exit normally, which the lowering drops, is
+// analyzed first, in the state after the loop, as without the lowering, e.g., for its errors and the return type)
+private void restoreBeforeLoop(Expression loop,ref FixedPointIterState state,Scope sc){
+	static if(language==silq) if(auto u=state.unreachable) if(!u.analyzed){
+		u.analyzed=true;
+		anchorLoopConstForgets(sc,loop,u.constForgets,state.loopScope,state.forgetScope);
+		u.error=unreachableSemantic(u.stms,loop,sc,u.flags,u.restriction,u.resetConst).isSemError();
+	}
+	sc.restoreStateSnapshot(state.origStateSnapshot);
 }
 private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(language==silq) enum isDoWhile=is(T==DoWhileExp);
@@ -4340,14 +4380,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	// continuation-passing lowering for loops with early returns:
 	// the statements after the loop (which end in a `return`) become the base case of the recursion
 	Expression[] continuation=null;
-	bool dropUnreachable=false; // code after an infinite loop
-	static if(language==silq){
-		bool contInfinite=isEmpty(loop); // (the loop does not exit normally, e.g., `repeat 2 { return 1; }`)
-		if(!contInfinite&&loopContainsReturn(loop))
-			continuation=sc.loopContinuation.take(loop,true);
-		else if(contInfinite)
-			dropUnreachable=sc.loopContinuation.take(loop).length!=0;
-	}
+	static if(language==silq) if(!isEmpty(loop)&&loopContainsReturn(loop)) continuation=sc.loopContinuation.take(loop,true); // (not after a loop that does not exit normally, e.g., `repeat 2 { return 1; }`, see `lowerLoop`)
 	// with a continuation, lifted loop-carried variables are threaded through the recursion as `const`
 	// parameters, so that they are still lifted in the code after the loop and in join points in the body
 	foreach(st;continuation){ // (the continuation becomes part of the recursive function)
@@ -4818,10 +4851,10 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		lowered.loc=loop.loc;
 		auto before=sc.rnsymtab.dup;
 		scope(success) linkLoweredVariables(sc,before);
-		sc.restoreStateSnapshot(state.origStateSnapshot);
+		restoreBeforeLoop(loop,state,sc);
 		//imported!"util.io".writeln("BEFORE SEMANTIC: ",lowered);
 		auto result=statementSemantic(lowered,sc,flags);
-		if(continuation||dropUnreachable) sc.loopContinuation.used=true; // (after analyzing `lowered`)
+		if(continuation) sc.loopContinuation.used=true; // (after analyzing `lowered`)
 		if(result.isSemError()){
 			sc.note("loop not yet supported by loop lowering pass",result.loc);
 		}
@@ -5472,8 +5505,10 @@ struct LoopContinuation{
 	bool returning; // the loop contains a `return` and the continuation ends in one
 	bool used; // set by `lowerLoop` if it absorbed the continuation
 	Expression absorbedBy; // set if the desugaring of `target` passed the continuation on
+	Annotation restriction; // (of the block, see `unreachableSemantic`)
+	bool resetConst;
 	// offer `stms[i+1..$]` to the loop statement `stms[i]`, if applicable
-	bool offer(Expression[] block,size_t i){
+	bool offer(Expression[] block,size_t i,Annotation restriction,bool resetConst){
 		auto e=block[i];
 		if(!astopt.removeLoops||!isLoopStatement(e)) return false;
 		if(i+1>=block.length) return false;
@@ -5485,6 +5520,8 @@ struct LoopContinuation{
 		returning=returns;
 		used=false;
 		absorbedBy=null;
+		this.restriction=restriction;
+		this.resetConst=resetConst;
 		return true;
 	}
 	// take the continuation offered to `loop` (if any; with `returning`, only one that ends in a `return`)

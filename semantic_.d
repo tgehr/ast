@@ -1574,6 +1574,7 @@ struct FixedPointIterState{
 	CompoundExp prevBdy,nextBdy; // (to explain restrictions due to quantum-controlled `return`)
 	MapX!(Declaration,Declaration) mustBeConstFromDummies;
 	bool dummyAnalysisRan=false;
+	static if(language==silq) UnreachableCode unreachable=null; // (see `lowerLoop`)
 	void beginIteration(){
 		prevStateSnapshot=nextStateSnapshot;
 		prevFlags=nextFlags;
@@ -1958,6 +1959,7 @@ bool insideLoopBody(Scope sc){
 bool shouldLowerLoop(Scope sc){
 	if(!astopt.removeLoops) return false;
 	if(auto fd=sc.getFunction()) if(fd.keepLoops) return false;
+	for(auto s=sc;s;s=s.parentScope()) if(s.droppedCodeAnalysis) return false; // (code that the lowering drops, e.g., a loop with a quantum-controlled `return` at its end, which has no continuation there, see `unreachableSemantic`)
 	return !insideLoopBody(sc);
 }
 // Run the final ("mode-(b)") loop iteration with `loopFinalPass` set, together
@@ -2138,7 +2140,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	fe.setSemCompleted();
 	Expression result=fe;
 	if(fe.isSemCompleted()&&shouldLowerLoop(sc))
-		result=lowerLoop(fe,state,sc,flags);
+		result=lowerLoop(fe,state,sc,flags,constForgets);
 	if(result.isSemCompleted())
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is fe);
 	return result;
@@ -2247,7 +2249,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	we.setSemCompleted();
 	Expression result=we;
 	if(we.isSemCompleted()&&shouldLowerLoop(sc))
-		result=lowerLoop(we,state,sc,flags);
+		result=lowerLoop(we,state,sc,flags,constForgets);
 	if(result.isSemCompleted())
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is we);
 	return result;
@@ -2295,7 +2297,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	re.setSemCompleted();
 	Expression result=re;
 	if(re.isSemCompleted()&&shouldLowerLoop(sc))
-		result=lowerLoop(re,state,sc,flags);
+		result=lowerLoop(re,state,sc,flags,constForgets);
 	if(result.isSemCompleted())
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is re);
 	return result;
@@ -2433,7 +2435,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	dw.setSemCompleted();
 	Expression result=dw;
 	if(dw.isSemCompleted()&&shouldLowerLoop(sc))
-		result=lowerLoop(dw,state,sc,flags);
+		result=lowerLoop(dw,state,sc,flags,constForgets);
 	if(result.isSemCompleted())
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is dw);
 	return result;
@@ -2534,7 +2536,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
 		static if(language==silq){
 			auto original=e;
-			bool offered=bsc.loopContinuation.offer(ce.s,i);
+			bool offered=bsc.loopContinuation.offer(ce.s,i,restriction_,resetConst);
 		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		propErr(e,ce);
@@ -2560,6 +2562,19 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 	ce.type=definitelyReturns(ce)?bottom:unit;
 	ce.setSemCompleted();
 	return ce;
+}
+static if(language==silq)
+CompoundExp unreachableSemantic(Expression[] stms,Expression prev,Scope sc,ref StmFlags flags,Annotation restriction_,bool resetConst){ // (copies of the statements after `prev` in a block of `sc`, as `compoundExpSemantic` analyzes them, e.g., after a loop whose lowering drops them)
+	sc.droppedCodeAnalysis++; // (their loops are analyzed as without the lowering, see `shouldLowerLoop`)
+	scope(exit) sc.droppedCodeAnalysis--;
+	auto ce=new CompoundExp(stms.map!(s=>s.copy()).array);
+	ce.loc=stms[0].loc.to(stms[$-1].loc);
+	if(restriction_<Annotation.mfree&&flags&StmFlags.quantumReturn){
+		ce=compoundExpSemantic(ce,sc,flags,Annotation.mfree,blscope:true,resetConst:resetConst,restrictionCause:findQuantumReturn(prev));
+		if(ce.blscope_) sc.merge(false,ce.blscope_);
+		return ce;
+	}
+	return compoundExpSemantic(ce,sc,flags,restriction_,blscope:false,resetConst:resetConst);
 }
 
 VarDecl varDeclSemantic(VarDecl vd,Scope sc){

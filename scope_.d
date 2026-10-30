@@ -167,6 +167,7 @@ abstract class Scope{
 	abstract @property ErrorHandler handler();
 	import ast.looplowering:LoopContinuation;
 	LoopContinuation loopContinuation; // loop lowering: code after a loop that the lowering may absorb
+	int droppedCodeAnalysis; // loop lowering: the code after a loop that the lowering drops is being analyzed, without lowering its loops (see `unreachableSemantic`)
 	bool allowsLinear(){
 		return true;
 	}
@@ -2821,6 +2822,7 @@ abstract class Scope{
 			}
 			rnsymtab[decl.getId]=updateDecl(decl);
 		}
+		foreach(_,decl;rnsymtab) consumedDepLog.remove(decl); // (logged after the snapshot, e.g., the version before a loop that the merge of the loop replaced)
 		lastUses.restoreSnapshot(state.lastUses,state.numLastUses,this);
 		foreach(scopes;mergedNestedScopes[state.numMergedNestedScopes..$])
 			foreach(sc;scopes) sc.lastUses.discarded=true;
