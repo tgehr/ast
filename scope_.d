@@ -1012,7 +1012,10 @@ abstract class Scope{
 	}
 	static struct ComponentReplacementContext{
 		private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
-		bool empty(){ return !componentReplacements.length; }
+		bool empty(){ // (also with the properties of declarations without replacements, e.g., of a `const` variable that a branch reads)
+			foreach(decl,crepls;componentReplacements) if(crepls.length) return false;
+			return true;
+		}
 	}
 	final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
 		MapX!(Declaration,DeclProp.ComponentReplacement[]) r;

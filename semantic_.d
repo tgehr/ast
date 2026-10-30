@@ -1415,6 +1415,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		}
 	}else if(with_.trans.isSemCompleted()){
 		enum unchecked=false,noImplicitDup=true;
+		static if(language==silq) resolveForgets(with_.trans); // (the inverse recomputes the quantum variables that the transformation forgets)
 		with_.itrans=new CompoundExp(reverseStatements(with_.trans.s,[],sc,unchecked,noImplicitDup)); // TODO: fix (this is incomplete)
 		with_.itrans.loc=with_.trans.loc;
 		static if(language==silq){ sc.withTransInverse=true; scope(exit) sc.withTransInverse=false; }
@@ -2619,7 +2620,7 @@ Dependency getDependencyImpl(CallExp ce,Scope sc){
 	return result;
 }
 
-private bool hasOnlyQfreeCalls(Expression e){
+bool hasOnlyQfreeCalls(Expression e){
 	if(auto ce=cast(CallExp)e){
 		if(auto ft=cast(ProductTy)ce.e.type)
 			if(ft.annotation<Annotation.qfree)

@@ -2472,6 +2472,7 @@ class IteExp: Expression{
 		super.setConstLookup(constLookup);
 	}
 	Expression condForget=null; // manual re-derivation of the condition
+	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for variables that both branches forget, which the reversal recomputes before the reversed statement, see `ast.reverse.resolveForgets`)
 }
 
 class WithExp: Expression{
@@ -2507,6 +2508,7 @@ class WithExp: Expression{
 	}
 	// semantic information
 	CompoundExp itrans; // inverse transform
+	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for the variables of enclosing blocks that `itrans` forgets at their last uses, see `ast.reverse.outerForgets`)
 	bool isIndices=false;
 	AAssignExp.Replacement[] replacements;
 	Declaration aggregate(bool old)in{
@@ -2934,6 +2936,7 @@ class CompoundExp: Expression{
 	// semantic information
 	BlockScope blscope_;
 	static if(language==silq) Expression loweredFrom; // (the analyzed loop that this block lowers, see `lowerLoop`)
+	static if(language==silq) Expression[] entryUncomputation,exitUncomputation; // (as `ForgetExp.uncomputation`, for the quantum variables that its scope forgets on entry and at its end)
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
 		foreach(x;s) if(auto r=x.freeVarsImpl(dg)) return r;
@@ -3738,6 +3741,7 @@ class ReturnExp: Expression{
 
 	// semantic information:
 	Declaration[] forgottenVars;
+	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for `forgottenVars`)
 }
 
 class AssertExp: Expression{
@@ -3868,6 +3872,11 @@ class ForgetExp: Expression{
 	}
 	// semantic information
 	bool isStatement=false; // TODO: get rid of this
+	static if(language==silq) Expression[] uncomputation; // (for a forget without value: forgets with values that uncompute its quantum variables, which the reversal recomputes, and a forget of the others, see `ast.reverse.resolveForgets`)
+	static if(language==silq){
+		Expression[] outerUncomputation; // (for a forget without value within a part of a statement that the reversal evaluates again: forgets with values of the variables of enclosing blocks that the statement forgets that way, which the reversal recomputes before the statement, see `ast.reverse.embeddedForgets`)
+		Expression outerStatement; // (that statement)
+	}
 }
 
 alias CommaExp=BinaryExp!(Tok!",");
