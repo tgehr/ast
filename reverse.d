@@ -492,7 +492,17 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		d2.loc=loc;
 		return res=new CompoundExp([d1,d2]);
 	}
-	if(cast(Identifier)olhs?isLiftedBuiltIn(olhs):isLiftedBuiltIn(lhs)) return forget();
+	if(cast(Identifier)olhs?isLiftedBuiltIn(olhs):isLiftedBuiltIn(lhs)){
+		static if(createFresh){ // (`dup(e):=x` forgets `x` with the value of `e`, which the forget only reads, e.g., `forget(x=v[0])` for an implicit duplication of a component in a branch of a `with` transformation: a copy would remain)
+			for(auto e=lhs;;){
+				e.implicitDup=false;
+				auto tae=cast(TypeAnnotationExp)e;
+				if(!tae) break;
+				e=tae.e;
+			}
+		}
+		return forget();
+	}
 	static if(reverseMode) if(auto fe=cast(FieldExp)olhs) if(fe.type&&fe.type.isClassical()) return forget(); // (e.g., the reversal of `t:=f(x).length`, which checks the value)
 	if(auto ce=cast(CallExp)olhs){
 		if(isForgettableCallLhs(ce))
@@ -990,7 +1000,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			auto tpl=new TupleExp([]);
 			tpl.type=unit;
 			tpl.loc=ite.loc;
-			Expression branch(CompoundExp b){
+			Expression branch(CompoundExp b,bool noImplicitDup){
 				auto d=lowerDefine!(flags|LowerDefineFlags.createFresh)(b.s[0],tmp,b.s[0].loc,sc,unchecked,noImplicitDup);
 				static if(language==silq&&(flags&LowerDefineFlags.reverseMode)) if(b.blscope_){ // (recomputes the variables that the branch forgets at its end, then those that it forgets on entry, see `resolveForgets`)
 					Expression[] r;
@@ -1005,8 +1015,18 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				}
 				return d;
 			}
-			auto dthen=branch(ite.then);
-			auto dothw=branch(ite.othw);
+			auto nerrors=sc.handler.nerrors;
+			auto dthen=branch(ite.then,noImplicitDup);
+			auto dothw=branch(ite.othw,noImplicitDup);
+			if(noImplicitDup&&sc.handler.nerrors==nerrors){ // (a branch cannot restore a variable that the other one does not restore: then both forget the copies of their implicit duplications instead, e.g., of `w` in `if c then w else e`)
+				bool[Id] outer;
+				foreach(id;ite.freeIdentifiers) outer[nameOf(id)]=true;
+				auto rthen=definedNames(dthen).filter!(n=>n in outer).array,rothw=definedNames(dothw).filter!(n=>n in outer).array;
+				if(!rthen.all!(n=>rothw.canFind(n))||!rothw.all!(n=>rthen.canFind(n))){
+					dthen=branch(ite.then,false);
+					dothw=branch(ite.othw,false);
+				}
+			}
 			static if(language==silq) auto cond=createFresh?reevaluationCopy(ite.cond):ite.cond;
 			else auto cond=createFresh?ite.cond.copy():ite.cond;
 			auto blthen=cast(CompoundExp)dthen;
