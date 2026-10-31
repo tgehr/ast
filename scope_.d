@@ -3324,10 +3324,19 @@ class CapturingScope(T): NestedScope{
 		if(!type) return null;
 		void captureMention(Identifier free){ // (through a copy: types share identifiers with expressions, which the renamings of the capture must not change, e.g., `n` of `vector(n,0:𝔹)` in the type of its result, or of `a:=𝔹^n` in the value of `a`, for a closure in a branch that splits `n`)
 			if(!free.meaning) return;
+			auto mentioned=free.meaning;
+			for(Scope c=parent;c;c=c.parentScope()){ // (the version with the same value that is current here, e.g., of `n` after a loop body that defines `n` and `a:=𝔹^n`, as for the uses of `n` in the closure, see `unavailableAt`)
+				if(auto cur=c.rnsymtab.get(mentioned.getId,null)){
+					if(!cast(DeadDecl)cur&&cur.canonicalSource is mentioned.canonicalSource) mentioned=cur;
+					break;
+				}
+				if(c is mentioned.scope_) break;
+			}
 			Expression.CopyArgs cargs={preserveSemantic:true};
 			auto mention=free.copy(cargs);
+			mention.meaning=mentioned;
 			mention.typeofSuppressedCapture=free.typeofSuppressedCapture;
-			addCapture(mention,free.meaning,Lookup.constant,origin);
+			addCapture(mention,mentioned,Lookup.constant,origin);
 		}
 		foreach(free;type.freeVars) captureMention(free);
 		static if(language==silq){ // (and the variables that the values of type variables mention, through which the closure can look, see `unfoldTypeVariables`)

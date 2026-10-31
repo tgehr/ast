@@ -16,6 +16,7 @@ import std.format, std.conv, util.tuple:Q=Tuple,q=tuple;
 import ast.lexer,ast.scope_,ast.expression,ast.type,ast.conversion;
 import ast.declaration,ast.error,util;
 import ast.semantic_;
+import ast.substitute:updateLambdaDefinition,updateLambdaDefinitions;
 
 // Conservative check that evaluating `e` cannot fail (e.g., an `assert` or out-of-bounds access) or diverge.
 // Only such code may be removed, or executed where the original program would not execute it.
@@ -2055,7 +2056,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				walkShallow(c,(Expression x){
 					if(auto we=cast(WithExp)x) if(we.itrans)
 						walkShallow(we.itrans,(Expression y){
-							if(auto le=cast(LambdaExp)y) le.orig=le.fd.copy(); // (as in the copy itself)
+							if(auto le=cast(LambdaExp)y) updateLambdaDefinition(le); // (as in the copy itself)
 							if(auto id=cast(Identifier)y) if(auto t=id.id in names) id.id=*t;
 						});
 				});
@@ -2092,9 +2093,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							if(auto t=y.id in names) y.id=*t;
 							return 0;
 						});
-						walkShallow(c,(Expression x){
-							if(auto le=cast(LambdaExp)x) le.orig=le.fd.copy();
-						});
+						updateLambdaDefinitions(c);
 					}
 					return c;
 				}
@@ -2118,7 +2117,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							});
 						}
 					}
-					if(ofd&&cast(LambdaExp)cn[k]) (cast(LambdaExp)cn[k]).orig=cfd.copy();
+					if(ofd){
+						if(auto le=cast(LambdaExp)cn[k]) updateLambdaDefinition(le);
+						else if(cfd.body_) updateLambdaDefinitions(cfd.body_);
+					}
 					if(auto t=cast(const(void)*)x in elemOf){
 						auto ie=cast(IndexExp)cn[k];
 						ie.e=mkId(*t);
@@ -2154,9 +2156,9 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						return 0;
 					});
 					walkShallow(c,(Expression x){
-						if(auto le=cast(LambdaExp)x) le.orig=le.fd.copy();
 						if(auto id=cast(Identifier)x) if(auto t=id.id in fNames) id.id=*t;
 					});
+					updateLambdaDefinitions(c);
 					renameItrans(c,fNames);
 				}
 				return c;
@@ -2641,6 +2643,27 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			classExits[c]~=decl.name.id;
 		}
 		if(!liftedNames.length&&!exitLifted.length) return null;
+		SetX!Declaration definedBy; // (the versions of the variables that the loop defines or changes, also after it)
+		foreach(d;loop.exitScope.mergedVars){
+			definedBy.insert(d);
+			if(d.mergedInto) definedBy.insert(d.mergedInto);
+		}
+		bool coercible(Expression type){ // (the recomputations define values whose types mention the logged values of the variables that the loop defines, and they are coerced back to their types after the loop, e.g., not for `x` after `do{ k+=1; n:=k+m; x:=5:uint[n]; }while k<2 { … }`)
+			if(!type) return true;
+			type=unfoldTypeVariables(type); // (the type variables of the body stand for their values, which the recomputations define again, e.g., `𝔹^n` for `x:a` after `a:=𝔹^n`)
+			MapSX!(Id,Expression) subst;
+			foreach(id;type.freeIdentifiers){
+				if(!id.meaning||id.meaning !in definedBy&&!definedInLoop(id.meaning)||id.id in subst) continue;
+				auto fresh=new Identifier(freshName());
+				fresh.loc=id.loc;
+				fresh.type=id.type;
+				fresh.setSemCompleted();
+				subst[id.id]=fresh;
+			}
+			return !subst.length||!!typeExplicitConversion(type.substitute(subst),type,TypeAnnotationType.coercion);
+		}
+		foreach(v;exitLifted) if(!coercible(exitTypes[v])) return null;
+		foreach(v;liftedNames) foreach(d;loop.exitScope.mergedVars) if(d.mergedInto&&d.mergedInto.name&&d.mergedInto.name.id==v) if(!coercible(typeForDecl(d.mergedInto))) return null;
 	}else if(!liftedNames.length) return null;
 	static Id[] sorted(ref SetX!Id s){
 		Id[] r;
@@ -3698,7 +3721,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		walkShallow(c,(Expression x){
 			if(auto we=cast(WithExp)x) if(we.itrans)
 				walkShallow(we.itrans,(Expression y){
-					if(auto le=cast(LambdaExp)y) le.orig=le.fd.copy(); // (as in the copy itself: later copies are made from the renamed definition)
+					if(auto le=cast(LambdaExp)y) updateLambdaDefinition(le); // (as in the copy itself: later copies are made from the renamed definition)
 					if(auto id=cast(Identifier)y) if(auto t=id.id in names) id.id=*t;
 				});
 		});
@@ -3730,10 +3753,13 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			});
 		}
 		walkShallow(c,(Expression x){
-			if(auto fd=cast(FunctionDef)x) renameNested(fd);
+			if(auto fd=cast(FunctionDef)x){
+				renameNested(fd);
+				if(fd.body_) updateLambdaDefinitions(fd.body_);
+			}
 			if(auto le=cast(LambdaExp)x){
 				renameNested(le.fd);
-				le.orig=le.fd.copy();
+				updateLambdaDefinition(le);
 			}
 			if(auto id=cast(Identifier)x) if(auto t=id.id in names) id.id=*t;
 			if(auto le=cast(LetExp)x) if(le.isForward(true)){ // (its definition is not a component)
@@ -5493,7 +5519,8 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 		foreach(fv;value.freeIdentifiers){
 			if(fv.meaning&&fv.meaning.isToplevelDeclaration()) continue;
 			auto v=varName(fv);
-			if(v==name||v in later||v !in paramNames&&v !in exitDecls) ok=false; // (`v==name`: the definition consumes the previous version)
+			bool outer=fv.meaning&&fv.meaning.scope_&&!fv.meaning.scope_.isNestedIn(loop.bdy.blscope_)&&v !in changed; // (a variable from before the loop that the loop does not change, which the function captures, e.g., `m` for `b:=𝔹^m`)
+			if(v==name||v in later||v !in paramNames&&v !in exitDecls&&!outer) ok=false; // (`v==name`: the definition consumes the previous version)
 		}
 		if(!ok) continue;
 		if(auto fd=cast(FunctionDef)value){

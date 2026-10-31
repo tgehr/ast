@@ -492,6 +492,16 @@ int blockFreeVarsImpl(Expression[] stmts,Expression trailing,scope int delegate(
 	return 0;
 }
 
+void updateLambdaDefinition(LambdaExp le){ // (copies of a lambda are made from its original definition: after a change of its definition, e.g., a renaming, they are made from the changed one, also for the lambdas within it, which a copy of it copies from their original definitions in turn)
+	if(le.fd.body_) updateLambdaDefinitions(le.fd.body_);
+	le.orig=le.fd.copy();
+}
+void updateLambdaDefinitions(Expression e){ // (of the lambdas within `e`, also within lambdas and local functions, see `updateLambdaDefinition`)
+	foreach(x;e.subexpressions){
+		if(auto le=cast(LambdaExp)x) updateLambdaDefinition(le);
+		else if(auto nested=cast(FunctionDef)x) if(nested.body_) updateLambdaDefinitions(nested.body_);
+	}
+}
 int functionDefFreeVarsImpl(FunctionDef fd,scope int delegate(Identifier) dg){
 	SetX!Id bound;
 	if(fd.name){ bound[fd.getId]=[]; bound[fd.name.id]=[]; }

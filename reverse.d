@@ -2995,15 +2995,8 @@ LetExp functionValue(FunctionDef fd){ // (the value that a function definition d
 	auto nfd=fd.copy(cargs);
 	if(nfd.body_&&!nfd.params.any!(p=>p.name&&p.name.id==fd.name.id)){ // (the recursive references that the renaming misses: those of a definition that is not analyzed yet, and those within lambdas, which are copied from their original definitions)
 		foreach(id;nfd.body_.freeIdentifiers) if(id.id==fd.name.id) id.id=fresh;
-		void updateLambdas(Expression e){
-			foreach(x;e.subexpressions){
-				if(auto le=cast(LambdaExp)x){
-					if(le.fd.body_) updateLambdas(le.fd.body_);
-					le.orig=le.fd.copy();
-				}else if(auto nested=cast(FunctionDef)x) if(nested.body_) updateLambdas(nested.body_);
-			}
-		}
-		updateLambdas(nfd.body_);
+		import ast.substitute:updateLambdaDefinitions;
+		updateLambdaDefinitions(nfd.body_);
 	}
 	auto nname=new Identifier(fresh);
 	nname.loc=fd.name.loc;
