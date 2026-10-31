@@ -6851,6 +6851,11 @@ Expression tryReverseSemantic(CallExp ce,ExpSemContext context){
 	auto reverse=cast(Identifier)ce.e;
 	assert(reverse&&isReverse(reverse));
 	ce.arg=expressionSemantic(ce.arg,context.nestConst);
+	static if(language==silq) if(ce.arg.type&&!ce.arg.isSemError()&&!cast(FunTy)ce.arg.type) if(auto uft=cast(FunTy)unfoldTypeVariables(ce.arg.type)){ // (as for the callee of a call, see `callSemantic`)
+		auto narg=new TypeAnnotationExp(ce.arg,uft,TypeAnnotationType.annotation);
+		narg.loc=ce.arg.loc;
+		ce.arg=expressionSemantic(narg,context.nestConst);
+	}
 	enum simplify=true;
 	auto r=tryReverse(reverse,ce.arg,ce.isSquare,ce.isClassical,context.sc,ce.checkReverse,simplify);
 	if(ce.arg.isSemError())
@@ -7072,6 +7077,15 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		else{
 			ce.e.type=analyzedFun.type;
 			context.sc.restoreStateSnapshot(state);
+		}
+	}
+	static if(language==silq) if(ce.e.type&&!ce.e.isSemError()&&!cast(FunTy)ce.e.type) if(auto uft=cast(FunTy)unfoldTypeVariables(ce.e.type)){ // (the value of a type variable, e.g., `f(x)` for `f:t` after `t:=!ℕ→!ℕ`, as for operators)
+		static if(isPresemantic) ce.e.type=uft;
+		else{
+			auto nfun=new TypeAnnotationExp(ce.e,uft,TypeAnnotationType.annotation);
+			nfun.loc=ce.e.loc;
+			static if(isRhs) ce.e=expressionSemantic(nfun,context.nestCalled);
+			else ce.e=expressionSemantic(nfun,context.expSem.nestCalled);
 		}
 	}
 	static if(!isPresemantic)

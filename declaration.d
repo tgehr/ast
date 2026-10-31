@@ -251,8 +251,10 @@ class Parameter: VarDecl{
 		this.isConst_=isConst;
 	}
 	override Parameter copyImpl(CopyArgs args){
-		enforce(!args.preserveSemantic||util.among(sstate,SemState.initial,SemState.error),"TODO");
+		auto ofType=sstate==SemState.evaluated&&vtype is dtype; // (a parameter of a function type, see `productTy`)
+		enforce(!args.preserveSemantic||ofType||util.among(sstate,SemState.initial,SemState.error),"TODO");
 		auto r=new Parameter(isConst,copyNameImpl(args),dtype?dtype.copy(args):dtype);
+		if(args.preserveSemantic&&ofType) r.vtype=r.dtype;
 		return r;
 	}
 	override bool isLinear(){
