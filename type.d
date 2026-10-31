@@ -1141,10 +1141,15 @@ class ProductTy: Type{
 		return nn;
 	}
 	Id[] freshNames(Expression block){
+		Expression[] mentions=[block];
+		static if(language==silq) foreach(e;only(isType(block)?block:null,block.type)) if(e){ // (and the values of the type variables that it mentions, through which the unification looks, e.g., `n` for an argument of type `t` after `t:=uint[n]`, see `unfoldTypeVariables`)
+			auto u=unfoldTypeVariables(e);
+			if(u !is e) mentions~=u;
+		}
 		auto nnames=names.dup;
 		foreach(i,ref nn;nnames){
 			if(!nn) nn=Id.intern("x");
-			while(hasFreeVar(nn)||block.hasFreeVar(nn)||nnames[0..i].canFind(nn)) nn=nn.apos;
+			while(hasFreeVar(nn)||mentions.any!(e=>e.hasFreeVar(nn))||nnames[0..i].canFind(nn)) nn=nn.apos;
 		}
 		return nnames;
 	}

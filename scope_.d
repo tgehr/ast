@@ -505,6 +505,7 @@ abstract class Scope{
 		cid.constLookup=true;
 		cid.setSemCompleted();
 		blockConst(decl,cid);
+		recordAccess(cid,decl); // (renamed with the other accesses, e.g., to a split of `decl`, as for the const blocks of `mergeDeclProps`)
 	}
 	final void blockConst(Declaration decl,Identifier constBlock){
 		if(!decl.isToplevelDeclaration){
@@ -3321,18 +3322,20 @@ class CapturingScope(T): NestedScope{
 			}
 		}
 		if(!type) return null;
-		foreach(free;type.freeVars){
-			if(free.meaning)
-				addCapture(free,free.meaning,Lookup.constant,origin);
+		void captureMention(Identifier free){ // (through a copy: types share identifiers with expressions, which the renamings of the capture must not change, e.g., `n` of `vector(n,0:𝔹)` in the type of its result, or of `a:=𝔹^n` in the value of `a`, for a closure in a branch that splits `n`)
+			if(!free.meaning) return;
+			Expression.CopyArgs cargs={preserveSemantic:true};
+			auto mention=free.copy(cargs);
+			mention.typeofSuppressedCapture=free.typeofSuppressedCapture;
+			addCapture(mention,free.meaning,Lookup.constant,origin);
 		}
+		foreach(free;type.freeVars) captureMention(free);
 		static if(language==silq){ // (and the variables that the values of type variables mention, through which the closure can look, see `unfoldTypeVariables`)
 			import ast.semantic_:typeVariableDependency,typeVariableValueUnavailable;
 			auto utype=unfoldTypeVariables(type);
 			auto value=typeVariableValueUnavailable(meaning,origin)?null:typeVariableDependency(meaning);
 			foreach(e;only(utype !is type?utype:null,value))
-				if(e) foreach(free;e.freeVars)
-					if(free.meaning)
-						addCapture(free,free.meaning,Lookup.constant,origin);
+				if(e) foreach(free;e.freeVars) captureMention(free);
 		}
 		parent.recordCapturers(type);
 		import ast.semantic_:typeConstBlocked;
