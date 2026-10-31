@@ -449,8 +449,10 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 	}
 	static if(language==silq){
 		if(auto le=cast(LetExp)olhs){
-			if(!le.isForward(true))
+			if(!le.isForward(true)){
+				static if(reverseMode) if(recomputable(le)) return res=new ForgetExp(rhs,lhs); // (e.g., for a conditional in it whose branches forget its locals)
 				return res=lowerLetDefine(le,rhs,loc,sc,old,needOld);
+			}
 		}
 	}
 	if(defer&&!cast(ForgetExp)olhs){
@@ -1767,6 +1769,29 @@ bool readsBesidesUpdates(Expression e,Id name){ // (whether a statement reads a 
 	return rec(e);
 }
 
+private SetX!Declaration declaredWithin(Expression s){ // (the variables that a statement or expression declares)
+	SetX!Declaration r;
+	foreach(x;s.subexpressions){
+		if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) r.insert(id.meaning);
+		if(auto fe=cast(ForExp)x) if(fe.loopVar) r.insert(fe.loopVar);
+	}
+	return r;
+}
+private bool isVersionOf(Declaration d,SetX!Declaration decls){ return d.derivedSequence.any!(o=>o in decls); } // (also in a nested block, e.g., of `s` in the branches of `let{ s:=1:𝔹; } in (if q then dup(s) else x)`)
+bool recomputable(LetExp le){ // (whether the reversal can uncompute a value that an analyzed `let` expression defines by evaluating it again: it only calls `qfree` functions and only reads the variables of enclosing blocks)
+	if(!le.isSemCompleted()||!hasOnlyQfreeCalls(le)) return false;
+	auto local=declaredWithin(le);
+	bool isLocal(Declaration d){ return isVersionOf(d,local); }
+	foreach(x;le.subexpressions){
+		if(cast(FunctionDef)x||cast(LambdaExp)x||cast(ReturnExp)x) return false;
+		if(auto id=cast(Identifier)x){
+			if(id.meaning&&!id.meaning.isToplevelDeclaration()&&!isLocal(id.meaning)&&!id.constLookup&&!id.implicitDup) return false;
+		}else if(auto ce=cast(CompoundExp)x){
+			if(ce.blscope_) foreach(d;chain(ce.blscope_.forgottenVarsOnEntry,ce.blscope_.forgottenVars)) if(!isLocal(d)) return false;
+		}
+	}
+	return true;
+}
 bool usesUp(Id name,Expression[] statements){ // (whether the statements consume, forget or redefine a variable called `name`)
 	bool rec(Expression e){
 		if(auto ce=cast(CompoundExp)e) return ce.s.any!rec;
@@ -2235,15 +2260,12 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 			foreach(d;fd.capturedDecls) if(d.name&&!d.isToplevelDeclaration()) add(r.reads,d.name.id);
 			return cache[cast(void*)s]=r;
 		}
-		SetX!Declaration local; // (declared within the statement)
-		foreach(x;s.subexpressions){
-			if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) local.insert(id.meaning);
-			if(auto fe=cast(ForExp)x) if(fe.loopVar) local.insert(fe.loopVar);
-		}
+		auto local=declaredWithin(s);
+		bool isLocal(Declaration d){ return isVersionOf(d,local); }
 		void base(Expression e){
 			e=unwrap(e);
 			while(auto idx=cast(IndexExp)e) e=unwrap(idx.e);
-			if(auto id=cast(Identifier)e) add(r.writes,nameOf(id));
+			if(auto id=cast(Identifier)e) if(!id.meaning||!isLocal(id.meaning)) add(r.writes,nameOf(id));
 		}
 		void lhs(Expression e){ // (components of the left-hand side of a definition, e.g., of a swap `(a[0],a[1]):=(a[1],a[0])`)
 			e=unwrap(e);
@@ -2254,14 +2276,14 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 		}
 		foreach(x;s.subexpressions){
 			if(auto id=cast(Identifier)x){
-				if(!id.meaning||id.meaning.isToplevelDeclaration()||id.meaning in local) continue;
+				if(!id.meaning||id.meaning.isToplevelDeclaration()||isLocal(id.meaning)) continue;
 				add(r.reads,nameOf(id));
 				if(!id.constLookup&&!id.implicitDup||id.byRef) add(r.writes,nameOf(id));
 			}else if(auto de=cast(DefineExp)x) lhs(de.e1);
 			else if(auto ae=isOpAssignExp(x)) base(ae.e1);
 			else if(auto ce=cast(CompoundExp)x){
-				if(ce.blscope_) foreach(d;chain(ce.blscope_.forgottenVarsOnEntry,ce.blscope_.forgottenVars)) if(d.name) add(r.writes,d.name.id);
-			}else if(auto we=cast(WithExp)x) foreach(id;outerForgets(we)) add(r.writes,nameOf(id));
+				if(ce.blscope_) foreach(d;chain(ce.blscope_.forgottenVarsOnEntry,ce.blscope_.forgottenVars)) if(d.name&&!isLocal(d)) add(r.writes,d.name.id);
+			}else if(auto we=cast(WithExp)x) foreach(id;outerForgets(we)) if(!id.meaning||!isLocal(id.meaning)) add(r.writes,nameOf(id));
 		}
 		r.defines=definedNames(s);
 		foreach(n;r.defines) add(r.writes,n);
@@ -2494,10 +2516,9 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 	void embedded(Expression s,ForgetFrame* f){ // (the forgets of variables of enclosing blocks within the parts of a statement that the reversal evaluates again, after the statement, see `embeddedForgets`)
 		auto forgets=embeddedForgets(s);
 		if(!forgets.length) return;
-		SetX!Declaration local; // (declared within the statement)
-		foreach(x;s.subexpressions) if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) local.insert(id.meaning);
+		auto local=declaredWithin(s);
 		Expression[] outer;
-		foreach(fe;forgets) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) if(id.meaning&&!(id.meaning in local)&&id.type&&!id.type.isClassical()&&!outer.any!(o=>nameOf(cast(Identifier)o)==nameOf(id))) outer~=id;
+		foreach(fe;forgets) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) if(id.meaning&&!isVersionOf(id.meaning,local)&&id.type&&!id.type.isClassical()&&!outer.any!(o=>nameOf(cast(Identifier)o)==nameOf(id))) outer~=id;
 		if(!outer.length) return;
 		auto values=site(outer,f,names(s).writes.filter!(w=>!outer.any!(o=>nameOf(cast(Identifier)o)==w)).array,s.loc).filter!(u=>!!(cast(ForgetExp)u).val).array;
 		if(!values.length) return;

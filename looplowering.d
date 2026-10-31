@@ -1485,7 +1485,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(auto p=cast(const(void)*)x in pos) condOf[*p]=cast(int)k;
 				});
 		size_t[2][] needBits;
-		bool place(size_t n,int Y,scope bool delegate(size_t,size_t) inside,bool classical,out size_t level,out size_t wAt,out size_t rAt,out size_t rLevel,out bool slot){
+		bool place(size_t n,int Y,Id[] vars,bool classical,out size_t level,out size_t wAt,out size_t rAt,out size_t rLevel,out bool slot){ // (`vars`: the variables that the logged value reads)
+			bool inside(size_t start,size_t end){ return vars.any!(v=>definedIn(v,start,end)); }
 			size_t[] chain;
 			size_t at;
 			if(owner[n]>=0){
@@ -1538,6 +1539,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				foreach(d2;dd..level) if(isClassicalIte(chain[d2])&&!condOK(chain[d2],Y)) bits~=[chain[d2],cast(size_t)Y];
 				break;
 			}
+			foreach(ai,_;hoistedFrom) if(ai<at&&atoms[ai].stm==i&&vars.any!(v=>v in ainfos[ai].defs)&&atoms[ai].ites.any!(k=>chain[level..$].canFind(k))) return false; // (a definition that `hoistLocal` moved out of a quantum conditional remains within its classical conditionals, also those that the log is not within, e.g., of `x3` in `if a { if x1<1 { x3:=i+1; if x3>=10 { assert(false); } } }`)
 			needBits~=bits;
 			return true;
 		}
@@ -1572,7 +1574,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto n=pos[cast(const(void)*)we.cond];
 				size_t level,wAt,rAt,rLevel;
 				bool slot;
-				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) return null;
+				if(!place(n,Y,vars,true,level,wAt,rAt,rLevel,slot)) return null;
 				if(slot||level!=it.ctx.length||rLevel!=level) return null;
 				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,ℕt(true),null,n,null,wAt,rAt,level);
 				l.count=k;
@@ -1603,7 +1605,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto n=pos[cast(const(void)*)it.heads[0]];
 				size_t level,wAt,rAt,rLevel;
 				bool slot;
-				if(!place(n,Y,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) continue;
+				if(!place(n,Y,vars,true,level,wAt,rAt,rLevel,slot)) continue;
 				auto l=Log(Id.init,i,Y,X,freshName(),freshName(),Id.init,it.heads[0].type,null,n,null,wAt,rAt,level);
 				l.ite=k;
 				l.rLevel=rLevel;
@@ -1645,7 +1647,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					size_t level,wAt,rAt,rLevel;
 					bool slot;
 					auto uty=u in isCarried?carriedType.get(u,null):types.get(u,null);
-					if(!place(n,Y,(size_t start,size_t end)=>definedIn(u,start,end),!uty||uty.isClassical(),level,wAt,rAt,rLevel,slot)) return false;
+					if(!place(n,Y,[u],!uty||uty.isClassical(),level,wAt,rAt,rLevel,slot)) return false;
 					if(consume&&(slot||owner[n]<0||level!=atoms[owner[n]].ites.length||wAt!=owner[n])) return false;
 					bool viaDummy=false;
 					if(slot&&u !in isCarried){
@@ -1799,7 +1801,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto n=pos[cast(const(void)*)ites[j].heads[0]];
 			size_t level,wAt,rAt,rLevel;
 			bool slot;
-			if(!place(n,Z,(size_t start,size_t end)=>vars.any!(v=>definedIn(v,start,end)),true,level,wAt,rAt,rLevel,slot)) return null;
+			if(!place(n,Z,vars,true,level,wAt,rAt,rLevel,slot)) return null;
 			auto l=Log(Id.init,i,Z,Y,freshName(),freshName(),Id.init,ites[j].heads[0].type,null,n,null,wAt,rAt,level);
 			l.ite=j;
 			l.rLevel=rLevel;
@@ -2082,7 +2084,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						if(auto t=cast(const(void)*)x in renameOf) if(auto id=cast(Identifier)x) names[vname(id)]=*t;
 						FunctionDef fd=cast(FunctionDef)x;
 						if(auto le=cast(LambdaExp)x) fd=le.fd;
-						if(fd) foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) if(auto t=cast(const(void)*)id in renameOf) names[vname(id)]=*t;
+						if(fd) foreach(decl;fd.capturedDecls) foreach(id;fd.captures[decl]) if(auto t=cast(const(void)*)id in renameOf) names[varName(id)]=*t; // (the name in the copy, also of a capture with versions)
 					}
 					if(names.length){
 						import ast.substitute:statementFreeVarsImpl;
@@ -2109,7 +2111,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					if(ofd) foreach(decl;ofd.capturedDecls) foreach(id;ofd.captures[decl]){
 						if(auto t=cast(const(void)*)id in renameOf){
 							import ast.substitute:functionDefFreeVarsImpl;
-							auto name=vname(id),tmp=*t;
+							auto name=varName(id),tmp=*t; // (the name in the copy, also of a capture with versions, e.g., `w` in `w:=X(w); w:=X(w); w:=(λ()⇒X(w))();`)
 							functionDefFreeVarsImpl(cfd,(Identifier y){
 								if(y.id==name) y.id=tmp;
 								return 0;
