@@ -515,6 +515,7 @@ class FunctionDef: FixedPointDeclaration{
 	}
 
 	FunctionDef reversed=null;
+	FunctionDef classicalSlice=null; // (see `ast.reverse.classicalSlice`; the function itself if there is none)
 	bool isMain=false;
 }
 

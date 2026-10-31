@@ -1848,40 +1848,42 @@ Expression recomputation(Expression s,Scope sc,Id[] inner=null){ // (the copy of
 }
 
 static if(language==silq)
-Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // (the classical part of an `if` statement, a loop, a `with` statement or a `let` expression that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
-	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner);
+private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables)
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
-	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){
-		Expression[] r;
-		auto vars=inner~more;
-		auto ss=mergeCompound(b.s);
-		bool unused(size_t j){ // (local variables that it defines or changes, which no later statement reads other than to forget them, e.g., a definition that reads a dropped variable)
-			auto names=chain(definedNames(ss[j]),changedNames(ss[j])).array;
-			if(!names.length||!names.all!(n=>ss[0..j+1].any!(t=>definedNames(t).canFind(n)))) return false;
-			Id[] mentions(Expression e){ Id[] m; walkIdentifiers(e.copy(),(Identifier id){ m~=id.id; }); return m; }
-			bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val; }
-			return !chain(ss[j+1..$].filter!(t=>!noop(t)),only(result).filter!(e=>!!e)).any!(t=>mentions(t).any!(n=>names.canFind(n)));
-		}
-		foreach(j,s;ss){
-			auto changes=changedNames(s);
-			auto changesDropped=changes.any!(n=>drop.canFind(n));
-			if(changesDropped&&changes.all!(n=>drop.canFind(n))&&!definedNames(s).length) continue;
-			if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
-				if(readsDropped(s)){
-					if(unused(j)) continue;
-					return null;
-				}
-				r~=recomputation(s,sc,vars);
-			}else if(auto p=projection(s,sc,drop,vars)) r~=p;
-			else if(changes.length){ // (the values that it changes would not be recomputed)
+	Expression[] r;
+	auto ss=mergeCompound(b.s);
+	bool unused(size_t j){ // (local variables that it defines or changes, which no later statement reads other than to forget them, e.g., a definition that reads a dropped variable)
+		auto names=chain(definedNames(ss[j]),changedNames(ss[j])).array;
+		if(!names.length||!names.all!(n=>ss[0..j+1].any!(t=>definedNames(t).canFind(n)))) return false;
+		Id[] mentions(Expression e){ Id[] m; walkIdentifiers(e.copy(),(Identifier id){ m~=id.id; }); return m; }
+		bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val; }
+		return !chain(ss[j+1..$].filter!(t=>!noop(t)),only(result).filter!(e=>!!e)).any!(t=>mentions(t).any!(n=>names.canFind(n)));
+	}
+	foreach(j,s;ss){
+		auto changes=changedNames(s);
+		auto changesDropped=changes.any!(n=>drop.canFind(n));
+		if(changesDropped&&changes.all!(n=>drop.canFind(n))&&!definedNames(s).length) continue;
+		if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
+			if(readsDropped(s)){
 				if(unused(j)) continue;
 				return null;
 			}
+			r~=recomputation(s,sc,vars);
+		}else if(auto p=projection(s,sc,drop,vars)) r~=p;
+		else if(changes.length){ // (the values that it changes would not be recomputed)
+			if(unused(j)) continue;
+			return null;
 		}
-		auto res=new CompoundExp(r);
-		res.loc=b.loc;
-		return res;
 	}
+	auto res=new CompoundExp(r);
+	res.loc=b.loc;
+	return res;
+}
+static if(language==silq)
+Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // (the classical part of an `if` statement, a loop, a `with` statement, a `let` expression or a call that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner);
+	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
+	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result); }
 	Expression res;
 	if(headers(s).any!readsDropped) return null;
 	if(auto ite=cast(IteExp)s){
@@ -1911,6 +1913,12 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // 
 		}
 		res=r;
 	}else if(auto de=cast(DefineExp)s){ // (the classical results of a `let` expression, e.g., `k:=let { k+=1; } in k` for `(y,k):=let { k+=1; z:=X(x); } in (z,k)`)
+		if(auto ce=cast(CallExp)unwrap(de.e2)){ // (or of a call, see `callProjection`)
+			res=callProjection(de,ce,sc,drop,inner);
+			if(!res) return null;
+			res.loc=s.loc;
+			return res;
+		}
 		auto le=cast(LetExp)unwrap(de.e2);
 		if(!le) return null;
 		Expression[] lhs,rhs;
@@ -1973,10 +1981,127 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // 
 	return definedNames(res).length||changedNames(s).length?res:null;
 }
 
+static if(language==silq){
+private size_t[][] classicalPaths(Expression type){ // (the classical components of values of type `type` that are not parts of larger classical components, e.g., `[[1]]` for `𝔹^4 × !ℕ`)
+	if(type.isClassical()) return [[]];
+	size_t[][] r;
+	if(auto tt=type.isTupleTy()) foreach(i;0..tt.length) foreach(p;classicalPaths(tt[i])) r~=[i]~p;
+	return r;
+}
+private Expression atPath(Expression e,size_t[] path){ // (the component of a tuple expression, see `classicalPaths`)
+	foreach(i;path){
+		auto tpl=cast(TupleExp)unwrap(e);
+		if(!tpl||i>=tpl.length) return null;
+		e=tpl.e[i];
+	}
+	return e;
+}
+private Expression tupleIfMany(Expression[] es,Location loc){ // (not analyzed, unlike `tupleOf`)
+	if(es.length==1) return es[0];
+	auto tpl=new TupleExp(es);
+	tpl.loc=loc;
+	return tpl;
+}
+/// a function that computes the classical components of the result of `fd` (see `classicalPaths`) from its classical parameters, without the quantum computations, e.g., `k+1` for `def g(xs:𝔹^4,const k:!ℕ)mfree{ xs[k]:=H(xs[k]); return (xs,k+1); }`; with it, the reversal of a call recomputes the classical results that the reversed call receives (see `callProjection`); `null` if the classical part of `fd` cannot be separated, e.g., if it reads a quantum parameter or returns early
+FunctionDef classicalSlice(FunctionDef fd){
+	if(fd.classicalSlice) return fd.classicalSlice is fd?null:fd.classicalSlice;
+	fd.classicalSlice=fd;
+	auto sc=fd.scope_;
+	if(!sc||!fd.isToplevelDeclaration()||fd.isSquare||!fd.ftype||!fd.body_||fd.isSemError()) return null;
+	auto handler=sc.handler;
+	handler.suppress++; // (the slice may not be valid, e.g., if its body reads a quantum parameter)
+	scope(exit) handler.suppress--;
+	auto bfd=fd;
+	if(astopt.removeLoops&&fd.origBody_&&hasLoop(fd.origBody_)){ // (as for `reverseFunction`)
+		auto src=new FunctionDef(null,fd.params.map!(p=>p.copy()).array,fd.isTuple,fd.rret?fd.rret.copy():null,fd.origBody_.copy());
+		src.copyIntrinsicFieldsFrom(fd);
+		src.keepLoops=true;
+		src.loc=fd.loc;
+		src.scope_=sc;
+		src=cast(FunctionDef)presemantic(src,sc);
+		if(src) src=functionDefSemantic(src,sc);
+		if(!src||!src.isSemCompleted()&&src.sstate!=SemState.passive) return null;
+		bfd=src;
+	}
+	auto ss=mergeCompound(bfd.body_.s);
+	auto ret=ss.length?cast(ReturnExp)ss[$-1]:null;
+	if(!ret||ss[0..$-1].any!(s=>!!mayReturn(s))) return null;
+	Expression[] results;
+	foreach(p;classicalPaths(fd.ftype.cod)){
+		auto r=atPath(ret.e,p);
+		if(!r) return null;
+		results~=r;
+	}
+	if(!results.length) return null;
+	Parameter[] params;
+	foreach(p;bfd.params) if(p.vtype&&p.vtype.isClassical()){
+		if(!p.dtype) return null;
+		auto np=new Parameter(p.isConst,p.name.copy(),p.dtype.copy());
+		np.loc=p.loc;
+		params~=np;
+	}
+	auto name=new Identifier(freshName());
+	name.loc=fd.name?fd.name.loc:fd.loc;
+	auto body_=new CompoundExp([]);
+	body_.loc=bfd.body_.loc;
+	auto slice=new FunctionDef(name,params,params.length!=1,null,body_);
+	slice.annotation=pure_;
+	slice.inferAnnotation=true;
+	slice.keepLoops=true; // (as `bfd`)
+	slice.loc=fd.loc;
+	fd.classicalSlice=slice; // (for recursive calls)
+	auto part=classicalPart(bfd.body_,bfd.fscope_,[],[],tupleIfMany(results,ret.e.loc));
+	if(!part){ fd.classicalSlice=fd; return null; }
+	auto nret=new ReturnExp(tupleIfMany(results.map!(r=>recomputation(r,bfd.fscope_)).array,ret.e.loc));
+	nret.loc=ret.loc;
+	body_.s=part.s~[cast(Expression)nret];
+	slice=cast(FunctionDef)presemantic(slice,sc);
+	if(slice) slice=functionDefSemantic(slice,sc);
+	if(!slice||!slice.isSemCompleted()&&slice.sstate!=SemState.passive){ fd.classicalSlice=fd; return null; }
+	return slice;
+}
+private Expression callProjection(DefineExp de,CallExp ce,Scope sc,Id[] drop,Id[] inner){ // (the classical results of a call, which the classical slice of the function recomputes, e.g., `c:=s(j)` for `(xs,c):=g(xs,j)`, see `classicalSlice`)
+	auto id=cast(Identifier)unwrap(ce.e);
+	auto fd=id?cast(FunctionDef)id.meaning:null;
+	if(!fd||ce.isSquare||!ce.type||ce.type.isClassical()) return null;
+	auto slice=classicalSlice(fd);
+	if(!slice) return null;
+	Id[] results;
+	bool pattern(Expression e){
+		e=unwrap(e);
+		if(auto tpl=cast(TupleExp)e) return tpl.e.all!pattern;
+		auto id=cast(Identifier)e;
+		if(id) results~=nameOf(id);
+		return !!id;
+	}
+	Expression[] lhs;
+	foreach(p;classicalPaths(fd.ftype.cod)){
+		auto l=atPath(de.e1,p);
+		if(!l||!pattern(l)) return null;
+		lhs~=l.copy();
+	}
+	Expression[] args;
+	auto tpl=cast(TupleExp)ce.arg;
+	foreach(i,p;fd.params){
+		if(!p.vtype||!p.vtype.isClassical()) continue;
+		auto a=!fd.isTuple?ce.arg:tpl&&tpl.length==fd.params.length?tpl.e[i]:null;
+		if(!a||a.subexpressions.any!(x=>x.type&&!x.type.isClassical())) return null; // (the reversal does not see the quantum values before the call, e.g., `xs.length`)
+		if(a.subexpressions.any!(x=>cast(Identifier)x&&(drop.canFind(nameOf(cast(Identifier)x))||results.canFind(nameOf(cast(Identifier)x))))) return null; // (e.g., a result that redefines a classical argument that the call consumes, whose reversal is not supported)
+		args~=recomputation(a,sc,inner);
+	}
+	auto fid=new Identifier(slice.name.id);
+	fid.loc=ce.e.loc;
+	auto call=new CallExp(fid,tupleIfMany(args,ce.arg.loc),false,false);
+	call.loc=ce.loc;
+	return new DefineExp(tupleIfMany(lhs,de.e1.loc),call);
+}
+}
+
 static if(language==silq)
 bool hasExactInverse(ABinaryExp be){ // (classical updates that the reversal of a function reverts in place, e.g., `t+=c` or `t*=2`, but neither `t*=c`, which loses the value for `c=0`, nor updates of floating-point numbers)
 	auto num=isNumericTy(be.e1.type);
 	if(num==NumericType.ℝ||num==NumericType.ℂ) return false;
+	if(auto id=cast(Identifier)unwrap(be.e1)) if(be.e2.subexpressions.any!(x=>cast(Identifier)x&&nameOf(cast(Identifier)x)==nameOf(id))) return false; // (the inverse would read the version after the update, e.g., `t+=h(t)`)
 	if(cast(AddAssignExp)be||cast(SubAssignExp)be||cast(BitXorAssignExp)be||cast(XorAssignExp)be) return true;
 	if(!cast(MulAssignExp)be&&!cast(DivAssignExp)be||num!=NumericType.ℕt&&num!=NumericType.ℤt&&num!=NumericType.ℚt) return false; // (e.g., `t*=2` loses the highest bit of `t:!uint[4]`)
 	auto val=be.e2.asIntegerConstant(true);
@@ -2774,7 +2899,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					auto p=projection(s,sc,drop);
 					if(p){
 						auto pnames=definedNames(p),pchanges=changed[i].filter!(n=>!drop.canFind(n)).array; // (all of the others, see `projection`)
-						if((pchanges.length||statements[i+1..$].any!(t=>pnames.any!(n=>reads(t,n))))&&valid(pnames,pchanges)){
+						auto receives=cast(DefineExp)s&&cast(CallExp)unwrap((cast(DefineExp)s).e2); // (the reversed call receives the classical results, see `callProjection`)
+						if((pchanges.length||receives||statements[i+1..$].any!(t=>pnames.any!(n=>reads(t,n))))&&valid(pnames,pchanges)){
 							projections[i]=p;
 							projectionChanges[i]=pchanges;
 						}
