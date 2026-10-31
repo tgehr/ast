@@ -8540,7 +8540,7 @@ bool containsCollidingDefineOrAssign(Expression e){ // TODO: get rid of this
 bool hoistAliasedConstRead(Scope hsc,IndexExp idx,Scope sc){ // TODO: replace with more general solution
 	if(!getIdFromIndex(idx)) return false;
 	if(auto base=getIdFromIndex(idx)){
-		auto id=new Identifier(base.name);
+		auto id=new Identifier(base.meaning&&base.meaning.name?base.meaning.name.id:base.id); // (an analyzed identifier has the renamed name of its declaration, e.g., `x'` for a variable `x` of a nested function while one of an enclosing function is visible, but the declaration is looked up by its name)
 		id.loc=idx.loc;
 		auto decl=lookupMeaning(id,Lookup.probing,sc,false,null);
 		if(!decl) return false;
