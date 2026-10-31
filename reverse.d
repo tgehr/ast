@@ -1700,28 +1700,29 @@ Expression[] transStatements(WithExp we){ // (also those of nested blocks, e.g.,
 	return r;
 }
 
+Id classicalBase(Expression e){ // (the classical variable of a component, e.g., `a` for `a[i][j]`)
+	e=unwrap(e);
+	while(auto idx=cast(IndexExp)e) e=unwrap(idx.e);
+	auto id=cast(Identifier)e;
+	return id&&id.type&&id.type.isClassical()?nameOf(id):Id();
+}
+
 Id[] changedNames(Expression e){ // (the classical variables that a statement changes, e.g., `t+=c` or `(y,t):=let { t+=c; … } in (z,t)`, other than the ones that it defines)
 	Id[] r,local;
 	void rec(Expression e){
 		if(cast(FunctionDef)e||cast(LambdaExp)e) return;
 		if(cast(LetExp)e) return; // (it consumes the variables that it changes, and its reversal recomputes them from copies, see `lowerLetDefine`)
 		static if(language==silq) if(auto ce=cast(CompoundExp)e) if(ce.loweredFrom) return rec(ce.loweredFrom);
-		Id base(Expression e){
-			e=unwrap(e);
-			while(auto idx=cast(IndexExp)e) e=unwrap(idx.e);
-			auto id=cast(Identifier)e;
-			return id&&id.type&&id.type.isClassical()?nameOf(id):Id();
-		}
 		if(auto we=cast(WithExp)e){ // (the inverse restores what the transformation changes)
 			auto defined=definedNames(we.bdy);
 			foreach(n;chain(changedNames(we.bdy),defined)){
 				auto des=transStatements(we).map!(x=>cast(DefineExp)x).filter!(de=>de&&definedNames(de).canFind(n));
-				if(!des.empty){ foreach(de;des) if(auto b=base(de.e2)) r~=b; } // (the inverse writes back the component that the body changes or defines again, e.g., for `a[i]+=c` or a swap)
+				if(!des.empty){ foreach(de;des) if(auto b=classicalBase(de.e2)) r~=b; } // (the inverse writes back the component that the body changes or defines again, e.g., for `a[i]+=c` or a swap)
 				else if(!defined.canFind(n)) r~=n;
 			}
 			return;
 		}
-		if(auto ae=isOpAssignExp(e)) if(auto b=base(ae.e1)) r~=b;
+		if(auto ae=isOpAssignExp(e)) if(auto b=classicalBase(ae.e1)) r~=b;
 		if(auto de=cast(DefineExp)e){
 			Id[] redefined; // (a new version of a variable that a `let` expression on the right-hand side consumes, e.g., `(y,k):=let { k+=1; … } in (z,k)`, which the reversals of later statements would not see if it is not recomputed; the reversal of a call checks the version that it receives)
 			if(cast(LetExp)unwrap(de.e2)&&classifyStatement(de)!=ComputationClass.classical) foreach(id;definedIdentifiers(de)) if(id.type&&id.type.isClassical()){
@@ -1733,7 +1734,7 @@ Id[] changedNames(Expression e){ // (the classical variables that a statement ch
 			void lhs(Expression x){ // (components of the left-hand side, e.g., of a swap `(a[0],a[1]):=(a[1],a[0])`)
 				x=unwrap(x);
 				if(auto tpl=cast(TupleExp)x) foreach(y;tpl.e) lhs(y);
-				else if(cast(IndexExp)x) if(auto b=base(x)) r~=b;
+				else if(cast(IndexExp)x) if(auto b=classicalBase(x)) r~=b;
 			}
 			lhs(de.e1);
 		}
@@ -1741,6 +1742,13 @@ Id[] changedNames(Expression e){ // (the classical variables that a statement ch
 	}
 	rec(e);
 	return r.filter!(n=>!local.canFind(n)).array;
+}
+
+Id[] writtenBack(WithExp we){ // (the classical variables into which the inverse writes back what the body changes or defines again, e.g., `k` for `with { c:=k; } do { c+=1; }`: a recomputation keeps their moves, see `recomputation`)
+	Id[] r;
+	auto updated=chain(changedNames(we.bdy),definedNames(we.bdy)).array;
+	foreach(x;transStatements(we)) if(auto de=cast(DefineExp)x) if(definedNames(de).any!(n=>updated.canFind(n))) if(auto b=classicalBase(de.e2)) r~=b;
+	return r;
 }
 
 bool readsBesidesUpdates(Expression e,Id name){ // (whether a statement reads a variable other than to update it, e.g., in `t+=c`, in a swap of components or in `a[i]+=c`)
@@ -1794,15 +1802,12 @@ bool recomputable(LetExp le){ // (whether the reversal can uncompute a value tha
 }
 bool usesUp(Id name,Expression[] statements){ // (whether the statements consume, forget or redefine a variable called `name`)
 	bool rec(Expression e){
-		if(auto ce=cast(CompoundExp)e) return ce.s.any!rec;
-		if(auto ite=cast(IteExp)e) return rec(ite.cond)||rec(ite.then)||ite.othw&&rec(ite.othw);
-		if(auto we=cast(WithExp)e) return rec(we.bdy)&&!(we.itrans&&definedNames(we.itrans).canFind(name)); // (the inverse restores what the transformation or the body consumes)
-		foreach(x;e.subexpressions){
-			if(auto id=cast(Identifier)x)
-				if(id.meaning&&id.meaning.name&&id.meaning.name.id==name&&!id.constLookup&&!id.implicitDup)
-					return true;
-			if(cast(DefineExp)x&&definedNames(x).canFind(name)) return true;
-		}
+		if(auto we=cast(WithExp)e) return rec(we.bdy)&&!(we.itrans&&definedNames(we.itrans).canFind(name)); // (the inverse restores what the transformation or the body consumes, also in a loop)
+		if(auto id=cast(Identifier)e)
+			if(id.meaning&&id.meaning.name&&id.meaning.name.id==name&&!id.constLookup&&!id.implicitDup)
+				return true;
+		if(cast(DefineExp)e&&definedNames(e).canFind(name)) return true;
+		foreach(x;e.components) if(rec(x)) return true;
 		return false;
 	}
 	return statements.any!rec;
@@ -1825,7 +1830,11 @@ Expression recomputation(Expression s,Scope sc,Id[] inner=null){ // (the copy of
 		if(cast(FunctionDef)x) return x.copy();
 		if(auto we=cast(WithExp)x){
 			inner~=chain(definedNames(we.trans),definedNames(we.bdy)).array;
-			auto r=new WithExp(we.trans.copy(args),we.bdy.copy(args),we.isIndices);
+			auto outer=inner;
+			inner~=writtenBack(we);
+			auto trans=we.trans.copy(args);
+			inner=outer;
+			auto r=new WithExp(trans,we.bdy.copy(args),we.isIndices);
 			if(we.itrans&&we.isIndices) r.itrans=we.itrans.copy(args); // (as for the reversal, see `reverseStatement`)
 			r.loc=we.loc;
 			return cast(Expression)r;
@@ -1903,7 +1912,7 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // 
 		auto changes=changedNames(we.bdy);
 		if(changedNames(we).any!(n=>drop.canFind(n)&&!changes.canFind(n))) return null; // (a classical component that the inverse writes back)
 		auto more=chain(definedNames(we.trans),definedNames(we.bdy)).array;
-		auto trans=part(we.trans,we.bdy,more),bdy=part(we.bdy,null,more);
+		auto trans=part(we.trans,we.bdy,more~writtenBack(we)),bdy=part(we.bdy,null,more);
 		if(!trans||!bdy) return null;
 		auto r=new WithExp(trans,bdy);
 		if(we.isIndices&&trans.s.length){ // (a classical component that it moves out and writes back)
