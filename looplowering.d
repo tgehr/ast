@@ -4513,13 +4513,14 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	// for consumptions are weakened, and the values are coerced back at the start of the function, for the `const`
 	// parameters that it copies, the copies, see `constParamDef`)
 	Expression[] entryCoercions;
-	SetX!Id weakenedParams;
+	SetX!Id weakenedParams,convertedParams; // (`convertedParams`: the arguments are converted to the weakened types, see `weakeningAnnotation`)
 	void weakenParam(ref Q!(Id,Declaration,Expression,bool) p){
 		auto type=typeForDecl(p[1]);
 		if(!type||!mentionsFreed(type)) return;
 		auto w=weakenedExitType(type,freed);
 		if(!w) return;
 		weakenedParams.insert(p[0]);
+		if(weakeningAnnotation(type,w)==TypeAnnotationType.conversion) convertedParams.insert(p[0]);
 		Expression.CopyArgs cargs;
 		auto use=new Identifier(p[1].name.id);
 		use.loc=p[1].loc;
@@ -4621,6 +4622,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		returnTpl.loc=loop.loc;
 	}
 	SetX!Id replayedParams; // (carried variables whose values at the exit are computed again after the loop instead of being returned)
+	SetX!Id convertedCarried; // (names of carried variables that the body defines with a type that converts to the type of the parameter, see `strongerExits`)
 	static if(isDoWhile){ // (the definitions of the body that are available after the loop are returned as well)
 		Q!(Identifier,Expression,Expression)[] exitLocals; // (name, type, type in the result of the function)
 		SetX!Id paramNames,changed; // (`changed`: names of the values that the loop defines or changes)
@@ -4656,6 +4658,10 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
 			if(!type||!ptype||type==ptype) continue;
 			auto rtype=isSubtype(type,ptype)?ptype:joinTypes(type,ptype); // (the parameter type can be stronger, e.g., `do{ x+=1; }while c{ x=0:!𝔹; }`)
+			if(!rtype) if(auto w=weakenedExitType(type,changed)) if(isSubtype(w,ptype)){ // (or the type of the next iteration, e.g., `!ℕ` for `!uint[n]`, see `weakenedExitType`)
+				rtype=ptype;
+				convertedCarried.insert(name.id);
+			}
 			if(rtype&&rtype!=type) strongerExits~=q(name.id,type,rtype);
 		}
 		foreach(ref r;returnTpl.e){ // (see `exitCoercions`)
@@ -4663,12 +4669,12 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			if(!id) continue;
 			auto s=strongerExits.find!(s=>s[0]==id.id);
 			if(s.empty) continue;
-			r=new TypeAnnotationExp(id,s.front[2].copy(cargsDefault),TypeAnnotationType.annotation);
+			r=new TypeAnnotationExp(id,s.front[2].copy(cargsDefault),weakeningAnnotation(s.front[1],s.front[2]));
 			r.loc=id.loc;
 		}
 		foreach(e;exitLocals){ // (types mentioning local values of the function are weakened, see `exitCoercions`)
 			Expression r=e[0].copy(cargsDefault);
-			if(e[2] !is e[1]) r=new TypeAnnotationExp(r,e[2].copy(cargsDefault),TypeAnnotationType.annotation);
+			if(e[2] !is e[1]) r=new TypeAnnotationExp(r,e[2].copy(cargsDefault),weakeningAnnotation(e[1],e[2]));
 			r.loc=e[0].loc;
 			returnTpl.e~=r;
 		}
@@ -4843,6 +4849,11 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}else static assert(0,"unsupported type of loop for lowering: ",T);
 	auto paramTpl=new TupleExp(cast(Expression[])ids(allParams,false));
 	paramTpl.loc=loop.loc;
+	foreach(i,p;allParams) if(p[0] in convertedParams||p[1].name.id in convertedCarried){ // (the call does not convert its arguments, see `weakenings`)
+		auto conv=new TypeAnnotationExp(paramTpl.e[i],p[2].copy(cargsDefault),TypeAnnotationType.conversion);
+		conv.loc=paramTpl.e[i].loc;
+		paramTpl.e[i]=conv;
+	}
 	static if(is(T==ForExp)){{
 		auto loopVar=constTmpNames[0].copy(cargsDefault);
 		auto step=stepName?stepName.copy(cargsDefault):LiteralExp.makeInteger(1);
@@ -5074,7 +5085,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						auto id=e[0].copy(cargsDefault);
 						id.moved=true; // (also a lifted quantum value, which the analysis would otherwise `dup` for the reset branch, where it is still available)
 						if(e[2] is e[1]) return id;
-						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),TypeAnnotationType.annotation));
+						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),weakeningAnnotation(e[1],e[2])));
 					}
 					auto vals=packed.map!pack.array;
 					typeof(strongerExits) weakened; // (parameters whose types mention the definitions that the exit branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
@@ -5085,7 +5096,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 						return at(new DefineExp(mk(name),at(new TypeAnnotationExp(use,type.copy(cargsDefault),kind))));
 					}
 					auto then=at(new CompoundExp(nrst.s~next)); // (only the exit branch joins with the code after the `if`)
-					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],TypeAnnotationType.annotation)).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
+					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],weakeningAnnotation(s[1],s[2]))).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
 					nbdy.s~=at(new IteExp(ncond,then,othw));
 					Expression[] lhs,coercions;
 					foreach(e;packed){
@@ -5241,21 +5252,27 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		tae.loc=id.loc;
 		arg=tae;
 	}
-	Expression[] weakenings; // (of the lifted variables whose types mention variables that the call consumes while they are live)
-	foreach(p;constParams){
-		if(!p[3]) continue;
-		auto type=state.origStateSnapshot.typeOf(p[0]),ptype=typeForDecl(p[1]);
-		if(!type||!ptype||type==ptype&&p[0] !in weakenedParams) continue;
-		if(!type.freeIdentifiers.any!(id=>id.meaning&&movedParams.any!(q=>q[0]==id.meaning.getId))) continue;
+	Expression[] weakenings; // (of the lifted variables whose types mention variables that the call consumes while they are live, and of the arguments that are converted, see `convertedParams`)
+	Expression weakening(Q!(Id,Declaration,Expression,bool) p){
 		auto use=new Identifier(p[1].name.id);
 		use.loc=loop.loc;
 		use.moved=true;
-		auto weak=new TypeAnnotationExp(use,p[2].copy(cargsDefault),TypeAnnotationType.annotation);
+		auto weak=new TypeAnnotationExp(use,p[2].copy(cargsDefault),p[0] in convertedParams?TypeAnnotationType.conversion:TypeAnnotationType.annotation);
 		weak.loc=loop.loc;
 		auto def=new DefineExp(new Identifier(p[1].name.id),weak);
 		def.loc=def.e1.loc=loop.loc;
-		weakenings~=def;
+		return def;
 	}
+	foreach(p;constParams){
+		if(!p[3]) continue;
+		auto type=state.origStateSnapshot.typeOf(p[0]),ptype=typeForDecl(p[1]);
+		if(p[0] !in convertedParams){
+			if(!type||!ptype||type==ptype&&p[0] !in weakenedParams) continue;
+			if(!type.freeIdentifiers.any!(id=>id.meaning&&movedParams.any!(q=>q[0]==id.meaning.getId))) continue;
+		}
+		weakenings~=weakening(p);
+	}
+	foreach(p;movedParams) if(p[0] in convertedParams) weakenings~=weakening(p); // (the call does not convert its arguments)
 	Expression[] stmts=forgetBefore.map!((d){
 		auto id=new Identifier(d.name.id);
 		id.loc=loop.loc;
@@ -5511,7 +5528,7 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 		auto type=typeForDecl(decl);
 		if(!type) continue;
 		bool typeValue=isTypeTy(type)||isQNumeric(type); // (a use needs the value, e.g., `x coerce a` with `a:=𝔹^n`)
-		bool dependentFunction=cast(FunTy)type&&type.isClassical()&&!weakenedExitType(type,changed); // (its type cannot be expressed in the result of the function)
+		bool dependentFunction=cast(FunTy)type&&!weakenedExitType(type,changed)&&(type.isClassical()||sc.dependencyTracked(decl)&&!sc.getDependency(decl).isTop); // (its type cannot be expressed in the result of the function; a quantum one is forgotten in the function, e.g., `def g()⇒dup(x)` for `x:𝔹^n`)
 		if(!typeValue&&!dependentFunction&&(type.isClassical()||!sc.dependencyTracked(decl)||sc.getDependency(decl).isTop)) continue;
 		if(cast(FunctionDef)value&&!dependentFunction) continue;
 		bool ok=true;
@@ -5557,6 +5574,11 @@ Expression weakenedExitType(Expression t,ref SetX!Id changed){
 		return null;
 	}
 	return rec(t);
+}
+// the annotation of a value of type `t` with its weakened type `w` (see `weakenedExitType`)
+static if(language==silq)
+TypeAnnotationType weakeningAnnotation(Expression t,Expression w){
+	return t&&isSubtype(t,w)?TypeAnnotationType.annotation:TypeAnnotationType.conversion; // (a conversion for a fixed-width integer, e.g., to `!ℕ` for `!uint[n]`)
 }
 bool loopContainsReturn(T)(T loop){
 	static if(language==silq) static if(is(T==DoWhileExp)) return containsReturn(loop.bdy)||loop.reset&&containsReturn(loop.reset);
@@ -6204,12 +6226,14 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 		auto pname=new Identifier(v.name);
 		pname.loc=s.loc;
 		auto type=v.type.copy(cargs);
+		auto argKind=TypeAnnotationType.annotation; // (`conversion` for a weakened type that is not a supertype, see `weakeningAnnotation`)
 		// (types of parameters cannot mention other parameters, and the calls may have other versions of the variables that
 		// the join point captures, e.g., the parameters of a nested join point: such a type is weakened, and the value is
 		// coerced back)
 		if(v.type.freeIdentifiers.any!(id=>id.id in localNames||id.meaning&&id.meaning.name&&id.meaning.name.id in localNames)){
 			if(auto w=weakenedExitType(v.type,localNames)){
 				type=w.copy(cargs);
+				argKind=weakeningAnnotation(v.type,w);
 				auto use=new Identifier(v.name);
 				use.loc=s.loc;
 				use.moved=true;
@@ -6238,7 +6262,11 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 		}
 		auto arg=new Identifier(v.name);
 		arg.loc=s.loc;
-		args~=arg;
+		if(argKind==TypeAnnotationType.conversion){ // (the call does not convert its arguments)
+			auto conv=new TypeAnnotationExp(arg,type.copy(cargs),argKind);
+			conv.loc=s.loc;
+			args~=conv;
+		}else args~=arg;
 	}
 	auto kname=new Identifier(freshName());
 	kname.loc=s.loc;

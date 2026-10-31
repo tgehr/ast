@@ -1068,6 +1068,7 @@ Expression definitionValue(Declaration meaning,bool typeVariable){ // (see `Iden
 	if(init.type&&vd.vtype&&!isSubtype(init.type,vd.vtype)) return null; // (e.g., the value before a coercion, as for `x` in `(x coerce ⊥)~y:=…`)
 	auto local=!cast(TopScope)vd.scope_;
 	if(typeVariable?!local||!isTypeTy(vd.vtype):local&&!isQNumeric(vd.vtype)) return null;
+	if(isEmpty(vd.vtype)) return null; // (a variable of an empty type has no value, e.g., `x` after `x:=y coerce ⊥`, although `⊥` is also a type of types)
 	return init.eval();
 }
 static if(language==silq)
