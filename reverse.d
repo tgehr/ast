@@ -1857,34 +1857,39 @@ Expression recomputation(Expression s,Scope sc,Id[] inner=null){ // (the copy of
 }
 
 static if(language==silq)
+private bool withoutEffect(Expression e){ // (a part that neither defines nor changes values, e.g., an `if` statement whose branches are empty)
+	if(auto ce=cast(CompoundExp)e) return ce.s.all!withoutEffect;
+	if(auto ite=cast(IteExp)e) return withoutEffect(ite.then)&&(!ite.othw||withoutEffect(ite.othw));
+	if(auto fe=cast(ForExp)e) return withoutEffect(fe.bdy);
+	if(auto re=cast(RepeatExp)e) return withoutEffect(re.bdy);
+	return false;
+}
+static if(language==silq)
 private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables)
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
-	Expression[] r;
 	auto ss=mergeCompound(b.s);
-	bool unused(size_t j){ // (local variables that it defines or changes, which no later statement reads other than to forget them, e.g., a definition that reads a dropped variable)
-		auto names=chain(definedNames(ss[j]),changedNames(ss[j])).array;
-		if(!names.length||!names.all!(n=>ss[0..j+1].any!(t=>definedNames(t).canFind(n)))) return false;
-		Id[] mentions(Expression e){ Id[] m; walkIdentifiers(e.copy(),(Identifier id){ m~=id.id; }); return m; }
-		bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val; }
-		return !chain(ss[j+1..$].filter!(t=>!noop(t)),only(result).filter!(e=>!!e)).any!(t=>mentions(t).any!(n=>names.canFind(n)));
-	}
+	auto parts=new Expression[](ss.length);
+	auto omitted=new bool[](ss.length); // (statements without classical parts that define or change values, which the classical part then must not read, see `unused`)
 	foreach(j,s;ss){
 		auto changes=changedNames(s);
 		auto changesDropped=changes.any!(n=>drop.canFind(n));
 		if(changesDropped&&changes.all!(n=>drop.canFind(n))&&!definedNames(s).length) continue;
 		if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
-			if(readsDropped(s)){
-				if(unused(j)) continue;
-				return null;
-			}
-			r~=recomputation(s,sc,vars);
-		}else if(auto p=projection(s,sc,drop,vars)) r~=p;
-		else if(changes.length){ // (the values that it changes would not be recomputed)
-			if(unused(j)) continue;
-			return null;
-		}
+			if(readsDropped(s)) omitted[j]=true;
+			else parts[j]=recomputation(s,sc,vars);
+		}else if(auto p=projection(s,sc,drop,vars)) parts[j]=p;
+		else if(changes.length) omitted[j]=true; // (the values that it changes would not be recomputed)
+		if(parts[j]&&withoutEffect(parts[j])) parts[j]=null; // (e.g., `if u==3 { }` for `if u==3 { x[2]:=X(x[2]); }`, which then does not need `u`)
 	}
-	auto res=new CompoundExp(r);
+	bool unused(size_t j){ // (local variables that it defines or changes, which no later part reads other than to forget them, e.g., a definition that reads a dropped variable)
+		auto names=chain(definedNames(ss[j]),changedNames(ss[j])).array;
+		if(!names.length||!names.all!(n=>ss[0..j+1].any!(t=>definedNames(t).canFind(n)))) return false;
+		Id[] mentions(Expression e){ Id[] m; walkIdentifiers(e.copy(),(Identifier id){ m~=id.id; }); return m; }
+		bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val; }
+		return !chain(parts[j+1..$].filter!(t=>t&&!noop(t)),only(result).filter!(e=>!!e)).any!(t=>mentions(t).any!(n=>names.canFind(n)));
+	}
+	foreach(j;0..ss.length) if(omitted[j]&&!unused(j)) return null;
+	auto res=new CompoundExp(parts.filter!(p=>!!p).array);
 	res.loc=b.loc;
 	return res;
 }
