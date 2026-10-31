@@ -1676,7 +1676,11 @@ Id[] definedNames(Expression e){
 		auto othw=ite.othw?definedNames(ite.othw):[];
 		return definedNames(ite.then).filter!(n=>othw.canFind(n)).array;
 	}
-	if(auto ce=cast(CompoundExp)e) return ce.s.map!definedNames.joiner.array;
+	if(auto ce=cast(CompoundExp)e){ // (not lazily: `joiner` evaluates the elements of `map` more than once, which is exponential for nested blocks, e.g., chains of `else if`)
+		Id[] r;
+		foreach(s;ce.s) r~=definedNames(s);
+		return r;
+	}
 	return definedIdentifiers(e).map!nameOf.array;
 }
 
@@ -2063,10 +2067,10 @@ Expression[] uncomputed(Expression s){ // (with explicit forgets for the quantum
 	foreach(fe;embeddedForgets(s)) if(fe.outerUncomputation.length&&fe.outerStatement is s){ after~=fe.outerUncomputation; break; }
 	return [s]~after;
 }
-private Id[] recomputedBefore(ForgetExp fe){ // (the variables that a forget within a part of a statement that the reversal evaluates again forgets and that the reversal recomputes before the statement, see `embeddedForgets`)
+private Id[] recomputedBefore(ForgetExp fe){ // (the variables that a forget within a part of a statement that the reversal evaluates again forgets and that the reversal recomputes before the statement, see `embeddedForgets`, or before an enclosing conditional)
 	Id[] r;
 	foreach(u;fe.outerUncomputation) foreach(v;forgottenVariables(cast(ForgetExp)u)) if(auto id=cast(Identifier)unwrap(v)) r~=nameOf(id);
-	return r;
+	return r~fe.outerHoisted;
 }
 private void reevaluatedParts(Expression e,ref Expression[] parts){ // (of the right-hand side of a definition: the parts that its reversal evaluates again, e.g., the `const` arguments of a reversed call, see `lowerDefine`)
 	e=unwrap(e);
@@ -2500,60 +2504,113 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 		foreach(fe;forgets){ // (the outermost statement, e.g., a definition whose reversal evaluates again a `let` expression with statements that forget them)
 			fe.outerUncomputation=values;
 			fe.outerStatement=s;
+			fe.outerHoisted=null;
 		}
 	}
-	void hoist(IteExp ite,ForgetFrame* f){ // (the quantum variables that both branches of an `if` statement or expression with a quantum condition forget, and that it does not change otherwise, are recomputed before its reversal, as their definitions under the condition may not be supported, e.g., of closures)
+	void hoist(IteExp ite,ForgetFrame* f){ // (the quantum variables that both branches of an `if` statement or expression with a quantum condition forget, also within nested statements and expressions, e.g., in both branches of a classical `if` statement, and that it does not change otherwise, are recomputed before its reversal, as their definitions under the condition may not be supported, e.g., of closures)
 		if(!ite.othw||!ite.cond.type||ite.cond.type.isClassical()) return;
-		ForgetExp[] forgets(Expression t){ // (that the reversal of a statement of a branch recomputes in the branch: a forget, or the forgets of a `let` expression that the statement is or defines, see `lowerDefine`)
-			if(auto fe=cast(ForgetExp)t) return fe.val?[]:[fe];
-			auto e=t;
-			if(auto de=cast(DefineExp)t) e=unwrap(de.e2);
-			ForgetExp[] r;
-			if(auto le=cast(LetExp)e) if(le.isForward(true)) foreach(u;le.s.s[1..$]) if(auto fe=cast(ForgetExp)u) if(!fe.val) r~=fe;
-			return r;
-		}
-		Id[] forgottenBy(Expression t){
-			Id[] r;
-			foreach(fe;forgets(t)) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) r~=nameOf(id);
-			return r;
-		}
+		static struct Site{ Expression[]* uncomputation; Location loc; ForgetExp embedded; } // (where the reversal of a branch recomputes variables that it forgets; `embedded`: a forget within a part that the reversal evaluates again, see `embeddedForgets`)
+		Site[] sites;
+		Id[] other=names(ite.cond).writes.dup; // (the variables that the branches change other than by forgetting them)
 		Identifier[] forgottenIn(CompoundExp b){
 			Identifier[] r;
-			if(b.blscope_) r~=identifiersOf(b.blscope_.forgottenVarsOnEntry~b.blscope_.forgottenVars,b.loc);
-			foreach(t;components(flatten(b.s))) foreach(fe;forgets(t)) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) if(id.meaning&&id.type&&!id.type.isClassical()) r~=id;
+			void forgotten(Identifier id){ if(id.meaning&&id.type&&!id.type.isClassical()&&!r.any!(o=>nameOf(o)==nameOf(id))) r~=id; }
+			void base(Expression e){
+				e=unwrap(e);
+				while(auto idx=cast(IndexExp)e) e=unwrap(idx.e);
+				if(auto id=cast(Identifier)e) add(other,[nameOf(id)]);
+			}
+			void lhs(Expression e){
+				e=unwrap(e);
+				if(auto tpl=cast(TupleExp)e) foreach(y;tpl.e) lhs(y);
+				else if(auto vec=cast(VectorExp)e) foreach(y;vec.e) lhs(y);
+				else if(auto ce=cast(CatExp)e){ lhs(ce.e1); lhs(ce.e2); }
+				else if(cast(IndexExp)e) base(e);
+			}
+			void visit(Expression e){
+				if(auto ce=cast(CompoundExp)e){
+					if(ce.loweredFrom) return visit(ce.loweredFrom);
+					if(ce.blscope_){
+						foreach(id;identifiersOf(ce.blscope_.forgottenVarsOnEntry~ce.blscope_.forgottenVars,ce.loc)) forgotten(id);
+						sites~=[Site(&ce.entryUncomputation,ce.loc),Site(&ce.exitUncomputation,ce.loc)];
+					}
+					foreach(x;ce.s) visit(x);
+					return;
+				}
+				if(auto fe=cast(ForgetExp)e) if(!fe.val){
+					foreach(v;forgottenVariables(fe)){
+						if(auto id=cast(Identifier)unwrap(v)) forgotten(id);
+						else visit(v);
+					}
+					sites~=Site(&fe.uncomputation,fe.loc);
+					if(fe.outerUncomputation.length) sites~=Site(&fe.outerUncomputation,fe.loc,fe);
+					return;
+				}
+				if(auto we=cast(WithExp)e){
+					add(other,names(we.trans).writes);
+					foreach(id;outerForgets(we)) forgotten(id);
+					sites~=Site(&we.uncomputation,we.loc);
+					visit(we.bdy);
+					return;
+				}
+				if(auto fd=cast(FunctionDef)e){
+					if(fd.name) add(other,[fd.name.id]);
+					foreach(_,ids;fd.captures) foreach(c;ids) visit(c);
+					return;
+				}
+				if(auto id=cast(Identifier)e){
+					if(id.meaning&&!id.meaning.isToplevelDeclaration()&&(!id.constLookup&&!id.implicitDup||id.byRef)) add(other,[nameOf(id)]);
+					return;
+				}
+				if(auto nite=cast(IteExp)e){
+					sites~=Site(&nite.uncomputation,nite.loc); // (hoisted out of a nested conditional)
+					visit(nite.cond);
+					visit(nite.then);
+					if(nite.othw) visit(nite.othw);
+					return;
+				}
+				if(auto de=cast(DefineExp)e){
+					add(other,definedNames(de));
+					lhs(de.e1);
+				}
+				if(auto ae=isOpAssignExp(e)) base(ae.e1);
+				if(auto fe=cast(ForExp)e) if(fe.loopVar&&fe.loopVar.name) add(other,[fe.loopVar.name.id]);
+				foreach(x;e.components) visit(x);
+			}
+			visit(b);
 			return r;
 		}
 		auto inThen=forgottenIn(ite.then),inOthw=forgottenIn(ite.othw);
-		Id[] other=names(ite.cond).writes.dup;
-		foreach(b;[ite.then,ite.othw]) foreach(t;components(flatten(b.s))){
-			if(cast(ForgetExp)t) continue;
-			auto n=names(t),forgotten=forgottenBy(t);
-			add(other,n.writes.filter!(w=>!forgotten.canFind(w)||n.defines.canFind(w)).array);
-		}
 		Expression[] candidates;
-		foreach(id;inThen) if(inOthw.any!(o=>nameOf(o)==nameOf(id))&&!other.canFind(nameOf(id))&&!candidates.any!(c=>nameOf(cast(Identifier)c)==nameOf(id))) candidates~=id;
+		foreach(id;inThen) if(inOthw.any!(o=>nameOf(o)==nameOf(id))&&!other.canFind(nameOf(id))) candidates~=id;
 		if(!candidates.length) return;
 		auto changed=names(statement?statement:ite).writes.filter!(w=>!candidates.any!(c=>nameOf(cast(Identifier)c)==w)).array; // (also by the statement that contains an `if` expression)
 		auto values=site(candidates,f,changed,ite.loc).filter!(u=>!!(cast(ForgetExp)u).val).array;
 		if(!values.length) return;
 		auto hoisted=values.map!(u=>nameOf(cast(Identifier)unwrap((cast(ForgetExp)u).var))).array;
-		ite.uncomputation=values;
-		void exclude(ref Expression[] uncomputation,Location loc){ // (the branches do not recompute them)
-			if(!uncomputation.length) return;
+		Id[] exclude(ref Expression[] uncomputation,Location loc){ // (the branches do not recompute them; returns the ones that it removes)
+			Id[] removed;
+			if(!uncomputation.length) return removed;
 			Expression[] r;
 			foreach(u;uncomputation){
 				auto fe=cast(ForgetExp)u;
-				auto vars=forgottenVariables(fe).filter!(v=>!(cast(Identifier)unwrap(v)&&hoisted.canFind(nameOf(cast(Identifier)unwrap(v))))).array;
+				Expression[] vars;
+				foreach(v;forgottenVariables(fe)){
+					auto id=cast(Identifier)unwrap(v);
+					if(id&&hoisted.canFind(nameOf(id))) removed~=nameOf(id);
+					else vars~=v;
+				}
 				if(vars.length) r~=vars.length<forgottenVariables(fe).length?makeForget(tupleOf(vars,fe.loc),fe.val,fe.loc):fe;
 			}
 			if(!r.length) r=[makeForget(tupleOf([],loc),null,loc)]; // (of nothing, which the reversal ignores)
 			uncomputation=r;
+			return removed;
 		}
-		foreach(b;[ite.then,ite.othw]){
-			exclude(b.entryUncomputation,b.loc);
-			exclude(b.exitUncomputation,b.loc);
-			foreach(t;components(flatten(b.s))) foreach(fe;forgets(t)) exclude(fe.uncomputation,fe.loc);
+		foreach(site_;sites){
+			auto removed=exclude(*site_.uncomputation,site_.loc);
+			if(site_.embedded) add(site_.embedded.outerHoisted,removed); // (the reversal still evaluates the part again without forgetting them, see `recomputedBefore`)
 		}
+		ite.uncomputation=values;
 	}
 	void expression(Expression e,ForgetFrame* f){ // (`f`: the frame of the statement that contains `e`)
 		if(cast(FunctionDef)e||cast(LambdaExp)e||cast(DoWhileExp)e) return; // (reversed separately, or not at all)

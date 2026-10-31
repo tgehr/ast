@@ -463,9 +463,14 @@ abstract class Scope{
 		if(auto type=typeForDeclNoAnalyze(meaning)) pinMentions(type);
 	}
 	static if(language==silq)
-	final void pinMentions(Expression type){ // (the variables that `type` mentions are live here)
-		foreach(fid;type.freeIdentifiers)
-			if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
+	final void pinMentions(Expression type){ // (the variables that `type` mentions are live here, also through the values of type variables, e.g., `n` for `x:a` after `a:=𝔹^n`, see `unfoldTypeVariables`)
+		void pin(Expression t){
+			foreach(fid;t.freeIdentifiers)
+				if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
+		}
+		pin(type);
+		auto unfolded=unfoldTypeVariables(type);
+		if(unfolded !is type) pin(unfolded);
 	}
 	final void recordCapturer(Declaration capturer,Declaration meaning){
 		if(!meaning.isToplevelDeclaration){
@@ -1355,6 +1360,7 @@ abstract class Scope{
 		}
 		static if(language==silq) if(consumesOutsideType(meaning,typeBoundary())){ // (e.g., `forget(x)` in a `let` expression within a type)
 			if(!id.isSemError()) error(format("cannot consume `%s` in a type",meaning.name),id.loc);
+			meaning.setSemForceError(); // (as below, e.g., for a parameter that its own type consumes, whose last uses are not tracked yet)
 			id.setSemForceError();
 			return false;
 		}

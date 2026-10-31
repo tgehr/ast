@@ -2390,7 +2390,7 @@ class IteExp: Expression{
 	override int componentsImpl(scope int delegate(Expression) dg){
 		if(auto r=dg(cond)) return r;
 		if(auto r=dg(then)) return r;
-		if(othw) if(auto r=othw.subexpressionsImpl(dg)) return r;
+		if(othw) if(auto r=dg(othw)) return r;
 		return 0;
 	}
 	override IteExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
@@ -3876,6 +3876,7 @@ class ForgetExp: Expression{
 	static if(language==silq){
 		Expression[] outerUncomputation; // (for a forget without value within a part of a statement that the reversal evaluates again: forgets with values of the variables of enclosing blocks that the statement forgets that way, which the reversal recomputes before the statement, see `ast.reverse.embeddedForgets`)
 		Expression outerStatement; // (that statement)
+		Id[] outerHoisted; // (variables that it forgets that way and that the reversal recomputes before an enclosing conditional instead, see `ast.reverse.resolveForgets`)
 	}
 }
 

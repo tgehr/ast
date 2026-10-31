@@ -458,6 +458,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						if(id.type&&!id.type.isClassical())
 							strongDef(vname(id));
 				});
+				if(we.itrans) visitStm(we.itrans,(Expression y){ if(auto de=cast(DefineExp)y) addDefs(de.e1,false); }); // (the inverse writes back what the transformation borrows, also classical variables, e.g., `k` for `with { c:=k; } do { c:=X(c); }`)
 				if(we.isIndices) foreach(st;we.trans.s) if(auto de=cast(DefineExp)st){ // (the write-back of an index assignment also updates a classical aggregate, e.g., `arr` for `arr[0]=5`)
 					Expression r=de.e2;
 					while(auto ie=cast(IndexExp)r) r=ie.e;
@@ -2538,6 +2539,7 @@ private final class SliceNode{
 	// `cdefs` (`strong` and `cstrong`: without reading them), and consumes `consumed` (`pconsumed`: partially)
 	SetX!Id uses,defs,strong,consumed,pconsumed; // (quantum values and functions: they are recomputed)
 	SetX!Id cuses,cdefs,cstrong,cfresh; // (other classical values: they are logged; `cfresh`: defined by `:=`)
+	SetX!Id writtenBack; // (classical values that the inverse of a `with` transformation writes back, e.g., `k` for `with { c:=k; } do { c:=X(c); }`, which are among `cdefs`)
 	bool nonQfree;
 	// classical results of calls that are not `qfree`: the main loop evaluates them before the atom and logs them
 	CallExp[] extracted;
@@ -2788,6 +2790,28 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(auto id=cast(Identifier)y) if(isVar(id)&&id.type&&(isTypeTy(id.type)||isQNumeric(id.type))) n.uses.insert(varName(id));
 			});
 		});
+		visitStm(s,(Expression x){ // (the inverses of nested `with` statements write back what their transformations borrow, e.g., `k` for `with { c:=k; } do { c:=X(c); }` within the body of a replacement of components)
+			auto we=cast(WithExp)x;
+			if(!we||!we.itrans) return;
+			void written(Expression e,bool whole){ // (as `lhs`: `whole` for a variable, not for the aggregate of a component)
+				if(auto id=cast(Identifier)e){
+					if(whole&&id.constLookup||!isVar(id)) return;
+					auto name=varName(id);
+					if(recomputed(id)){
+						n.defs.insert(name);
+						if(whole) n.strong.insert(name);
+					}else n.cdefs.insert(name);
+				}else if(auto ie=cast(IndexExp)e){
+					Expression r=ie;
+					while(auto ie2=cast(IndexExp)r) r=ie2.e;
+					written(r,false);
+				}else if(auto tae=cast(TypeAnnotationExp)e) written(tae.e,whole);
+				else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) written(c,whole);
+				else if(auto vec=cast(VectorExp)e) foreach(c;vec.e) written(c,whole);
+				else if(auto cat=cast(CatExp)e){ written(cat.e1,whole); written(cat.e2,whole); }
+			}
+			visitStm(we.itrans,(Expression y){ if(auto de=cast(DefineExp)y) written(de.e1,true); });
+		});
 	}
 	// analysis of an atom (with components for definitions of tuples of variables)
 	void analyzeAtom(SliceNode n,Expression s){
@@ -2930,6 +2954,14 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				// (the transformation is kept as a whole)
 				auto n=mk(K.with_,s);
 				analyzeSeq(n,we.trans.s,false);
+				if(we.itrans){
+					auto x=new SliceNode(K.atom,we.itrans,0,inR,region);
+					analyzeSeq(x,we.itrans.s,false);
+					foreach(d;x.cdefs) if(d !in n.cfresh){
+						n.cdefs.insert(d);
+						n.writtenBack.insert(d);
+					}
+				}
 				n.a=build(we.bdy.s,inR,region);
 			}else{
 				auto n=mk(K.atom,s);
@@ -3626,7 +3658,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			final switch(n.kind){
 				case K.atom: k|=n.nonQfree||n.extracted.length||!writes||writesLive; break;
 				case K.ite,K.loop: k|=n.nonQfree||writesLive; break;
-				case K.with_,K.block: break; // (a transformation without a body is undone)
+				case K.with_: // (a transformation without a body is undone, but the inverse writes back what the transformation borrows, which the body may change)
+					foreach(ws;only(&n.consumed,&n.pconsumed,&n.writtenBack)) foreach(u;*ws) if(u in mLive) k=true;
+					break;
+				case K.block: break;
 			}
 			k|=mayFail[n.id];
 			if(k&&!mKept[n.id]){
