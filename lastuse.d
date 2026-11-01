@@ -951,6 +951,7 @@ final class LastUse{
 					return false;
 				}
 				//imported!"util.io".writeln("CONSUMING: ",this," ",use.loc," ",constBlock," ",dep);
+				scope_.noteImplicitDupCancelled(use,dep);
 				ok&=consume(false);
 				if(isBranchSplit()) updateDependenciesOnConsumption(); // (as for a consumption recorded in this branch)
 				return ok;
@@ -1188,6 +1189,7 @@ struct LastUses{
 		assert(!!use.scope_);
 	}do{
 		add(new LastUse(LastUse.Kind.implicitDup,use.scope_,use.meaning,use,null));
+		use.scope_.noteImplicitDup(use);
 		//imported!"util.io".writeln("IMPLICIT DUP: ",use," ",use.loc," ",lastUses);
 	}
 	void constUse(Identifier use,ref Expression parent,bool isStatement,bool inType)in{

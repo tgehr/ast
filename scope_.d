@@ -143,7 +143,10 @@ struct DummyWitnessContext{
 	MapX!(Declaration,Declaration) results; // candidates witnessed so far
 	MapSX!(Declaration,Dependency) consumedDeps; // dependency each decl had when it was consumed while this context was active
 	SetX!Id[] nestedLoopCarried; // the loop-carried candidates of each nested quantum loop analyzed while this context was active
-	Dependency[] reconstructed; // dependencies of quantum guards whose inputs change while borrowed
+	Dependency[] reconstructed; // dependencies of quantum guards whose inputs change while borrowed, and of variables that recomputed temporaries depend on (see `noteImplicitDupCancelled`)
+	size_t order; // (of the implicit duplications and the recomputed temporaries below)
+	MapX!(Identifier,size_t) dupOrder; // implicit duplications
+	Q!(size_t,SetX!Id)[] recomputed; // variables that temporaries forgotten by recomputation depend on
 }
 
 import ast.lastuse;
@@ -798,7 +801,10 @@ abstract class Scope{
 		//imported!"util.io".writeln("CHECKING TEMPORARIES: ",trackedTemporaries," ",parent);
 		bool success=true;
 		foreach(ref tt;trackedTemporaries){
-			if(!tt.dep.isTop) continue; // nothing to do for recomputable temporaries
+			if(!tt.dep.isTop){ // nothing to do for recomputable temporaries
+				if(!cast(Identifier)tt.expr) noteRecomputedTemporary(tt.dep);
+				continue;
+			}
 			if(auto id=cast(Identifier)tt.expr){
 				if(tt.read){ // non-recomputable const-blocked consumption
 					if(id.meaning&&(!id.constLookup&&!id.implicitDup)){
@@ -1707,6 +1713,30 @@ abstract class Scope{
 		if(dep.isTop||!dummyWitnessActive) return;
 		foreach(ref context;dummyWitnessContexts)
 			context.reconstructed~=dep.dup;
+	}
+	// (a temporary is forgotten using its dependencies, also those of the variables it depends on whose earlier implicit
+	// duplications are cancelled later, which consumes them before, e.g., `b` in `X(b)` for `(X(b),)` in `b:=(X(b),)[0]` under
+	// quantum control, or in `t:=X(b)` before `b:=(X(move(t)),)[0]`)
+	final void noteImplicitDup(Identifier use){
+		if(!dummyWitnessActive) return;
+		foreach(ref context;dummyWitnessContexts) context.dupOrder[use]=++context.order;
+	}
+	final void noteRecomputedTemporary(Dependency dep){
+		if(dep.isTop||!dummyWitnessActive) return;
+		noteDependencyResolved(dep);
+		SetX!Id ids;
+		foreach(decl;dep.dependencies) ids.insert(decl.getId);
+		foreach(ref context;dummyWitnessContexts) context.recomputed~=q(++context.order,ids);
+	}
+	final void noteImplicitDupCancelled(Identifier use,Dependency dep){
+		if(!dummyWitnessActive||!use.meaning) return;
+		foreach(ref context;dummyWitnessContexts){
+			auto order=context.dupOrder.get(use,size_t.max);
+			if(context.recomputed.any!(r=>r[0]>order&&use.meaning.getId in r[1])){
+				noteReconstructed(dep); // (resolved through the variables consumed later, e.g., `t` for the dependency `{t}` of `b` after `b:=X(t)`)
+				return;
+			}
+		}
 	}
 	final void noteNestedLoopCarried(SetX!Id ids){
 		if(!dummyWitnessActive||!ids.length) return;

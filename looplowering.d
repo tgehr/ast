@@ -1254,7 +1254,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		return r;
 	}
 	bool classicalUpdateOnDiv(size_t a){
-		if(!atoms[a].div.on) return false;
+		if(!atoms[a].div.on||atoms[a].parts.any!(p=>isEmpty(p))) return false; // (an atom that diverges itself does not update anything, e.g., `b:=(X(b),)[1]`, whose target has type `⊥`: it stays in its loop, which diverges with it)
 		auto c=atoms[a].ites;
 		ptrdiff_t q=-1;
 		foreach(x,k;c) if(quantumIte(k)) q=x;
@@ -1300,6 +1300,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	bool inX(size_t a,int X){ return atomColor[a]==X||X==P&&atomColor[a]>P||atomColor[a]==LSH&&X>=P; }
 	bool keepAtom(size_t a,int X){ return inX(a,X)||atomColor[a]==SHARED; }
+	// (the main loop keeps the classical updates on diverging paths, which are only valid there if it diverges as well: not if
+	// a statement that diverges itself is in a loop that runs before it, e.g., `b:=(X(b),)[1]` after `k+=1` under quantum control)
+	foreach(a;0..atoms.length) if(atoms[a].parts.any!(p=>isEmpty(p))&&atomColor[a]>=0&&!inX(a,P))
+		if(iota(atoms.length).any!(b=>inX(b,P)&&classicalUpdateOnDiv(b))) return null;
 	foreach(k,ref it;ites) if(it.isWith){
 		auto owner=atomColor[it.pseudo];
 		auto ti=&ainfos[it.pseudo];
@@ -2462,7 +2466,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						}
 						if(dname in f.locals) known=true;
 					}
-					if(dname in isCarried||dname in topLocals||open.any!(f=>dname in f.locals)) continue;
+					if(dname in isCarried||dname in topLocals||dname in bodyLocals&&dname !in ainfos[a].fresh||open.any!(f=>dname in f.locals)) continue; // (an update of a variable from an earlier statement is not local to the conditional, e.g., of the version of `b` that `b:=X(b);` defines before `if a { for j in 0..1 { b:=X(b); } b:=X(b); } else { b:=X(b); }`, whose copy within the loop updates it)
 					if(open.length) open[$-1].locals.insert(dname);
 					else topLocals.insert(dname);
 				}
