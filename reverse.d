@@ -1529,7 +1529,7 @@ ComputationClass classifyStatement(Expression e){
 			//return chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement.reduce!join(classical); // ???
 			auto r=bottom;
 			foreach(c;chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement) r=join(r,c);
-			return r;
+			return r==bottom?classical:r; // (e.g., `if t>1 { }`, as for `classicalUpToForgets`)
 		}
 		if(auto we=cast(WithExp)e){
 			//return join(classifyExpression(we.trans,we.bdy));

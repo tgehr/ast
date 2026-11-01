@@ -8838,6 +8838,7 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	sl.e=expressionSemantic(sl.e,context.nestConst);
 	propErr(sl.e,sl);
 	static if(language==silq) if(!context.inType) holdValue(sl.e,sc);
+	auto lloc=sl.l.loc,rloc=sl.r.loc; // (an analyzed bound can be a shared type, e.g., the result of `typeof(x)`)
 	sl.l=expressionSemantic(sl.l,context.nestConst);
 	propErr(sl.l,sl);
 	sl.r=expressionSemantic(sl.r,context.nestConst);
@@ -8852,15 +8853,15 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	}
 	// TODO: quantum slicing (at least when length is known)
 	if(!isSubtype(sl.l.type,ℤt(true))){
-		sc.error(format("lower bound should be classical integer, not `%s`",sl.l.type),sl.l.loc);
+		sc.error(format("lower bound should be classical integer, not `%s`",sl.l.type),lloc);
 		explainNumericType(sc,sl.l,NumericType.ℤt);
-		sl.l.setSemForceError();
+		if(!isType(sl.l)) sl.l.setSemForceError();
 		sl.setSemError();
 	}
 	if(!isSubtype(sl.r.type,ℤt(true))){
-		sc.error(format("upper bound should be classical integer, not `%s`",sl.r.type),sl.r.loc);
+		sc.error(format("upper bound should be classical integer, not `%s`",sl.r.type),rloc);
 		explainNumericType(sc,sl.r,NumericType.ℤt);
-		sl.r.setSemForceError();
+		if(!isType(sl.r)) sl.r.setSemForceError();
 		sl.setSemError();
 	}
 	if(sl.isSemError())
