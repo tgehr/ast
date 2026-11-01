@@ -7736,6 +7736,11 @@ auto nestLhs(ref ExpSemContext context){ // (for the left-hand sides of assignme
 auto nestIndexed(ref ExpSemContext context){
 	return context.nest(ConstResult.indexed);
 }
+auto nestAggregate(ref ExpSemContext context,Expression agg){ // (of an indexed expression, also of the element type of an array type, see `ArrayTy`)
+	agg=unwrap(agg);
+	auto composite=cast(CatExp)agg||cast(TupleExp)agg||cast(VectorExp)agg||cast(IteExp)agg||cast(LetExp)agg; // (e.g., an element of a concatenation is not indexed in its operands, while the result of a call is indexed as the result of any other call)
+	return composite?context.nestConst:context.nestIndexed;
+}
 auto nestCalled(ref ExpSemContext context){
 	return context.nest(ConstResult.called);
 }
@@ -8640,9 +8645,8 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			if(meaning) cid.meaning=sc.split(meaning,cid);
 		}
 	}
-	auto agg=unwrap(idx.e);
-	auto composite=cast(CatExp)agg||cast(TupleExp)agg||cast(VectorExp)agg||cast(IteExp)agg||cast(LetExp)agg; // (e.g., an element of a concatenation is not indexed in its operands, while the result of a call is indexed as the result of any other call)
-	idx.e=expressionSemantic(idx.e,composite?context.nestConst:context.nestIndexed);
+	auto aggContext=context.nestAggregate(idx.e);
+	idx.e=expressionSemantic(idx.e,aggContext);
 	propErr(idx.e,idx);
 	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
 	if(!ne){
@@ -8670,7 +8674,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		if(holdAggregate) holdValue(idx.e,sc);
 	}
 	idx.a=expressionSemantic(idx.a,context.nestConst);
-	static if(language==silq) if(holdAggregate) idx.e=weakenHeld(idx.e,composite?context.nestConst:context.nestIndexed);
+	static if(language==silq) if(holdAggregate) idx.e=weakenHeld(idx.e,aggContext);
 	propErr(idx.a,idx);
 	explainSliceSyntax(idx,index,sc); // e.g., `x[1:3]` instead of `x[1..3]`
 	if(idx.isSemError())
@@ -9696,7 +9700,7 @@ Expression expressionSemanticImpl(UBitNotExp ubne,ExpSemContext context){
 Expression expressionSemanticImpl(ClassicalTy ce, ExpSemContext context){
 	auto sc=context.sc;
 
-	ce.inner = expressionSemantic(ce.inner, context.nestType());
+	ce.inner = expressionSemantic(ce.inner, context.nestConst); // (as the operand of `UNotExp`, of which it is the analyzed form: a copy is analyzed as the original, e.g., `!uint[move(k)]` in a loop that the loop lowering copies)
 	typeSemantic(ce.inner, sc, true);
 	propErr(ce.inner, ce);
 
@@ -9707,18 +9711,18 @@ Expression expressionSemanticImpl(ClassicalTy ce, ExpSemContext context){
 Expression expressionSemanticImpl(ArrayTy ae, ExpSemContext context){
 	auto sc=context.sc;
 
-	ae.next = expressionSemantic(ae.next, context.nestType());
+	ae.next = expressionSemantic(ae.next, context.nestAggregate(ae.next)); // (as the aggregate of `IndexExp`, of which it is the analyzed form, see `ClassicalTy`)
 	typeSemantic(ae.next, sc, true);
 	propErr(ae.next, ae);
 
-	ae.type = typeOfArrayTy(ae.next);
+	ae.type = ae.isSemError() ? typeTy() : typeOfArrayTy(ae.next);
 	return ae;
 }
 
 Expression expressionSemanticImpl(VectorTy ve, ExpSemContext context){
 	auto sc=context.sc;
 
-	ve.next = expressionSemantic(ve.next, context.nestType());
+	ve.next = expressionSemantic(ve.next, context.nestConst); // (as the base of the power operator, of which it is the analyzed form, see `ClassicalTy`)
 	typeSemantic(ve.next, sc, true);
 	ve.num = expressionSemantic(ve.num, context.nestConst());
 	propErr(ve.next, ve);
