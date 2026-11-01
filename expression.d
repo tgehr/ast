@@ -876,6 +876,22 @@ struct EqualityContext{
 		mapL[ma]=mb;
 		mapR[mb]=ma;
 	}
+	static if(language==silq) private static void mergedVersions(Expression stmt,ref Declaration[] acc){ // (variables merged after `if` statements and loops that some path changes; the others are earlier versions, whose canonical sources are compared, e.g., a variable from outside of the statements)
+		static bool earlier(Declaration d){ return d.mergedFrom.all!(f=>f.canonicalSource is d.canonicalSource); }
+		void merged(Scope sc){
+			if(sc) foreach(m;sc.mergedVars) if(m.mergedInto&&!earlier(m.mergedInto)) acc~=m.mergedInto;
+		}
+		void block(CompoundExp ce){ if(ce) merged(ce.blscope_); }
+		if(auto ite=cast(IteExp)stmt){ block(ite.then); block(ite.othw); }
+		else if(auto fe=cast(ForExp)stmt) block(fe.bdy);
+		else if(auto we=cast(WhileExp)stmt) block(we.bdy);
+		else if(auto re=cast(RepeatExp)stmt) block(re.bdy);
+		else if(auto wi=cast(WithExp)stmt){ if(!wi.isIndices) foreach(ce;[wi.trans,wi.bdy,wi.itrans]) block(ce); }
+		else if(auto dw=cast(DoWhileExp)stmt){
+			block(dw.bdy);
+			merged(dw.exitScope);
+		}
+	}
 	private bool pairBound(Expression sa,Expression sb){
 		import ast.substitute: statementBoundVarsImpl;
 		Declaration[] da,db;
@@ -888,31 +904,29 @@ struct EqualityContext{
 			static if(language==silq){
 				if(auto ae=cast(AAssignExp)stmt) // (an assignment binds new versions of the assigned variables)
 					foreach(r;ae.replacements) if(r.new_) acc~=r.new_;
-				void merged(CompoundExp ce){ // (variables merged after `if` statements and loops)
-					if(ce&&ce.blscope_) foreach(m;ce.blscope_.mergedVars) if(m.mergedInto) acc~=m.mergedInto;
+				if(auto wi=cast(WithExp)stmt) if(wi.isIndices){ // (the inverse transformation writes back the components, redefining the aggregates)
+					import ast.semantic_:getIdFromIndex;
+					if(wi.itrans) foreach(x;wi.itrans.s)
+						if(auto de=cast(DefineExp)x) if(auto idx=cast(IndexExp)de.e1)
+							if(auto id=getIdFromIndex(idx)) if(id.meaning) acc~=id.meaning;
 				}
-				if(auto ite=cast(IteExp)stmt){ merged(ite.then); merged(ite.othw); }
-				else if(auto fe=cast(ForExp)stmt) merged(fe.bdy);
-				else if(auto we=cast(WhileExp)stmt) merged(we.bdy);
-				else if(auto re=cast(RepeatExp)stmt) merged(re.bdy);
-				else if(auto wi=cast(WithExp)stmt){
-					if(wi.isIndices){ // (the inverse transformation writes back the components, redefining the aggregates)
-						import ast.semantic_:getIdFromIndex;
-						if(wi.itrans) foreach(x;wi.itrans.s)
-							if(auto de=cast(DefineExp)x) if(auto idx=cast(IndexExp)de.e1)
-								if(auto id=getIdFromIndex(idx)) if(id.meaning) acc~=id.meaning;
-					}else foreach(ce;[wi.trans,wi.bdy,wi.itrans]) merged(ce);
-				}
-				else if(auto dw=cast(DoWhileExp)stmt){
-					merged(dw.bdy);
-					if(dw.exitScope) foreach(m;dw.exitScope.mergedVars) if(m.mergedInto) acc~=m.mergedInto;
-				}
+				mergedVersions(stmt,acc);
 			}
 		}
 		collect(sa,da);
 		collect(sb,db);
 		if(da.length!=db.length) return false;
 		foreach(i;0..da.length) bind(da[i],db[i]);
+		return true;
+	}
+	static if(language==silq) private bool pairedMerges(Expression sa,Expression sb){ // (the merged versions that `pairBound` binds are equal only if the versions that they merge are, e.g., not for variables from outside of the statements that only one path changes)
+		Declaration[] da,db;
+		mergedVersions(sa,da);
+		mergedVersions(sb,db);
+		foreach(i;0..da.length){
+			auto fa=da[i].mergedFrom,fb=db[i].mergedFrom;
+			if(fa.length!=fb.length||iota(fa.length).any!(j=>!lookup(fa[j],fb[j]))) return false;
+		}
 		return true;
 	}
 
@@ -973,6 +987,7 @@ struct EqualityContext{
 		foreach(i;0..fa.length){
 			if(!pairBound(fa[i],fb[i])) return false;
 			if(!stmtEquals(fa[i],fb[i])) return false;
+			static if(language==silq) if(!pairedMerges(fa[i],fb[i])) return false;
 		}
 		return true;
 	}
