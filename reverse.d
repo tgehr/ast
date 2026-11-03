@@ -3314,9 +3314,14 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					if(!avail) shadowed[i]~=n;
 				}
 			}
+			bool isLoop(Expression e){
+				if(auto ce=cast(CompoundExp)e) if(ce.loweredFrom) return isLoop(ce.loweredFrom);
+				return cast(ForExp)e||cast(RepeatExp)e||cast(WhileExp)e;
+			}
+			auto saving=iota(statements.length).map!(i=>isLoop(statements[i])?shadowed[i]:[]).array; // (for a loop, the reversal saves them around its reversal, e.g., `v` for `for i in 0..2 { v:=i+j; … }` after `forget(v)`)
 			Id[] aliveFor(size_t i){ // (the reversal of a `with` statement with quantum operations receives the versions after it of the variables that it forgets or moves and defines again itself, whose versions before it are lost, see `unsupported`)
 				auto we=cast(WithExp)statements[i];
-				return we&&classifyStatement(we)!=ComputationClass.classical?aliveAt[i].filter!(n=>!lossy[i].canFind(n)).array:aliveAt[i];
+				return aliveAt[i].filter!(n=>!saving[i].canFind(n)&&!(we&&classifyStatement(we)!=ComputationClass.classical&&lossy[i].canFind(n))).array;
 			}
 		}else Id[] aliveFor(size_t i){ return aliveAt[i]; }
 		auto oldVersions=new Id[2][][](statements.length); // (copies of the versions before a statement whose classical part is recomputed, for its reversal, see `NeedOld`)
@@ -3460,8 +3465,35 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		}
 		Expression[] undoneFirst=iota(statements.length).retro.filter!(i=>undoFirst[i]).map!narrowed.joiner.array;
 		Expression[] quantumStatements;
+		static if(language==silq) bool[Id] dropped; // (versions that the recomputations of later statements keep, which the reversal of a statement defines again for its own variables, e.g., `v` for `with { … } do { v:=u+1; xs[v]:=X(xs[v]); forget(v); }` before `v:=2;`: the reversals of earlier statements do not see them)
 		foreach_reverse(i;0..statements.length){
 			if(recomputed[i]&&!undone[i]||undoFirst[i]||dead[i]) continue;
+			static if(language==silq){
+				auto after=i+1<statements.length?aliveAt[i+1]:alive;
+				foreach(n;definedWithin(statements[i])) if(!(n in dropped)&&!after.canFind(n)&&iota(i+1,statements.length).any!(k=>recomputed[k]&&!undone[k]&&definedNames(statements[k]).canFind(n)&&!movedIntoItself(statements[k],n))){
+					dropped[n]=true;
+					auto var=new Identifier(n);
+					var.loc=statements[i].loc;
+					auto fe=new ForgetExp(var,null);
+					fe.loc=statements[i].loc;
+					quantumStatements~=fe;
+				}
+			}
+			static if(language==silq){
+				auto saved=saving[i].map!(n=>freshName()).array;
+				foreach(k,n;saving[i]){
+					auto loc=statements[i].loc;
+					auto lhs=new Identifier(saved[k]),var=new Identifier(n),fvar=new Identifier(n);
+					lhs.loc=var.loc=fvar.loc=loc;
+					auto rhs=new CallExp(getDup(loc,sc),var,false,false);
+					rhs.loc=loc;
+					auto cpy=new DefineExp(lhs,rhs);
+					cpy.loc=loc;
+					auto fe=new ForgetExp(fvar,null);
+					fe.loc=loc;
+					quantumStatements~=[cast(Expression)cpy,fe];
+				}
+			}
 			quantumStatements~=narrowed(i);
 			static if(language==silq) foreach(o;oldVersions[i]){ // (the version before the statement replaces the one after it)
 				auto loc=statements[i].loc;
@@ -3472,6 +3504,14 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				auto de=new DefineExp(lhs,rhs);
 				de.loc=loc;
 				if(!consumedBy[i].canFind(o[0])) quantumStatements~=fe;
+				quantumStatements~=de;
+			}
+			static if(language==silq) foreach(k,n;saving[i]){
+				auto loc=statements[i].loc;
+				auto lhs=new Identifier(n),rhs=new Identifier(saved[k]);
+				lhs.loc=rhs.loc=loc;
+				auto de=new DefineExp(lhs,rhs);
+				de.loc=loc;
 				quantumStatements~=de;
 			}
 		}
