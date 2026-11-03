@@ -887,7 +887,7 @@ class Checker {
 		bool isLifted = e.constLookup;
 		expectConst(e.l, "slice-left-index");
 		expectConst(e.r, "slice-right-index");
-		assert(e.e.constLookup, "TODO: non-lifted slicing");
+		assert(e.e.constLookup || !ast_ty.hasQuantumComponent(e.e.type), "TODO: non-lifted slicing"); // (a classical value can be consumed by each use, e.g., an argument that is substituted into a return type, see `Identifier.substituteImpl`)
 		visExpr(e.e);
 		visExpr(e.l);
 		visExpr(e.r);
@@ -896,7 +896,7 @@ class Checker {
 	void implExpr(ast_exp.IndexExp e) {
 		bool isLifted = e.constLookup;
 		expectConst(e.a, "index");
-		assert(e.e.constLookup, "TODO: non-lifted indexing");
+		assert(e.e.constLookup || !ast_ty.hasQuantumComponent(e.e.type), "TODO: non-lifted indexing"); // (as for slicing)
 		visExpr(e.e);
 		visExpr(e.a);
 		auto expectedType = ast_ty.isEmpty(e.e.type) ? ast_ty.bottom : ast_sem.indexType(e.e.type, e.a); // (indexing an aggregate that diverges)

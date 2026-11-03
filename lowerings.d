@@ -424,7 +424,7 @@ Expression[] annotateEmpty(Expression[] args,Expression type,ExpSemContext conte
 	auto r=args.dup;
 	foreach(ref arg;r){
 		if(!isEmpty(arg.type)) continue;
-		auto tae=new TypeAnnotationExp(arg,type,TypeAnnotationType.annotation);
+		auto tae=new TypeAnnotationExp(arg,type,isSubtype(arg.type,type)?TypeAnnotationType.annotation:TypeAnnotationType.coercion); // (an empty tuple has no value either, e.g., of type `⊥ × !ℕ` for `(!𝔹^2) × !𝔹`)
 		tae.loc=arg.loc;
 		arg=expressionSemantic(tae,context.nestConst);
 	}
