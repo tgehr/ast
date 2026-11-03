@@ -1744,11 +1744,11 @@ bool definesForItself(Expression s,Id name){ // (whether no version of a variabl
 	return !rec(s,State(before,false)).own;
 }
 static if(language==silq)
-bool readsBeforeDefining(Expression s,Id name){ // (whether a statement reads the version before it of a variable called `name` before it defines the variable, other than to forget it, e.g., `j` for `(xs,j):=let{ j-=1; … } in (xs,j);`, but not `w` for `w:=dup(u); if c { w+=u; forget(w); }`)
+bool readsBeforeDefining(Expression s,Id name,bool forgets=false){ // (whether a statement reads the version before it of a variable called `name` before it defines the variable, other than to forget it unless `forgets`, e.g., `j` for `(xs,j):=let{ j-=1; … } in (xs,j);`, but not `w` for `w:=dup(u); if c { w+=u; forget(w); }`)
 	bool reads=false;
 	bool rec(Expression e,bool defined){ // (returns whether the statement has defined the variable after `e`)
 		if(reads||cast(FunctionDef)e||cast(LambdaExp)e) return defined;
-		if(auto fe=cast(ForgetExp)e) return fe.val?rec(fe.val,defined):defined;
+		if(auto fe=cast(ForgetExp)e) if(!forgets) return fe.val?rec(fe.val,defined):defined;
 		if(auto id=cast(Identifier)e){
 			if(!defined&&nameOf(id)==name) reads=true;
 			return defined;
@@ -1862,8 +1862,8 @@ bool availableAfter(Expression e,Id n,bool avail=true){ // (whether a classical 
 		return then&&(ite.othw?availableAfter(ite.othw,n,avail):avail);
 	}
 	if(auto we=cast(WithExp)e) return availableAfter(we.bdy,n,availableAfter(we.trans,n,avail));
-	if(auto fe=cast(ForExp)e) return availableAfter(fe.bdy,n,avail); // (an iteration starts with the versions after the previous one)
-	if(auto re=cast(RepeatExp)e) return availableAfter(re.bdy,n,avail);
+	if(auto fe=cast(ForExp)e) return avail&&availableAfter(fe.bdy,n,avail); // (an iteration starts with the versions after the previous one; the variables of the body of its own are not available after the loop)
+	if(auto re=cast(RepeatExp)e) return avail&&availableAfter(re.bdy,n,avail);
 	if(auto fe=cast(ForgetExp)e){
 		if(fe.val) avail=availableAfter(fe.val,n,avail);
 		return avail&&!forgottenVariables(fe).any!(v=>cast(Identifier)unwrap(v)&&nameOf(cast(Identifier)unwrap(v))==n);
@@ -3794,6 +3794,26 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto trans=we.trans.copy(cargs);
 		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive);
 		assert(!!bdy);
+		static if(language==silq){ // (the classical variables of its own that the body defines and does not leave available, but whose recomputations the reversal of the body keeps: it forgets them at its end, as the body does not have a scope of its own, e.g., `v` for `with { … } do { v:=w+1; xs[w%4]:=X(xs[w%4]); u:=move(v); }`, such that the reversal of an earlier statement may define `v` again; not versions of earlier ones, nor ones whose versions before it the reversal of the enclosing block recomputes, which the reversal of the body restores, e.g., `v` for `w:=move(v); with { … } do { v:=u+1; … forget(v); }`)
+			Id[] leftover;
+			foreach(x;we.bdy.subexpressions) if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)){
+				auto n=nameOf(id);
+				if(id.type&&id.type.isClassical()&&!leftover.canFind(n)&&!keep.canFind(n)&&!availableAfter(we.bdy,n)&&!readsBeforeDefining(we.bdy,n,true)&&!alive.canFind(n)&&availableAfter(bdy,n,false)) leftover~=n;
+			}
+			if(leftover.length){
+				Expression[] forgets;
+				foreach(n;leftover){
+					auto var=new Identifier(n);
+					var.loc=we.loc;
+					auto fe=new ForgetExp(var,null);
+					fe.loc=we.loc;
+					forgets~=fe;
+				}
+				auto nbdy=new CompoundExp(bdy.s~forgets);
+				nbdy.loc=bdy.loc;
+				bdy=nbdy;
+			}
+		}
 		auto res=new WithExp(trans,bdy);
 		res.isIndices=we.isIndices;
 		if(we.itrans&&we.isIndices) res.itrans=we.itrans.copy(cargs); // (otherwise, the inverse of the copied transformation is derived again, for the context of the reversal)
