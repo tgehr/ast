@@ -2105,7 +2105,7 @@ private bool withoutEffect(Expression e){ // (a part that neither defines nor ch
 	return false;
 }
 static if(language==silq)
-private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables)
+private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null,Id[] skip=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables)
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
 	auto ss=mergeCompound(b.s);
 	auto parts=new Expression[](ss.length);
@@ -2125,13 +2125,15 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 		return ce;
 	}
 	auto later=new Id[][](ss.length); // (the variables that later statements define again, whose forgets and moves the classical part keeps, see `recomputation`: those that their parts define or that are available after them, but not those that statements which it leaves out define for themselves, e.g., `v` in `if c { v:=w+1; }`)
+	auto skipped=new bool[](ss.length); // (see `projection`)
 	Id[] defs;
 	foreach_reverse(j,s;ss){
 		later[j]=defs;
 		if(auto fe=cast(ForgetExp)s) if(!fe.val) continue;
 		auto changes=changedNames(s);
 		auto changesDropped=changes.any!(n=>drop.canFind(n));
-		if(!changesDropped||!changes.all!(n=>drop.canFind(n))||definedNames(s).length){
+		skipped[j]=skip.length&&!changes.length&&definedNames(s).length&&definedNames(s).all!(n=>skip.canFind(n));
+		if(!skipped[j]&&(!changesDropped||!changes.all!(n=>drop.canFind(n))||definedNames(s).length)){
 			if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
 				if(readsDropped(s)) omitted[j]=true;
 				else parts[j]=recomputation(s,sc,vars,later[j]);
@@ -2149,6 +2151,7 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 			defined=defined.filter!(n=>!names.canFind(n)).array;
 			continue;
 		}
+		if(skipped[j]) continue;
 		auto consumed=defined.filter!(n=>!availableAfter(s,n)&&(!parts[j]||availableAfter(parts[j],n))).array; // (e.g., `v` for `if c { … } else { w:=move(v); }`, also if the classical part leaves the statement out)
 		if(parts[j]){
 			defined=defined.filter!(n=>availableAfter(parts[j],n)).array;
@@ -2177,10 +2180,10 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 	return res;
 }
 static if(language==silq)
-Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null){ // (the classical part of an `if` statement, a loop, a `with` statement, a `let` expression or a call that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
-	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner);
+Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] skip=null){ // (the classical part of an `if` statement, a loop, a `with` statement, a `let` expression or a call that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner,skip);
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
-	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result); }
+	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result,skip); }
 	Expression res;
 	if(headers(s).any!readsDropped) return null;
 	if(auto ite=cast(IteExp)s){
@@ -3230,7 +3233,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				static if(language==silq) if(!recomputed[i]&&!dead[i]){
 					auto drop=changed[i].filter!(n=>!hoisted.canFind(n)||after.canFind(n)&&!defined.canFind(n)).array; // (variables whose current versions the reversal changes in place, e.g., a variable of an enclosing block that a `let` expression returns, in a loop that also changes one that it consumes)
 					auto p=projection(s,sc,drop);
-					if(p){
+					void consider(Expression p){
 						auto pnames=definedNames(p),pchanges=changed[i].filter!(n=>!drop.canFind(n)).array; // (all of the others, see `projection`)
 						auto receives=cast(DefineExp)s&&cast(CallExp)unwrap((cast(DefineExp)s).e2); // (the reversed call receives the classical results, see `callProjection`)
 						static if(language==silq) if(cast(WithExp)s&&classifyStatement(s)!=ComputationClass.classical&&lossy[i].length) receives=true; // (the reversal of the body receives the new versions of the variables that it forgets and defines again, see `aliveFor`, also where no later statement that the reversal keeps reads them)
@@ -3238,6 +3241,11 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 							projections[i]=p;
 							projectionChanges[i]=pchanges;
 						}
+					}
+					if(p) consider(p);
+					static if(language==silq) if(p&&!projections[i]){ // (without the definitions of variables whose values the reversal receives, which the reversed statement checks, e.g., `w` for `with { … } do { v:=dup(u); w:=u*2; xs[v]:=X(xs[v]); }` that the reversal of an enclosing block recomputes: the classical part reads the received values)
+						auto skip=definedNames(p).filter!(n=>after.canFind(n)&&!defined.canFind(n)).array;
+						if(skip.length) if(auto q=projection(s,sc,drop,null,skip)) consider(q);
 					}
 					if(!projections[i]&&(p||classifyStatement(s)==ComputationClass.classical)){ // (also in earlier iterations, e.g., before the variables that the statement changes are excluded)
 						foreach(n;changedAfter[i]) if(!hoisted.canFind(n)&&!inner.canFind(n)&&reads(s,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
