@@ -1875,6 +1875,7 @@ Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,Bloc
 		auto type=typeForDecl(decl);
 		if(!type) continue;
 		auto lastUse=sc.lastUses.lastUses.get(decl,null);
+		while(lastUse&&lastUse.kind==LastUse.Kind.lazySplitSink) lastUse=lastUse.forwardTo; // (e.g., from the nested scopes of the condition of a `while` loop on the path that exits it, e.g., `false||k<2`)
 		if(!lastUse||lastUse.kind!=LastUse.Kind.constPinned) continue;
 		if(!lastUse.nestedScopes.any!(nsc=>nsc is loopScope)) continue;
 		if(!lastUse.nestedScopes.any!(nsc=>nsc is forgetScope)) continue;
