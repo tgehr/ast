@@ -455,7 +455,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 		}
 	}
-	if(defer&&!cast(ForgetExp)olhs){
+	if(defer&&!cast(ForgetExp)olhs&&!(language==silq&&reverseMode&&cast(IteExp)olhs&&olhs.isSemCompleted())){ // (not an analyzed conditional, whose branches may forget variables that its reversal recomputes, see below)
 		static if(language==silq) return res=new DefineExp(reevaluationCopy(olhs),rhs); // (keeps implicit duplications of analyzed statements)
 		else return res=new DefineExp(olhs.copy(),rhs); // (keeps implicit duplications of analyzed statements)
 	}
@@ -1112,8 +1112,23 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 			mrhs=tuple(rs,orhs.loc);
 		}
 	}
-	auto def=new DefineExp(mlhs,mrhs);
-	def.loc=loc;
+	Expression def,received=mrhs; // (the definition of the result, and the received value, which the renamings below leave alone)
+	Expression[] pre;
+	static if(language==silq) if(hoist&&mrhs is orhs){
+		auto v=unwrap(value),nested=cast(LetExp)v;
+		if(v.isSemCompleted()&&(cast(IteExp)v||nested&&!nested.isForward(true))){ // (an analyzed conditional or `let` expression, whose blocks may forget variables that its reversal recomputes, see `lowerDefine`)
+			auto tmp=temporaryIdentifier(loc);
+			auto bind=new DefineExp(tmp,mrhs);
+			bind.loc=loc;
+			pre=[bind];
+			def=lowerDefine!(LowerDefineFlags.createFresh|LowerDefineFlags.reverseMode)(value,tmp.copy(),loc,sc,unchecked,noImplicitDup,true);
+			received=null;
+		}
+	}
+	if(!def){
+		def=new DefineExp(mlhs,mrhs);
+		def.loc=loc;
+	}
 	Id[] copied,excludedCopied; // (the classical variables of the enclosing block that the `let` expression changes and consumes: the reversal recomputes the changes on copies, as the enclosing block recomputes the versions before them)
 	if(hoist){
 		Id[] result,local;
@@ -1124,12 +1139,19 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 		}
 		foreach(o;old) if(!copied.canFind(o[0])) copied~=o[0]; // (e.g., a variable of the enclosing block that it returns, see `NeedOld`)
 	}
-	static if(language==silq) auto stmts=le.s.blscope_?uncomputationOf(le.s.entryUncomputation,le.s.blscope_.forgottenVarsOnEntry,le.s.loc)~le.s.s~tail~uncomputationOf(le.s.exitUncomputation,le.s.blscope_.forgottenVars,le.s.loc):le.s.s~tail;
-	else auto stmts=le.s.s;
-	auto r=new CompoundExp(reverseStatements(stmts,[cast(Expression)def],sc,unchecked,noImplicitDup,hoist,true,hoist?definedNames(def):null,null,copied,&excludedCopied,forgottenNames(le.s),needOld));
+	Expression[] middle=[def];
+	static if(language==silq){
+		auto stmts=le.s.blscope_?uncomputationOf(le.s.entryUncomputation,le.s.blscope_.forgottenVarsOnEntry,le.s.loc)~le.s.s~tail:le.s.s~tail;
+		if(le.s.blscope_) foreach(u;uncomputationOf(le.s.exitUncomputation,le.s.blscope_.forgottenVars,le.s.loc)){ // (the forgets after the result: the reversal recomputes their quantum variables before it uncomputes the result, as for the branches of a conditional, see `lowerDefine`)
+			auto fe=cast(ForgetExp)u;
+			if(fe&&forgottenVariables(fe).all!(v=>v.type&&v.type.isClassical())) stmts~=u;
+			else middle=reverseStatement(u,sc,unchecked,noImplicitDup,false,true)~middle;
+		}
+	}else auto stmts=le.s.s;
+	auto r=new CompoundExp(reverseStatements(stmts,middle,sc,unchecked,noImplicitDup,hoist,true,hoist?middle.map!definedNames.joiner.array:null,null,copied,&excludedCopied,forgottenNames(le.s),needOld));
 	r.loc=loc;
 	static if(language==silq) if(hoist){
-		renameLocals(le,r,def.e2);
+		renameLocals(le,r,received);
 		if(copied.length){
 			MapSX!(Id,Id) renames;
 			Expression[] copies;
@@ -1145,10 +1167,11 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 				cpy.loc=loc;
 				copies~=cpy;
 			}
-			walkIdentifiers(r,(Identifier id){ if(!id.meaning) if(auto p=renames.getPtr(id.id)) id.id=*p; },true,def.e2);
+			walkIdentifiers(r,(Identifier id){ if(!id.meaning) if(auto p=renames.getPtr(id.id)) id.id=*p; },true,received);
 			r.s=copies~r.s;
 		}
 	}
+	r.s=pre~r.s;
 	return r;
 }
 
