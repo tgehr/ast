@@ -1711,6 +1711,39 @@ bool consumesBeforeDefining(Expression s,Id name,bool* survives=null){ // (on ea
 	return ok;
 }
 static if(language==silq)
+bool definesForItself(Expression s,Id name){ // (whether no version of a variable called `name` that a statement defines is available after it, e.g., for `w:=move(v); if c { v:=w+1; … }`, but not for `if c { forget(v); v:=1; }`, after which the new version is available if `c` holds)
+	auto own=declaredWithin(s);
+	bool isOwn(Identifier id){ return id.meaning&&isVersionOf(id.meaning,own); }
+	static struct State{ bool available,own; } // (the variable is available, and it may be a version that the statement defines)
+	State merge(State a,State b){ auto available=a.available&&b.available; return State(available,available&&(a.own||b.own)); }
+	State rec(Expression e,State st){ // (also for lowered statements, whose copies it renames, e.g., not `t` for the lowering of `for i in 0..2 { t+=c; }` with `--remove-loops`, which defines `t` again)
+		if(cast(FunctionDef)e||cast(LambdaExp)e) return st;
+		if(auto fe=cast(ForgetExp)e){
+			if(fe.val) st=rec(fe.val,st);
+			if(forgottenVariables(fe).any!(v=>cast(Identifier)unwrap(v)&&nameOf(cast(Identifier)unwrap(v))==name)) return State(false,false);
+			return st;
+		}
+		if(auto id=cast(Identifier)e) return id.moved&&nameOf(id)==name?State(false,false):st;
+		if(auto de=cast(DefineExp)e){
+			st=rec(de.e2,st);
+			return definedNames(de).canFind(name)?State(true,true):st;
+		}
+		if(auto ite=cast(IteExp)e){
+			st=rec(ite.cond,st);
+			return merge(rec(ite.then,st),ite.othw?rec(ite.othw,st):st);
+		}
+		if(cast(ForExp)e||cast(RepeatExp)e||cast(WhileExp)e){ // (the body may not run)
+			auto r=st;
+			foreach(c;e.components) r=rec(c,r);
+			return merge(st,r);
+		}
+		foreach(c;e.components) st=rec(c,st);
+		return st;
+	}
+	auto before=s.subexpressions.any!(x=>cast(Identifier)x&&nameOf(cast(Identifier)x)==name&&!isOwn(cast(Identifier)x)); // (it mentions the version before it, which is then available before it)
+	return !rec(s,State(before,false)).own;
+}
+static if(language==silq)
 bool readsBeforeDefining(Expression s,Id name){ // (whether a statement reads the version before it of a variable called `name` before it defines the variable, other than to forget it, e.g., `j` for `(xs,j):=let{ j-=1; … } in (xs,j);`, but not `w` for `w:=dup(u); if c { w+=u; forget(w); }`)
 	bool reads=false;
 	bool rec(Expression e,bool defined){ // (returns whether the statement has defined the variable after `e`)
@@ -1985,12 +2018,17 @@ bool readsBesidesUpdates(Expression e,Id name){ // (whether a statement reads a 
 	return rec(e);
 }
 
-private SetX!Declaration declaredWithin(Expression s){ // (the variables that a statement or expression declares)
+private SetX!Declaration declaredWithin(Expression s){ // (the variables that a statement or expression declares, also the new versions of updates, e.g., of `v` for `v+=1`, and those in the inverses of `with` statements, which are not components, e.g., the version of `t` that `v[0]:=t` writes back for `with { a:=v[0]; } do { a+=1; }`)
 	SetX!Declaration r;
-	foreach(x;s.subexpressions){
-		if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) r.insert(id.meaning);
-		if(auto fe=cast(ForExp)x) if(fe.loopVar) r.insert(fe.loopVar);
+	void rec(Expression e){
+		foreach(x;e.subexpressions){
+			if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) r.insert(id.meaning);
+			if(auto fe=cast(ForExp)x) if(fe.loopVar) r.insert(fe.loopVar);
+			static if(language==silq) if(auto we=cast(WithExp)x) if(we.itrans) rec(we.itrans);
+			static if(language==silq) if(auto ae=cast(AAssignExp)x) foreach(repl;ae.replacements) if(repl.new_) r.insert(repl.new_); // (not splits of the versions before them)
+		}
 	}
+	rec(s);
 	return r;
 }
 private bool isVersionOf(Declaration d,SetX!Declaration decls){ return d.derivedSequence.any!(o=>o in decls); } // (also in a nested block, e.g., of `s` in the branches of `let{ s:=1:𝔹; } in (if q then dup(s) else x)`)
@@ -2047,13 +2085,40 @@ Id[] definedWithin(Expression e){ // (the variables that a statement defines, al
 
 Expression recomputation(Expression s,Scope sc,Id[] inner=null,Id[] later=null){ // (the copy of a classical statement that the reversal of a block recomputes; `inner`: the variables of `with` statements, also of enclosing ones, e.g., the components that they move out and write back; `later`: the variables that later statements of the block define)
 	Expression.CopyArgs cargs;
-	static if(language==silq) auto local=definedWithin(s)~later; // (a forget or a move of one of them may precede a definition of the same name, e.g., `with { … } do { forget(v); v:=w+1; }`)
+	static if(language==silq){
+		auto own=declaredWithin(s);
+		bool isOwn(Identifier id){ return id.meaning&&isVersionOf(id.meaning,own); }
+		MapSX!(Id,Id) renames; // (variables that it defines again only for itself, e.g., `v` for `with { … } do { w:=move(v); if c { v:=w+1; … } }`: the copy reads the version before it, as for the other variables that it moves or forgets, and renames its own versions)
+		bool renamed(Id n){ return !!renames.getPtr(n); }
+		bool updatesBefore(Id n){ return s.subexpressions.any!(x=>cast(AAssignExp)x&&(cast(AAssignExp)x).replacements.any!(r=>r.previous&&r.previous.name&&r.previous.name.id==n&&!isVersionOf(r.previous,own))); } // (an update of the version before it, which the copy would not keep, e.g., `t` for `with { u:=2; } do { t+=u; w:=move(t); t:=w*2; … }`: the copy consumes it, as the statement does)
+		bool carried(Id n){ // (a variable that a loop of the statement carries from one iteration to the next, e.g., `v` for `for i in 0..2 { v:=move(v); }`: the reads in the body see the version before the loop as well as the own versions, which the copy cannot rename apart)
+			foreach(x;s.subexpressions){
+				CompoundExp bdy=null;
+				if(auto fe=cast(ForExp)x) bdy=fe.bdy;
+				else if(auto re=cast(RepeatExp)x) bdy=re.bdy;
+				else if(auto we=cast(WhileExp)x) bdy=we.bdy;
+				if(!bdy||!definedWithin(bdy).canFind(n)) continue;
+				auto inBody=declaredWithin(bdy);
+				if(bdy.subexpressions.any!((y){ auto id=cast(Identifier)y; return id&&nameOf(id)==n&&id.meaning&&!isVersionOf(id.meaning,inBody); })) return true;
+			}
+			return false;
+		}
+		bool mixed(Id n){ // (a variable that only one branch of a conditional of the statement defines, after which it is available: the reads after it see the version before it as well as an own version, e.g., `v` for `if c { (w,v):=(1,v); } v+=1;`, which the copy cannot rename apart)
+			foreach(x;s.subexpressions) if(auto ite=cast(IteExp)x){
+				auto then=definedWithin(ite.then).canFind(n),othw=ite.othw&&definedWithin(ite.othw).canFind(n);
+				if(then!=othw&&availableAfter(ite.then,n)&&(!ite.othw||availableAfter(ite.othw,n))) return true;
+			}
+			return false;
+		}
+		foreach(n;definedWithin(s)) if(!renamed(n)&&!later.canFind(n)&&!inner.canFind(n)&&definesForItself(s,n)&&!updatesBefore(n)&&!carried(n)&&!mixed(n)&&!movedIntoItself(s,n)) renames[n]=freshName(); // (not a variable that it only moves into its own new versions, which are the version before it, e.g., `v` for `(w,v):=(1,v); v+=1; forget(v);`, whose reversal changes it back in place)
+		auto local=definedWithin(s).filter!(n=>!renamed(n)).array~later; // (a forget or a move of one of them may precede a definition of the same name, e.g., `with { … } do { forget(v); v:=w+1; }`)
+	}
 	static if(language==silq) cargs.mapExp=(Expression x,ref Expression.CopyArgs args){ // (reads the variables that it moves or forgets, such that the reversed statements see the same versions)
 		if(cast(FunctionDef)x) return x.copy();
 		if(auto fe=cast(ForgetExp)x){
 			bool kept(Expression v){ // (e.g., at the last use of a variable of the block in a loop in the body of a `with` statement, which the reversal of an earlier statement reads)
 				auto id=cast(Identifier)unwrap(v);
-				return id&&id.type&&id.type.isClassical()&&(!local.canFind(nameOf(id))||movedIntoItself(s,nameOf(id))&&!later.canFind(nameOf(id)))&&!inner.canFind(nameOf(id)); // (also one that the statement only moves into its own new versions, e.g., `v` for `(v,w):=(v,0)`, which is not one of its own)
+				return id&&id.type&&id.type.isClassical()&&(!local.canFind(nameOf(id))||movedIntoItself(s,nameOf(id))&&!later.canFind(nameOf(id)))&&(renamed(nameOf(id))?!isOwn(id):!inner.canFind(nameOf(id))); // (also one that the statement only moves into its own new versions, e.g., `v` for `(v,w):=(v,0)`, which is not one of its own)
 			}
 			auto vars=forgottenVariables(fe);
 			if(vars.all!kept){
@@ -2085,12 +2150,19 @@ Expression recomputation(Expression s,Scope sc,Id[] inner=null,Id[] later=null){
 			r.loc=we.loc;
 			return cast(Expression)r;
 		}
-		if(auto id=cast(Identifier)x) if(id.moved&&!inner.canFind(nameOf(id))&&!local.canFind(nameOf(id))){
-			auto r=id.copy();
-			r.moved=false;
-			return cast(Expression)r;
+		if(auto id=cast(Identifier)x){
+			if(isOwn(id)) if(auto p=renames.getPtr(nameOf(id))){
+				auto r=id.copy();
+				r.id=*p;
+				return cast(Expression)r;
+			}
+			if(id.moved&&!local.canFind(nameOf(id))&&(renamed(nameOf(id))||!inner.canFind(nameOf(id)))){
+				auto r=id.copy();
+				r.moved=false;
+				return cast(Expression)r;
+			}
 		}
-		if(auto de=cast(DefineExp)x) if(isClassicalMove(de)&&!de.e2.subexpressions.any!(y=>cast(Identifier)y&&(inner.canFind(nameOf(cast(Identifier)y))||local.canFind(nameOf(cast(Identifier)y))))){
+		if(auto de=cast(DefineExp)x) if(isClassicalMove(de)&&!de.e2.subexpressions.any!((y){ auto id=cast(Identifier)y; return id&&(local.canFind(nameOf(id))||(renamed(nameOf(id))?isOwn(id):inner.canFind(nameOf(id)))); })){
 			auto rhs=new CallExp(getDup(de.e2.loc,sc),de.e2.copy(args),false,false);
 			rhs.loc=de.e2.loc;
 			auto r=new DefineExp(de.e1.copy(args),rhs);
@@ -3331,10 +3403,10 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			auto shadowed=new Id[][](statements.length); // (kept versions of earlier variables with the names of variables of its own of a statement, which the statement does not see: its recomputation renames its variables, see `renamedLocals`, and the reversal of a conditional or a `with` statement saves the kept versions, see `redefined`)
 			foreach(i,s;statements){
 				auto escaping=definedNames(s);
-				foreach(n;definedWithin(s)) if(aliveAt[i].canFind(n)&&!escaping.canFind(n)&&!redefined[i].canFind(n)&&!shadowed[i].canFind(n)){
+				foreach(n;definedWithin(s)) if((aliveAt[i].canFind(n)||(recomputed[i]||projections[i])&&given.canFind(n)&&!defined.canFind(n)&&!givenAfter(i).canFind(n))&&!escaping.canFind(n)&&!redefined[i].canFind(n)&&!shadowed[i].canFind(n)){ // (also, for a recomputation, the versions from later statements that the reversal receives before it, e.g., `v` for `if c { v:=1; … }` in the body of a `with` statement that defines `v` after it, but not those that it receives afterwards, see `middle`)
 					auto avail=outer.canFind(n);
 					foreach(t;statements[0..i]) avail=availableAfter(t,n,avail);
-					if(!avail) shadowed[i]~=n;
+					if(!avail||!readsOther(s,n)) shadowed[i]~=n; // (also if the statement does not mention the version before it, which it then does not see, e.g., `v` for `if c { v:=w+1; }` in a branch after `w:=move(v)`, as the version is available only to the reversal)
 				}
 			}
 			bool isLoop(Expression e){
@@ -3407,7 +3479,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				if(recomputed[i]&&undone[i]){ // (the versions before it of the variables that it changes, which the recomputation saves, replace the ones after it, see `oldVersions`)
 					oldVersions[i]=changed[i].map!(n=>cast(Id[2])[n,freshName()]).array;
 					auto copy=recomputation(statements[i],sc);
-					consumedBy[i]=changed[i].filter!(n=>!availableAfter(copy,n)).array;
+					consumedBy[i]=changed[i].filter!(n=>!availableAfter(copy,n,!(redefined[i].canFind(n)&&aliveAt[i].canFind(n)&&!early[i]))).array; // (the kept version of a variable that it defines again is forgotten before it, see `redefined`, e.g., `v` for `forget(v); with { … } do { v:=w+1; … forget(v); }`, whose recomputation renames its own versions, see `recomputation`)
 					auto r=new CompoundExp([]);
 					r.loc=statements[i].loc;
 					return r;
@@ -3440,6 +3512,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				}
 			}
 			auto projected=projections[i]?definedNames(projections[i]):undone[i]?definedNames(statements[i]):[]; // (checked by the reversed statement)
+			static if(language==silq) if(!projections[i]&&!recomputed[i]) projected~=definedNames(statements[i]).filter!(n=>excluded.canFind(n)).array; // (the reversal of a later statement that changes it in place gives back the version after it, e.g., `v` for `with { … } do { v:=u*2; xs[u]:=X(xs[u]); }` before `v+=j`, see `excluded`)
 			NeedOld need;
 			auto nerrors=sc.handler.nerrors;
 			auto r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,givenAfter(i)~projected,aliveFor(i),null,&need);
