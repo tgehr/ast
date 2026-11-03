@@ -2571,9 +2571,10 @@ ForgetExp[] embeddedForgets(Expression s){ // (the forgets without value within 
 	foreach(p;parts) foreach(x;p.subexpressions) if(auto fe=cast(ForgetExp)x) if(!fe.val) r~=fe;
 	return r;
 }
-Expression reevaluationCopy(Expression e){ // (of a part of a statement that the reversal evaluates again, without the forgets of the variables that it recomputes before the statement, see `embeddedForgets`)
+Expression reevaluationCopy(Expression e,Expression delegate(Expression) replacement=null){ // (of a part of a statement that the reversal evaluates again, without the forgets of the variables that it recomputes before the statement, see `embeddedForgets`; `replacement`: of subexpressions)
 	Expression.CopyArgs cargs;
 	cargs.mapExp=(Expression x,ref Expression.CopyArgs args){
+		if(replacement) if(auto r=replacement(x)) return r;
 		auto fe=cast(ForgetExp)x;
 		if(!fe||fe.val||!fe.outerUncomputation.length) return null;
 		auto recomputed=recomputedBefore(fe);

@@ -220,6 +220,22 @@ class ArrayConversion: Conversion{
 }
 
 Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotationType annotationType){
+	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
+	auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
+	if(vec1&&vec2&&isEqual(vec1.num,vec2.num,null)){ // (by the conversion of the elements, not as tuples, whose conversion lists them, e.g., for `!𝔹^999999999999`; judgmental equality, e.g., `n` and `3` after `n:=3`)
+		if(auto next=typeExplicitConversion!witness(vec1.next,vec2.next,annotationType)){
+			static if(witness) return new VectorConversion(vec1,vec2,next,false);
+			else return true;
+		}
+	}
+	if(vec1&&arr2){
+		if(auto next=typeExplicitConversion!witness(vec1.next,arr2.next,annotationType)){
+			static if(witness){
+				auto nvec2=vectorTy(arr2.next,vec1.num);
+				return trans(new VectorConversion(vec1,nvec2,next,false),new VectorToArrayConversion(nvec2,arr2));
+			}else return true;
+		}
+	}
 	auto tpl1=from.isTupleTy(), tpl2=to.isTupleTy();
 	if(tpl1&&tpl2&&tpl1.length==tpl2.length){
 		auto next=iota(tpl1.length).map!(i=>typeExplicitConversion!witness(tpl1[i],tpl2[i],annotationType));
@@ -228,7 +244,6 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 			if(elements.all!(x=>!!x)) return new TupleConversion(from,to,elements);
 		}else if(next.all) return true;
 	}
-	auto arr1=cast(ArrayTy)from, arr2=cast(ArrayTy)to;
 	if(arr1&&arr2){
 		if(auto next=typeExplicitConversion!witness(arr1.next,arr2.next,annotationType)){
 			static if(witness) return new ArrayConversion(arr1,arr2,next);
@@ -244,23 +259,6 @@ Ret!witness tupleToTuple(bool witness)(Expression from,Expression to,TypeAnnotat
 				return trans(new TupleConversion(from,nvec2,elements),new VectorToArrayConversion(nvec2,arr2));
 			}
 		}else if(next.all) return true;
-	}
-	auto vec1=cast(VectorTy)from, vec2=cast(VectorTy)to;
-	if(vec1&&vec2&&isEqual(vec1.num,vec2.num,null)){ // (judgmental equality, e.g., `n` and `3` after `n:=3`)
-		if(auto next=typeExplicitConversion!witness(vec1.next,vec2.next,annotationType)){
-			static if(witness){
-				enum checkLength=false;
-				return new VectorConversion(vec1,vec2,next,false);
-			}else return true;
-		}
-	}
-	if(vec1&&arr2){
-		if(auto next=typeExplicitConversion!witness(vec1.next,arr2.next,annotationType)){
-			static if(witness){
-				auto nvec2=vectorTy(arr2.next,vec1.num);
-				return trans(new VectorConversion(vec1,nvec2,next,false),new VectorToArrayConversion(nvec2,arr2));
-			}else return true;
-		}
 	}
 	if(tpl1&&vec2&&isEqual(LiteralExp.makeInteger(tpl1.length),vec2.num,null)){ // TODO: redundant?
 		auto next=iota(tpl1.length).map!(i=>typeExplicitConversion!witness(tpl1[i],vec2.next,annotationType));

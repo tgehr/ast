@@ -1071,7 +1071,7 @@ Expression knownForm(Expression e,EqualityContext* ctx){ // (`e` with the known 
 	if(!subst.length||!foldable(e,subst)) return e;
 	return e.substitute(subst);
 }
-Expression definitionValue(Declaration meaning,bool typeVariable){ // (see `Identifier.getInitializer` and `typeVariableValue`)
+Expression definitionValue(Declaration meaning,bool typeVariable,bool deterministic=true){ // (see `Identifier.getInitializer` and `typeVariableValue`)
 	auto vd=cast(VarDecl)meaning;
 	if(!vd) return null;
 	if(!vd.initializer) if(auto source=cast(VarDecl)vd.canonicalSource) vd=source; // (e.g., the version merged from the scope of a `with` transformation has the value of its definition)
@@ -1084,6 +1084,7 @@ Expression definitionValue(Declaration meaning,bool typeVariable){ // (see `Iden
 	auto local=!cast(TopScope)vd.scope_;
 	if(typeVariable?!local||!isTypeTy(vd.vtype):local&&!isQNumeric(vd.vtype)) return null;
 	if(isEmpty(vd.vtype)) return null; // (a variable of an empty type has no value, e.g., `x` after `x:=y coerce ⊥`, although `⊥` is also a type of types)
+	if(deterministic&&!init.isDeterministic()) return null; // (a variable does not stand for a value that each evaluation computes anew, e.g., `t` after `t:=f(x)` for a function `f` that measures, see `lowerNondeterministicType`)
 	return init.eval();
 }
 static if(language==silq)

@@ -1108,6 +1108,84 @@ bool hasLocalScope(Expression e){
 	foreach(c;e.components) if(hasLocalScope(c)) return true;
 	return false;
 }
+static if(language==silq)
+bool isTypeConstruction(Expression e){ // (a type that its components determine, e.g., `uint[n]` or `𝔹^n`, see `typeWitnesses`)
+	if(!e.type||!isTypeTy(e.type)) return false;
+	if(cast(VectorTy)e||cast(TupleTy)e||cast(ArrayTy)e||cast(ClassicalTy)e) return true;
+	if(auto tae=cast(TypeAnnotationExp)e) return tae.annotationType==TypeAnnotationType.annotation; // (e.g., `uint[n]:qtype`)
+	if(auto ce=cast(CallExp)e){
+		auto ft=cast(FunTy)ce.e.type;
+		return ft&&ft.annotation>=deterministic&&ce.e.isDeterministic();
+	}
+	return false;
+}
+static if(language==silq)
+Expression[] typeWitnesses(Expression e,ref Expression[] rest,ref Location[] locs){ // (the maximal parts of the type `e` that are not deterministic, whose values determine it, e.g., `measure(x) as !ℕ` for `uint[measure(x) as !ℕ]`; `rest`: the deterministic parts; `locs`: of the parts, without the brackets of arguments, e.g., of `n` in `uint[n]`)
+	import std.string:strip;
+	bool enclosed(string rep){ // (by the brackets at its ends, e.g., `[n]`, but not `(a)+(b)`)
+		if(rep.length<2||rep.canFind('\n')) return false;
+		auto open=rep[0],close=open=='['?']':open=='('?')':0;
+		if(!close||rep[$-1]!=close) return false;
+		int depth=0;
+		foreach(i,c;rep){
+			if(c==open) depth++;
+			else if(c==close&&--depth==0) return i+1==rep.length;
+		}
+		return false;
+	}
+	Expression[] r;
+	void rec(Expression e,bool bracketed){
+		if(e.isDeterministic()){ rest~=e; return; }
+		if(!isTypeConstruction(e)){
+			r~=e;
+			auto loc=e.loc;
+			if(bracketed&&!cast(TupleExp)e&&enclosed(loc.rep)) loc.rep=loc.rep[1..$-1].strip;
+			locs~=loc;
+			return;
+		}
+		auto ce=cast(CallExp)e;
+		foreach(c;e.components) rec(c,ce&&c is ce.arg);
+	}
+	rec(e,false);
+	return r;
+}
+static if(language==silq)
+Expression lowerNondeterministicType(DefineExp be){ // (`w:=e; t:=uint[w];` for `t:=uint[e]` if `e` is not deterministic: the type variable stands for the type of its own evaluation of `e`, through which the analysis looks, while another evaluation of `uint[e]` can give another type, see `definitionValue`)
+	auto lhs=be.e1;
+	while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+	auto id=cast(Identifier)lhs;
+	if(!id||!id.meaning||!be.e2.isSemCompleted()||be.e2.isDeterministic()||!isTypeConstruction(be.e2)) return null;
+	Expression[] rest;
+	Location[] locs;
+	auto parts=typeWitnesses(be.e2,rest,locs);
+	if(!parts.length||parts.any!(p=>!p.type||!p.type.isClassical())) return null;
+	SetX!Declaration consumed; // (the parts are evaluated first: not if the rest reads a variable that they consume)
+	foreach(p;parts) foreach(x;p.freeIdentifiers) if(x.meaning&&!x.constLookup&&!x.implicitDup) consumed.insert(x.meaning);
+	foreach(e;rest) foreach(x;e.freeIdentifiers) if(x.meaning&&x.meaning in consumed) return null;
+	IdMapSX!(Expression,Id) names;
+	Expression[] r;
+	foreach(i,p;parts){
+		auto tmp=temporaryIdentifier(locs[i]);
+		names[p]=tmp.id;
+		auto init=reevaluationCopy(p);
+		init.loc=locs[i];
+		auto def=new DefineExp(tmp,init);
+		def.loc=locs[i];
+		r~=def;
+	}
+	auto rhs=reevaluationCopy(be.e2,(Expression x){
+		if(x !in names) return cast(Expression)null;
+		auto nid=new Identifier(names[x]);
+		nid.loc=x.loc;
+		return cast(Expression)nid;
+	});
+	auto def=new DefineExp(be.e1.copy(),rhs);
+	def.loc=be.loc;
+	r~=def;
+	auto ce=new CompoundExp(r);
+	ce.loc=be.loc;
+	return ce;
+}
 
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq) auto condConstContext=sc.saveConst();
@@ -4816,6 +4894,16 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		checkIndexReplacement(be,sc);
 		updateLhs();
 		if(!be.isSemError()){
+			static if(language==silq) if(auto e=lowerNondeterministicType(be)){
+				sc.restoreStateSnapshot(preState);
+				auto r=statementSemantic(e,sc,flags);
+				finishIndexReplacement(be,sc);
+				if(be.isSemError()){
+					sc.clearConsumed();
+					return be;
+				}
+				return lowerIndexReplacement(prologues,epilogues,r,sc,flags);
+			}
 			if(auto e=lowerDefine!ldflags(be,sc,unchecked,noImplicitDup)){
 				if(!e.isSemError()){
 					sc.restoreStateSnapshot(preState);
@@ -9352,10 +9440,17 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 	return tae;
 }
 static if(language==silq)
-void explainOpaqueTypeVariables(Scope sc,Expression[] types...){ // (the uses of type variables that do not look through them, see `typeVariableValueUnavailable`)
+void explainOpaqueTypeVariables(Scope sc,Expression[] types...){ // (the uses of type variables that do not look through them, see `typeVariableValueUnavailable` and `definitionValue`)
 	SetX!Declaration done;
 	foreach(type;types) if(type) foreach(id;type.freeIdentifiers){
-		if(!id.opaqueTypeVariable||!id.meaning||id.meaning in done) continue;
+		if(!id.meaning||id.meaning in done) continue;
+		if(!id.opaqueTypeVariable){
+			if(auto value=definitionValue(id.meaning,true,false)) if(!value.isDeterministic()){
+				done.insert(id.meaning);
+				sc.note(format("the value `%s` of `%s` is not deterministic",value,id.name),id.loc);
+			}
+			continue;
+		}
 		done.insert(id.meaning);
 		auto value=typeVariableDependency(id.meaning);
 		if(!value) continue;
@@ -10490,6 +10585,24 @@ bool isBodyLocal(FunctionDef fd,Declaration decl){ // (a variable of the body of
 	return decl.scope_&&decl.scope_.isNestedIn(bsc)&&decl.canonicalSource.scope_&&decl.canonicalSource.scope_.isNestedIn(bsc);
 }
 
+Location returnedDepending(FunctionDef fd,Declaration decl){ // (of the first returned value whose type mentions `decl`, e.g., `inc(0:t)` for `t:=uint[measure(H(0))+1]` before, otherwise of `fd`)
+	Expression r=null;
+	void rec(Expression e){
+		if(r||!e||cast(FunctionDef)e||cast(LambdaExp)e) return;
+		if(auto ret=cast(ReturnExp)e){
+			auto type=ret.e?ret.e.type:null;
+			if(!type) if(auto le=cast(LambdaExp)ret.e) if(le.fd) type=le.fd.ftype; // (e.g., `return λ(x:!𝔹^n)⇒x;`, whose body is analyzed after the function)
+			if(type&&type.freeIdentifiers.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource)){
+				r=ret.e;
+				return;
+			}
+		}
+		foreach(c;e.components) rec(c);
+	}
+	rec(fd.body_);
+	return r?r.loc:fd.loc;
+}
+
 bool setFtype(FunctionDef fd,bool force){
 	if(fd.ftype&&fd.ftypeFinal) return true;
 	if(fd.isNested&&!force&&!fd.sealed)
@@ -10526,12 +10639,21 @@ bool setFtype(FunctionDef fd,bool force){
 		fd.ftypeCallbacks=[];
 	auto bdy=fd.body_,fsc=fd.fscope_;
 	if(bdy&&bdy.blscope_&&fsc&&!fd.isSemError()){
+		Declaration[] reported; // (one error for each variable, not for each of its occurrences)
 		if(fd.ret) foreach(id;fd.ret.freeIdentifiers){
 			if(!id.meaning) continue;
 			if(cast(DatDecl)id.meaning) continue; // allow nested types to be returned from functions
 			if(isBodyLocal(fd,id.meaning)){
-				fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), fd.loc);
-				fsc.note("variable declared here",id.meaning.loc);
+				auto vd=cast(VarDecl)id.meaning;
+				if(reported.canFind(id.meaning.canonicalSource)){}
+				else if(vd&&vd.isTemporary){ // (e.g., the value of `measure(x) as !ℕ` for `t` after `t:=uint[measure(x) as !ℕ]`, see `lowerNondeterministicType`)
+					fsc.error(format("return type `%s`%s depends on a value that the body computes", fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):""), returnedDepending(fd,id.meaning));
+					fsc.note(format("value of `%s` computed here",id),id.meaning.loc);
+				}else{
+					fsc.error(format("local variable `%s` appears in return type `%s`%s (maybe declare `%s` in the enclosing scope?)", id.name, fd.ftype.cod, fd.name?format(" of function `%s`",fd.name):"",id.name), returnedDepending(fd,id.meaning));
+					fsc.note("variable declared here",id.meaning.loc);
+				}
+				reported~=id.meaning.canonicalSource;
 				fd.setSemError();
 			}
 			if(fd.scope_&&fd.sstate==SemState.started) typeConstBlockDecl(id.meaning,fd,fd.scope_); // (released after the definition: later, the live function itself blocks the variables)
