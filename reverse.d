@@ -1100,7 +1100,7 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 			annotations~=tae;
 			inner=tae.e;
 		}
-		if(auto fle=cast(LetExp)inner) if(fle.isForward(true)&&fle.s.s.length>1){ // (`let{ … } in let{ x:=e; forget(…); } in x`, also with a type annotation, e.g., for the result `s⊕0:𝔹`: its statements continue with those of the inner `let`, see `resolveForgets`)
+		if(auto fle=continuedLet(le)){ // (`let{ … } in let{ x:=e; forget(…); } in x`, also with a type annotation, e.g., for the result `s⊕0:𝔹`: its statements continue with those of the inner `let`, see `resolveForgets`)
 			value=fle.e;
 			foreach_reverse(tae;annotations){
 				auto nv=new TypeAnnotationExp(value,tae.t.copy(),tae.annotationType);
@@ -1110,7 +1110,9 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 			tail=fle.s.s;
 		}
 	}
-	Expression mlhs=reevaluationCopy(value),mrhs=orhs; // (see `embeddedForgets`)
+	Id[] kept; // (the variables of the block that the result forgets, which the reversal of an update recomputes before it, see `resultForgets`)
+	static if(language==silq) if(update) foreach(u;le.resultUncomputation) if(auto fe=cast(ForgetExp)u) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) kept~=nameOf(id);
+	Expression mlhs=reevaluationCopy(value,null,kept),mrhs=orhs; // (see `embeddedForgets`)
 	if(hoist) if(auto lt=cast(TupleExp)unwrap(value)) if(auto rt=cast(TupleExp)orhs) if(lt.length==rt.length){ // (without the classical variables of the enclosing block that it returns, e.g., `k` in `(y,k):=let { k+=1; … } in (z,k)`: the received version is the current one, which the reversal changes in place)
 		Expression[] ls,rs;
 		foreach(i;0..lt.length){
@@ -1162,6 +1164,7 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 	}
 	Expression[] middle=[def];
 	static if(language==silq){
+		if(update) foreach(u;le.resultUncomputation) middle=reverseStatement(u,sc,unchecked,noImplicitDup,false,true)~middle;
 		auto stmts=le.s.blscope_?uncomputationOf(le.s.entryUncomputation,le.s.blscope_.forgottenVarsOnEntry,le.s.loc)~le.s.s~tail:le.s.s~tail;
 		if(le.s.blscope_) foreach(u;uncomputationOf(le.s.exitUncomputation,le.s.blscope_.forgottenVars,le.s.loc)){ // (the forgets after the result: the reversal recomputes their quantum variables before it uncomputes the result, as for the branches of a conditional, see `lowerDefine`)
 			auto fe=cast(ForgetExp)u;
@@ -2774,14 +2777,16 @@ ForgetExp[] embeddedForgets(Expression s){ // (the forgets without value within 
 	foreach(p;parts) foreach(x;p.subexpressions) if(auto fe=cast(ForgetExp)x) if(!fe.val) r~=fe;
 	return r;
 }
-Expression reevaluationCopy(Expression e,Expression delegate(Expression) replacement=null){ // (of a part of a statement that the reversal evaluates again, without the forgets of the variables that it recomputes before the statement, see `embeddedForgets`; `replacement`: of subexpressions)
+Expression reevaluationCopy(Expression e,Expression delegate(Expression) replacement=null,Id[] kept=null){ // (of a part of a statement that the reversal evaluates again, without the forgets of the variables that it recomputes before the statement, see `embeddedForgets`, and of `kept`; `replacement`: of subexpressions)
 	Expression.CopyArgs cargs;
 	cargs.mapExp=(Expression x,ref Expression.CopyArgs args){
 		if(replacement) if(auto r=replacement(x)) return r;
 		auto fe=cast(ForgetExp)x;
-		if(!fe||fe.val||!fe.outerUncomputation.length) return null;
-		auto recomputed=recomputedBefore(fe);
-		auto vars=forgottenVariables(fe).filter!(v=>!(cast(Identifier)unwrap(v)&&recomputed.canFind(nameOf(cast(Identifier)unwrap(v))))).map!(v=>v.copy(args)).array;
+		if(!fe||fe.val) return null;
+		auto recomputed=(fe.outerUncomputation.length?recomputedBefore(fe):[])~kept;
+		bool isRecomputed(Expression v){ return cast(Identifier)unwrap(v)&&recomputed.canFind(nameOf(cast(Identifier)unwrap(v))); }
+		if(!fe.outerUncomputation.length&&!forgottenVariables(fe).any!isRecomputed) return null;
+		auto vars=forgottenVariables(fe).filter!(v=>!isRecomputed(v)).map!(v=>v.copy(args)).array;
 		Expression var;
 		if(vars.length==1) var=vars[0];
 		else{
@@ -2794,6 +2799,28 @@ Expression reevaluationCopy(Expression e,Expression delegate(Expression) replace
 		return cast(Expression)r;
 	};
 	return e.copy(cargs);
+}
+static if(language==silq)
+LetExp continuedLet(LetExp le){ // (a forward `let` expression with statements as the result, also with type annotations, whose statements continue those of `le`, see `lowerLetDefine`)
+	auto inner=le.e;
+	for(auto tae=cast(TypeAnnotationExp)inner;tae;tae=cast(TypeAnnotationExp)inner) inner=tae.e;
+	auto fle=cast(LetExp)inner;
+	return fle&&fle.isForward(true)&&fle.s.s.length>1?fle:null;
+}
+static if(language==silq)
+Identifier[] resultForgets(LetExp le){ // (the quantum variables of the block of a `let` expression that the part of its result that the reversal of an update evaluates again forgets, e.g., at their last uses, and does not change otherwise, e.g., `a` for `y⊕=(let{ a:=t; } in (let{ b:=dup(a); } in b))`: the reversal recomputes them before the update, see `lowerLetDefine`)
+	auto cle=continuedLet(le);
+	Id[] local,changed;
+	foreach(s;chain(le.s.s,cle?cle.s.s:[])) local~=definedNames(s);
+	Identifier[] r;
+	void add(Identifier id){ if(id.type&&!id.type.isClassical()&&local.canFind(nameOf(id))&&!r.any!(o=>nameOf(o)==nameOf(id))) r~=id; }
+	foreach(x;(cle?cle.e:le.e).subexpressions){
+		if(auto fe=cast(ForgetExp)x){ if(!fe.val) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) add(id); }
+		else if(auto ce=cast(CompoundExp)x){ if(ce.blscope_) foreach(id;identifiersOf(ce.blscope_.forgottenVarsOnEntry~ce.blscope_.forgottenVars,ce.loc)) add(id); }
+		else if(cast(DefineExp)x) changed~=definedNames(x);
+		else if(auto be=isOpAssignExp(x)) if(auto id=cast(Identifier)unwrap(be.e1)) changed~=nameOf(id);
+	}
+	return r.filter!(id=>!changed.canFind(nameOf(id))).array;
 }
 Identifier[] outerForgets(WithExp we){ // (the quantum variables of enclosing blocks that the inverse of the transformation forgets, e.g., at their last uses, also in nested blocks)
 	if(!we.itrans) return [];
@@ -3282,6 +3309,11 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 				return;
 			}
 			auto end=block(le.s,f,null);
+			static if(language==silq) if(blockUpdate(statement) is le){
+				auto ids=resultForgets(le);
+				auto cle=continuedLet(le);
+				if(ids.length) le.resultUncomputation=site(cast(Expression[])ids,cle?new ForgetFrame(cle.s.s,end,null):end,[],le.loc);
+			}
 			expression(le.e,end);
 			return;
 		}

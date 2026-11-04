@@ -3132,6 +3132,7 @@ class LetExp: Expression{
 	CompoundExp s;
 	Expression e;
 	bool analyzed=false; // (a copy of an analyzed `let` expression renames its variables whose names are taken where it is analyzed again)
+	static if(language==silq) Expression[] resultUncomputation; // (as `CompoundExp.exitUncomputation`, for the quantum variables of its block that its result forgets, if it is the right-hand side of an update whose reversal reverses its block, see `ast.reverse.resultForgets`)
 	this(CompoundExp s,Expression e){
 		this.s=s;
 		this.e=e;
