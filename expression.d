@@ -1644,6 +1644,14 @@ class IndexExp: Expression{ //e[a]
 		r.isArraySyntax=isArraySyntax;
 		static if(language==silq) r.isClassical_=isClassical_;
 		r.loc=loc;
+		static if(language==silq) if(type&&ne.type&&na.type){ // (the type of the components of the substituted aggregate, which can be a subtype, e.g., `(1,0)[i]` for a parameter `t:!ℕ^2`)
+			import ast.semantic_:indexType;
+			auto ty=type.substitute(subst,tt);
+			if(auto nty=indexType(ne.type,na)){
+				if(isClassical_) nty=nty.getClassical();
+				if(nty&&nty.isSemEvaluated()&&nty!=ty&&isSubtype(nty,ty)) r.type=nty;
+			}
+		}
 		return r;
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
