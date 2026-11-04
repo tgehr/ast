@@ -2000,6 +2000,7 @@ private Id[][2] changes(Expression e){
 		static if(language==silq) if(auto ce=cast(CompoundExp)e) if(ce.loweredFrom) return rec(ce.loweredFrom);
 		if(auto we=cast(WithExp)e){ // (the inverse restores what the transformation changes)
 			auto defined=definedNames(we.bdy).filter!(n=>!movedIntoItself(we.bdy,n)&&availableAfter(we.bdy,n)).array,inBody=changes(we.bdy); // (not a variable that the body only moves into its own new version, whose changes in the body count, e.g., `v` for `v+=1; (w,v):=(2,v);`, nor one that it forgets, which it changes, e.g., `k` for `(xs,k):=let{ k-=1; … } in (xs,k); k+=2;` at the last use of `k`)
+			auto own=definedNames(we).filter!(n=>!movedIntoItself(we.bdy,n)&&!inBody[0].canFind(n)&&!inBody[1].canFind(n)&&!consumed.canFind(n)).array; // (new variables, as for a definition, e.g., `v` for `with { … } do { v:=u+1; }` before `w:=move(v); v:=2;`, whose move does not consume a variable of an enclosing block)
 			static if(language==silq) if(classifyStatement(we)!=ComputationClass.classical){ // (the reversal of the body recomputes the definitions, see `projection`)
 				inBody[0]=inBody[0].filter!(n=>!inBody[1].canFind(n)).array;
 				inBody[1]=[];
@@ -2010,6 +2011,7 @@ private Id[][2] changes(Expression e){
 				else if(!defined.canFind(n)||inBody[1].canFind(n)) r~=n;
 			}
 			lossy~=inBody[1];
+			local~=own;
 			return;
 		}
 		static if(language==silq){
