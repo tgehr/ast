@@ -455,7 +455,12 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			}
 		}
 	}
-	if(defer&&!cast(ForgetExp)olhs&&!(language==silq&&reverseMode&&cast(IteExp)olhs&&olhs.isSemCompleted())){ // (not an analyzed conditional, whose branches may forget variables that its reversal recomputes, see below)
+	static if(language==silq&&reverseMode){
+		auto bare=olhs;
+		for(auto tae=cast(TypeAnnotationExp)bare;tae;tae=cast(TypeAnnotationExp)bare) bare=tae.e;
+		bool lowered=cast(LetExp)bare||cast(IteExp)bare&&olhs.isSemCompleted(); // (a `let` expression, as above, or an analyzed conditional, also with type annotations: their blocks may forget variables that the reversal recomputes, see below)
+	}else enum lowered=false;
+	if(defer&&!cast(ForgetExp)olhs&&!lowered){
 		static if(language==silq) return res=new DefineExp(reevaluationCopy(olhs),rhs); // (keeps implicit duplications of analyzed statements)
 		else return res=new DefineExp(olhs.copy(),rhs); // (keeps implicit duplications of analyzed statements)
 	}
@@ -545,8 +550,8 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 				if(!orhs.type||orhs.type!=tae.e.type){
 					auto newRhs=new TypeAnnotationExp(rhs,tae.e.type,TypeAnnotationType.coercion);
 					newRhs.loc=orhs.loc;
-					return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup);
-				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked,noImplicitDup);
+					return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup,defer,old,needOld);
+				}else return lowerDefine!flags(tae.e,orhs,loc,sc,unchecked,noImplicitDup,defer,old,needOld);
 			}
 		}
 		Expression newRhs;
@@ -557,7 +562,7 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 			newRhs=new TypeAnnotationExp(orhs,tae.t,tae.annotationType);
 		}
 		newRhs.loc=orhs.loc;
-		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup);
+		return lowerDefine!flags(tae.e,newRhs,loc,sc,unchecked,noImplicitDup,defer,old,needOld);
 	}
 	if(auto ce=cast(CatExp)olhs){
 		//scope(exit) imported!"util.io".writeln(olhs," := ",orhs," → ",res);
@@ -1080,7 +1085,7 @@ bool isClassicalReverseCall(Expression lhs,Expression rhs){
 }
 
 static if(language==silq)
-Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][] old=null,NeedOld* needOld=null)in{
+Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][] old=null,NeedOld* needOld=null,ABinaryExp update=null)in{ // (`update`: an update whose right-hand side is the `let` expression, e.g., `y⊕=(let{ a:=t; } in a⊕x)`, instead of a definition from `orhs`)
 	assert(!le.isForward(true));
 }do{
 	enum unchecked=false,noImplicitDup=true;
@@ -1088,9 +1093,22 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 	auto hoist=le.s.isSemCompleted(); // (the classical locals of an analyzed `let` are recomputed, as for a nested block, and the received values are checked against them)
 	auto value=le.e;
 	Expression[] tail;
-	static if(language==silq) if(auto fle=cast(LetExp)le.e) if(fle.isForward(true)&&fle.s.s.length>1){ // (`let{ … } in let{ x:=e; forget(…); } in x`: its statements continue with those of the inner `let`, see `resolveForgets`)
-		value=fle.e;
-		tail=fle.s.s;
+	static if(language==silq){
+		TypeAnnotationExp[] annotations;
+		auto inner=le.e;
+		for(auto tae=cast(TypeAnnotationExp)inner;tae;tae=cast(TypeAnnotationExp)inner){
+			annotations~=tae;
+			inner=tae.e;
+		}
+		if(auto fle=cast(LetExp)inner) if(fle.isForward(true)&&fle.s.s.length>1){ // (`let{ … } in let{ x:=e; forget(…); } in x`, also with a type annotation, e.g., for the result `s⊕0:𝔹`: its statements continue with those of the inner `let`, see `resolveForgets`)
+			value=fle.e;
+			foreach_reverse(tae;annotations){
+				auto nv=new TypeAnnotationExp(value,tae.t.copy(),tae.annotationType);
+				nv.loc=tae.loc;
+				value=nv;
+			}
+			tail=fle.s.s;
+		}
 	}
 	Expression mlhs=reevaluationCopy(value),mrhs=orhs; // (see `embeddedForgets`)
 	if(hoist) if(auto lt=cast(TupleExp)unwrap(value)) if(auto rt=cast(TupleExp)orhs) if(lt.length==rt.length){ // (without the classical variables of the enclosing block that it returns, e.g., `k` in `(y,k):=let { k+=1; … } in (z,k)`: the received version is the current one, which the reversal changes in place)
@@ -1114,7 +1132,7 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 	}
 	Expression def,received=mrhs; // (the definition of the result, and the received value, which the renamings below leave alone)
 	Expression[] pre;
-	static if(language==silq) if(hoist&&mrhs is orhs){
+	static if(language==silq) if(hoist&&mrhs is orhs&&!update){
 		auto v=unwrap(value),nested=cast(LetExp)v;
 		if(v.isSemCompleted()&&(cast(IteExp)v||nested&&!nested.isForward(true))){ // (an analyzed conditional or `let` expression, whose blocks may forget variables that its reversal recomputes, see `lowerDefine`)
 			auto tmp=temporaryIdentifier(loc);
@@ -1126,13 +1144,16 @@ Expression lowerLetDefine(LetExp le,Expression orhs,Location loc,Scope sc,Id[2][
 		}
 	}
 	if(!def){
-		def=new DefineExp(mlhs,mrhs);
-		def.loc=loc;
+		if(update) def=reevaluationCopy(update,(Expression x)=>x is le?mlhs:null); // (evaluated again, between the reversal of the block and the recomputation of its forgets, see below)
+		else{
+			def=new DefineExp(mlhs,mrhs);
+			def.loc=loc;
+		}
 	}
 	Id[] copied,excludedCopied; // (the classical variables of the enclosing block that the `let` expression changes and consumes: the reversal recomputes the changes on copies, as the enclosing block recomputes the versions before them)
 	if(hoist){
 		Id[] result,local;
-		foreach(e;[value,orhs]) foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) result~=nameOf(id); // (also a new version that the definition defines, e.g., `(y,k):=let { k+=1; … } in (z,0)`, which the enclosing block may recompute)
+		foreach(e;[value,update?update.e1:orhs]) foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) result~=nameOf(id); // (also a new version that the definition defines, e.g., `(y,k):=let { k+=1; … } in (z,0)`, which the enclosing block may recompute)
 		foreach(s;mergeCompound(le.s.s~tail)){
 			foreach(n;changedNames(s)) if(!copied.canFind(n)&&!local.canFind(n)&&!result.canFind(n)) copied~=n;
 			local~=definedNames(s);
@@ -2665,9 +2686,23 @@ private void reevaluatedParts(Expression e,ref Expression[] parts){ // (of the r
 	}
 	parts~=e; // (e.g., `a⊕b`, which the reversal forgets with that value)
 }
+static if(language==silq)
+LetExp blockUpdate(Expression e){ // (the `let` expression on the right-hand side of an update whose reversal reverses its block around the update, as for a definition, see `lowerLetDefine`: the evaluation of a copy would read variables that the update consumes, e.g., `t` in `y⊕=(let{ a:=t; } in a⊕x);`)
+	if(!cast(BitXorAssignExp)e&&!cast(XorAssignExp)e) return null;
+	auto le=cast(LetExp)unwrap((cast(ABinaryExp)e).e2);
+	if(!le||le.isForward(true)||!le.s.isSemCompleted()) return null;
+	bool consumes=false;
+	le.freeVarsImpl((Identifier id){ if(id.moved||!id.constLookup&&!id.implicitDup&&id.type&&!id.type.isClassical()) consumes=true; return 0; });
+	return consumes?le:null;
+}
 ForgetExp[] embeddedForgets(Expression s){ // (the forgets without value within the parts of a statement that its reversal evaluates again, e.g., in a `let` expression on the right-hand side of `x⊕=…`: for the variables of enclosing blocks that they forget, the reversal evaluates the parts without forgetting them, see `reevaluationCopy`, and recomputes them before)
 	Expression[] parts;
-	if(auto be=isOpAssignExp(s)) parts=[be.e1,be.e2];
+	if(auto be=isOpAssignExp(s)){
+		LetExp le=null;
+		static if(language==silq) le=blockUpdate(s);
+		if(le){ parts=[be.e1]; reevaluatedParts(le,parts); } // (the reversal of its block recomputes the forgets of the block, see `lowerLetDefine`)
+		else parts=[be.e1,be.e2];
+	}
 	else if(auto ae=cast(AssertExp)s) parts=[ae.e];
 	else if(auto fe=cast(ForgetExp)s){ if(fe.val) parts=[fe.val]; }
 	else if(auto ite=cast(IteExp)s) parts=[ite.cond];
@@ -3952,6 +3987,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 			auto nrhs=ae.e1;
 			return lowerDefine!flags(nlhs,nrhs,ae.loc,sc,unchecked,noImplicitDup,defer);
 		}
+		static if(language==silq) if(auto le=blockUpdate(e)) return lowerLetDefine(le,null,be.loc,sc,old,needOld,be);
 		if(auto ae=cast(BitXorAssignExp)e) return reevaluationCopy(ae);
 		if(auto ae=cast(XorAssignExp)e) return reevaluationCopy(ae);
 		sc.error("reversal not supported yet",e.loc);
