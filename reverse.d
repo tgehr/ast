@@ -2003,14 +2003,15 @@ private bool movedIntoItself(Expression s,Id n){ // (whether a statement defines
 	}
 	return any;
 }
-private Id[][2] changes(Expression e){
+private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`: the variables of enclosing blocks that it forgets or moves)
 	Id[] r,local,consumed,lossy;
 	void rec(Expression e){
 		if(cast(FunctionDef)e||cast(LambdaExp)e) return;
 		if(cast(LetExp)e) return; // (it consumes the variables that it changes, and its reversal recomputes them from copies, see `lowerLetDefine`)
 		static if(language==silq) if(auto ce=cast(CompoundExp)e) if(ce.loweredFrom) return rec(ce.loweredFrom);
 		if(auto we=cast(WithExp)e){ // (the inverse restores what the transformation changes)
-			auto defined=definedNames(we.bdy).filter!(n=>!movedIntoItself(we.bdy,n)&&availableAfter(we.bdy,n)).array,inBody=changes(we.bdy); // (not a variable that the body only moves into its own new version, whose changes in the body count, e.g., `v` for `v+=1; (w,v):=(2,v);`, nor one that it forgets, which it changes, e.g., `k` for `(xs,k):=let{ k-=1; … } in (xs,k); k+=2;` at the last use of `k`)
+			Id[] consumedInBody;
+			auto defined=definedNames(we.bdy).filter!(n=>!movedIntoItself(we.bdy,n)&&availableAfter(we.bdy,n)).array,inBody=changes(we.bdy,&consumedInBody); // (not a variable that the body only moves into its own new version, whose changes in the body count, e.g., `v` for `v+=1; (w,v):=(2,v);`, nor one that it forgets, which it changes, e.g., `k` for `(xs,k):=let{ k-=1; … } in (xs,k); k+=2;` at the last use of `k`)
 			auto own=definedNames(we).filter!(n=>!movedIntoItself(we.bdy,n)&&!inBody[0].canFind(n)&&!inBody[1].canFind(n)&&!consumed.canFind(n)).array; // (new variables, as for a definition, e.g., `v` for `with { … } do { v:=u+1; }` before `w:=move(v); v:=2;`, whose move does not consume a variable of an enclosing block)
 			static if(language==silq) if(classifyStatement(we)!=ComputationClass.classical){ // (the reversal of the body recomputes the definitions, see `projection`)
 				inBody[0]=inBody[0].filter!(n=>!inBody[1].canFind(n)).array;
@@ -2022,6 +2023,7 @@ private Id[][2] changes(Expression e){
 				else if(!defined.canFind(n)||inBody[1].canFind(n)) r~=n;
 			}
 			lossy~=inBody[1];
+			foreach(n;consumedInBody) if(!local.canFind(n)&&!consumed.canFind(n)) consumed~=n; // (e.g., `v` for `with { … } do { w:=move(v); }` before `v:=w+1;`, which defines it again)
 			local~=own;
 			return;
 		}
@@ -2058,6 +2060,7 @@ private Id[][2] changes(Expression e){
 		foreach(x;e.components) rec(x);
 	}
 	rec(e);
+	if(consumedOut) *consumedOut=consumed;
 	Id[] result(Id[] names){
 		Id[] res;
 		foreach(n;names) if(!local.canFind(n)&&!res.canFind(n)) res~=n;
@@ -2264,7 +2267,7 @@ private bool withoutEffect(Expression e){ // (a part that neither defines nor ch
 	return false;
 }
 static if(language==silq)
-private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null,Id[] skip=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables)
+private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Expression result=null,Id[] skip=null,Id[] after=null){ // (the classical part of a block, which the reversal recomputes, see `projection`; `result`: an expression after the block that reads its variables; `after`: the variables that statements after the block define again, see `later`)
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
 	auto ss=mergeCompound(b.s);
 	auto parts=new Expression[](ss.length);
@@ -2285,7 +2288,7 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 	}
 	auto later=new Id[][](ss.length); // (the variables that later statements define again, whose forgets and moves the classical part keeps, see `recomputation`: those that their parts define or that are available after them, but not those that statements which it leaves out define for themselves, e.g., `v` in `if c { v:=w+1; }`)
 	auto skipped=new bool[](ss.length); // (see `projection`)
-	Id[] defs;
+	Id[] defs=after.dup;
 	foreach_reverse(j,s;ss){
 		later[j]=defs;
 		if(auto fe=cast(ForgetExp)s) if(!fe.val) continue;
@@ -2296,7 +2299,7 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 			if(classifyStatement(s)==ComputationClass.classical&&!changesDropped){
 				if(readsDropped(s)) omitted[j]=true;
 				else parts[j]=recomputation(s,sc,vars,later[j]);
-			}else if(auto p=projection(s,sc,drop,vars)) parts[j]=p;
+			}else if(auto p=projection(s,sc,drop,vars,null,later[j])) parts[j]=p;
 			else if(changes.length) omitted[j]=true; // (the values that it changes would not be recomputed)
 			if(parts[j]&&withoutEffect(parts[j])) parts[j]=null; // (e.g., `if u==3 { }` for `if u==3 { x[2]:=X(x[2]); }`, which then does not need `u`)
 		}
@@ -2339,17 +2342,17 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 	return res;
 }
 static if(language==silq)
-Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] skip=null){ // (the classical part of an `if` statement, a loop, a `with` statement, a `let` expression or a call that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
-	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner,skip);
+Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] skip=null,Id[] after=null){ // (the classical part of an `if` statement, a loop, a `with` statement, a `let` expression or a call that is reversed, which the reversal recomputes; without the changes of the variables in `drop`, which it then must not read; `inner`: see `recomputation`)
+	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner,skip,after);
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
-	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result,skip); }
+	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result,skip,result?null:after); } // (the forgets of variables that later statements define again, e.g., `v` for `with { … } do { forget(v); … }` before `v:=2;` in a branch, see `later`)
 	Expression res;
 	if(headers(s).any!readsDropped) return null;
 	if(auto ite=cast(IteExp)s){
 		if(!ite.cond.type||!ite.cond.type.isClassical()) return null;
 		CompoundExp branch(CompoundExp b){ // (it may read the variables in `drop` that only the other branch changes, e.g., `k` for `if c { k+=1; } else { u+=k; }`)
 			auto changes=changedNames(b);
-			return classicalPart(b,sc,drop.filter!(n=>changes.canFind(n)||usesUp(n,b.s)).array,inner,null,skip);
+			return classicalPart(b,sc,drop.filter!(n=>changes.canFind(n)||usesUp(n,b.s)).array,inner,null,skip,after);
 		}
 		auto then=branch(ite.then),othw=ite.othw?branch(ite.othw):null;
 		if(!then||ite.othw&&!othw) return null;
@@ -2441,6 +2444,13 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] 
 		res=new DefineExp(tuple(lhs),nle);
 	}else return null;
 	res.loc=s.loc;
+	static if(language==silq){
+		bool forgetsLater(Expression x){ // (it forgets a variable that later statements define again, e.g., `v` for `with { … } do { forget(v); xs[u]:=X(xs[u]); }` before `v:=2;` in a branch, see `classicalPart`)
+			auto fe=cast(ForgetExp)x;
+			return fe&&forgottenVariables(fe).any!((v){ auto id=cast(Identifier)unwrap(v); return id&&after.canFind(nameOf(id)); });
+		}
+		if(after.length&&res.subexpressions.any!forgetsLater) return res;
+	}
 	return definedNames(res).length||changedNames(s).length?res:null;
 }
 
@@ -3436,7 +3446,9 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					static if(language==silq) bool recomputable(Id n){ return hoisted.canFind(n)||lossy[i].canFind(n)&&outer.canFind(n); } // (a definition again of a variable of an enclosing block, whose version before the block the reversal of the block saves, see `oldVersions`)
 					else bool recomputable(Id n){ return hoisted.canFind(n); }
 					if(!changes.all!recomputable) return false; // (e.g., the reversal of a nested block reverses the changes of variables that an enclosing block defines)
-					if(changedAfter[i].any!(n=>!hoisted.canFind(n)&&(names.canFind(n)?movedIntoItself(s,n)&&readsBesidesMove(s,n):readsOther(s,n)))) return false; // (the recomputation would see the version after the change, also of a variable that it moves into its own new version and reads otherwise, e.g., `v` for `(w,v):=(v*2,v);` before `v+=1;` in a branch)
+					static if(language==silq) bool keptBefore(Id n){ return outer.canFind(n)&&!given.canFind(n)&&iota(i).all!(h=>!changed[h].canFind(n))&&iota(i+1,statements.length).all!(k=>!changed[k].canFind(n)||redefined[k].canFind(n)); } // (a variable of an enclosing block whose version before the block the reversal sees and that later statements only define again, whose recomputations keep that version, see `redefined`, e.g., `v` for `w:=move(v);` before `v:=w+1;` in a branch)
+					else bool keptBefore(Id n){ return false; }
+					if(changedAfter[i].any!(n=>!hoisted.canFind(n)&&!keptBefore(n)&&(names.canFind(n)?movedIntoItself(s,n)&&readsBesidesMove(s,n):readsOther(s,n)))) return false; // (the recomputation would see the version after the change, also of a variable that it moves into its own new version and reads otherwise, e.g., `v` for `(w,v):=(v*2,v);` before `v+=1;` in a branch)
 					return !chain(names,changes).any!(n=>excluded.canFind(n)&&!movedBack(n)||after.canFind(n)&&!defined.canFind(n)&&!movedIntoItself(s,n)); // (the reversed definition checks the received value, unless the new version is the one before it)
 				}
 				auto names=definedNames(s);
