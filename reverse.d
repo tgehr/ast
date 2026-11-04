@@ -1580,7 +1580,10 @@ ComputationClass classifyStatement(Expression e){
 			if(!ite.cond.type.isClassical()) return ComputationClass.quantum;
 			//return chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement.reduce!join(classical); // ???
 			auto r=bottom;
-			foreach(c;chain(ite.then.s,ite.othw?ite.othw.s:[]).map!classifyStatement) r=join(r,c);
+			foreach(s;chain(ite.then.s,ite.othw?ite.othw.s:[])){
+				static if(language==silq) if(auto fe=cast(ForgetExp)s) if(!fe.val&&fe.var.type&&fe.var.type.isClassical()) continue; // (a forget of classical variables, e.g., of a variable that a branch defines for itself, `v` in `if c { w:=move(v); v:=w+1; } else { w:=move(v); }`: the recomputation renames it, see `recomputation`)
+				r=join(r,classifyStatement(s));
+			}
 			return r==bottom?classical:r; // (e.g., `if t>1 { }`, as for `classicalUpToForgets`)
 		}
 		if(auto we=cast(WithExp)e){
@@ -1830,7 +1833,7 @@ bool definedInBlocks(CompoundExp b,Id name){ // (whether a block defines a varia
 	return rec(b);
 }
 static if(language==silq)
-private bool consumesVariable(Expression e,Id name){ // (whether an expression forgets or moves a variable called `name`, e.g., `w:=move(v)` in the classical part of `if c { w:=move(v); v:=w+1; } else { w:=move(v); }`)
+private bool consumesVariable(Expression e,Id name){ // (whether an expression forgets or moves a variable called `name`, e.g., `w:=move(v)` in the classical part of `if c { w:=move(v); v:=w+1; xs[v]:=X(xs[v]); } else { w:=move(v); }`)
 	foreach(x;e.subexpressions){
 		if(auto fe=cast(ForgetExp)x) if(forgottenVariables(fe).any!(v=>cast(Identifier)unwrap(v)&&nameOf(cast(Identifier)unwrap(v))==name)) return true;
 		if(auto id=cast(Identifier)x) if(id.moved&&nameOf(id)==name) return true;
@@ -3290,7 +3293,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			auto classicalDefined=statements.map!classicalEscapingNames.array;
 			bool ofBlock(size_t j,Id n){ return iota(j).any!(h=>classicalDefined[h].canFind(n)&&availableAfter(statements[h],n)&&!movedIntoItself(statements[h],n)); } // (a variable that an earlier statement of the block defines, not one of an enclosing block that it only moves into its own new version, e.g., `v` for `(w,v):=(1,v)` in the body of a `with` statement in a loop, whose reversal recomputes the iterations on copies of the versions before them, see `NeedOld`)
 			auto unsupported=new Id[][](statements.length); // (classical variables that the body of a `with` statement with quantum operations defines again after an earlier statement forgets or moves them, see `reversal`)
-			auto readAgain=new Id[][](statements.length); // (classical variables that a statement reads, consumes and defines again only for itself, e.g., `v` for `if c { w:=move(v); v:=w+1; } else { w:=move(v); }`, after which `v` is not available: the recomputation of its classical part keeps the move, see `recomputation`, but its reversal reads the version before it, see `reversal`)
+			auto readAgain=new Id[][](statements.length); // (classical variables that a statement reads, consumes and defines again only for itself, e.g., `v` for `if c { w:=move(v); v:=w+1; xs[v]:=X(xs[v]); } else { w:=move(v); }`, after which `v` is not available: the recomputation of its classical part keeps the move, see `recomputation`, but its reversal reads the version before it, see `reversal`)
 			foreach(j,s;statements){
 				lossy[j]=lossyChanges(s);
 				if(auto we=cast(WithExp)s) if(classifyStatement(s)!=ComputationClass.classical){ // (the reversal of the body recomputes the definitions, see `projection`: the recomputation of the block would not see the versions after it, also of a variable that an earlier statement forgets or moves, or that it reads before it forgets or moves it itself)
