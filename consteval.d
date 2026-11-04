@@ -179,7 +179,7 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!â„
 			if(ae1.e1 == ne2) return ae1.e2;
 			if(ae1.e2 == ne2) return ae1.e1;
 			auto v12 = ae1.e2.asIntegerConstant();
-			if(v12 && v2){
+			if(v12 && v2 && !(op == Tok!"sub" && v2.get() == 0 && v12.get() > 0)){ // (not `(a + 1) sub 0` into `a sub -1`, which becomes `(a + 1) sub 0` again below)
 				return make!op(loc, ae1.e1, make(v2.get() - v12.get()));
 			}
 			if(auto ae2 = cast(BinaryExp!(Tok!"+"))ne2){

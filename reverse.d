@@ -3919,11 +3919,16 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto trans=we.trans.copy(cargs);
 		auto bdy=cast(CompoundExp)reverseStatement(we.bdy,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive);
 		assert(!!bdy);
-		static if(language==silq){ // (the classical variables of its own that the body defines and does not leave available, but whose recomputations the reversal of the body keeps: it forgets them at its end, as the body does not have a scope of its own, e.g., `v` for `with { … } do { v:=w+1; xs[w%4]:=X(xs[w%4]); u:=move(v); }`, such that the reversal of an earlier statement may define `v` again; not versions of earlier ones, nor ones whose versions before it the reversal of the enclosing block recomputes, which the reversal of the body restores, e.g., `v` for `w:=move(v); with { … } do { v:=u+1; … forget(v); }`)
+		static if(language==silq){ // (the classical variables of its own that the body defines, but whose recomputations the reversal of the body keeps: it forgets them at its end, as the body does not have a scope of its own, e.g., `v` for `with { … } do { v:=w+1; xs[w%4]:=X(xs[w%4]); u:=move(v); }`, also if the body leaves them available, but the reversal does not receive them, e.g., `v` for `with { … } do { xs[2]:=X(xs[2]); v:=u*2; }` before `t:=v+j;`, whose value no statement uses, such that the reversal of an earlier statement may define `v` again; not versions of earlier ones, nor ones whose versions before it the reversal of the enclosing block recomputes, which the reversal of the body restores, e.g., `v` for `w:=move(v); with { … } do { v:=u+1; … forget(v); }`)
 			Id[] leftover;
+			Expression[] restored; // (the definitions of the transformations of nested `with` statements, whose inverses restore their variables, which `availableAfter` does not see: they count only where the body does not leave them available)
+			foreach(x;we.bdy.subexpressions) if(auto iwe=cast(WithExp)x){
+				foreach(y;iwe.trans.subexpressions) if(cast(DefineExp)y) restored~=y;
+				if(iwe.itrans) foreach(y;iwe.itrans.subexpressions) if(cast(DefineExp)y) restored~=y;
+			}
 			foreach(x;we.bdy.subexpressions) if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)){
 				auto n=nameOf(id);
-				if(id.type&&id.type.isClassical()&&!leftover.canFind(n)&&!keep.canFind(n)&&!availableAfter(we.bdy,n)&&!readsBeforeDefining(we.bdy,n,true)&&!alive.canFind(n)&&availableAfter(bdy,n,false)) leftover~=n;
+				if(id.type&&id.type.isClassical()&&!leftover.canFind(n)&&!keep.canFind(n)&&(!restored.any!(y=>y is x)||!availableAfter(we.bdy,n))&&!readsBeforeDefining(we.bdy,n,true)&&!alive.canFind(n)&&availableAfter(bdy,n,false)) leftover~=n;
 			}
 			if(leftover.length){
 				Expression[] forgets;
