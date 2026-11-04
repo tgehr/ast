@@ -2799,6 +2799,7 @@ private struct ForgetFrame{ // (statements that precede a forget in the function
 	Expression[] statements; // (in the block of the forget, or before the statement that contains that block)
 	ForgetFrame* parent;
 	Expression loop; // (whose body the block is: also its earlier iterations precede the forget)
+	Expression[] earlier; // (the parts of the statement before the part of the forget: their changes are between the statements and the forget, e.g., the forget of `f` in `f(c)` for the forget of `h` in `(t,u):=(f(c),h(c));` after `def h(const z:𝔹)qfree⇒z&f(c);`)
 }
 private struct Slice{ // (of the statements before a forget, which recompute the value of a variable, see `ForgetResolution.value`)
 	Id[] needed; // (variables whose versions after the current statement the recomputation needs)
@@ -3019,6 +3020,11 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 				if(n.writes.any!(w=>sl.needed.canFind(w))) return null;
 				add(sl.changed,n.writes);
 			}
+			foreach(p;f.earlier){
+				auto writes=names(p).writes;
+				if(writes.any!(w=>sl.needed.canFind(w))) return null;
+				add(sl.changed,writes);
+			}
 		}
 		return null; // (e.g., a version of a parameter that the function consumes)
 	}
@@ -3216,10 +3222,12 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 			expression(le.e,end);
 			return;
 		}
+		ForgetFrame* after(Expression[] earlier){ return earlier.length?new ForgetFrame([],f,null,earlier):f; }
 		if(auto ite=cast(IteExp)e){
 			expression(ite.cond,f);
-			block(ite.then,f,null);
-			if(ite.othw) block(ite.othw,f,null);
+			auto g=after([ite.cond]);
+			block(ite.then,g,null);
+			if(ite.othw) block(ite.othw,g,null);
 			hoist(ite,f);
 			return;
 		}
@@ -3232,7 +3240,12 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 			if(outer.length) we.uncomputation=site(cast(Expression[])outer,f,chain(names(we.trans).writes,names(we.bdy).writes).array,we.loc); // (after the statement)
 			return;
 		}
-		foreach(x;e.components) expression(x,f);
+		bool ordered=!cast(DefineExp)e&&!cast(AssignExp)e&&!isOpAssignExp(e); // (the left-hand side of a definition or an update is written after the right-hand side)
+		Expression[] earlier;
+		foreach(x;e.components){
+			expression(x,after(earlier));
+			if(ordered) earlier~=x;
+		}
 	}
 }
 void resolveForgets(CompoundExp body_){ // (see `ForgetExp.uncomputation`)
