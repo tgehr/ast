@@ -1750,6 +1750,13 @@ bool consumesBeforeDefining(Expression s,Id name,bool* survives=null){ // (on ea
 			foreach(c;e.components) rec(c,alive);
 			return alive;
 		}
+		if(auto ce=cast(CompoundExp)e) if(ce.blscope_){ // (also the forgets that the analysis adds, e.g., of `v` on entry to the `else` branch of `if c { w:=move(v); }`)
+			bool forgets(Declaration[] ds){ return ds.any!(d=>d.name&&d.name.id==name); }
+			if(forgets(ce.blscope_.forgottenVarsOnEntry)) alive=false;
+			foreach(c;ce.s) alive=rec(c,alive);
+			if(forgets(ce.blscope_.forgottenVars)) alive=false;
+			return alive;
+		}
 		foreach(c;e.components) alive=rec(c,alive);
 		return alive;
 	}
