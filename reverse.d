@@ -1697,15 +1697,10 @@ Expression[] mergeCompound(Expression[] s){
 }
 
 static if(language==silq)
-bool isClassicalMove(Expression e){ // (a classical definition that moves classical variables, e.g., at their last use)
+bool isClassicalMove(Expression e){ // (a classical definition that moves classical variables, e.g., at their last use, also into a new version of a moved variable, e.g., `v:=v coerce !uint[2]`, whose recomputation keeps the version before it for the reversals of earlier statements, see `oldVersions`)
 	auto de=cast(DefineExp)e;
 	if(!de||de.isSwap||!de.e2.type) return false;
-	if(!de.e2.subexpressions.all!(x=>!x.type||x.type.isClassical())||!de.e2.isQfree()||!de.e2.consumes) return false;
-	auto names=definedNames(de);
-	return !de.e2.subexpressions.any!((x){ // (not into a new version of a moved variable, unless the new version is the one before it, see `movedIntoItself`)
-		auto id=cast(Identifier)x;
-		return id&&id.meaning&&!id.constLookup&&!id.implicitDup&&names.canFind(nameOf(id))&&!movedIntoItself(de,nameOf(id));
-	});
+	return de.e2.subexpressions.all!(x=>!x.type||x.type.isClassical())&&de.e2.isQfree()&&de.e2.consumes;
 }
 
 Identifier[] definedIdentifiers(Expression e){ // (the variables that a definition introduces)
@@ -1984,7 +1979,16 @@ Id[] lossyChanges(Expression e){ // (the classical variables that a statement co
 private bool movedIntoItself(Expression s,Id n){ // (whether a statement defines `n` only by moving the version before it into the new version, e.g., `k:=k` or `(k,w):=(k,1)`, also in the body of a `with` statement: the new version is the one before it, which the reversal moves back)
 	bool identity(Expression l,Expression r){
 		l=unwrap(l);
-		r=unwrap(r);
+		for(;;){ // (as `unwrap`, but not through a conversion or a coercion that changes the value or the type, e.g., `v:=v coerce !uint[2]` or `v:=v as !ℤ` for `v:!ℕ`, whose new version is not the one before it)
+			if(auto tae=cast(TypeAnnotationExp)r){
+				if(!tae.e.type||!tae.type||tae.e.type!=tae.type) return false;
+				r=tae.e;
+			}else if(auto let=cast(LetExp)r){
+				auto fwd=let.isForward(false);
+				if(!fwd) break;
+				r=fwd;
+			}else break;
+		}
 		if(auto lid=cast(Identifier)l){
 			auto rid=cast(Identifier)r;
 			return nameOf(lid)==n&&rid&&(rid.moved||!rid.constLookup&&!rid.implicitDup)&&nameOf(rid)==n;
