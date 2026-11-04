@@ -3292,6 +3292,13 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		if(e.isSemError())
 			return e;
 		if(auto id=cast(Identifier)next){
+			auto meaning=id.meaning?id.meaning:context.sc.lookup(id,false,true,Lookup.probing,null);
+			if(meaning&&cast(FunTy)typeForDecl(meaning)){ // (a call, e.g., `f[x]:=g[y];`, analyzed as `f(x):=g(y);`, which looks up `f` after the right-hand side)
+				auto ce=new CallExp(id,e.a,true,false);
+				ce.loc=e.loc;
+				if(context.constResult) return callSemantic(ce,context.expSem);
+				else return callSemantic!isPresemantic(ce,context);
+			}
 			id.byRef=true;
 			id.scope_=context.sc;
 			DeadDecl[] failures;
@@ -3303,12 +3310,6 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 				id.meaning=context.sc.split(id.meaning,id);
 				if(id.meaning.rename) id.id=id.meaning.rename.id;
 				id.type=id.typeFromMeaning;
-				if(auto ft=cast(FunTy)id.type){
-					auto ce=new CallExp(id,e.a,true,false);
-					ce.loc=e.loc;
-					if(context.constResult) return callSemantic(ce,context.expSem);
-					else return callSemantic!isPresemantic(ce,context);
-				}
 			}else{
 				undefinedIdentifierError(id,failures,context.sc);
 				e.e.setSemError();
