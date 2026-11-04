@@ -2684,8 +2684,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		if(!id.meaning||cast(DatDecl)id.meaning) return false;
 		if(auto fd=cast(FunctionDef)id.meaning) return !fd.isToplevelDeclaration();
 		if(!cast(VarDecl)id.meaning) return false;
-		for(auto s=cast(BlockScope)id.meaning.scope_;s&&s !is loop.bdy.blscope_;s=cast(BlockScope)s.parent)
-			if(s.isLetBody) return false; // (local to a `let` expression of the statement)
+		static bool inLet(Declaration d,Scope bdy){
+			for(auto s=cast(BlockScope)d.scope_;s&&s !is bdy;s=cast(BlockScope)s.parent)
+				if(s.isLetBody) return true;
+			return false;
+		}
+		if(inLet(id.meaning,loop.bdy.blscope_)&&id.meaning.derivedSequence.all!(d=>inLet(d,loop.bdy.blscope_))) return false; // (local to a `let` expression of the statement, not a version of a variable of the loop body or from before the loop that its block splits, e.g., `p` in `p:=let{ x:=p; x:=let{} in x; } in x;`)
 		return true;
 	}
 	SetX!Id liftedVars; // (the main loop runs on copies of them: all of their versions are recomputed, also those of classical types, e.g., of `x` in `x:=vector(0,…); x:=x~vector(1,…);`)
