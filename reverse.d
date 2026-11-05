@@ -1878,10 +1878,9 @@ bool readsBefore(Expression s,Id name){ // (whether a statement reads the versio
 	}
 	return rec(s);
 }
-bool readsOther(Expression s,Id name){ // (whether a statement mentions a variable called `name` other than one of its own, e.g., not for `v` in `with { … } do { v:=j+3; w:=move(v); }`)
-	SetX!Declaration own;
-	foreach(x;s.subexpressions) if(auto de=cast(DefineExp)x) foreach(id;definedIdentifiers(de)) if(id.meaning) own.insert(id.meaning);
-	foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) if(nameOf(id)==name&&!(id.meaning&&id.meaning in own)) return true;
+bool readsOther(Expression s,Id name){ // (whether a statement mentions a variable called `name` other than one of its own, e.g., not for `v` in `with { … } do { v:=j+3; w:=move(v); }`, also after an update, e.g., `with { … } do { v:=3; v+=u; w:=move(v); }`)
+	auto own=declaredWithin(s);
+	foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) if(nameOf(id)==name&&!(id.meaning&&isVersionOf(id.meaning,own))) return true;
 	return false;
 }
 bool readsBesidesMove(Expression s,Id name){ // (as `readsOther`, but not where the statement moves the variable into its own new version, e.g., not for `v` in `(w,v):=(2,v)`, but for `(w,v):=(v*2,v)`, see `movedIntoItself`)
@@ -2145,6 +2144,46 @@ bool readsBesidesUpdates(Expression e,Id name){ // (whether a statement reads a 
 		return false;
 	}
 	return rec(e);
+}
+bool onlyClassical(Expression s){ // (no quantum values, closures or calls other than to `dup`)
+	foreach(x;s.subexpressions){
+		if(x.type&&!x.type.isClassical()||cast(LambdaExp)x||cast(FunctionDef)x) return false;
+		if(auto ce=cast(CallExp)x) if(!ce.isSquare){
+			Expression f=ce.e;
+			if(auto sq=cast(CallExp)f) if(sq.isSquare) f=sq.e;
+			auto id=cast(Identifier)f;
+			if(!id||isPreludeSymbol(id)!="dup") return false;
+		}
+	}
+	return true;
+}
+bool revertsInPlace(Expression s,Id name){ // (whether the reversal of a statement after which a classical variable is not available may revert a change of it in place: not if each change is without effect, see `dead` in `reverseStatements`, i.e., classical and of only that variable, in a block that does not leave it available, where no later statement mentions it other than such changes, e.g., not for `u` in `if c { u+=k; k+=1; u*=2; }` at the last use of `u`, but for `v` in `if c { v+=k; xs[v%4]:=X(xs[v%4]); }` at the last use of `v`, whose reversal needs the version after the update, or in a loop)
+	bool mentions(Expression e){ bool r=false; walkIdentifiers(e.copy(),(Identifier id){ if(id.id==name) r=true; }); return r; } // (as in `reverseStatements`)
+	bool statement(Expression t){ // (that changes it, whose reversal is not left out)
+		if(auto ce=cast(CompoundExp)t){
+			static if(language==silq) if(ce.loweredFrom) return statement(ce.loweredFrom);
+			static if(language==silq) auto stmts=ce.blscope_?uncomputationOf(ce.entryUncomputation,ce.blscope_.forgottenVarsOnEntry,ce.loc)~ce.s~uncomputationOf(ce.exitUncomputation,ce.blscope_.forgottenVars,ce.loc):ce.s; // (as `reverseStatement`)
+			else auto stmts=ce.s;
+			stmts=mergeCompound(stmts);
+			static if(language==silq) stmts=stmts.map!uncomputed.joiner.array;
+			bool live=availableAfter(ce,name)&&!forgottenNames(ce).canFind(name); // (also whether a later statement that is not without effect mentions it)
+			foreach_reverse(x;stmts){
+				if(auto fe=cast(ForgetExp)x) if(!fe.val&&fe.var.type&&fe.var.type.isClassical()) continue;
+				if(!mentions(x)) continue;
+				auto names=chain(definedNames(x),changedNames(x)).array;
+				if(names.canFind(name)){
+					if(!live&&onlyClassical(x)&&names.all!(n=>n==name)) continue;
+					if(statement(x)) return true;
+				}
+				live=true;
+			}
+			return false;
+		}
+		if(auto ite=cast(IteExp)t) return statement(ite.then)||ite.othw&&statement(ite.othw);
+		static if(language==silq) if(auto we=cast(WithExp)t) return transStatements(we).any!(x=>mentions(x))||statement(we.bdy); // (the inverse mentions what the transformation mentions)
+		return true; // (e.g., an update or a loop, an iteration of which starts with the versions after the previous one)
+	}
+	return statement(s);
 }
 
 static if(language==silq)
@@ -3521,18 +3560,6 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			if(auto re=cast(RepeatExp)s) return re.bdy.s.all!(t=>classicalUpToForgets(t));
 			return classifyStatement(s)==ComputationClass.classical;
 		}
-		bool onlyClassical(Expression s){ // (no quantum values, closures or calls other than to `dup`)
-			foreach(x;s.subexpressions){
-				if(x.type&&!x.type.isClassical()||cast(LambdaExp)x||cast(FunctionDef)x) return false;
-				if(auto ce=cast(CallExp)x) if(!ce.isSquare){
-					Expression f=ce.e;
-					if(auto sq=cast(CallExp)f) if(sq.isSquare) f=sq.e;
-					auto id=cast(Identifier)f;
-					if(!id||isPreludeSymbol(id)!="dup") return false;
-				}
-			}
-			return true;
-		}
 		auto dead=new bool[](statements.length); // (classical statements whose values no later statement uses, e.g., the definition of a local that is forgotten right after it, or a swap of the components of a local vector at its end: the reversal neither recomputes nor reverses them)
 		Id[] mentions(Expression e){ Id[] r; walkIdentifiers(e.copy(),(Identifier id){ r~=id.id; }); return r; } // (as the reversal mentions them, e.g., a type variable that the analysis substitutes into an annotation, or a capture of a local function)
 		auto mentionsOf=statements.map!mentions.array,mentionedAfter=middle.map!mentions.joiner.array;
@@ -3587,7 +3614,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		auto blockedAt=new Id[][](statements.length); // (variables of an enclosing block that a statement which is not recomputed reads before a later statement changes them, see `NeedOld`)
 		Id[] excluded; // (variables that a reversed statement which is not recomputed changes, e.g., a loop with quantum statements: the statements that define them are reversed as well)
 		bool needed(Id n){ return given.canFind(n)||copied.canFind(n)||middle.any!(t=>readsBesidesUpdates(t,n))||iota(statements.length).any!(j=>!dead[j]&&readsBesidesUpdates(statements[j],n)); } // (otherwise, its values do not matter, e.g., a vector whose components are updated but not read; but the reversal of an update of a copy reads the version after it, e.g., of `k` for `(y,j):=let { repeat 2 { k+=j; j*=2; } } in (x,j);`, which would fail on the version before it)
-		Id[] inPlace(size_t i){ return recomputed[i]?[]:changed[i].filter!(n=>!projections[i]||!projectionChanges[i].canFind(n)).array; } // (the changes that the reversal of a statement reverts in place, also those that its projection leaves out, e.g., `v` for `if c { v+=1; w+=1; }` in the body of a `with` statement whose reversal receives `v` and recomputes `w`)
+		Id[] inPlace(size_t i){ return recomputed[i]?[]:changed[i].filter!(n=>(!projections[i]||!projectionChanges[i].canFind(n))&&(availableAfter(statements[i],n)||revertsInPlace(statements[i],n))).array; } // (the changes that the reversal of a statement reverts in place, also those that its projection leaves out, e.g., `v` for `if c { v+=1; w+=1; }` in the body of a `with` statement whose reversal receives `v` and recomputes `w`; not those of a variable that it forgets itself if they are without effect, e.g., `u` for `if c { u+=k; k+=1; }` at the last use of `u`, which has no version after it: the reversal of the statement sees the version before it, see `unseen`)
 		for(;;){
 			auto hoisted=copied.dup;
 			foreach(i,s;statements){
@@ -3661,6 +3688,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			return outer.canFind(n)||readEarlier(i,n);
 		}
 		auto hoistedAll=chain(copied,iota(statements.length).map!(i=>recomputed[i]?definedNames(statements[i]):projections[i]?definedNames(projections[i]):[]).joiner).array;
+		bool hoistedBefore(size_t k,Id n){ return copied.canFind(n)||iota(k).any!(h=>(recomputed[h]?definedNames(statements[h]):projections[h]?definedNames(projections[h]):[]).canFind(n)); } // (as `hoistedAll`, but only the versions before a statement, e.g., not `v` for `if v%4==3 { forget(v); } else { v+=1; xs[j]:=X(xs[j]); } v:=4;` in a branch, whose reversal needs the version before the conditional)
 		auto saves=new Id[][](statements.length); // (the fresh names of the copies, see `headerChanges`)
 		static if(language==silq) foreach(i;0..statements.length) if(headerChanges[i].length&&(projections[i]||recomputed[i]&&undone[i])&&headerChanges[i].all!(n=>hoistedAll.canFind(n)||before.canFind(n))) saves[i]=headerChanges[i].map!(n=>freshName()).array;
 		auto savedValues=new Expression[][](statements.length); // (for a statement that the reversal reverses in place without recomputing its classical part, the right-hand sides of the definitions before it of the variables of its condition or range that only read variables that no statement of the block changes or defines: the copies evaluate them, e.g., `v` for `v:=j+j; if v%4==0 { v+=u; xs[j%4]:=X(xs[j%4]); }` in the body of a `with` statement whose reversal receives `v`)
@@ -3876,7 +3904,8 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			if(headerChanges[i].length&&!saves[i].length){
 				auto loc=headers(statements[i])[0].loc;
 				Id[] missing; // (variables of enclosing blocks whose versions before the block may allow the reversal to recompute the classical part of the statement, also those that other statements of the block need)
-				foreach(n;chain(headerChanges[i],changed[i],changedAfter[i].filter!(n=>reads(statements[i],n)),blockedAt.joiner)) if(!hoistedAll.canFind(n)&&!innerAt(i,n)&&!missing.canFind(n)) missing~=n;
+				foreach(n;chain(headerChanges[i],changed[i],changedAfter[i].filter!(n=>reads(statements[i],n)))) if(!hoistedBefore(i,n)&&!innerAt(i,n)&&!missing.canFind(n)) missing~=n;
+				foreach(k,b;blockedAt) foreach(n;b) if(!hoistedBefore(k,n)&&!innerAt(k,n)&&!missing.canFind(n)) missing~=n;
 				if(needOld&&missing.length) needOld.errors~=q(missing,loc,headerChangeError); // (the reversal of an enclosing block may resolve it)
 				else sc.error(headerChangeError,loc);
 				auto r=statements[i].copy();
