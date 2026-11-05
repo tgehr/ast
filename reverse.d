@@ -1845,6 +1845,29 @@ private bool consumesVariable(Expression e,Id name){ // (whether an expression f
 	}
 	return false;
 }
+private bool consumesOuterVersion(Expression e,Id name){ // (as `consumesVariable`, but not where it only forgets or moves a version of its own, e.g., not `v` for `with { … } do { v:=u*2; w:=move(v); }`)
+	bool rec(Expression e,ref bool own){
+		if(cast(FunctionDef)e||cast(LambdaExp)e) return false;
+		if(auto fe=cast(ForgetExp)e) if(!own&&forgottenVariables(fe).any!(v=>cast(Identifier)unwrap(v)&&nameOf(cast(Identifier)unwrap(v))==name)) return true;
+		if(auto id=cast(Identifier)e) return !own&&id.moved&&nameOf(id)==name;
+		if(auto de=cast(DefineExp)e){
+			if(rec(de.e2,own)) return true;
+			if(definedNames(de).canFind(name)) own=true;
+			return false;
+		}
+		if(auto ite=cast(IteExp)e){
+			if(rec(ite.cond,own)) return true;
+			bool inThen=own,inOthw=own;
+			if(rec(ite.then,inThen)||ite.othw&&rec(ite.othw,inOthw)) return true;
+			own=inThen&&inOthw;
+			return false;
+		}
+		foreach(x;e.components) if(rec(x,own)) return true;
+		return false;
+	}
+	bool own=false;
+	return rec(e,own);
+}
 static if(language==silq)
 bool readsBefore(Expression s,Id name){ // (whether a statement reads the version before it of a variable called `name` other than to forget it, e.g., not for `v` in `with { … } do { with { … } do { forget(v); } v:=2; }`)
 	auto own=declaredWithin(s);
@@ -1971,12 +1994,12 @@ Id classicalBase(Expression e){ // (the classical variable of a component, e.g.,
 
 Id[] changedNames(Expression e){ // (the classical variables that a statement changes, e.g., `t+=c` or `(y,t):=let { t+=c; … } in (z,t)`, other than the ones that it defines)
 	auto c=changes(e);
-	static if(language==silq) return c[0].filter!(n=>!c[1].canFind(n)||availableAfter(e,n)).array;
+	static if(language==silq) return c[0].filter!(n=>!c[1].canFind(n)||availableAfter(e,n)||c[2].canFind(n)).array;
 	else return c[0];
 }
-Id[] lossyChanges(Expression e){ // (the classical variables that a statement consumes and defines again, e.g., `v` in `with { w:=1; } do { forget(v); v:=w+1; }`: the recomputation keeps their forgets and moves, see `recomputation`, so the reversal cannot recompute their versions before it from the versions after it; not if they are not available after it, e.g., for `if c { forget(v); v:=2; } else { forget(v); }`, where the reversals of its branches recompute the definitions, see `redefined` in `reverseStatements`)
+Id[] lossyChanges(Expression e){ // (the classical variables that a statement consumes and defines again, e.g., `v` in `with { w:=1; } do { forget(v); v:=w+1; }`: the recomputation keeps their forgets and moves, see `recomputation`, so the reversal cannot recompute their versions before it from the versions after it; not if they are not available after it, e.g., for `if c { forget(v); v:=2; } else { forget(v); }`, where the reversals of its branches recompute the definitions, see `redefined` in `reverseStatements`, unless it also changes the versions before it in place, e.g., for `if c { forget(v); v:=2; } else { v+=1; xs[v%4]:=X(xs[v%4]); }`, whose reversal would revert the update from the version before it)
 	auto c=changes(e);
-	static if(language==silq) return c[1].filter!(n=>availableAfter(e,n)).array;
+	static if(language==silq) return c[1].filter!(n=>availableAfter(e,n)||c[2].canFind(n)).array;
 	else return c[1];
 }
 private bool movedIntoItself(Expression s,Id n){ // (whether a statement defines `n` only by moving the version before it into the new version, e.g., `k:=k` or `(k,w):=(k,1)`, also in the body of a `with` statement: the new version is the one before it, which the reversal moves back)
@@ -2006,8 +2029,12 @@ private bool movedIntoItself(Expression s,Id n){ // (whether a statement defines
 	}
 	return any;
 }
-private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`: the variables of enclosing blocks that it forgets or moves)
-	Id[] r,local,consumed,lossy;
+private Id[][3] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`: the variables of enclosing blocks that it forgets or moves; the third list: the variables whose versions before it it changes in place, see `lossyChanges`)
+	Id[] r,local,consumed,lossy,inPlace;
+	void change(Id n){
+		r~=n;
+		if(!consumed.canFind(n)) inPlace~=n;
+	}
 	void rec(Expression e){
 		if(cast(FunctionDef)e||cast(LambdaExp)e) return;
 		if(cast(LetExp)e) return; // (it consumes the variables that it changes, and its reversal recomputes them from copies, see `lowerLetDefine`)
@@ -2022,8 +2049,11 @@ private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`:
 			}
 			foreach(n;chain(inBody[0],defined)){
 				auto des=transStatements(we).map!(x=>cast(DefineExp)x).filter!(de=>de&&definedNames(de).canFind(n));
-				if(!des.empty){ foreach(de;des) if(auto b=classicalBase(de.e2)) r~=b; } // (the inverse writes back the component that the body changes or defines again, e.g., for `a[i]+=c` or a swap)
-				else if(!defined.canFind(n)||inBody[1].canFind(n)) r~=n;
+				if(!des.empty){ foreach(de;des) if(auto b=classicalBase(de.e2)) change(b); } // (the inverse writes back the component that the body changes or defines again, e.g., for `a[i]+=c` or a swap)
+				else if(!defined.canFind(n)||inBody[1].canFind(n)){
+					r~=n;
+					if(inBody[2].canFind(n)&&!consumed.canFind(n)) inPlace~=n;
+				}
 			}
 			lossy~=inBody[1];
 			foreach(n;consumedInBody) if(!local.canFind(n)&&!consumed.canFind(n)) consumed~=n; // (e.g., `v` for `with { … } do { w:=move(v); }` before `v:=w+1;`, which defines it again)
@@ -2035,7 +2065,7 @@ private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`:
 			if(auto fe=cast(ForgetExp)e) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) if(outer(id)) consumed~=nameOf(id);
 			if(auto id=cast(Identifier)e) if(id.moved&&outer(id)) consumed~=nameOf(id);
 		}
-		if(auto ae=isOpAssignExp(e)) if(auto b=classicalBase(ae.e1)) r~=b;
+		if(auto ae=isOpAssignExp(e)) if(auto b=classicalBase(ae.e1)) change(b);
 		if(auto de=cast(DefineExp)e){
 			rec(de.e2); // (first, for the variables that it consumes, e.g., `v:=f(move(v))`)
 			Id[] redefined; // (a new version of a variable that a `let` expression on the right-hand side consumes, e.g., `(y,k):=let { k+=1; … } in (z,k)`, which the reversals of later statements would not see if it is not recomputed; the reversal of a call checks the version that it receives)
@@ -2048,16 +2078,28 @@ private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`:
 				auto n=nameOf(id);
 				if(consumed.canFind(n)&&!redefined.canFind(n)&&!movedIntoItself(de,n)) again~=n;
 			}
-			r~=redefined~again;
+			foreach(n;redefined) change(n);
+			r~=again;
 			lossy~=again;
 			local~=definedNames(de).filter!(n=>!redefined.canFind(n)&&!again.canFind(n)&&!movedIntoItself(de,n)).array; // (not a variable that it moves into its own new version, whose earlier changes count, e.g., `v` for `v+=1; (w,v):=(2,v);`)
 			void lhs(Expression x){ // (components of the left-hand side, e.g., of a swap `(a[0],a[1]):=(a[1],a[0])`)
 				x=unwrap(x);
 				if(auto tpl=cast(TupleExp)x) foreach(y;tpl.e) lhs(y);
-				else if(cast(IndexExp)x) if(auto b=classicalBase(x)) r~=b;
+				else if(cast(IndexExp)x) if(auto b=classicalBase(x)) change(b);
 			}
 			lhs(de.e1);
 			rec(de.e1);
+			return;
+		}
+		if(auto ite=cast(IteExp)e){ // (a branch changes the versions before it in place also where the other branch consumes them, e.g., `v` for `if c { forget(v); v:=2; } else { v+=1; }`)
+			rec(ite.cond);
+			auto before=consumed.dup;
+			rec(ite.then);
+			if(!ite.othw) return;
+			auto inThen=consumed;
+			consumed=before;
+			rec(ite.othw);
+			foreach(n;inThen) if(!consumed.canFind(n)) consumed~=n;
 			return;
 		}
 		foreach(x;e.components) rec(x);
@@ -2069,7 +2111,7 @@ private Id[][2] changes(Expression e,Id[]* consumedOut=null){ // (`consumedOut`:
 		foreach(n;names) if(!local.canFind(n)&&!res.canFind(n)) res~=n;
 		return res;
 	}
-	return [result(r),result(lossy)];
+	return [result(r),result(lossy),result(inPlace)];
 }
 
 Id[] writtenBack(WithExp we){ // (the classical variables into which the inverse writes back what the body changes or defines again, e.g., `k` for `with { c:=k; } do { c+=1; }`: a recomputation keeps their moves, see `recomputation`)
@@ -2349,6 +2391,7 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] 
 	if(auto ce=cast(CompoundExp)s) if(ce.loweredFrom) return projection(ce.loweredFrom,sc,drop,inner,skip,after);
 	bool readsDropped(Expression e){ return drop.length&&e.subexpressions.any!(x=>cast(Identifier)x&&drop.canFind(nameOf(cast(Identifier)x))); }
 	CompoundExp part(CompoundExp b,Expression result=null,Id[] more=null){ return classicalPart(b,sc,drop,inner~more,result,skip,result?null:after); } // (the forgets of variables that later statements define again, e.g., `v` for `with { … } do { forget(v); … }` before `v:=2;` in a branch, see `later`)
+	bool carriedLost(CompoundExp b,CompoundExp p){ return definedWithin(b).any!(n=>readsBeforeDefining(b,n,true)&&availableAfter(b,n)&&consumesVariable(p,n)&&!availableAfter(p,n)); } // (the classical part of the body of a loop forgets a version that the body defines again for the next iteration, but leaves out the definition, e.g., `v` for `for i in 0..2 { k+=1; forget(v); v:=i+k; }` without the changes of `k`)
 	Expression res;
 	if(headers(s).any!readsDropped) return null;
 	if(auto ite=cast(IteExp)s){
@@ -2362,11 +2405,11 @@ Expression projection(Expression s,Scope sc,Id[] drop=null,Id[] inner=null,Id[] 
 		res=new IteExp(ite.cond.copy(),then,othw);
 	}else if(auto fe=cast(ForExp)s){
 		auto bdy=part(fe.bdy);
-		if(!bdy) return null;
+		if(!bdy||carriedLost(fe.bdy,bdy)) return null;
 		res=new ForExp(fe.var?fe.var.copy():null,fe.pattern?fe.pattern.copy():null,fe.aggr.copy(Expression.CopyArgs.init),bdy);
 	}else if(auto re=cast(RepeatExp)s){
 		auto bdy=part(re.bdy);
-		if(!bdy) return null;
+		if(!bdy||carriedLost(re.bdy,bdy)) return null;
 		res=new RepeatExp(re.num.copy(),bdy);
 	}else if(auto we=cast(WithExp)s){ // (the classical parts of the transformation and the body, e.g., `with { } do { k*=2; }` for `with { a:=xs[j]; } do { k*=2; a:=H(a); }`)
 		auto changes=changedNames(we.bdy);
@@ -3390,12 +3433,20 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					if(!lossy[j].canFind(n)) lossy[j]~=n;
 				}
 			}
+			bool availableAtEnd(Id n){
+				auto avail=true;
+				foreach(t;statements) avail=availableAfter(t,n,avail);
+				return avail&&!forgotten.canFind(n);
+			}
+			auto before=outer.filter!(n=>!copied.canFind(n)&&!given.canFind(n)&&lossy.joiner.canFind(n)&&!availableAtEnd(n)).array; // (variables of enclosing blocks that a statement of the block changes such that the reversal cannot recompute their versions before it, see `lossyChanges`, and that are not available after the block, other than those whose versions after it the reversal receives, e.g., `v` for `forget(v); v:=2;` in a branch of a conditional whose other branch updates `v`: the reversal of the block receives their versions before it and recomputes all of their changes, e.g., `v` for `v+=1; xs[v]:=X(xs[v]); forget(v); v:=2; forget(v);` in the body of a `with` statement)
 		}
 		auto headerChanges=new Id[][](statements.length); // (the variables of the condition or bounds of an `if` statement or a loop that it changes: the reversal reads copies of the versions before it)
 		foreach(i,s;statements) foreach(h;headers(s)) foreach(x;h.subexpressions) if(auto id=cast(Identifier)x) if(changed[i].canFind(nameOf(id))&&!headerChanges[i].canFind(nameOf(id))) headerChanges[i]~=nameOf(id);
 		auto local=chain(copied,statements.map!(s=>definedNames(s).filter!(n=>!movedIntoItself(s,n))).joiner).array; // (not a variable of an enclosing block that a statement only moves into its own new version, see `movedIntoItself`)
-		Id[] inner=copied.dup; // (as `local`, but without new versions of variables of an enclosing block, e.g., one that a `let` expression returns, see `NeedOld`)
-		foreach(j,s;statements) foreach(n;definedNames(s)) if(!changed[j].canFind(n)&&!inner.canFind(n)&&!movedIntoItself(s,n)) inner~=n;
+		size_t[Id] innerFrom; // (the variables of the block as `local`, but without new versions of variables of an enclosing block, e.g., one that a `let` expression returns, see `NeedOld`; from the statement that defines them on, before which they are those of an enclosing block, e.g., `v` for `if v%4==3 { … forget(v); } else { forget(v); } v:=dup(j);` in the body of a loop, whose version before the loop an enclosing block may provide)
+		foreach(n;copied) innerFrom[n]=0;
+		foreach(j,s;statements) foreach(n;definedNames(s)) if(!changed[j].canFind(n)&&!(n in innerFrom)&&!movedIntoItself(s,n)) innerFrom[n]=j;
+		bool innerAt(size_t i,Id n){ auto k=n in innerFrom; return k&&*k<=i; }
 		auto undoFirst=new bool[](statements.length); // (updates of variables of an enclosing block that no later statement mentions, e.g., in a branch: they are reversed first, such that the recomputed statements see the versions before them)
 		bool noop(Expression e){ auto fe=cast(ForgetExp)e; return fe&&!fe.val&&fe.var.type&&fe.var.type.isClassical(); } // (its reversal does nothing, see `lowerDefine`)
 		bool classicalUpToForgets(Expression s){ // (also, e.g., an `if` statement whose branch forgets a classical variable at its last use)
@@ -3433,8 +3484,10 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			static if(language==silq) if(!names.length){ dead[i]=!cast(ForgetExp)s; continue; } // (e.g., `with { u:=1; } do { w:=move(v); }`, which forgets its variables itself: its recomputation may read variables of earlier statements that are not recomputed)
 			if(!names.length) continue;
 			bool isLocal(Id n){ return copied.canFind(n)||statements[0..i+1].any!(t=>definedNames(t).canFind(n)&&!movedIntoItself(t,n)); } // (not a variable of an enclosing block that a statement only moves into its own new version, e.g., `v` for `(w,v):=(1,v); v+=w;` before `forget(v)`, whose changes the reversal reverts)
-			bool usedUp(Id n){ return usesUp(n,statements[i+1..$])||forgotten.canFind(n)||forgetsIn(s,n); } // (otherwise, it may be used after the block)
-			if(!names.all!(n=>isLocal(n)&&usedUp(n)&&!given.canFind(n)&&!defined.canFind(n)&&!mentionedAfter.canFind(n))) continue;
+			bool usedUp(Id n){ return usesUp(n,statements[i+1..$])||forgotten.canFind(n)||forgetsIn(s,n)||!availableAfter(s,n); } // (otherwise, it may be used after the block; also one that the statement forgets itself, e.g., at its last use in the body of a `with` statement)
+			static if(language==silq) bool unseen(Id n){ return outer.canFind(n)&&!availableAtEnd(n); } // (a variable of an enclosing block that the block does not leave available: the reversal of the block keeps the version before it, e.g., `v` for `with { … } do { for i in 0..2 { v+=1; forget(v); v:=i; } }` in the body of a `with` statement after which no statement reads `v`)
+			else bool unseen(Id n){ return false; }
+			if(!names.all!(n=>(isLocal(n)||unseen(n))&&usedUp(n)&&!given.canFind(n)&&!defined.canFind(n)&&!mentionedAfter.canFind(n))) continue;
 			dead[i]=iota(i+1,statements.length).all!(j=>dead[j]||noop(statements[j])||!names.any!(n=>mentionsOf[j].canFind(n)));
 		}
 		Id[] invariants; // (classical definitions that only read variables that no statement of the block changes, e.g., `v:=n+c`, can be recomputed first, such that statements that are reversed first may read them, see `early`)
@@ -3450,7 +3503,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		}
 		foreach_reverse(i,s;statements){
 			if(dead[i]||!classicalUpToForgets(s)||definedNames(s).length||!changed[i].length||headerChanges[i].length) continue;
-			static if(language==silq) if(lossy[i].length) continue; // (the reversal does not have the versions before it)
+			static if(language==silq) if(lossy[i].length||changed[i].any!(n=>before.canFind(n))) continue; // (the reversal does not have the versions before it, or does not have the ones after it, see `before`)
 			Id[] mentioned;
 			foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) mentioned~=nameOf(id);
 			auto read=mentioned.filter!(n=>!changed[i].canFind(n)).array;
@@ -3474,20 +3527,20 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			foreach(i,s;statements){
 				auto after=givenAfter(i);
 				bool movedBack(Id n){ return movedIntoItself(s,n)&&!changedAfter[i].canFind(n)&&!usesUp(n,statements[i+1..$].filter!(t=>!movedIntoItself(t,n)&&!noop(t)).array); } // (a variable that the reversal changes in place, see `excluded`, and that it moves into its own new version, if no later statement changes or uses it up, other than by a forget whose reversal does nothing: the recomputation moves the version after it, which the reversal of the block starts with, into itself before the reversal changes it, e.g., `v` for `v+=dup(j); (w,v):=(j*2,v);` in a branch)
+				static if(language==silq) bool recomputable(Id n){ return hoisted.canFind(n)||before.canFind(n)||lossy[i].canFind(n)&&outer.canFind(n); } // (also a variable of an enclosing block whose version before the block the reversal of the block receives, see `before`, which saves it where a statement defines it again, see `oldVersions`, as for a variable of an enclosing block that the statement defines again, e.g., `v` for `with { … } do { v:=j*2; v+=1; }` after `forget(v)` in a branch, if the block leaves it available)
+				else bool recomputable(Id n){ return hoisted.canFind(n); }
 				bool valid(Id[] names,Id[] changes){
-					static if(language==silq) bool recomputable(Id n){ return hoisted.canFind(n)||lossy[i].canFind(n)&&outer.canFind(n); } // (a definition again of a variable of an enclosing block, whose version before the block the reversal of the block saves, see `oldVersions`)
-					else bool recomputable(Id n){ return hoisted.canFind(n); }
 					if(!changes.all!recomputable) return false; // (e.g., the reversal of a nested block reverses the changes of variables that an enclosing block defines)
 					static if(language==silq) bool keptBefore(Id n){ return outer.canFind(n)&&!given.canFind(n)&&iota(i).all!(h=>!changed[h].canFind(n))&&iota(i+1,statements.length).all!(k=>!changed[k].canFind(n)||redefined[k].canFind(n)); } // (a variable of an enclosing block whose version before the block the reversal sees and that later statements only define again, whose recomputations keep that version, see `redefined`, e.g., `v` for `w:=move(v);` before `v:=w+1;` in a branch)
 					else bool keptBefore(Id n){ return false; }
-					if(changedAfter[i].any!(n=>!hoisted.canFind(n)&&!keptBefore(n)&&(names.canFind(n)?movedIntoItself(s,n)&&readsBesidesMove(s,n):readsOther(s,n)))) return false; // (the recomputation would see the version after the change, also of a variable that it moves into its own new version and reads otherwise, e.g., `v` for `(w,v):=(v*2,v);` before `v+=1;` in a branch)
+					if(changedAfter[i].any!(n=>!recomputable(n)&&!keptBefore(n)&&(names.canFind(n)?movedIntoItself(s,n)&&readsBesidesMove(s,n):readsOther(s,n)))) return false; // (the recomputation would see the version after the change, also of a variable that it moves into its own new version and reads otherwise, e.g., `v` for `(w,v):=(v*2,v);` before `v+=1;` in a branch)
 					return !chain(names,changes).any!(n=>excluded.canFind(n)&&!movedBack(n)||after.canFind(n)&&!defined.canFind(n)&&!movedIntoItself(s,n)); // (the reversed definition checks the received value, unless the new version is the one before it)
 				}
 				auto names=definedNames(s);
 				recomputed[i]=!dead[i]&&classifyStatement(s)==ComputationClass.classical&&valid(names,changed[i]);
 				projections[i]=null;
 				static if(language==silq) if(!recomputed[i]&&!dead[i]){
-					auto drop=changed[i].filter!(n=>!hoisted.canFind(n)||after.canFind(n)&&!defined.canFind(n)).array; // (variables whose current versions the reversal changes in place, e.g., a variable of an enclosing block that a `let` expression returns, in a loop that also changes one that it consumes)
+					auto drop=changed[i].filter!(n=>!recomputable(n)||after.canFind(n)&&!defined.canFind(n)).array; // (variables whose current versions the reversal changes in place, e.g., a variable of an enclosing block that a `let` expression returns, in a loop that also changes one that it consumes)
 					auto p=projection(s,sc,drop);
 					void consider(Expression p){
 						auto pnames=definedNames(p),pchanges=changed[i].filter!(n=>!drop.canFind(n)).array; // (all of the others, see `projection`)
@@ -3504,9 +3557,9 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 						if(skip.length) if(auto q=projection(s,sc,drop,null,skip)) consider(q);
 					}
 					if(!projections[i]&&(p||classifyStatement(s)==ComputationClass.classical)){ // (also in earlier iterations, e.g., before the variables that the statement changes are excluded)
-						foreach(n;changedAfter[i]) if(!hoisted.canFind(n)&&!inner.canFind(n)&&reads(s,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
+						foreach(n;changedAfter[i]) if(!hoisted.canFind(n)&&!innerAt(i,n)&&reads(s,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
 						if(names.any!(n=>!after.canFind(n)&&iota(i+1,statements.length).any!(j=>!dead[j]&&reads(statements[j],n)))) // (definitions that the reversals of later statements read, which it computes from the versions before it of the variables that it changes, e.g., `w` and `v` for `with { … } do { w:=v*2; v+=3; }` in a branch)
-							foreach(n;drop) if(!inner.canFind(n)&&reads(s,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
+							foreach(n;drop) if(!innerAt(i,n)&&reads(s,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
 					}
 				}
 				if(recomputed[i]) hoisted~=names.filter!(n=>!movedIntoItself(s,n)||hoisted.canFind(n)).array; // (not a variable that it only moves into its own new version, whose version the recomputation does not compute, e.g., `v` for `(w,v):=(2,v);` before `v+=1;` in a branch, whose reversal changes `v` back in place)
@@ -3515,7 +3568,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			bool needed(Id n){ return given.canFind(n)||copied.canFind(n)||middle.any!(t=>readsBesidesUpdates(t,n))||iota(statements.length).any!(j=>!dead[j]&&readsBesidesUpdates(statements[j],n)); } // (otherwise, its values do not matter, e.g., a vector whose components are updated but not read; but the reversal of an update of a copy reads the version after it, e.g., of `k` for `(y,j):=let { repeat 2 { k+=j; j*=2; } } in (x,j);`, which would fail on the version before it)
 			auto more=iota(statements.length).filter!(i=>!recomputed[i]&&!projections[i]&&!dead[i]).map!(i=>changed[i]).joiner.filter!(n=>hoisted.canFind(n)&&!excluded.canFind(n)&&needed(n)).array;
 			static if(language==silq) foreach(i;0..statements.length) if(!recomputed[i]&&!projections[i]&&!dead[i]&&changed[i].any!(n=>copied.canFind(n)&&more.canFind(n))) // (the reversal would not have the versions of the copy after the statement, see `excludedCopied` in `lowerLetDefine`)
-				foreach(n;changed[i]) if(!hoisted.canFind(n)&&!inner.canFind(n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
+				foreach(n;changed[i]) if(!hoisted.canFind(n)&&!innerAt(i,n)&&!blockedAt[i].canFind(n)) blockedAt[i]~=n;
 			if(!more.length){
 				if(excludedCopied) *excludedCopied=excluded.filter!(n=>copied.canFind(n)).array;
 				if(needOld) foreach(n;blockedAt.joiner) if(!needOld.vars.canFind(n)) needOld.vars~=n;
@@ -3534,14 +3587,17 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			more=false;
 			foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&changed[i].any!(n=>iota(i).any!(j=>!dead[j]&&(!recomputed[j]||undone[j])&&reads(statements[j],n))))
 				undone[i]=more=true;
-			static if(language==silq) foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&lossy[i].any!(n=>outer.canFind(n))) undone[i]=more=true; // (the reversal of the block ends with the versions before it, which the enclosing block may read)
+			static if(language==silq) foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&(lossy[i].any!(n=>outer.canFind(n))||changed[i].any!(n=>before.canFind(n)))) undone[i]=more=true; // (the reversal of the block ends with the versions before it, which the enclosing block may read)
+		}
+		static if(language==silq) bool readEarlier(size_t i,Id n){ // (the version before the statement, for the reversal of an earlier statement)
+			return iota(i).any!(h=>!dead[h]&&!undoFirst[h]&&(!recomputed[h]||undone[h])&&reads(statements[h],n));
 		}
 		static if(language==silq) bool neededBefore(size_t i,Id n){ // (the version before the statement, e.g., for the reversal of an earlier statement, or for an enclosing block)
-			return outer.canFind(n)||iota(i).any!(h=>!dead[h]&&!undoFirst[h]&&(!recomputed[h]||undone[h])&&reads(statements[h],n));
+			return outer.canFind(n)||readEarlier(i,n);
 		}
 		auto hoistedAll=chain(copied,iota(statements.length).map!(i=>recomputed[i]?definedNames(statements[i]):projections[i]?definedNames(projections[i]):[]).joiner).array;
 		auto saves=new Id[][](statements.length); // (the fresh names of the copies, see `headerChanges`)
-		static if(language==silq) foreach(i;0..statements.length) if(headerChanges[i].length&&(projections[i]||recomputed[i]&&undone[i])&&headerChanges[i].all!(n=>hoistedAll.canFind(n))) saves[i]=headerChanges[i].map!(n=>freshName()).array;
+		static if(language==silq) foreach(i;0..statements.length) if(headerChanges[i].length&&(projections[i]||recomputed[i]&&undone[i])&&headerChanges[i].all!(n=>hoistedAll.canFind(n)||before.canFind(n))) saves[i]=headerChanges[i].map!(n=>freshName()).array;
 		auto savedValues=new Expression[][](statements.length); // (for a statement that the reversal reverses in place without recomputing its classical part, the right-hand sides of the definitions before it of the variables of its condition or range that only read variables that no statement of the block changes or defines: the copies evaluate them, e.g., `v` for `v:=j+j; if v%4==0 { v+=u; xs[j%4]:=X(xs[j%4]); }` in the body of a `with` statement whose reversal receives `v`)
 		static if(language==silq) foreach(i;0..statements.length) if(headerChanges[i].length&&!saves[i].length&&!recomputed[i]&&!projections[i]){
 			Expression[] values;
@@ -3583,9 +3639,16 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				return cast(ForExp)e||cast(RepeatExp)e||cast(WhileExp)e;
 			}
 			auto saving=iota(statements.length).map!(i=>isLoop(statements[i])?shadowed[i]:[]).array; // (for a loop, the reversal saves them around its reversal, e.g., `v` for `for i in 0..2 { v:=i+j; … }` after `forget(v)`)
-			Id[] aliveFor(size_t i){ // (the reversal of a `with` statement with quantum operations receives the versions after it of the variables that it forgets or moves and defines again itself, whose versions before it are lost, see `unsupported`)
+			auto copies=new Expression[](statements.length);
+			bool lostBy(size_t i,Id n){ // (the recomputation of a statement that the reversal also reverses forgets or moves the version before it, e.g., `v` for `with { … } do { k+=1; for i in 0..2 { forget(v); v:=i; } }`, but not for `with { … } do { k+=1; forget(v); v:=2; }`, whose recomputation renames its own versions, see `recomputation`)
+				if(!recomputed[i]) return false;
+				if(!copies[i]) copies[i]=recomputation(statements[i],sc);
+				return consumesVariable(copies[i],n)&&!availableAfter(copies[i],n);
+			}
+			bool consumedByProjection(size_t i,Id n){ return projections[i]&&!readsOld(statements[i])&&!changed[i].canFind(n)&&consumesOuterVersion(projections[i],n)&&!availableAfter(projections[i],n); } // (the classical part of the statement, which the reversal recomputes first, forgets the version before it and leaves none, e.g., `v` for `with { … } do { with { … } do { for i in 0..2 { k+=1; forget(v); v:=i; } } xs[0]:=X(xs[0]); }` after which no statement reads `v`)
+			Id[] aliveFor(size_t i){ // (the reversal of a `with` statement with quantum operations receives the versions after it of the variables that it forgets or moves and defines again itself, whose versions before it are lost, see `unsupported`; not the versions that the recomputation of the statement loses, see `lostBy`)
 				auto we=cast(WithExp)statements[i];
-				return aliveAt[i].filter!(n=>!saving[i].canFind(n)&&!(we&&classifyStatement(we)!=ComputationClass.classical&&lossy[i].canFind(n))).array;
+				return aliveAt[i].filter!(n=>!saving[i].canFind(n)&&!(we&&classifyStatement(we)!=ComputationClass.classical&&lossy[i].canFind(n))&&!lostBy(i,n)&&!consumedByProjection(i,n)).array;
 			}
 		}else Id[] aliveFor(size_t i){ return aliveAt[i]; }
 		auto oldVersions=new Id[2][][](statements.length); // (copies of the versions before a statement whose classical part is recomputed, for its reversal, see `NeedOld`)
@@ -3616,7 +3679,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					r.loc=be.loc;
 					return r;
 				}
-				if(needOld&&!inner.canFind(n)){ // (an enclosing block may recompute it from the version before it, see `NeedOld`)
+				if(needOld&&!innerAt(i,n)){ // (an enclosing block may recompute it from the version before it, see `NeedOld`)
 					if(defer){ if(!needOld.vars.canFind(n)) needOld.vars~=n; } // (otherwise, it is reverted in place, see below)
 					else{
 						needOld.errors~=q(chain(only(n),blockedAt.joiner.filter!(m=>m!=n)).array,be.loc,"reversal of assignments not supported yet");
@@ -3633,8 +3696,41 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				r.setSemError();
 				return r;
 			}
+			static if(language==silq) if(recomputed[i]&&undone[i]){
+				auto lost=aliveAt[i].filter!(n=>!changed[i].canFind(n)&&!shadowed[i].canFind(n)&&lostBy(i,n)&&(readEarlier(i,n)||!readsOld(statements[i])&&!lossy[i].length&&readsBefore(statements[i],n))).array; // (the reversal of an earlier statement of the block or of the statement reads the version that the recomputation loses, but not that of an enclosing block, which then does not see it, e.g., `v` for `with { … } do { k+=1; for i in 0..2 { forget(v); v:=i; } }` after `xs[v+k]:=X(xs[v+k]);`, also for a conditional, e.g., `v` for `if c { … } else { with { … } do { k+=1; for i in 0..2 { forget(v); v:=i; } forget(v); } }`; not that of a statement with lossy changes, which gives back the versions before it that the recomputation saves, see `oldVersions`)
+				if(lost.length){
+					if(needOld) needOld.errors~=q(chain(lost,blockedAt.joiner.filter!(m=>!lost.canFind(m))).array,statements[i].loc,redefinitionError);
+					else sc.error(redefinitionError,statements[i].loc);
+					auto r=new ErrorExp();
+					r.loc=statements[i].loc;
+					r.setSemError();
+					return r;
+				}
+			}
 			static if(language==silq) if(projections[i]){
-				auto kept=readAgain[i].filter!(n=>consumesVariable(projections[i],n)).array; // (the recomputation of the classical part consumes the version that the reversal reads, see `readAgain`)
+				auto lost=aliveAt[i].filter!(n=>!changed[i].canFind(n)&&!shadowed[i].canFind(n)&&consumesVariable(projections[i],n)&&(availableAfter(projections[i],n)&&!movedIntoItself(statements[i],n)&&(neededBefore(i,n)||readsBefore(statements[i],n)&&readsBesidesUpdates(statements[i],n))||consumedByProjection(i,n)&&neededBefore(i,n))).array; // (the projection forgets the version before the statement, which the reversal of an earlier statement or of an enclosing block reads, see `consumedByProjection`, or replaces it, also for the reversal of the statement, with one of its own, which does not count as a change, see `changedNames`, e.g., `v` for `with { … } do { for i in 0..2 { forget(v); v:=i; } k+=1; xs[0]:=X(xs[0]); forget(v); }` after `xs[v]:=X(xs[v]);`, see `classicalPart`)
+				if(lost.length){
+					if(needOld) needOld.errors~=q(chain(lost,blockedAt.joiner.filter!(m=>!lost.canFind(m))).array,statements[i].loc,redefinitionError);
+					else sc.error(redefinitionError,statements[i].loc);
+					auto r=new ErrorExp();
+					r.loc=statements[i].loc;
+					r.setSemError();
+					return r;
+				}
+			}
+			static if(language==silq) if(!recomputed[i]&&!projections[i]){
+				auto lost=changed[i].filter!(n=>before.canFind(n)).array; // (the reversal of the block receives the versions before it, see `before`, but the reversal of the statement would change them in place)
+				if(lost.length){
+					if(needOld) needOld.errors~=q(chain(lost,blockedAt.joiner.filter!(m=>!lost.canFind(m))).array,statements[i].loc,redefinitionError);
+					else sc.error(redefinitionError,statements[i].loc);
+					auto r=new ErrorExp();
+					r.loc=statements[i].loc;
+					r.setSemError();
+					return r;
+				}
+			}
+			static if(language==silq) if(projections[i]){
+				auto kept=readAgain[i].filter!(n=>consumesVariable(projections[i],n)&&!(lossy[i].canFind(n)&&readsOld(statements[i]))).array; // (the recomputation of the classical part consumes the version that the reversal reads, see `readAgain`, unless the reversal reads a copy of it, see `lossyChanges`)
 				if(kept.length){
 					if(needOld) needOld.errors~=q(chain(kept,blockedAt.joiner.filter!(m=>!kept.canFind(m))).array,statements[i].loc,redefinitionError);
 					else sc.error(redefinitionError,statements[i].loc);
@@ -3654,7 +3750,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					return r;
 				}
 				if(!(projections[i]&&readsOld(statements[i]))&&lossy[i].any!(n=>neededBefore(i,n))){ // (otherwise, its reversal recomputes them on copies, see below)
-					auto vars=lossy[i].filter!(n=>!inner.canFind(n)).array;
+					auto vars=lossy[i].filter!(n=>!innerAt(i,n)).array;
 					if(needOld&&vars.length) needOld.errors~=q(chain(vars,blockedAt.joiner.filter!(m=>!vars.canFind(m))).array,statements[i].loc,redefinitionError); // (an enclosing block may recompute them from the versions before it, see `NeedOld`)
 					else sc.error(redefinitionError,statements[i].loc);
 					auto r=statements[i].copy();
@@ -3681,6 +3777,10 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				}
 			}
 			auto projected=projections[i]?chain(definedNames(projections[i]),projectionChanges[i].filter!(n=>availableAfter(projections[i],n)&&!availableAfter(statements[i],n))).array:undone[i]?definedNames(statements[i]):[]; // (checked by the reversed statement; also the versions after the classical part of the variables that it keeps although the statement forgets them, which the reversed statement changes back, e.g., `k` for `if c { … } else { (xs,k):=let{ k-=1; … } in (xs,k); k+=2; }` at the last use of `k`, see `readsBeforeDefining`)
+			static if(language==silq) if(undone[i]){
+				if(!copies[i]) copies[i]=recomputation(statements[i],sc);
+				projected~=changed[i].filter!(n=>availableAfter(copies[i],n)&&!availableAfter(statements[i],n)).array; // (as for a projection, e.g., `w` for `with { … } do { (s,w):=(dup(n),w); w+=t+s; }` at the last use of `w`)
+			}
 			static if(language==silq) if(!projections[i]&&!recomputed[i]) projected~=definedNames(statements[i]).filter!(n=>excluded.canFind(n)).array; // (the reversal of a later statement that changes it in place gives back the version after it, e.g., `v` for `with { … } do { v:=u*2; xs[u]:=X(xs[u]); }` before `v+=j`, see `excluded`)
 			NeedOld need;
 			auto nerrors=sc.handler.nerrors;
@@ -3696,9 +3796,9 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,givenAfter(i)~projected,aliveFor(i),oldVersions[i],&need);
 				}
 			}
-			if(needOld) foreach(n;need.vars) if(!inner.canFind(n)&&!needOld.vars.canFind(n)) needOld.vars~=n;
+			if(needOld) foreach(n;need.vars) if(!innerAt(i,n)&&!needOld.vars.canFind(n)) needOld.vars~=n;
 			foreach(e;need.errors){ // (deferred if an enclosing block may resolve it, also through the other needs of this block)
-				auto vars=e[0].filter!(n=>!inner.canFind(n)).array;
+				auto vars=e[0].filter!(n=>!innerAt(i,n)).array;
 				if(needOld) foreach(n;blockedAt.joiner) if(!vars.canFind(n)) vars~=n;
 				if(needOld&&vars.length) needOld.errors~=q(vars,e[1],e[2]);
 				else sc.error(e[2],e[1]);
@@ -3709,7 +3809,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			if(headerChanges[i].length&&!saves[i].length){
 				auto loc=headers(statements[i])[0].loc;
 				Id[] missing; // (variables of enclosing blocks whose versions before the block may allow the reversal to recompute the classical part of the statement, also those that other statements of the block need)
-				foreach(n;chain(headerChanges[i],changed[i],changedAfter[i].filter!(n=>reads(statements[i],n)),blockedAt.joiner)) if(!hoistedAll.canFind(n)&&!inner.canFind(n)&&!missing.canFind(n)) missing~=n;
+				foreach(n;chain(headerChanges[i],changed[i],changedAfter[i].filter!(n=>reads(statements[i],n)),blockedAt.joiner)) if(!hoistedAll.canFind(n)&&!innerAt(i,n)&&!missing.canFind(n)) missing~=n;
 				if(needOld&&missing.length) needOld.errors~=q(missing,loc,headerChangeError); // (the reversal of an enclosing block may resolve it)
 				else sc.error(headerChangeError,loc);
 				auto r=statements[i].copy();
@@ -3725,8 +3825,15 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		}
 		Expression[] narrowed(size_t i){ // (with conversions to the types before the statement, see `narrowing`)
 			auto r=[reversed(i)];
-			static if(language==silq) if(!oldVersions[i].length) r~=statementNarrowings(statements[i],changed[i]);
+			static if(language==silq) if(!oldVersions[i].length) r~=statementNarrowings(statements[i],changed[i].filter!(n=>local.canFind(n)||outer.canFind(n)).array); // (not of a variable of an enclosing block whose version before the block its reversal does not see, e.g., `v3` for `for i in 0..3 { forget(v3); v3:=i+v1; v2+=1; }` after `v3:=1;` in the body of a `with` statement that the reversal recomputes and reverts, after which `v3` is not available, see `lostBy`: no reversal reads that version)
 			return r;
+		}
+		static if(language==silq) foreach(i;0..statements.length) if(recomputed[i]&&!undone[i]&&!early[i]){ // (a statement that the reversal only recomputes, whose recomputation loses the version that the reversal of an earlier statement reads, e.g., `v` for `with { … } do { for i in 0..2 { forget(v); v:=i+j; k+=v; } forget(v); }` after `xs[v]:=X(xs[v]);`, see `lostBy`)
+			auto lost=aliveAt[i].filter!(n=>!changed[i].canFind(n)&&!shadowed[i].canFind(n)&&lostBy(i,n)&&readEarlier(i,n)).array;
+			if(lost.length){
+				if(needOld) needOld.errors~=q(chain(lost,blockedAt.joiner.filter!(m=>!lost.canFind(m))).array,statements[i].loc,redefinitionError);
+				else sc.error(redefinitionError,statements[i].loc);
+			}
 		}
 		Expression[] undoneFirst=iota(statements.length).retro.filter!(i=>undoFirst[i]).map!narrowed.joiner.array;
 		Expression[] quantumStatements;
@@ -3919,7 +4026,7 @@ Expression reverseStatement(Expression e,Scope sc,bool unchecked,bool noImplicit
 		auto othw=cast(CompoundExp)reverseStatement(ite.othw,sc,unchecked,noImplicitDup,hoistClassical,defer,given,alive,old,needOld);
 		assert(!!othw==!!ite.othw);
 		static if(language==silq){ // (the reversal of a branch starts from the version that the merge widens, see `narrowing`)
-			auto names=changedNames(ite);
+			auto names=changedNames(ite).filter!(n=>!old.canFind!(o=>o[0]==n)).array; // (not of the variables whose versions before the statement the reversals of the branches recompute on copies, which they read instead, see `copiesOf`)
 			then.s=branchNarrowings(ite,ite.then,names,given)~then.s;
 			if(othw) othw.s=branchNarrowings(ite,ite.othw,names,given)~othw.s;
 		}
