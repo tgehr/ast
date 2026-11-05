@@ -5720,6 +5720,7 @@ bool[size_t] erpConsumingGuards; // `while` conditions that consume variables
 struct ERPReturn{
 	bool quantum; // under quantum control
 	Q!(Id,Expression)[] consumed; // quantum variables consumed by the returned expression
+	Id[] moved; // variables that the returned expression moves explicitly, e.g., `y` in `return (move(y),k);`
 	Q!(Id,Expression)[] types; // (of the variables before the return, see `erpLoopExplicit`)
 	bool recorded=false; // (the information above, see `erpBeforeReturn`)
 }
@@ -5792,9 +5793,11 @@ void erpRecordReturn(ReturnExp ret,Scope sc){
 	ERPReturn r;
 	r.quantum=sc.quantumControlled;
 	if(ret.e) visitStm(ret.e,(Expression x){
-		if(auto id=cast(Identifier)x)
+		if(auto id=cast(Identifier)x){
 			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup)
 				r.consumed~=q(id.id,id.type);
+			if(cast(VarDecl)id.meaning&&id.moved) r.moved~=id.id;
+		}
 	});
 	if(auto p=erpKey(ret) in erpReturns) r.types=p.types; // (see `erpBeforeReturn`)
 	r.recorded=true;
@@ -6051,16 +6054,28 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 				consumedOuter~=c;
 			}
 	});
+	Expression value(ReturnExp ret){ // (without the explicit moves of the variables that keep their values, which the analysis `dup`s, e.g., `y` in `return (move(y),k);`, see `needsPlaceholder`)
+		auto info=erpReturns[erpKey(ret)];
+		Expression.CopyArgs args;
+		args.mapExp=(Expression x,ref Expression.CopyArgs args){
+			auto ce=cast(CallExp)x;
+			if(!ce||ce.isSquare) return null;
+			auto f=cast(Identifier)ce.e,a=cast(Identifier)ce.arg;
+			if(!f||f.id!=Id.s!"move"||!a||!info.moved.canFind(a.id)||info.consumed.any!(c=>c[0]==a.id&&needsPlaceholder(c[0]))) return null;
+			return cast(Expression)a.copy(args);
+		};
+		return ret.e.copy(args);
+	}
 	Expression[] exitWith(ReturnExp ret){
 		Expression[] r;
 		final switch(kind){
 			case Kind.unit: break;
 			case Kind.quantum:
 				r~=at(new ForgetExp(mk(res),dummy(R)));
-				r~=at(new DefineExp(mk(res),ret.e));
+				r~=at(new DefineExp(mk(res),value(ret)));
 				break;
 			case Kind.classical:
-				r~=at(new AssignExp(mk(res),at(new VectorExp([ret.e]))));
+				r~=at(new AssignExp(mk(res),at(new VectorExp([value(ret)]))));
 				break;
 		}
 		r~=at(new AssignExp(mk(done),at(LiteralExp.makeBoolean(true))));
