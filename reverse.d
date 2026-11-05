@@ -2867,13 +2867,21 @@ Identifier[] resultForgets(LetExp le){ // (the quantum variables of the block of
 }
 Identifier[] outerForgets(WithExp we){ // (the quantum variables of enclosing blocks that the inverse of the transformation forgets, e.g., at their last uses, also in nested blocks)
 	if(!we.itrans) return [];
-	Id[] local;
-	foreach(b;[we.trans,we.itrans]) foreach(x;b.subexpressions) if(cast(DefineExp)x) local~=definedNames(x);
+	Id[] local,read;
+	foreach(x;we.trans.subexpressions){
+		if(cast(DefineExp)x) local~=definedNames(x);
+		else if(auto fd=cast(FunctionDef)x){ if(fd.name) local~=fd.name.id; } // (e.g., `p` for `with { def p()⇒dup(q); r:=p(); } do { … }`, which the inverse forgets)
+		if(auto id=cast(Identifier)x) read~=nameOf(id);
+	}
+	foreach(x;we.itrans.subexpressions) if(cast(DefineExp)x) foreach(n;definedNames(x)) if(!read.canFind(n)||local.canFind(n)) local~=n; // (not a variable of an enclosing block that the transformation consumes and the inverse restores, e.g., `t` for `with { s:=t; } do { … }`, which the inverse forgets at its last use)
 	Identifier[] r;
 	void add(Identifier id){ if(id.type&&!id.type.isClassical()&&!local.canFind(nameOf(id))&&!r.any!(o=>nameOf(o)==nameOf(id))) r~=id; }
+	Identifier[] defining;
+	foreach(x;we.itrans.subexpressions) if(cast(DefineExp)x) defining~=definedIdentifiers(x);
 	foreach(x;we.itrans.subexpressions){
 		if(auto fe=cast(ForgetExp)x){ if(!fe.val) foreach(v;forgottenVariables(fe)) if(auto id=cast(Identifier)unwrap(v)) add(id); }
-		else if(auto ce=cast(CompoundExp)x) if(ce.blscope_) foreach(id;identifiersOf(ce.blscope_.forgottenVarsOnEntry~ce.blscope_.forgottenVars,ce.loc)) add(id);
+		else if(auto ce=cast(CompoundExp)x){ if(ce.blscope_) foreach(id;identifiersOf(ce.blscope_.forgottenVarsOnEntry~ce.blscope_.forgottenVars,ce.loc)) add(id); }
+		else if(auto id=cast(Identifier)x) if(cast(VarDecl)id.meaning&&!id.constLookup&&!id.implicitDup&&!defining.any!(d=>d is id)) add(id); // (also one that it consumes at its last use, e.g., `t` in the value of `forget(w=let{ s:=t; } in s⊕1)` for `with { w:=let{ s:=t; } in s⊕1; } do { … }`)
 	}
 	return r;
 }
@@ -2974,11 +2982,20 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 			else if(auto ce=cast(CatExp)e){ lhs(ce.e1); lhs(ce.e2); }
 			else if(cast(IndexExp)e) base(e);
 		}
+		Identifier[] restored; // (moves by the transformations of `with` statements of variables that their inverses restore, where the bodies do not change what the transformations define, e.g., `t` for `with { s:=t; } do { x⊕=s; }`: the statement does not change them, unless the inverse forgets them, see `outerForgets`)
+		foreach(x;s.subexpressions) if(auto we=cast(WithExp)x) if(we.itrans){
+			auto defs=definedWithin(we.trans);
+			if(names(we.bdy).writes.any!(m=>defs.canFind(m))) continue;
+			Id[] back;
+			foreach(y;we.itrans.subexpressions) if(cast(DefineExp)y) back~=definedNames(y);
+			auto forgotten=outerForgets(we).map!(id=>nameOf(id)).array;
+			foreach(y;we.trans.subexpressions) if(auto id=cast(Identifier)y) if(back.canFind(nameOf(id))&&!forgotten.canFind(nameOf(id))&&!defs.canFind(nameOf(id))) restored~=id;
+		}
 		foreach(x;s.subexpressions){
 			if(auto id=cast(Identifier)x){
 				if(!id.meaning||id.meaning.isToplevelDeclaration()||isLocal(id.meaning)) continue;
 				add(r.reads,nameOf(id));
-				if(!id.constLookup&&!id.implicitDup||id.byRef) add(r.writes,nameOf(id));
+				if((!id.constLookup&&!id.implicitDup||id.byRef)&&!restored.any!(o=>o is id)) add(r.writes,nameOf(id));
 			}else if(auto de=cast(DefineExp)x) lhs(de.e1);
 			else if(auto ae=isOpAssignExp(x)) base(ae.e1);
 			else if(auto ce=cast(CompoundExp)x){
