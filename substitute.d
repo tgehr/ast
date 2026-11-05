@@ -1424,8 +1424,6 @@ private void rescopeImpl(FunctionDef r,FunctionDef fd,LetRescope* let,ref BlockS
 		if(cast(Type)e&&e.isSemEvaluated()) return shareTy(e); // (as for the types of expressions)
 		if(cast(Type)e&&e.isSemCompleted()) return shareTy(e.eval()); // (e.g., an inferred argument of a generic function)
 		if(let) if(auto id=cast(Identifier)e) if(id.isSemCompleted()){ // (a use of a substituted variable from outside the `let`; unanalyzed syntax, e.g., the body of an analyzed vector comprehension, is not substituted)
-			if(id.meaning&&id.meaning.isToplevelDeclaration()) // (e.g., a type alias such as `unit`, as for a substitution, but not a value, which the copy reads as the original does, e.g., `n` for `n:=(1,2)`)
-				if(auto init=id.getInitializer()) if(isType(init)) return init;
 			if(!id.meaning){
 				if(id.id in bctx.subst) return id.substitute(bctx.subst);
 			}else if(!cast(FunctionDef)id.meaning&&!mapDecl(id.meaning)){
