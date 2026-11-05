@@ -3329,8 +3329,18 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 		if(!candidates.length) return;
 		auto changed=names(statement?statement:ite).writes.filter!(w=>!candidates.any!(c=>nameOf(cast(Identifier)c)==w)).array; // (also by the statement that contains an `if` expression)
 		auto values=site(candidates,f,changed,ite.loc).filter!(u=>!!(cast(ForgetExp)u).val).array;
+		Id hoistedName(Expression u){ return nameOf(cast(Identifier)unwrap((cast(ForgetExp)u).var)); }
+		for(bool again=true;again;){ // (not one whose recomputation reads another one that the branches recompute themselves, e.g., `s` for `t:=dup(x); s:=dup(t); if c { forget(s); forget(t); x:=X(x); } else { forget(s); forget(t); }`, as the statement changes `x`)
+			again=false;
+			auto names_=values.map!hoistedName.array;
+			foreach(i,u;values) if(candidates.any!(c=>!names_.canFind(nameOf(cast(Identifier)c))&&mentions((cast(ForgetExp)u).val,nameOf(cast(Identifier)c)))){
+				values=values[0..i]~values[i+1..$];
+				again=true;
+				break;
+			}
+		}
 		if(!values.length) return;
-		auto hoisted=values.map!(u=>nameOf(cast(Identifier)unwrap((cast(ForgetExp)u).var))).array;
+		auto hoisted=values.map!hoistedName.array;
 		Id[] exclude(ref Expression[] uncomputation,Location loc){ // (the branches do not recompute them; returns the ones that it removes)
 			Id[] removed;
 			if(!uncomputation.length) return removed;

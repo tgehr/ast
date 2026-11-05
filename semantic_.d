@@ -1205,6 +1205,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		ite.othw.loc=ite.loc;
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
+	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
 	auto dep=ite.cond.getDependency(sc);
 	static if(language==silq){
 		Dependency guardDeps;
@@ -1222,8 +1223,10 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
 	foreach(branch;only(ite.then,ite.othw)){
-		if(definitelyReturns(branch))
+		if(definitelyReturns(branch)){
+			branch.blscope_.returns=returnsOnEveryPath(branch);
 			branch.blscope_.closeUnreachable(sc,null,mentionsOf(branch));
+		}
 	}
 	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
 	auto diverges=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
@@ -3069,6 +3072,8 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 	// initialize both scopes first, to allow captures to be inserted
 	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
+	ite.then.blscope_.isBranch=true;
+	if(ite.othw) ite.othw.blscope_.isBranch=true;
 	ite.then=branchBlockSemanticLhs(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
@@ -7903,6 +7908,8 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	// initialize both scopes first, to allow captures to be inserted
 	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
+	ite.then.blscope_.isBranch=true;
+	if(ite.othw) ite.othw.blscope_.isBranch=true;
 	static if(language==silq){
 		auto crepls=sc.allComponentReplacements(); // (each branch may consume a replaced component)
 		auto entryReads=crepls.map!(crepl=>q(crepl.read,crepl.constRead)).array;
@@ -8291,7 +8298,12 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				auto nmeaning=sc.consume(meaning,id); // (null if not available here, e.g., declared outside of an enclosing lambda)
 				if(nmeaning) meaning=nmeaning;
 				static if(language==silq) sc.pinTypeMentions(meaning); // (the variables that its type mentions are live up to here)
-				if(nmeaning&&sc.dependencyTracked(meaning)&&sc.canForget(meaning,true)){
+				Dependency atSplit;
+				imported!"ast.lastuse".LastUse split;
+				bool forgettable=nmeaning&&sc.dependencyTracked(meaning)&&sc.canForget(meaning,true);
+				bool uncomputedAtSplit=nmeaning&&!forgettable&&sc.dependencyTracked(meaning)&&sc.lastUses.dependencyAtSplit(meaning,sc,atSplit,split); // (not used since it was split from a version outside a conditional, before a branch consumed what it depends on)
+				if(uncomputedAtSplit&&split.scope_ !is sc) (cast(NestedScope)split.scope_).forgottenAtSplit~=q(split.decl,split);
+				if(forgettable||uncomputedAtSplit){
 					id.scope_=sc;
 					id.byRef=true;
 					assert(!!meaning);
@@ -8304,7 +8316,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						id.setSemError();
 						return false;
 					}else id.setSemCompleted();
-					sc.lastUses.synthesizedForget(meaning,id,sc,fe);
+					sc.lastUses.synthesizedForget(meaning,id,sc,fe,uncomputedAtSplit?&atSplit:null);
+					if(uncomputedAtSplit) sc.consumedDepLog[meaning]=atSplit.dup; // (for the versions forgotten at the split that depend on it)
 					return true;
 				}else{
 					if(!meaning.isSemError()){
@@ -11308,6 +11321,15 @@ Expression typeForDecl(Declaration decl){
 	return unit; // TODO
 }
 
+bool returnsOnEveryPath(Expression e){ // (rather than aborting on some path: the HQIR continues after a branch that returns in the other branch, without merging the versions there, see `ItePartialReturn`, but merges them after one that aborts)
+	if(cast(ReturnExp)e) return true;
+	if(auto ce=cast(CompoundExp)e){
+		foreach(s;ce.s) if(definitelyReturns(s)) return returnsOnEveryPath(s);
+		return false;
+	}
+	if(auto ite=cast(IteExp)e) return ite.othw&&returnsOnEveryPath(ite.then)&&returnsOnEveryPath(ite.othw);
+	return false;
+}
 bool definitelyReturns(Expression e){
 	if(e.type) return isEmpty(e.type);
 	return dispatchStm!(definitelyReturnsImpl,definitelyReturnsImplDefault)(e);

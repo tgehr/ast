@@ -110,6 +110,7 @@ final class LastUse{
 		auto r=new LastUse(kind,scope_,decl,use,parent,nestedScopes.dup);
 		r.constBlock=constBlock;
 		r.dep=dep;
+		r.depAtSplit=depAtSplit;
 		r.forwardTo=forwardTo;
 		r.constConsume=constConsume;
 		r.prevImplicitDup=prevImplicitDup;
@@ -121,6 +122,7 @@ final class LastUse{
 		r.consumedComponent=consumedComponent;
 		r.loopGuard=loopGuard;
 		r.discarded=discarded;
+		r.atSplit=atSplit;
 		return r;
 	}
 	enum Kind{
@@ -137,12 +139,15 @@ final class LastUse{
 	}
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
+	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
+	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
 	Identifier[] constBlock;
 	Expression parent=null;
 	auto dep=Dependency(true);
+	auto depAtSplit=Dependency(true); // (of a version in a branch: its dependency at the split, which the consumptions in the branches do not change)
 	LastUse forwardTo=null;
 	LastUse constConsume=null;
 	LastUse prevImplicitDup=null;
@@ -394,7 +399,15 @@ final class LastUse{
 				return true;
 			}
 			if(present(x)) return true; // (read at the forget, its definition is not undone)
-			if(isOuter(x)) return false;
+			if(isOuter(x)){ // (only if it was consumed with a known dependency, which has to be read instead, e.g., `f` for `t:=dup(x)&f; forget(f); forget(t);` in a branch)
+				if(x in visited) return true;
+				visited.insert(x);
+				auto lu=x.scope_?x.scope_.lastUses.get(x,true):null;
+				while(lu&&lu.forwardTo&&!lu.kind.among(Kind.consumption,Kind.synthesizedForget)) lu=lu.forwardTo; // (e.g., the last use before a conditional, consumed in a branch)
+				if(!lu||!lu.isConsumption()||lu.dep.isTop) return false;
+				foreach(y;lu.dep.dependencies) if(version_(y,decl)||!ok(y)) return false;
+				return true;
+			}
 			if(x in visited) return true;
 			visited.insert(x);
 			if(x.splitFrom) return ok(x.splitFrom);
@@ -450,14 +463,18 @@ final class LastUse{
 					if(x.parent is y.parent) return x !is y&&x.getSiblingScopes().canFind(y);
 			return false;
 		}
-		void walk(LastUse start,Dependency cdep,bool nested){
+		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level){ // (`atSplit`: the dependency at the split into `level`, for the forgets there)
+		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
 		for(auto lu=start;lu;lu=lu.next){
-			scope(success) if(descend) foreach(nsc;lu.nestedAfter){
-				if(nsc.lastUses.discarded) continue;
-				auto head=nsc.lastUses.lastLastUse;
-				if(!head) continue;
-				while(head.prev) head=head.prev;
-				walk(head,cdep.dup,true);
+			scope(success){
+				if(!lu.forwardTo) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
+				if(descend) foreach(nsc;lu.nestedAfter){
+					if(nsc.lastUses.discarded) continue;
+					auto head=nsc.lastUses.lastLastUse;
+					if(!head) continue;
+					while(head.prev) head=head.prev;
+					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
+				}
 			}
 			if(lu is this||lu.discarded) continue;
 			visited.insert(lu);
@@ -475,8 +492,14 @@ final class LastUse{
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
+			if(!nested&&lu.atSplit){ // (its dependency is the one at the split, which comes before the consumption)
+				cdep.replace(lu.decl,lu.dep,lu.use);
+				continue;
+			}
+			auto byAtSplit=nested&&lu.scope_ is level&&isBranch(level)?atSplit:cdep; // (for the forgets at the split: `decl` is consumed before the split)
+			if(nested&&lu.kind==Kind.lazySplit) replaceVersions(lu.depAtSplit,decl,byAtSplit);
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			if(nested) replaceVersions(lu.dep,decl,cdep);
+			if(nested) replaceVersions(lu.dep,decl,lu.atSplit?byAtSplit:cdep);
 			else lu.dep.replace(decl,cdep);
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
@@ -530,7 +553,7 @@ final class LastUse{
 			}
 		}
 		}
-		walk(splitFrom?start:this,cdep,false);
+		walk(splitFrom?start:this,cdep,false,cdep,null);
 	}
 
 	bool checkConsumable(){
@@ -640,8 +663,8 @@ final class LastUse{
 		consumable,
 	}
 
-	bool canForget(bool forceConsumed,ReturnExp earlyReturn=null){
-		return getForgettability(forceConsumed,earlyReturn)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
+	bool canForget(bool forceConsumed,ReturnExp earlyReturn=null,bool enclosing=false){
+		return getForgettability(forceConsumed,earlyReturn,enclosing)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
 
 	bool canForgetBeforeLoops(bool forceConsumed,ReturnExp earlyReturn){ // (a forget on entry of a loop body has to be moved before the loop)
@@ -653,6 +676,9 @@ final class LastUse{
 	bool atLoopEntry(){
 		auto bs=cast(BlockScope)scope_;
 		return bs&&bs.isLoopEntry;
+	}
+	bool forgettableAtSplit(ReturnExp earlyReturn,bool enclosing){ // (a version in a branch, e.g., at an early return after the branch consumed what it depends on, rather than before the split, as it may be used after the conditional; not at an early return in a nested scope (`enclosing`), after which the branch may continue on another path, e.g., `u` for `if c { if d { return x; } forget(u); }`)
+		return kind==Kind.lazySplit&&isBranch(scope_)&&!depAtSplit.isTop&&!(earlyReturn&&enclosing);
 	}
 	bool isLastSplitSibling(){
 		auto nsc=cast(NestedScope)scope_;
@@ -675,10 +701,10 @@ final class LastUse{
 		return true;
 	}
 
-	Forgettability getForgettability(bool forceConsumed,ReturnExp earlyReturn=null){
+	Forgettability getForgettability(bool forceConsumed,ReturnExp earlyReturn=null,bool enclosing=false){
 		import ast.semantic_:typeConstBlocked;
 		if(typeConstBlocked(decl,scope_)) return Forgettability.none;
-		if(forwardTo) return forwardTo.getForgettability(forceConsumed,earlyReturn);
+		if(forwardTo) return forwardTo.getForgettability(forceConsumed,earlyReturn,enclosing);
 		//imported!"util.io".writeln("GETTING FORGETTABILITY: ",this);
 		if(kind.among(Kind.consumption,Kind.capture)) return Forgettability.none; // (their uses can be in nested scopes, e.g., the consumption of the version in a loop body)
 		if(use&&!scope_.canSplit(use.meaning)) return Forgettability.none;
@@ -692,10 +718,10 @@ final class LastUse{
 			case lazySplit:
 				assert(!!splitFrom);
 				auto r=Forgettability.none;
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop||atLoopEntry())
-					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn));
-				if(r==Forgettability.none&&!dep.isTop&&scope_.canSplit(decl)&&canForgetBeforeLoops(forceConsumed,earlyReturn))
-					r=Forgettability.forgettable;
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||atLoopEntry())
+					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn,!!earlyReturn));
+				if(r==Forgettability.none&&(!dep.isTop||forgettableAtSplit(earlyReturn,enclosing))&&scope_.canSplit(decl)&&canForgetBeforeLoops(forceConsumed,earlyReturn))
+					r=Forgettability.forgettable; // (on entry, also at the split if the branch consumes what it depends on)
 				//imported!"util.io".writeln("RESULT: ",r);
 				return r;
 			case lazyMerge:
@@ -780,10 +806,10 @@ final class LastUse{
 		}
 	}
 
-	void forget(bool forceConsumed,ReturnExp earlyReturn=null){
+	void forget(bool forceConsumed,ReturnExp earlyReturn=null,bool enclosing=false){
 		bool isForget=false;
 		if(forwardTo){
-			forwardTo.forget(forceConsumed,earlyReturn);
+			forwardTo.forget(forceConsumed,earlyReturn,enclosing);
 			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
 			assert(isConsumption(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption()));
 			if(scope_.lastUses.lastUses.get(decl,null) is this)
@@ -801,11 +827,11 @@ final class LastUse{
 				assert(0); // always forwarded
 			case lazySplit:
 				assert(!!splitFrom);
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop||atLoopEntry()){
-					if(splitFrom.canForget(forceConsumed,earlyReturn)){
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||atLoopEntry()){
+					if(splitFrom.canForget(forceConsumed,earlyReturn,!!earlyReturn)){
 						if(earlyReturn&&dep.isTop) // (forgotten before the split because of the early return)
 							splitFrom.decl.forgottenBeforeEarlyReturn=earlyReturn;
-						splitFrom.forget(forceConsumed,earlyReturn);
+						splitFrom.forget(forceConsumed,earlyReturn,!!earlyReturn);
 						if(scope_.rnsymtab.get(decl.getId,null) is decl){
 							scope_.symtabRemove(decl);
 							scope_.pushDependencies(decl,false);
@@ -815,10 +841,15 @@ final class LastUse{
 						return;
 					}
 				}
+				if(dep.isTop&&forgettableAtSplit(earlyReturn,enclosing)) dep=depAtSplit.dup; // (forgotten at the split, before the branch consumes what it depends on)
 				assert(!dep.isTop);
 				assert(!forceConsumed);
 				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",splitFrom," ",splitFrom.canForget(forceConsumed));
 				scope_.forgetOnEntry(decl);
+				if(isBranch(scope_)){
+					atSplit=true;
+					(cast(NestedScope)scope_).forgottenAtSplit~=q(decl,this);
+				}
 				isForget=true;
 				break;
 			case lazyMerge:
@@ -978,6 +1009,7 @@ final class LastUse{
 		if(forwardTo) forwardTo.replaceDecl(splitFrom,splitInto);
 		if(decl is splitFrom) decl=splitInto;
 		if(splitFrom in dep.dependencies) dep.replace(splitFrom,splitInto);
+		if(splitFrom in depAtSplit.dependencies) depAtSplit.replace(splitFrom,splitInto);
 	}
 }
 
@@ -1022,7 +1054,7 @@ struct LastUses{
 	private void retire(LastUse lastUse){
 		retired[lastUse.decl]~=lastUse;
 	}
-	private void add(LastUse lastUse)in{
+	private void add(LastUse lastUse,Dependency* atSplit=null)in{
 		assert(!!lastUse.scope_);
 		with(LastUse.Kind){
 			assert(lastUse.kind!=constUse||lastUse.parent);
@@ -1038,7 +1070,8 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
-		lastUse.dep=lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
+		lastUse.dep=atSplit?atSplit.dup:lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
+		lastUse.atSplit=!!atSplit;
 		if(lastUse.dep.isTop){
 			// TODO: make sure classical variables have dependency ∅ instead?
 			import ast.semantic_:typeForDecl;
@@ -1076,6 +1109,10 @@ struct LastUses{
 					lastUse.prevImplicitDup=prev;
 					keep=true;
 				}
+			}
+			if(lastUse.kind==LastUse.Kind.synthesizedForget&&prev.splitFrom&&prev.kind==LastUse.Kind.lazySplit&&LastUse.isBranch(lastUse.scope_)){
+				lastUse.atSplit=true;
+				(cast(NestedScope)lastUse.scope_).forgottenAtSplit~=q(lastUse.decl,lastUse);
 			}
 			if(prevLastUse.splitFrom){
 				//imported!"util.io".writeln("PINNING SPLITS: ",lastUse," ",prevLastUse);
@@ -1140,6 +1177,7 @@ struct LastUses{
 		auto splitFrom=lu.getSplitFrom();
 		//assert(splitFrom.kind==LastUse.Kind.lazySplitSink,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
 		add(lu);
+		lu.depAtSplit=lu.dep.dup;
 		if(splitFrom){
 			auto p=splitFrom;
 			while(p.forwardTo) p=p.forwardTo;
@@ -1170,7 +1208,7 @@ struct LastUses{
 			}
 		}
 	}
-	void synthesizedForget(Declaration decl,Identifier use,Scope sc,Expression parent)in{
+	void synthesizedForget(Declaration decl,Identifier use,Scope sc,Expression parent,Dependency* atSplit=null)in{
 		if(use){
 			assert(use.byRef);
 			assert(!use.constLookup);
@@ -1179,7 +1217,49 @@ struct LastUses{
 		}
 	}do{
 		//imported!"util.io".writeln("SYNTHESIZEDFORGET: ",use?text(use.loc):"<?>");
-		add(new LastUse(LastUse.Kind.synthesizedForget,sc,decl,use,parent));
+		add(new LastUse(LastUse.Kind.synthesizedForget,sc,decl,use,parent),atSplit);
+	}
+	bool dependencyAtSplit(Declaration decl,Scope sc,ref Dependency result,ref LastUse split){ // (of a version that is not used after its split: the dependency there, after the forgets since then; `split`: its last use in the branch)
+		if(!splitDependency(decl,result,split)) return false;
+		Scope.substituteConsumed(result,sc.consumedDepLog);
+		return !result.isTop;
+	}
+	private bool splitDependency(Declaration decl,ref Dependency result,ref LastUse split){ // (in terms of the versions here)
+		static bool isLoop(NestedScope nsc){ return nsc.getSiblingScopes().any!(s=>cast(BlockScope)s&&((cast(BlockScope)s).isLoopBody||(cast(BlockScope)s).isLoopEntry)); }
+		auto lu=lastUses.get(decl,null);
+		if(!lu) return false;
+		while(lu.forwardTo) lu=lu.forwardTo;
+		if(lu.kind==LastUse.Kind.lazyMerge){ // (continues the version of the only branch that reaches the merge, e.g., after the other one returns)
+			if(lu.nestedScopes.length!=1||!LastUse.isBranch(lu.nestedScopes[0])) return false;
+			auto nsc=lu.nestedScopes[0];
+			if(nsc.getSiblingScopes().any!(s=>s !is nsc&&!(cast(BlockScope)s&&(cast(BlockScope)s).returns))) return false; // (the HQIR merges the versions after a branch that aborts, after the splits)
+			auto cdecl=LastUse.versionIn(decl,nsc);
+			if(cdecl is decl||!nsc.lastUses.splitDependency(cdecl,result,split)) return false;
+			foreach(d;result.dependencies.dup){
+				if(d.scope_ !is nsc) continue;
+				if(!d.mergedInto) return false; // (consumed in the branch)
+				result.replace(d,d.mergedInto);
+			}
+			return true;
+		}
+		if(!lu.splitFrom||lu.kind!=LastUse.Kind.lazySplit) return false;
+		auto nsc=cast(NestedScope)lu.scope_;
+		if(!nsc) return false;
+		if(LastUse.isBranch(nsc)){
+			if(lu.depAtSplit.isTop) return false;
+			split=lu;
+			result=lu.depAtSplit.dup;
+			return true;
+		}
+		if(!lu.dep.isTop||nsc.getSiblingScopes().length!=1||isLoop(nsc)) return false; // (a block that does not split the version, e.g., the continuation of a `return` under quantum control)
+		if(!nsc.parent.lastUses.splitDependency(lu.splitFrom.decl,result,split)) return false;
+		Scope.substituteConsumed(result,nsc.parent.consumedDepLog);
+		if(result.isTop) return false;
+		foreach(d;result.dependencies.dup){
+			auto s=nsc.getSplit(d);
+			if(s !is d) result.replace(d,s);
+		}
+		return true;
 	}
 	void implicitDup(Identifier use)in{
 		assert(!!use);
@@ -1406,11 +1486,16 @@ struct LastUses{
 
 	// TODO: snapshotting is a bit hacky
 	void substituteDependency(Declaration decl,Dependency dep){
-		foreach(_,lu;lastUses)
+		foreach(_,lu;lastUses){
 			lu.dep.replace(decl,dep);
+			lu.depAtSplit.replace(decl,dep);
+		}
 		foreach(_,lus;retired)
 			foreach(lu;lus)
-				if(lu) lu.dep.replace(decl,dep);
+				if(lu){
+					lu.dep.replace(decl,dep);
+					lu.depAtSplit.replace(decl,dep);
+				}
 	}
 	MapX!(Declaration,LastUse) getSnapshot(Scope sc){
 		MapX!(Declaration,LastUse) nlastUses;

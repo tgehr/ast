@@ -3055,6 +3055,10 @@ class WithTransTrial{ // silq: token identifying one activation of the trial ana
 class NestedScope: Scope{
 	Scope parent;
 	private bool splitForDivergingSibling=false; // (a sibling that diverges consumes a variable from outside, see `closeUnreachable`: the variables of this scope keep depending on its split here, as merges ignore the sibling)
+	Q!(Declaration,LastUse)[] forgottenAtSplit; // (versions that are uncomputed at their split, with the last uses that keep their dependencies there, see `dependenciesAtSplit`)
+	final Q!(Declaration,Dependency)[] dependenciesAtSplit(){ // (they are split before the variables that those mention)
+		return forgottenAtSplit.map!(f=>q(f[0],f[1].kind==LastUse.Kind.lazySplit?f[1].depAtSplit:f[1].dep)).array;
+	}
 	override @property ErrorHandler handler(){ return parent.handler; }
 	this(Scope parent){
 		this.parent=parent;
@@ -3566,6 +3570,8 @@ class BlockScope: NestedScope{
 	bool isLoopEntry=false; // (merged with the loop body for the state at the start of an iteration: its forgets happen before the loop)
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
+	bool isBranch=false; // (of a conditional, see `LastUses.dependencyAtSplit`)
+	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
