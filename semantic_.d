@@ -8502,6 +8502,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 		setConstResult(id,context);
 		setImplicitDup();
 		if(sc) sc.recordAccess(id,id.meaning);
+		static if(language==silq) if(sc&&context.inType) sc.captureTypeDependencies(id); // (e.g., a copy of a type that keeps its meaning in a lowered loop, see `loopParams`)
 	}
 	id.id=id.meaning.getId;
 	propErr(id.meaning,id);

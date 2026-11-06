@@ -2595,6 +2595,22 @@ abstract class Scope{
 				foreach(v;(*mustBeConstFromDummies).byValue)
 					mustBeConst.insert(v.getId);
 			import ast.semantic_: typeForDecl;
+			Expression typeCopy(Expression type){ // (a free identifier whose name denotes another declaration at the loop keeps its meaning, e.g., the generic parameter `n` in the type of `x` after `n:=3`, which the lowered loop then captures)
+				bool[const(void)*] free; // (not those that the type binds, e.g., `r` in `𝔹^(let { r:=dup(n); } in r)`)
+				foreach(id;type.freeIdentifiers) free[cast(const(void)*)id]=true;
+				Expression.CopyArgs cargs;
+				cargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+					auto id=cast(Identifier)e;
+					if(!id||cast(const(void)*)id !in free||!id.meaning||!id.meaning.name||id.meaning.isToplevelDeclaration()) return null;
+					auto probe=new Identifier(id.meaning.name.id);
+					probe.loc=id.loc;
+					auto cur=loopScope.lookup(probe,false,true,Lookup.probing,null);
+					if(!cur||cur.canonicalSource is id.meaning.canonicalSource) return null;
+					Expression.CopyArgs keep={preserveMeanings:true};
+					return id.copy(keep);
+				};
+				return type.copy(cargs);
+			}
 			Scope letScope=null; // (variables declared outside of a `let` expression are captured, such that its lowering does not depend on where it is analyzed)
 			for(Scope s=loopScope;s&&!cast(FunctionScope)s;s=cast(NestedScope)s?(cast(NestedScope)s).parent:null)
 				if(auto bs=cast(BlockScope)s) if(bs.isLetBody){ letScope=bs; break; }
@@ -2634,8 +2650,7 @@ abstract class Scope{
 					if(consumedAfter&&decl.name&&decl.name.id in *consumedAfter&&type.isClassical()&&!decl.isConst&&(cast(VarDecl)decl||cast(Parameter)decl)&&!decl.isToplevelDeclaration()&&!isTypeTy(type)&&!cast(FunTy)type){
 						// (consumed by the code after the loop, which becomes part of the function, e.g., `n` in `forget(x); forget(n);` with
 						// `x:𝔹^n`: the types of the parameters that mention it are weakened, see `lowerLoop`)
-						Expression.CopyArgs cargsMoved;
-						r[1]~=q(id,decl,type.copy(cargsMoved),true);
+						r[1]~=q(id,decl,typeCopy(type),true);
 						if(freed) freed.insert(decl.name.id);
 						continue;
 					}
@@ -2644,8 +2659,7 @@ abstract class Scope{
 					// (classical variables are passed as well: a function without captures is analyzed only once)
 					if(type.isClassical()&&(!cast(VarDecl)decl&&!cast(Parameter)decl||decl.isToplevelDeclaration()||isTypeTy(type)||cast(FunTy)type||decl.canonicalSource in inTypes)) continue; // (const capture)
 					if(type.isClassical()&&letScope&&!(decl.canonicalSource.scope_&&decl.canonicalSource.scope_.isNestedIn(letScope))) continue; // (const capture)
-					Expression.CopyArgs cargsConst;
-					r[0]~=q(id,decl,type.copy(cargsConst),false); // separate const parameter
+					r[0]~=q(id,decl,typeCopy(type),false); // separate const parameter
 					continue;
 				}
 				bool canForget=type.isClassical()||dependencies.canForget(decl);
@@ -2656,8 +2670,7 @@ abstract class Scope{
 					isConstParamDecl=true;
 					unchangedConst.insert(id);
 				}
-				Expression.CopyArgs cargs;
-				r[isConstParamDecl?0:1]~=q(id,decl,type.copy(cargs),mayChange);
+				r[isConstParamDecl?0:1]~=q(id,decl,typeCopy(type),mayChange);
 			}
 			foreach(i;0..2) sort!"a[0].str<b[0].str"(r[i]);
 			return r;
