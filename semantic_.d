@@ -8405,6 +8405,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						sc.explainUnforgettable(meaning);
 						meaning.setSemForceError();
 					}
+					id.meaning=meaning; // (the consumed version, which later uses mention, see `ConsumedDecl`)
 					id.setSemError();
 					return false;
 				}

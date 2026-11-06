@@ -2738,8 +2738,15 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(auto id=cast(Identifier)y) if(consumes(id)) consumed.insert(varName(id));
 		});
 		bool ok=true;
+		SetX!Expression redefined; // (the variables that the statement defines again, which do not read their previous versions, e.g., `x` in `x:=measure(x)`)
+		void defines(Expression e){
+			if(auto id=cast(Identifier)e) redefined.insert(id);
+			else if(auto tae=cast(TypeAnnotationExp)e) defines(tae.e);
+			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) defines(c);
+		}
+		visitStm(s,(Expression x){ if(auto de=cast(DefineExp)x) defines(de.e1); });
 		visitStm(s,(Expression x){
-			if(x in inCalls) return;
+			if(x in inCalls||x in redefined) return;
 			if(auto id=cast(Identifier)x) if(isVar(id)&&varName(id) in consumed) ok=false;
 		});
 		Expression[] on,cn;
@@ -4675,6 +4682,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			auto type=typeForDecl(d.mergedInto),ptype=typeForDecl(p.front[1]);
 			if(!type||!ptype||type==ptype) continue;
 			auto rtype=isSubtype(type,ptype)?ptype:joinTypes(type,ptype); // (the parameter type can be stronger, e.g., `do{ x+=1; }while c{ x=0:!𝔹; }`)
+			if(rtype&&!typeExplicitConversion(rtype,type,TypeAnnotationType.coercion)) rtype=type; // (the result keeps a type that the parameter type cannot be coerced back to, e.g., `!𝔹` after `x:=measure(x)` for a parameter of type `𝔹`)
 			if(!rtype) if(auto w=weakenedExitType(type,changed)) if(isSubtype(w,ptype)){ // (or the type of the next iteration, e.g., `!ℕ` for `!uint[n]`, see `weakenedExitType`)
 				rtype=ptype;
 				convertedCarried.insert(name.id);
