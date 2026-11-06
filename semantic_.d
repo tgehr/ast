@@ -8333,6 +8333,13 @@ Expression expressionSemanticImpl(PlaceholderExp pl,ExpSemContext context){
 	return pl;
 }
 
+static if(language==silq)
+bool capturedByForget(Declaration meaning,Scope sc){ // (a classical variable of an enclosing function, which an implicit `forget` in a closure captures by moving it, as `forget(n=v)` and `move(n)` do)
+	if(meaning.isToplevelDeclaration()||!meaning.scope_||meaning.scope_.getFunction() is sc.getFunction()) return false;
+	auto type=typeForDecl(meaning);
+	return type&&type.isClassical();
+}
+
 Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	if(!fe.val){
@@ -8377,6 +8384,14 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					return false;
 				}
 				auto nmeaning=sc.consume(meaning,id); // (null if not available here, e.g., declared outside of an enclosing lambda)
+				static if(language==silq) if(!nmeaning&&capturedByForget(meaning,sc)){
+					id.byRef=true;
+					nmeaning=sc.lookup(id,false,true,Lookup.consuming,&failures);
+					if(!nmeaning||id.isSemError()){
+						id.setSemError();
+						return false;
+					}
+				}
 				if(nmeaning) meaning=nmeaning;
 				static if(language==silq) sc.pinTypeMentions(meaning); // (the variables that its type mentions are live up to here)
 				Dependency atSplit;
