@@ -1265,7 +1265,8 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
 	auto continued=insideLoopBody(sc)?null:continuedBranch(ite); // (not in a loop body: `--remove-loops` rewrites the returns there, and the code after the conditional is then guarded by another conditional, see `erpLoopExplicit`)
-	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=!continued&&(containsReturn(ite.then)||containsReturn(ite.othw));
+	auto bothReturn=only(ite.then,ite.othw).all!(b=>definitelyReturns(b)&&returnsOnEveryPath(b)); // (the code generator interleaves their statements as for branches that do not return, and merges their results; in a loop body, `--remove-loops` rewrites the returns, see `erpLoopExplicit`, and the branches do not return)
+	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=!continued&&!bothReturn&&(containsReturn(ite.then)||containsReturn(ite.othw));
 	if(continued) (continued is ite.then?ite.othw:ite.then).blscope_.returningBeforeContinuation=true;
 	auto dep=ite.cond.getDependency(sc);
 	static if(language==silq){

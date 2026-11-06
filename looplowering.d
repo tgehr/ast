@@ -2633,13 +2633,22 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	static if(isDoWhile){
 		// lifted definitions of the body that are available after the loop: the main loop computes copies of them, as the
-		// results of its recursive function are not lifted, and the recomputations define them
+		// results of its recursive function are not lifted, and the recomputations define them (also the versions at the exit
+		// of carried variables that are not lifted at the loop header, e.g., `x` in `x:=H(0:𝔹); do{ x:=measure(x):𝔹; }while c;`:
+		// the main loop runs on them, and the recomputations do not read them, see `sliceClass`)
 		Id[][] classExits=new Id[][](classDeps.length);
 		SetX!Id exitLifted;
 		MapSX!(Id,Expression) exitTypes;
+		SetX!Id replayed; // (carried variables whose definitions at the exit the lowering computes again after the loop, see `liftedExitDefinitions`)
+		{
+			SetX!Id changed;
+			foreach(d;chain(loop.exitScope.mergedVars,loop.bdy.blscope_.mergedVars)) if(d.mergedInto.name) changed.insert(d.mergedInto.name.id);
+			foreach(r;liftedExitDefinitions(loop,sc,carriedNames,changed,&carriedNames,true)) replayed.insert(r[0]);
+		}
 		foreach(d;loop.exitScope.mergedVars){
 			auto decl=d.mergedInto;
-			if(!decl||!decl.name||decl.name.id in carriedNames||decl.name.id in exitLifted||!definedInLoop(d)) continue;
+			if(!decl||!decl.name||decl.name.id in liftedNames||decl.name.id in exitLifted||!definedInLoop(d)) continue;
+			if(decl.name.id in carriedNames&&decl.name.id in replayed) continue;
 			auto type=typeForDecl(decl);
 			if(!type||type.isClassical()||!sc.canSplit(decl)||!sc.dependencyTracked(decl)) continue;
 			auto dep=sc.getDependency(decl);
@@ -3410,7 +3419,11 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					break;
 			}
 		}
-		foreach(n;nodes) if(S.kept[n.id]) foreach(d;n.strong) if(d in carriedNames&&d !in S.carried) S.locals.insert(d);
+		bool ownExit(Id d){
+			static if(isDoWhile) return classExits[cls].canFind(d); // (the recomputation defines its version at the exit)
+			else return false;
+		}
+		foreach(n;nodes) if(S.kept[n.id]) foreach(d;n.strong) if(d in carriedNames&&d !in S.carried&&!ownExit(d)) S.locals.insert(d);
 		droppedDefs=SetX!Id.init;
 		foreach(n;nodes){
 			if(n.kind!=K.atom&&n.kind!=K.with_) continue;
@@ -3430,10 +3443,17 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	foreach(cls;0..classDeps.length){
 		if(sliceClass(cls)) continue;
-		static if(isDoWhile) if(classExits[cls].length){ // (the main loop computes these definitions instead)
-			foreach(v;classExits[cls]) exitLifted.remove(v);
-			classExits[cls]=null;
-			if(!classVars[cls].length||sliceClass(cls)) continue;
+		static if(isDoWhile){
+			if(classExits[cls].any!(v=>v in carriedNames)){ // (the recomputation needs the value of a carried variable at the entry: the main loop computes its version at the exit)
+				foreach(v;classExits[cls]) if(v in carriedNames) exitLifted.remove(v);
+				classExits[cls]=classExits[cls].filter!(v=>v !in carriedNames).array;
+				if(!classVars[cls].length&&!classExits[cls].length||sliceClass(cls)) continue;
+			}
+			if(classExits[cls].length){ // (the main loop computes these definitions instead)
+				foreach(v;classExits[cls]) exitLifted.remove(v);
+				classExits[cls]=null;
+				if(!classVars[cls].length||sliceClass(cls)) continue;
+			}
 		}
 		return null;
 	}
@@ -3865,7 +3885,10 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		copyOf[v]=freshName();
 		stmts~=define(mkId(copyOf[v]),dupOf(mkId(v)));
 	}
-	static if(isDoWhile) foreach(v;sorted(exitLifted)) copyOf[v]=freshName(); // (defined by the main loop)
+	static if(isDoWhile) foreach(v;sorted(exitLifted)){
+		copyOf[v]=freshName(); // (defined by the main loop)
+		if(v in carriedNames) stmts~=define(mkId(copyOf[v]),mkId(v)); // (the main loop runs on the carried variable itself)
+	}
 	foreach(ref l;logs) stmts~=define(mkId(l.name),annot(setLoc(new VectorExp([])),arrayTy(l.stored)));
 	auto mRebuild=new bool[](nodes.length);
 	bool computeRebuild(SliceNode n){
@@ -5454,7 +5477,7 @@ bool hasLoopWithReturn(Expression e){
 // after it as well, which the rest of the body and the condition do not change: they are computed again after the recursive function
 // returns instead of being returned (the result of the function is not lifted)
 static if(language==silq)
-Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames,ref SetX!Id changed,SetX!Id* movedNames=null){
+Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id paramNames,ref SetX!Id changed,SetX!Id* movedNames=null,bool namesOnly=false){ // (`namesOnly`: the values of function definitions are not converted)
 	Q!(Id,Expression)[] r;
 	auto xsc=loop.exitScope;
 	MapSX!(Id,Declaration) exitDecls;
@@ -5520,7 +5543,7 @@ Q!(Id,Expression)[] liftedExitDefinitions(DoWhileExp loop,Scope sc,ref SetX!Id p
 			if(v==name||v in later||v !in paramNames&&v !in exitDecls&&!outer) ok=false; // (`v==name`: the definition consumes the previous version)
 		}
 		if(!ok) continue;
-		if(auto fd=cast(FunctionDef)value){
+		if(auto fd=cast(FunctionDef)value) if(!namesOnly){
 			import ast.reverse:functionValue;
 			value=functionValue(fd); // (`let { def fresh(…)…; } in fresh`)
 		}

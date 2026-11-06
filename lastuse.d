@@ -485,6 +485,11 @@ final class LastUse{
 		}
 		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
 		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
+		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch)
+			if(!(lu.use&&lu.use.implicitDup)) return false;
+			auto last=lu.scope_.lastUses.lastUses.get(lu.decl,null);
+			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
+		}
 		SetX!LastUse visited;
 		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by,Identifier consumedAt=null){
 			if(dep.isTop) return;
@@ -517,7 +522,7 @@ final class LastUse{
 					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
 				}
 			}
-			if(lu is this||lu.discarded||before(lu)) continue;
+			if(lu is this||lu.discarded||before(lu)||goneBefore(lu)) continue;
 			if(splitFrom&&!fromBranch&&lu.kind==Kind.synthesizedForget&&lu.time<consumption.consumedAt) continue; // (forgotten before the consumption, e.g., in a block whose lazy splits come before it: the walk starts at them)
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
