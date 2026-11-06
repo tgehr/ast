@@ -1494,6 +1494,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 				sc.merge(false,isc);
 			}
 		}
+		propErr(with_.itrans,with_);
 	}else if(with_.trans.isSemCompleted()){
 		enum unchecked=false,noImplicitDup=true;
 		static if(language==silq) resolveForgets(with_.trans); // (the inverse recomputes the quantum variables that the transformation forgets)
