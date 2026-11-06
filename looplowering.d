@@ -5797,7 +5797,7 @@ void erpRecordReturn(ReturnExp ret,Scope sc){
 	r.quantum=sc.quantumControlled;
 	if(ret.e) visitStm(ret.e,(Expression x){
 		if(auto id=cast(Identifier)x){
-			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup)
+			if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup&&!r.consumed.any!(c=>c[0]==id.id)) // (once, e.g., for `if c then x else x`)
 				r.consumed~=q(id.id,id.type);
 			if(cast(VarDecl)id.meaning&&id.moved) r.moved~=id.id;
 		}

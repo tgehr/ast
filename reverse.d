@@ -3931,16 +3931,43 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			NeedOld need;
 			auto nerrors=sc.handler.nerrors;
 			auto r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,receivedAfter(i)~projected,aliveFor(i),null,&need);
+			static if(language==silq) Id[] old,lost;
+			static if(language==silq) Id[] lostRead(Expression r){ // (versions before it that its classical part loses, but which its reversal reads, e.g., `v` for `with { … } do { for i in 0..2 { forget(v); v:=w+i; w+=v; } forget(v); }`, or for `if c { with { … } do { k+=1; for i in 0..2 { forget(v); v:=k+i; } forget(v); } } else { with { … } do { for i in 0..2 { forget(v); v:=dup(u); } xs[v]:=X(xs[v]); } }`)
+				bool lostByPart(Id n){ return projections[i]?consumesVariable(projections[i],n)&&!availableAfter(projections[i],n):lostBy(i,n); }
+				return aliveAt[i].filter!(n=>!old.canFind(n)&&!shadowed[i].canFind(n)&&lostByPart(n)&&!preserved[i].canFind!(o=>o[0]==n)&&readsBeforeDefining(r,n,true)).array;
+			}
+			static if(language==silq) if(recomputed[i]&&undone[i]&&onlyClassical(statements[i])&&(need.vars.length||need.errors.length||lostRead(r).length)&&sc.handler.nerrors==nerrors){ // (a classical statement whose reversal needs more than the recomputation keeps: the versions before it, which the recomputation saves, replace the ones after it, as for lossy changes)
+				oldVersions[i]=changed[i].map!(n=>cast(Id[2])[n,freshName()]).array;
+				auto copy=recomputation(statements[i],sc);
+				consumedBy[i]=changed[i].filter!(n=>!availableAfter(copy,n,!(redefined[i].canFind(n)&&aliveAt[i].canFind(n)&&!early[i]))).array;
+				auto e=new CompoundExp([]);
+				e.loc=statements[i].loc;
+				return e;
+			}
+			static if(language==silq) if(projections[i]&&!readsOld(statements[i])&&sc.handler.nerrors==nerrors){ // (the reversal of the statement receives copies of them, see `preserved`, e.g., `v` for `with { … } do { with { … } do { for i in 0..2 { forget(v); v:=2; } v:=w+1; } xs[v]:=X(xs[v]); }`, whose reversal then reports the limitation for redefinitions instead of reading a version that it does not have)
+				auto more=lostRead(r);
+				if(more.length){
+					preserved[i]~=more.map!(n=>cast(Id[2])[n,freshName()]).array;
+					need=NeedOld.init;
+					r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,receivedAfter(i)~projected,aliveFor(i),null,&need);
+				}
+			}
 			static if(language==silq) if((projections[i]||recomputed[i]&&undone[i])&&readsOld(statements[i])){ // (also a recomputed statement that is reversed in place, e.g., a loop that a conditional in it changes, for earlier statements that read the versions before it)
 				auto pc=projections[i]?chain(projectionChanges[i],definedNames(projections[i])).array:chain(changed[i],definedNames(statements[i])).array;
-				Id[] old;
 				if(chain(need.vars,need.errors.map!(e=>e[0]).joiner).any!(n=>pc.canFind(n))||lossy[i].length||projections[i]&&changed[i].any!(n=>consumesVariable(projections[i],n)&&neededBefore(i,n))) foreach(n;pc) if(!old.canFind(n)) old~=n; // (all of them, as the reversal of the statement may need more once it recomputes some, e.g., an update that it would otherwise reverse first; also for changes that it cannot reverse in place, see `lossyChanges`, and where the projection forgets a version before it that it changes on another path and that an enclosing block or the reversal of an earlier statement reads, e.g., `v` for `if v%4==0 { with { … } do { for i in 0..2 { forget(v); v:=i; } w+=j; xs[0]:=X(xs[0]); } } else { v+=2; }` after `xs[v%4]:=X(xs[v%4]);`, where `changes` does not count the definitions again in the body of the `with` statement)
 				static if(language==silq) if(projections[i]) foreach(n;aliveAt[i]) if(!old.canFind(n)&&!changed[i].canFind(n)&&!shadowed[i].canFind(n)&&consumesVariable(projections[i],n)&&(neededBefore(i,n)||readsBefore(statements[i],n))) old~=n; // (also the versions before it that the projection forgets or moves, if it defines them again only for itself, which do not count as changes, see `changedNames`, where the reversals of earlier statements or of the statement read them, e.g., `v` for `if c { xs[0]:=X(xs[0]); k+=1; } else { forget(v); v:=2; }` after `xs[v]:=X(xs[v]);`, or for `if v%4==0 { forget(v); xs[0]:=X(xs[0]); } else { with { … } do { w+=3; forget(v); v:=j; xs[v%4]:=X(xs[v%4]); } }`, whose reversal reads `v` in the condition)
-				if(old.length&&sc.handler.nerrors==nerrors){ // (versions before the statement that the projection changes: the reversal of the statement recomputes them on copies)
+				lost=lostRead(r);
+				old~=lost;
+				if(old.length&&sc.handler.nerrors==nerrors) for(;;){ // (versions before the statement that the projection changes: the reversal of the statement recomputes them on copies)
 					oldVersions[i]=old.map!(n=>cast(Id[2])[n,freshName()]).array;
 					if(projections[i]) consumedBy[i]=old.filter!(n=>!availableAfter(projections[i],n)).array; // (e.g., `w` for `if c { … } else { with { … } do { forget(w); w:=2; … } }`, after which it is available only if `c` holds)
+					else consumedBy[i]=lost;
 					need=NeedOld.init;
 					r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,receivedAfter(i)~projected,aliveFor(i),oldVersions[i],&need);
+					auto more=lostRead(r);
+					if(!more.length) break;
+					lost~=more;
+					old~=more;
 				}
 			}
 			if(needOld) foreach(n;need.vars) if(!innerAt(i,n)&&!needOld.vars.canFind(n)) needOld.vars~=n;
@@ -4039,9 +4066,10 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					fe.loc=loc;
 					quantumStatements~=[cast(Expression)cpy,fe];
 				}
-				quantumStatements~=restored(i);
 			}
-			quantumStatements~=narrowed(i);
+			auto rev=narrowed(i); // (before the copies: its reversal may need more of them, see `lostRead`)
+			static if(language==silq) quantumStatements~=restored(i);
+			quantumStatements~=rev;
 			static if(language==silq) foreach(o;oldVersions[i]){ // (the version before the statement replaces the one after it)
 				auto loc=statements[i].loc;
 				auto var=new Identifier(o[0]),lhs=new Identifier(o[0]),rhs=new Identifier(o[1]);
