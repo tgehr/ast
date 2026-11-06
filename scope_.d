@@ -3055,6 +3055,7 @@ class WithTransTrial{ // silq: token identifying one activation of the trial ana
 class NestedScope: Scope{
 	Scope parent;
 	private bool splitForDivergingSibling=false; // (a sibling that diverges consumes a variable from outside, see `closeUnreachable`: the variables of this scope keep depending on its split here, as merges ignore the sibling)
+	private bool splitForSibling=false; // (another branch consumes a variable from outside: without a known dependency, the variables of this branch keep depending on its version from before the split, see `checkBranchOrder`)
 	Q!(Declaration,LastUse)[] forgottenAtSplit; // (versions that are uncomputed at their split, with the last uses that keep their dependencies there, see `dependenciesAtSplit`)
 	final Q!(Declaration,Dependency)[] dependenciesAtSplit(){ // (they are split before the variables that those mention)
 		return forgottenAtSplit.map!(f=>q(f[0],f[1].kind==LastUse.Kind.lazySplit?f[1].depAtSplit:f[1].dep)).array;
@@ -3093,12 +3094,17 @@ class NestedScope: Scope{
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=getDefaultDependency(ndecl);
+		Dependency splitDependency(NestedScope sc){ // (without a known dependency in the enclosing scope, a branch keeps the one it has there: a sibling consumed something it depends on, see `checkBranchOrder`)
+			if(!pdep.isTop||!LastUse.interleavable(sc)||!sc.dependencyTracked(odecl)) return pdep.dup;
+			auto own=sc.getDependency(odecl);
+			return own.isTop?pdep.dup:own.dup;
+		}
 		Declaration result=ndecl;
 		void processCurrent(){
 			result=ndecl;
 			if(type){
 				symtabRemove(odecl);
-				if(dependencyTracked(odecl)&&!splitForDivergingSibling){
+				if(dependencyTracked(odecl)&&!splitForDivergingSibling&&!(splitForSibling&&getDependency(odecl).isTop)){
 					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
 					auto prevConsumingUse=consumingUse;
 					consumingUse=use;
@@ -3117,11 +3123,12 @@ class NestedScope: Scope{
 					//imported!"util.io".writeln("MAKING SPLIT: ",ndecl," ",result," ",cast(void*)ndecl," ",cast(void*)result);
 					if(remove){ // TODO: can we get rid of this?
 						if(parent.getFunction() is getFunction()){
+							auto ndep=splitDependency(this);
 							if(dependencyTracked(odecl))
 								removeDependency(odecl);
 							//imported!"util.io".writeln("DEPS: ",dependencies);
 							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)this);
-							addDependency(odecl,pdep.dup);
+							addDependency(odecl,ndep);
 							//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
 						}
 						assert(odecl !is result);
@@ -3156,15 +3163,17 @@ class NestedScope: Scope{
 						continue;
 					}
 					sc.splitForDivergingSibling=diverges;
+					sc.splitForSibling=LastUse.interleavable(sc);
 					auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting);
-					sc.splitForDivergingSibling=false;
+					sc.splitForDivergingSibling=sc.splitForSibling=false;
 					if(cdecl){
 						if(parent.getFunction() is sc.getFunction()){
+							auto ndep=splitDependency(sc);
 							if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
 								sc.removeDependency(odecl);
 							//imported!"util.io".writeln("DEPS: ",sc.dependencies);
 							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)sc);
-							sc.addDependency(odecl,pdep.dup);
+							sc.addDependency(odecl,ndep);
 							//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
 						}
 						if(odecl !is cdecl)
@@ -3529,6 +3538,7 @@ class CapturingScope(T): NestedScope{
 class FunctionScope: CapturingScope!FunctionDef{
 	alias fd=decl;
 	static if(language==silq) bool returnAnalyzed=false; // (a capture consumed afterwards requires another analysis)
+	static if(language==silq) Q!(Scope,BlockScope[])[] pendingBranchOrders; // (of the conditionals of the function, see `checkBranchOrder`)
 	this(Scope parent,FunctionDef fd){
 		super(parent,fd);
 	}
@@ -3571,6 +3581,10 @@ class BlockScope: NestedScope{
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
 	bool isBranch=false; // (of a conditional, see `LastUses.dependencyAtSplit`)
+	LastUse[] uncomputations; // (in the branch and its nested scopes, see `checkBranchOrder`)
+	Q!(Declaration,LastUse)[] outerConsumptions; // (of versions of variables of the enclosing scope)
+	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
+	bool returningConditional=false; // (a branch of the conditional returns on some path: the code generator does not interleave the branches)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;

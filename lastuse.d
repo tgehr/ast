@@ -123,6 +123,8 @@ final class LastUse{
 		r.loopGuard=loopGuard;
 		r.discarded=discarded;
 		r.atSplit=atSplit;
+		r.time=time;
+		r.consumedAt=consumedAt;
 		return r;
 	}
 	enum Kind{
@@ -140,7 +142,9 @@ final class LastUse{
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
 	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
+	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
+	static bool interleavable(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch&&!bs.returningConditional; } // (the code generator can interleave the statements of the branches of its conditional, see `checkBranchOrder`)
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
@@ -280,7 +284,7 @@ final class LastUse{
 			slu.markConsumed(null,false);
 		}
 	}
-	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false,IndexExp component=null){
+	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false,IndexExp component=null,bool copy=false){ // (`copy`: of a version that an enclosing scope consumes)
 		if(!use) use=theUse;
 		if(!consumedComponent&&use is theUse) consumedComponent=component; // (consumed by the same use)
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
@@ -293,9 +297,32 @@ final class LastUse{
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
 		}else kind=Kind.consumption;
+		consumedAt=fromNested?scope_.lastUses.tick():time; // (a nested scope consumes it now)
+		if(!fromNested&&!copy) noteBranchEvent();
 		recordCancelable();
 		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(); // (consumed in a nested scope)
 		else updateDependenciesOnConsumptionLocal(!fromNested);
+	}
+	private void noteBranchEvent(){ // (for the order of the branches of the enclosing conditionals, see `checkBranchOrder`)
+		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=cast(NestedScope)nsc.parent){
+			auto bs=cast(BlockScope)nsc;
+			if(!interleavable(bs)) continue;
+			if(kind==Kind.synthesizedForget) bs.uncomputations~=this;
+			else if(auto outer=outerVersion(decl,bs)) bs.outerConsumptions~=q(outer,this);
+		}
+	}
+	static Declaration outerVersion(Declaration d,NestedScope sc){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`)
+		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=d.splitFrom;
+		if(d&&d.scope_&&d.scope_ !is sc.parent&&sc.parent.isNestedIn(d.scope_)) d=sc.parent.getSplit(d); // (a version from further out)
+		return d&&d.scope_ is sc.parent?d:null;
+	}
+	static BlockScope splitBranch(LastUse lu){ // (the innermost branch that splits the variable from its enclosing scope, through blocks that run once)
+		for(auto nsc=cast(NestedScope)lu.scope_;nsc;nsc=cast(NestedScope)nsc.parent){
+			auto bs=cast(BlockScope)nsc;
+			if(!bs||bs.isLoopBody||bs.isLoopEntry||bs.isLoopReset) return null;
+			if(bs.isBranch&&outerVersion(lu.decl,bs)) return interleavable(bs)?bs:null;
+		}
+		return null;
 	}
 	Q!(LastUse,Dependency)[] cancelable; // (last uses that could have been cancelled when this consumption happened, with their dependencies at that time)
 	bool cancelableRecorded=false;
@@ -356,6 +383,7 @@ final class LastUse{
 		if(auto parent=decl.splitFrom){
 			assert(parent.splitInto.canFind(decl));
 			foreach(split;parent.splitInto){
+				if(split !is decl&&interleavable(split.scope_)&&dep.isTop) continue; // (the other branches keep the version from before the split, see `checkBranchOrder`)
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
@@ -374,6 +402,9 @@ final class LastUse{
 		return d.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(scope_));
 	}
 	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
+		return readsSplitAtDefinition(scope_,decl,d,forgetDep);
+	}
+	private static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way)
 		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
 		SetX!Declaration visited;
@@ -444,6 +475,8 @@ final class LastUse{
 			}else for(start=this;start&&start.prev&&start.prev.splitFrom;)
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
+		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
+		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
 		SetX!LastUse visited;
 		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by,Identifier consumedAt=null){
 			if(dep.isTop) return;
@@ -476,7 +509,7 @@ final class LastUse{
 					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
 				}
 			}
-			if(lu is this||lu.discarded) continue;
+			if(lu is this||lu.discarded||before(lu)) continue;
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
@@ -524,25 +557,7 @@ final class LastUse{
 				}
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
-						if(lu.use&&lu.use.scope_&&cast(ForgetExp)lu.parent){
-							lu.scope_.error(format("cannot synthesize forget expression for `%s`",lu.use),lu.use.loc);
-							lu.scope_.explainUnknownDependency(lu.decl,lu.dep);
-						}else if(lu.use && lu.use.isSemError()){
-							// already reported
-						}else if(lu.decl.scope_){
-							auto d=lu.decl,sc=lu.decl.scope_;
-							if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
-							else sc.error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
-							if(cast(ReturnExp)lu.parent) sc.note("at function return",lu.parent.loc);
-							else if(lu.use) sc.note("cannot be forgotten after its last use here",lu.use.loc);
-							sc.explainUnknownDependency(d,lu.dep);
-						}else if(lu.use && lu.use.scope_){
-							lu.scope_.error(format("cannot synthesize forget expression for `%s`",lu.use),lu.use.loc);
-						}
-						lu.decl.setSemForceError();
-						if(lu.use) lu.use.setSemForceError();
-						if(lu.parent) lu.parent.setSemForceError();
-						// TODO: the error has to be propagated out further
+						lu.reportUnforgettable();
 					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup){
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
 						if(auto vd=cast(VarDecl)lu.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=lu.dep.lostAt;
@@ -554,6 +569,28 @@ final class LastUse{
 		}
 		}
 		walk(splitFrom?start:this,cdep,false,cdep,null);
+	}
+
+	private void reportUnforgettable(){ // (a forget whose dependency is unknown)
+		if(use&&use.scope_&&cast(ForgetExp)parent){
+			scope_.error(format("cannot synthesize forget expression for `%s`",use),use.loc);
+			scope_.explainUnknownDependency(decl,dep);
+		}else if(use && use.isSemError()){
+			// already reported
+		}else if(decl.scope_){
+			auto d=decl,sc=decl.scope_;
+			if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
+			else sc.error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+			if(cast(ReturnExp)parent) sc.note("at function return",parent.loc);
+			else if(use) sc.note("cannot be forgotten after its last use here",use.loc);
+			sc.explainUnknownDependency(d,dep);
+		}else if(use && use.scope_){
+			scope_.error(format("cannot synthesize forget expression for `%s`",use),use.loc);
+		}
+		decl.setSemForceError();
+		if(use) use.setSemForceError();
+		if(parent) parent.setSemForceError();
+		// TODO: the error has to be propagated out further
 	}
 
 	bool checkConsumable(){
@@ -641,7 +678,7 @@ final class LastUse{
 					if(use&&!use.constLookup&&!use.implicitDup)
 						nested.recordConsumption(copy,use);
 					if(auto lu=nested.lastUses.get(copy,true))
-						lu.markConsumed(use,isForget&&!lu.dep.isTop);
+						lu.markConsumed(use,isForget&&!lu.dep.isTop,false,null,true);
 				}
 				if(nested.forgottenVars.canFind(result)){
 					nested.forgottenVars=nested.forgottenVars.filter!(d=>d!is result).array; // TODO: make more efficient
@@ -1070,6 +1107,7 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
+		lastUse.time=lastUse.consumedAt=tick();
 		lastUse.dep=atSplit?atSplit.dup:lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
 		lastUse.atSplit=!!atSplit;
 		if(lastUse.dep.isTop){
@@ -1150,10 +1188,17 @@ struct LastUses{
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()||lastUse.use&&lastUse.use.implicitDup) lastUse.recordCancelable();
 		if(lastUse.isConsumption()){
+			lastUse.noteBranchEvent();
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
 				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
 			lastUse.updateDependenciesOnConsumption();
 		}
+	}
+	size_t clock=0;
+	size_t tick(){ // (the analysis of a function adds the last uses of its scopes in program order)
+		auto root=&this;
+		while(root.parent) root=root.parent;
+		return root.clock++;
 	}
 	void definition(Declaration decl,Expression defExp)in{
 		assert(!!decl.scope_);
@@ -1391,6 +1436,7 @@ struct LastUses{
 			if(auto nd=mapDecl(d)) foreach(lu;lus) if(auto r=remap(lu)) retired[nd]~=r;
 		lastLastUse=remap(src.lastLastUse);
 		numAdded=src.numAdded;
+		clock=src.clock;
 	}
 
 	LastUse get(Declaration decl,bool forceHere){
@@ -1519,4 +1565,138 @@ struct LastUses{
 			}
 		}
 	}
+}
+
+void queueBranchOrder(Scope sc,BlockScope[] branches){ // (the forgets in the branches are only known after the analysis of the function)
+	if(!branches.all!(b=>LastUse.interleavable(b))) return;
+	if(auto fd=sc.getFunction()) if(fd.fscope_){
+		fd.fscope_.pendingBranchOrders~=q(sc,branches);
+		return;
+	}
+	checkBranchOrder(sc,branches);
+}
+void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator splits a variable that a branch consumes after the uncomputations in the branches that recompute values from its version from before the split, and before the consumptions of its versions: without such an order, those cannot be forgotten, see `interleaveBranches` in hqir.d)
+	static struct Event{
+		size_t branch,time,var;
+		LastUse lu; // (the consumption or the uncomputation)
+		bool need,active; // (the uncomputation needs the version from before the split if it is active, e.g., once its definition reads the version of the branch before the split)
+		size_t def=size_t.max; // (the event of that definition)
+	}
+	MapX!(Declaration,size_t) varIndex;
+	Event[] events; // (first the splits of the variables)
+	foreach(b;branches) foreach(c;b.outerConsumptions){
+		if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||!c[1].dep.isTop||c[0].scope_ !is sc||c[0] in varIndex) continue; // (with a known dependency, the uncomputations recompute it from that one instead, as before)
+		varIndex[c[0]]=events.length;
+		events~=Event(size_t.max,0,events.length);
+	}
+	if(!events.length) return;
+	auto numVars=events.length;
+	static bool reported(Declaration d){ // (an error about a version of the variable, e.g., for the forgets of a version in both branches of a nested conditional)
+		while(d.splitFrom) d=d.splitFrom;
+		SetX!Declaration visited;
+		bool visit(Declaration x){
+			if(!x||x in visited) return false;
+			visited.insert(x);
+			return x.isSemError()||x.splitInto.any!(y=>visit(y))||visit(x.mergedInto);
+		}
+		return visit(d);
+	}
+	static size_t definitionTime(Declaration d,Scope b){ // (of the first version in `b` that it is derived or updated from)
+		size_t r=size_t.max;
+		SetX!Declaration visited;
+		void visit(Declaration x){
+			if(x in visited||!x.scope_||!x.scope_.isNestedIn(b)) return;
+			visited.insert(x);
+			auto lus=x.scope_.lastUses.retired.get(x,null);
+			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.lastUses.get(x,null)) r=min(r,lu.time);
+			foreach(y;x.derivedSequence) visit(y);
+			foreach(c;x.definitionSources.consumes) visit(c[0]);
+		}
+		visit(d);
+		return r==size_t.max?0:r;
+	}
+	foreach(i,b;branches){
+		foreach(c;b.outerConsumptions){
+			if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption) continue;
+			auto p=varIndex.get(c[0],size_t.max);
+			if(p!=size_t.max) events~=Event(i,c[1].consumedAt,p,c[1]);
+		}
+		foreach(lu;b.uncomputations){
+			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			foreach(d;lu.dep.dependencies){
+				auto outer=LastUse.outerVersion(d,b);
+				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
+				if(p==size_t.max) continue;
+				if(lu.decl.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(b))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep)){ // (it reads the version of the branch)
+					events~=Event(i,lu.time,p,lu,true,false,events.length+1);
+					events~=Event(i,definitionTime(lu.decl,b),p);
+				}else events~=Event(i,lu.time,p,lu,true,true);
+			}
+		}
+	}
+	auto edges=new size_t[][](events.length);
+	foreach(i;0..branches.length){
+		auto inBranch=iota(numVars,events.length).filter!(k=>events[k].branch==i).array;
+		inBranch.sort!((k,l)=>events[k].time<events[l].time||events[k].time==events[l].time&&k<l);
+		foreach(j;1..inBranch.length) edges[inBranch[j-1]]~=inBranch[j];
+	}
+	foreach(k;numVars..events.length){
+		auto e=events[k];
+		if(e.lu&&!e.need) edges[e.var]~=k;
+		if(e.need&&e.active) edges[k]~=e.var;
+	}
+	foreach(b;branches) foreach(f;b.dependenciesAtSplit()){ // (a version without uses in a branch is uncomputed at its split, before the splits of the variables it depends on)
+		auto outer=LastUse.outerVersion(f[0],b);
+		auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
+		if(p==size_t.max||f[1].isTop) continue;
+		foreach(d;f[1].dependencies){
+			auto od=LastUse.outerVersion(d,b);
+			auto q=od?varIndex.get(od,size_t.max):size_t.max;
+			if(q!=size_t.max&&q!=p) edges[p]~=q;
+		}
+	}
+	bool reaches(size_t from,size_t to){
+		auto visited=new bool[](events.length);
+		bool visit(size_t k){
+			if(k==to) return true;
+			if(visited[k]) return false;
+			visited[k]=true;
+			foreach(l;edges[k]) if(visit(l)) return true;
+			return false;
+		}
+		return visit(from);
+	}
+	for(bool changed=true;changed;){ // (a definition before the split reads the version from before it)
+		changed=false;
+		foreach(k;numVars..events.length){
+			if(!events[k].need||events[k].active||!reaches(events[k].def,events[k].var)) continue;
+			events[k].active=true;
+			edges[k]~=events[k].var;
+			changed=true;
+		}
+	}
+	bool interleave=false;
+	foreach(k;numVars..events.length){
+		auto e=events[k];
+		if(!e.need||!e.active||reported(e.lu.decl)) continue;
+		if(!reaches(e.var,k)){
+			interleave=true;
+			continue;
+		}
+		LastUse at=null; // (a consumption on the cycle, preferably of the same variable, which it cannot precede)
+		bool atSame=false;
+		foreach(l;numVars..events.length){
+			auto c=events[l];
+			if(!c.lu||c.need||!reaches(k,l)||!reaches(l,k)) continue;
+			bool same=c.var==e.var;
+			if(!at||same>atSame||same==atSame&&c.lu.consumedAt<at.consumedAt) at=c.lu, atSame=same;
+		}
+		e.lu.dep=Dependency(true);
+		if(at){
+			e.lu.dep.lostVar=at.decl;
+			e.lu.dep.lostAt=at.use;
+		}
+		e.lu.reportUnforgettable();
+	}
+	if(interleave) foreach(b;branches) b.interleave=true;
 }

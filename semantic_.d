@@ -1206,6 +1206,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
+	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=containsReturn(ite.then)||containsReturn(ite.othw);
 	auto dep=ite.cond.getDependency(sc);
 	static if(language==silq){
 		Dependency guardDeps;
@@ -1234,6 +1235,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
+	static if(language==silq) imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
 	static if(language==silq) Identifier[] condForgetUses;
 	static if(language==silq) // TODO: can we avoid doing this?
 	if(quantumControl&&!diverges&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
@@ -3109,6 +3111,7 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 			sc.note("consumed in one branch of if expression", ite.loc);
 			ite.setSemError();
 		}
+		static if(language==silq) imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
 		ite.setSemCompleted();
 	}
 	return ite;
@@ -7948,6 +7951,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		sc.note("consumed in one branch of if expression", ite.loc);
 		ite.setSemError();
 	}
+	static if(language==silq) imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
 	ite.setSemCompleted();
 	return ite;
 }
@@ -10918,6 +10922,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	auto fsc=fd.fscope_;
 	assert(!!fsc,text(fd));
 	assert(fsc.allowsLinear());
+	static if(language==silq) fsc.pendingBranchOrders=[];
 	StmFlags bdyFlags;
 	static if(language==silq){
 		erpBeforeBody(fd); // early-return elimination, stage 1
@@ -10959,6 +10964,11 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		if(fsc.merge(false,bdy.blscope_)||fsc.closeUnreachable(fd.scope_)) fd.setSemError();
 	}else{
 		fsc.forceClose();
+	}
+	static if(language==silq){ // (once the forgets in the branches are known)
+		auto pendingBranchOrders=fsc.pendingBranchOrders;
+		fsc.pendingBranchOrders=[];
+		foreach(p;pendingBranchOrders) imported!"ast.lastuse".checkBranchOrder(p.expand);
 	}
 	if(!fd.sealed) fd.seal();
 	if(fd.unsealed||fd.numUpdatesPending!=0){
@@ -11329,6 +11339,10 @@ bool returnsOnEveryPath(Expression e){ // (rather than aborting on some path: th
 		return false;
 	}
 	if(auto ite=cast(IteExp)e) return ite.othw&&returnsOnEveryPath(ite.then)&&returnsOnEveryPath(ite.othw);
+	return false;
+}
+bool containsReturn(CompoundExp ce){ // (on some path)
+	foreach(x;ce.subexpressions) if(cast(ReturnExp)x) return true;
 	return false;
 }
 bool definitelyReturns(Expression e){
