@@ -5186,7 +5186,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		rret=new TypeofExp(rtpl);
 		rret.loc=loop.loc;
 	}else if(continuation||isInfinite&&loopContainsReturn(loop)){ // (the result of the call is that of the enclosing function, whose return type the returns of the loop convert their values to, e.g., `(r,q)` with `r:⊥` under quantum control)
-		if(auto efd=sc.getFunction()) if(efd.rret&&efd.ret) rret=efd.ret.copy(cargsDefault);
+		if(auto efd=sc.getFunction()) if(efd.rret&&efd.ret&&!efd.annotationSource) rret=efd.ret.copy(cargsDefault); // (not while the value of the annotation is not final, see `annotationSource`)
 	}
 	auto fd=new FunctionDef(fdn,params,true,rret,fbdy);
 	foreach(p;constParams) if(p[3]) fd.loweredConstIds.insert(p[0]);

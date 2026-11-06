@@ -465,6 +465,12 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	bool inferringReturnType;
 	CompoundExp origBody_=null;
+	// (a return type annotation whose value depends on types that are not final yet, e.g., on the return type of the function itself through the functions that it calls: it is evaluated again in each analysis, and the return type is inferred from its value and from the returned values, but it must be the value of the annotation once the types are final, see `annotationMismatch`)
+	Expression annotationSource=null;
+	Expression annotationValue=null;
+	Scope annotationScope=null;
+	bool evaluatingAnnotation=false;
+	bool annotationDependsOnInference=false;
 
 	// inference mode
 	bool finalPassDone=false;

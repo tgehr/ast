@@ -266,9 +266,14 @@ Expression presemantic(Declaration expr,Scope sc){
 		declareParameters(fd,fd.isSquare,fd.params,fsc); // parameter variables
 		fd.declaringParameters=false;
 		if(fd.rret){
-			fd.rret=expressionSemantic(fd.rret, ExpSemContext.forType(fsc));
-			fd.ret=typeSemantic(fd.rret, fsc);
-			propErr(fd.rret,fd);
+			auto source=fd.rret.isSemCompleted()?null:fd.rret.copy();
+			auto value=evaluateAnnotation(fd,fd.rret);
+			if(fd.annotationDependsOnInference&&value&&source&&fd.body_){ // (evaluated again in each analysis, see `annotationSource`)
+				fd.annotationSource=source;
+				fd.annotationValue=value;
+				evaluateAnnotationAgain(fd); // (if the value is outdated already)
+				fd.inferringReturnType=true;
+			}else fd.ret=value;
 			if(fd.ret&&fd.ret.isSemCompleted()) foreach(id;fd.ret.freeIdentifiers){
 				assert(!!id.meaning);
 				typeConstBlockDecl(id.meaning,fd,sc);
@@ -297,6 +302,53 @@ Expression presemantic(Declaration expr,Scope sc){
 		prepareFunctionDef(fd,sc);
 	}
 	return expr;
+}
+Expression evaluateAnnotation(FunctionDef fd,Expression rret){ // (the value of the return type annotation, in the function scope before the analysis of the body)
+	auto fsc=fd.fscope_;
+	fd.evaluatingAnnotation=true;
+	fd.annotationScope=fsc; // (reset if an analysis of the function is skipped meanwhile, see `reanalyzeDependents`)
+	fd.rret=expressionSemantic(rret,ExpSemContext.forType(fsc));
+	auto value=typeSemantic(fd.rret,fsc);
+	fd.evaluatingAnnotation=false;
+	propErr(fd.rret,fd);
+	return value;
+}
+void evaluateAnnotationAgain(FunctionDef fd){ // (in a new function scope, see `annotationSource`)
+	if(!fd.annotationSource||fd.isSemError()) return;
+	for(int i=0;fd.annotationScope !is fd.fscope_&&i<=astopt.inferenceLimit;i++){
+		auto value=evaluateAnnotation(fd,fd.annotationSource.copy());
+		if(!value){
+			fd.setSemError();
+			return;
+		}
+		fd.annotationValue=value;
+	}
+}
+void joinAnnotation(FunctionDef fd){ // (at the start of an analysis, see `annotationSource`)
+	if(fd.ftypeFinal) return; // (compared at the end of the analysis, see `annotationMismatch`)
+	auto nret=fd.ret?joinTypes(fd.ret,fd.annotationValue):fd.annotationValue;
+	if(!nret) nret=fd.annotationValue; // (the incompatible returned values are reported)
+	if(nret==fd.ret) return;
+	if(fd.sealed) fd.unseal();
+	fd.ret=nret;
+	fd.ftype=null;
+	setFtype(fd,true);
+}
+bool annotationMismatch(FunctionDef fd){ // (once the types that the value of the annotation depends on are final, see `annotationSource`)
+	if(!fd.annotationSource||fd.isSemError()) return false;
+	fd.annotationSource=null;
+	if(fd.ret==fd.annotationValue) return false;
+	auto inferred=fd.ret;
+	fd.ret=fd.annotationValue; // (analyzed again with the value of the annotation, which reports the returned values that are incompatible with it)
+	fd.inferringReturnType=false;
+	resetFunction(fd,fd);
+	functionDefSemantic(fd,fd.scope_);
+	if(!fd.isSemError()){ // (e.g., the value of the annotation is smaller with a smaller return type)
+		fd.scope_.error("unable to determine return type for function",fd.loc);
+		fd.scope_.note(format("the return type annotation evaluates to `%s` for the return type `%s`",fd.annotationValue,inferred),fd.rret.loc);
+		fd.setSemError();
+	}
+	return true;
 }
 
 VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success){
@@ -543,6 +595,7 @@ Expression[] semantic(Expression[] exprs,Scope sc){
 	foreach(expr;exprs){ // TODO: ok?
 		if(expr.sstate==SemState.passive){
 			if(auto fd=cast(FunctionDef)expr){
+				if(annotationMismatch(fd)) continue;
 				bool reanalyze=false;
 				if(fd.deferredSpecificityCheck && !fd.finalPassDone && !fd.isSemError() && fd.scope_){
 					fd.finalPassDone=true;
@@ -601,6 +654,7 @@ FunctionDef reanalyzePassiveFunction(FunctionDef fd){
 		p.scope_=null;
 		newfscope_.insert(p);
 	}
+	evaluateAnnotationAgain(fd);
 	if(fd.body_&&!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(newfscope_);
 	return functionDefSemantic(fd,fd.scope_);
 }
@@ -694,6 +748,10 @@ void reanalyzeDependents(FixedPointDeclaration d,FixedPointDeclaration cause){
 		auto ufd=cast(FunctionDef)dep;
 		while(ufd&&ufd.isSemCompleted())
 			ufd=ufd.scope_.getFunction();
+		if(ufd&&ufd.evaluatingAnnotation){ // (it is evaluated again, see `evaluateAnnotationAgain`)
+			ufd.annotationScope=null;
+			continue;
+		}
 		if(!ufd||skip(ufd)||ufd.sstate==SemState.started||ufd.isSemError()) continue; // (e.g., the enclosing function of a local function has an error)
 		if(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted) continue;
 		if(reanalyzed.canFind(ufd)) continue;
@@ -10711,6 +10769,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					}
 					if(auto cfd=cast(FunctionDef)dep){
 						cfd.unsealed=true;
+						if(cfd.evaluatingAnnotation) cfd.annotationDependsOnInference=true;
 						markCallerTainted(sc,null);
 					}
 				}
@@ -10745,6 +10804,7 @@ bool subscribeToTypeUpdates(Declaration meaning,Scope sc,Location loc){
 					cfd.numUpdatesPending+=1;
 				}
 				cfd.unsealed=true;
+				if(cfd.evaluatingAnnotation) cfd.annotationDependsOnInference=true;
 				markCallerTainted(sc,fd);
 			}
 		}
@@ -10815,6 +10875,7 @@ void resetFunction(FunctionDef fd,FunctionDef cause)in{
 	fd.movedCaptures=[];
 	fd.context=null;
 	fd.thisVar=null;
+	evaluateAnnotationAgain(fd);
 	prepareFunctionDef(fd,fd.scope_);
 }
 void resetFunctionDefsToUpdate()(FunctionDef fd){
@@ -10889,7 +10950,7 @@ void notify(FunctionDef fd,FunctionDef ufd){
 	else if(fd.sstate==SemState.passive) finalizeClosure(fd);
 }
 void completeFunction(FunctionDef fd){ // (its type is final)
-	if(fd.sstate==SemState.started) return; // semantic analysis is still active
+	if(fd.sstate==SemState.started||fd.evaluatingAnnotation) return; // semantic analysis is still active
 	static if(language==silq) if(fd.erpStage==1&&fd.scope_&&!fd.isSemError()&&!fd.isSemFinal()){
 		// early-return elimination, stage 2 (for functions that were tainted at the end of stage 1)
 		fd.tainted=false;
@@ -10903,6 +10964,7 @@ void completeFunction(FunctionDef fd){ // (its type is final)
 	fd.ftypeFinal=true;
 	fd.inferringReturnType=false;
 	fd.inferAnnotation=false;
+	if(fd.sstate==SemState.passive&&annotationMismatch(fd)) return;
 	static if(language==psi) finalizeRetNames(fd);
 	if(fd.deferredSpecificityCheck&&!fd.finalPassDone&&fd.sstate==SemState.passive&&fd.scope_){ // (the checks deferred while the types were speculative)
 		fd.tainted=false;
@@ -10925,6 +10987,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	if(!fd.isSemError()) fd.sstate=SemState.started;
 	auto ftypeBefore=fd.ftype;
 	auto numCapturesBefore=fd.capturedDecls.length;
+	if(fd.annotationSource&&!fd.isSemError()) joinAnnotation(fd);
 	fd.inferringReturnType|=!fd.ret;
 	//imported!"util.io".writeln("STARTING: ",fd," ",fd.ftype," ",fd.ret," ",fd.rret," ",fd.inferringReturnType);
 	if(!fd.ret){
@@ -10997,6 +11060,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		fd.inferringReturnType=false;
 		fd.inferAnnotation=false;
 		fd.tainted=false;
+		if(annotationMismatch(fd)) return fd;
 	}
 	static if(language==psi) finalizeRetNames(fd); // (the return values of nested functions are named even if `fd.ftypeFinal` is never set)
 	auto dependents=fd.dependents;
@@ -11042,6 +11106,10 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 			if(ufd is fd) continue;
 			while(ufd&&ufd.isSemCompleted())
 				ufd=ufd.scope_.getFunction();
+			if(ufd&&ufd.evaluatingAnnotation){ // (as in `reanalyzeDependents`)
+				ufd.annotationScope=null;
+				continue;
+			}
 			if(!ufd||ufd.sstate==SemState.started||ufd.isSemError()||(!ufd.inferringReturnType&&!ufd.inferAnnotation&&!ufd.tainted)) continue; // (as in `reanalyzeDependents`)
 			if(reanalyzed.canFind(ufd)) continue;
 			reanalyzed~=ufd;
@@ -11194,7 +11262,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		auto convertTy=fd.ret?fd.ret:ret.e.type;
 		if(quantumControlled){
 			bool ok=true;
-			if(convertTy&&convertTy.hasClassicalComponent()){
+			if(convertTy&&!isEmpty(convertTy)&&convertTy.hasClassicalComponent()){ // (not for `⊥`, e.g., the type of a call of a function whose return type is not known yet, which is analyzed again with it, see `subscribeToTypeUpdates`)
 				ok=false;
 				if(auto qtype=convertTy.getQuantum()){
 					if(isType(qtype)){
@@ -11337,7 +11405,7 @@ Expression typeForDecl(Declaration decl){
 	if(auto fd=cast(FunctionDef)decl){
 		if(fd.declaringParameters) return null;
 		if(!fd.ftype||!fd.ftypeFinal) setFtype(fd,true);
-		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started) fd=reportingErrorsOf(fd,functionDefSemantic(fd,fd.scope_));
+		if((!fd.ftype||!fd.ftypeFinal)&&fd.scope_&&fd.sstate!=SemState.started&&!fd.evaluatingAnnotation) fd=reportingErrorsOf(fd,functionDefSemantic(fd,fd.scope_)); // (not during the evaluation of its own return type annotation, for which its return type is still `⊥`, see `annotationSource`)
 		assert(!!fd);
 		return fd.ftype;
 	}
