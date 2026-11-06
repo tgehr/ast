@@ -5350,14 +5350,22 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				}
 			}
 		}
-		Expression[] early,earlyValues,late; // (the replays that the types of the coercions mention come before them, e.g., `a` in `x:=x coerce a;` after `a:=𝔹^n`)
-		static if(isDoWhile) foreach(r;replays){
-			auto rdef=new DefineExp(new Identifier(r[0]),r[1].copy(cargsDefault));
-			rdef.loc=rdef.e1.loc=loop.loc;
-			if((constCoercionTypes~exitCoercionTypes).any!(t=>t.freeIdentifiers.any!(id=>id.id==r[0]||id.meaning&&id.meaning.name&&id.meaning.name.id==r[0]))){
-				early~=rdef;
-				earlyValues~=r[1];
-			}else late~=rdef;
+		Expression[] early,earlyValues,late; // (the replays that the types of the coercions mention come before them, e.g., `a` in `x:=x coerce a;` after `a:=𝔹^n`, as do the replays that their values mention, e.g., `b` for `a:=b` after `b:=𝔹^n`)
+		static if(isDoWhile){
+			bool mentions(Expression t,Id name){ return t.freeIdentifiers.any!(id=>id.id==name||id.meaning&&id.meaning.name&&id.meaning.name.id==name); }
+			auto isEarly=replays.map!(r=>(constCoercionTypes~exitCoercionTypes).any!(t=>mentions(t,r[0]))).array;
+			for(bool grown=true;grown;){
+				grown=false;
+				foreach(i,r;replays) if(!isEarly[i]&&iota(replays.length).any!(j=>isEarly[j]&&mentions(replays[j][1],r[0]))) isEarly[i]=grown=true;
+			}
+			foreach(i,r;replays){
+				auto rdef=new DefineExp(new Identifier(r[0]),r[1].copy(cargsDefault));
+				rdef.loc=rdef.e1.loc=loop.loc;
+				if(isEarly[i]){
+					early~=rdef;
+					earlyValues~=r[1];
+				}else late~=rdef;
+			}
 		}
 		stmts~=inDependencyOrder(constCoercions~exitCoercions~early,constCoercionTypes~exitCoercionTypes~earlyValues);
 		stmts~=late;
@@ -5913,6 +5921,16 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			if(erpKey(we) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
 	});
 	if(auto we=cast(WhileExp)loop) if(erpKey(we) in erpConsumingGuards&&!cannotFail(we.cond)) ok=false;
+	// The rewritten loops also match the patterns of their variables in the iterations after the return: a loop whose
+	// pattern may not match is not rewritten, e.g., `for 0 in 0..3 { return 1; }`.
+	static bool mayNotMatch(Expression p){
+		if(cast(Identifier)p||cast(WildcardExp)p) return false;
+		if(auto tpl=cast(TupleExp)p) return tpl.e.any!mayNotMatch;
+		return true;
+	}
+	visitStm(loop,(Expression x){
+		if(auto fe=cast(ForExp)x) if(fe.pattern&&containsReturn(fe)&&mayNotMatch(fe.pattern)) ok=false;
+	});
 	if(!ok) return null;
 	// Consumed variables that are lifted after the loop and can be forgotten at each return consuming them keep their values
 	// (the analysis `dup`s them, as they are still used); the others get placeholders. Returns consuming loop-local quantum
@@ -6136,7 +6154,13 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			we.bdy=guardBlock(we.bdy);
 			return [we];
 		}
-		return [s]; // (e.g., `with`: not reached, as returns are not allowed there)
+		if(auto we=cast(WithExp)s) if(we.bdy.s.length) if(auto ret=cast(ReturnExp)we.bdy.s[$-1]){ // (the value of a `return` that ends the body is returned after the transformation is reversed, as by `statementSemanticImpl(WithExp)`, e.g., `with { k:=1; } do { return k; }`)
+			auto t=freshName();
+			we.bdy.s[$-1]=at(new DefineExp(mk(t),ret.e));
+			ret.e=mk(t);
+			return [cast(Expression)we]~exitWith(ret);
+		}
+		return [s];
 	}
 	auto nloop=explicitStm(loop);
 	Expression[] exitBlock;
@@ -6328,6 +6352,7 @@ bool endsWithReturn(Expression e){
 	if(auto we=cast(WhileExp)e) return literalIs!(v=>v!=0)(we.cond);
 	if(auto re=cast(RepeatExp)e) return literalIs!(v=>v>0)(re.num)&&endsWithReturn(re.bdy);
 	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return endsWithReturn(dw.bdy)||literalIs!(v=>v!=0)(dw.cond);
+	if(auto we=cast(WithExp)e) return endsWithReturn(we.trans)||endsWithReturn(we.bdy);
 	return false;
 }
 // (also if `e` is not yet analyzed, e.g., `false`)

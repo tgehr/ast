@@ -2140,7 +2140,19 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 		uil.loc=cnt.loc;
 		auto cntFin=cntId.copy();
 		cntFin.moved=true;
-		auto uid=new DefineExp(uil,cntFin);
+		Expression rest=cntFin;
+		auto cty=unfoldTypeVariables(cnt.e.type);
+		Expression ety=null;
+		if(auto vt=cast(VectorTy)cty){
+			auto len=vt.num.asIntegerConstant();
+			if(!len||len.get()!=0) ety=vt.next;
+		}
+		if(auto tt=cast(TupleTy)cty) foreach(i,ty;tt.types) ety=i?joinTypes(ety,ty):ty;
+		if(ety){ // (the rest of the container is empty after the loop, but where no iteration ends normally, the analysis still sees the static length of a vector or a tuple, e.g., for `[0,1]` in `for i in [0,1] { return 1; }`: the length is checked at run time)
+			rest=new TypeAnnotationExp(cntFin,arrayTy(ety),TypeAnnotationType.annotation);
+			rest.loc=cnt.loc;
+		}
+		auto uid=new DefineExp(uil,rest);
 		uid.loc=cnt.loc;
 		uninit~=uid;
 		auto left=LiteralExp.makeInteger(0);
@@ -2165,7 +2177,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	}
 	if(init.length||uninit.length){
 		Expression[] cont;
-		static if(language==silq) cont=sc.loopContinuation.take(fe); // follows the desugared range loop
+		static if(language==silq) if(shouldLowerLoop(sc)) cont=sc.loopContinuation.take(fe); // follows the desugared range loop (where it is lowered, as for the other loops: e.g., not in stage 1 of the early-return elimination, which records the variables after the loop, see `erpAfterStatement`)
 		auto s=init~fe~uninit~cont;
 		auto ce=new CompoundExp(s);
 		ce.loc=fe.loc;

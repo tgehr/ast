@@ -468,12 +468,24 @@ abstract class Scope{
 	static if(language==silq)
 	final void pinMentions(Expression type){ // (the variables that `type` mentions are live here, also through the values of type variables, e.g., `n` for `x:a` after `a:=𝔹^n`, see `unfoldTypeVariables`)
 		void pin(Expression t){
-			foreach(fid;t.freeIdentifiers)
-				if(fid.meaning&&!fid.meaning.isToplevelDeclaration()&&!fid.meaning.isAggregateMember()) lastUses.pin(getSplit(fid.meaning),false);
+			foreach(fid;t.freeIdentifiers){
+				auto decl=fid.meaning;
+				if(!decl||decl.isToplevelDeclaration()||decl.isAggregateMember()) continue;
+				lastUses.pin(getSplit(decl),false);
+				if(auto cur=sameValueVersion(decl)) lastUses.pin(getSplit(cur),false); // (e.g., `n` for `x` after `do{ n:=dup(m); b:=𝔹^n; a:=b; x:=x coerce a; }while c;`: the value of the version of `b` after the loop mentions the version of `n` in the body)
+			}
 		}
 		pin(type);
 		auto unfolded=unfoldTypeVariables(type);
 		if(unfolded !is type) pin(unfolded);
+	}
+	static if(language==silq)
+	private final Declaration sameValueVersion(Declaration decl){ // (the version of the variable of `decl` here, if it has the same value, see `unavailableAt`)
+		for(Scope c=this;c;c=c.parentScope()){
+			if(auto cur=c.rnsymtab.get(decl.getId,null)) return cast(DeadDecl)cur||cur.canonicalSource !is decl.canonicalSource?null:cur;
+			if(c is decl.scope_) return null;
+		}
+		return null;
 	}
 	final void recordCapturer(Declaration capturer,Declaration meaning){
 		if(!meaning.isToplevelDeclaration){
