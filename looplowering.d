@@ -1272,6 +1272,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		return false;
 	}
 	bool dropped(size_t a,int X){ return X!=P&&(dropOnDiv(a)||classicalUpdateOnDiv(a)); }
+	bool sharedWhile(size_t k){ // (a `while` loop that only computes values that no loop needs: it runs in the main loop, as it may not terminate, e.g., `k:=0; while k<5 { k+=0; }`)
+		return ites[k].isLoop&&cast(WhileExp)ites[k].e&&iota(atoms.length).all!(a=>!atoms[a].ites.canFind(k)||atomColor[a]==SHARED);
+	}
+	bool inSharedWhile(size_t a){ return atoms[a].ites.any!(k=>sharedWhile(k)); }
 	// (a loop whose lifted state is computed by a single loop is still rewritten without its dead code: otherwise, the
 	// results of the recursive function it is lowered to would depend on the quantum variables the dead code reads)
 	auto counted=iota(atoms.length).filter!(a=>atomColor[a]>=0&&!dropped(a,atomColor[a])).map!(a=>atomColor[a]).array;
@@ -1282,6 +1286,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		// on such quantum data (e.g., a division by zero that the return guards against).
 		foreach(a,c;atomColor) if(c!=P&&!cannotFail(atoms[a].e)) return null;
 		foreach(ref it;ites) if(!it.heads.all!cannotFail) return null;
+		foreach(a,c;atomColor) if(c!=P&&c!=SHARED&&atoms[a].ites.any!(k=>ites[k].isLoop&&cast(WhileExp)ites[k].e)) return null; // (nor diverge, e.g., in `if k>5 { j:=0; while true { j+=1; } }` after the return)
 	}
 	{
 		bool changed=false;
@@ -1900,7 +1905,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	Id[Id] fNames;
 	foreach(i,p;carried[0]) if(rank[classOf[i]]>P) fNames[p[1].name.id]=freshName();
-	bool skip(int X){ return !iota(atoms.length).any!(a=>atomColor[a]==X&&!dropped(a,X))&&!(X==P&&atomColor.any!(c=>c>P))&&!logs.any!(l=>l.src==X&&l.primary); }
+	bool skip(int X){ return !iota(atoms.length).any!(a=>atomColor[a]==X&&!dropped(a,X))&&!(X==P&&atomColor.any!(c=>c>P))&&!logs.any!(l=>l.src==X&&l.primary)&&!(X==P&&iota(atoms.length).any!(a=>inSharedWhile(a))); }
 	auto counting=cast(int)max(0,iota(cast(int)classDeps.length+1).countUntil!(X=>!skip(X))); // (for a `while` loop: the first loop, which evaluates the condition and counts the iterations, e.g., the main loop for `while k<2 { if n>0 { …; assert(false); } }`)
 	foreach(X;0..cast(int)classDeps.length+1){
 		if(skip(X)&&!(is(T==WhileExp)&&X==counting)) continue;
@@ -1976,7 +1981,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			return r;
 		}
 		bool hasIn(size_t k){
-			foreach(a,ref at;atoms) if(inX(a,X)&&at.ites.canFind(k)) return true;
+			foreach(a,ref at;atoms) if((inX(a,X)||X==P&&inSharedWhile(a))&&at.ites.canFind(k)) return true;
 			foreach(l;logs){
 				if(l.src==X&&l.primary&&atoms[l.wAt].ites[0..l.level].canFind(k)) return true;
 				if(l.dst==X&&atoms[l.rAt].ites[0..l.rLevel].canFind(k)) return true;
@@ -2001,6 +2006,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(atomColor[a]!=SHARED) continue;
 			auto inf=&ainfos[a];
 			if(!inf.isForget&&(inf.effects||inf.nonQfree||!cannotFail(atoms[a].e))) neededShared[a]=true; // (not removed)
+			if(X==P&&inSharedWhile(a)) neededShared[a]=true;
 			foreach(l;logs) if(l.src==X&&l.var in inf.defs) neededShared[a]=true;
 			if(!inf.isForget&&intersect(inf.defs,evaluated)) neededShared[a]=true;
 		}

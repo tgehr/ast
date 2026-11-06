@@ -3630,6 +3630,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			foreach(x;s.subexpressions) if(auto id=cast(Identifier)x) mentioned~=nameOf(id);
 			auto read=mentioned.filter!(n=>!changed[i].canFind(n)).array;
 			if(mentioned.any!(n=>local.canFind(n)&&!invariants.canFind(n))||changed[i].any!(n=>middle.any!(t=>reads(t,n)))||read.any!(n=>defined.canFind(n))) continue;
+			static if(language==silq) if(read.any!(n=>before.canFind(n)&&iota(i).any!(h=>changed[h].canFind(n)))) continue; // (the reversal has the version before the block, not the one that an earlier statement defines, e.g., `v2` for `if c { for i in 0..1 { v3+=v2*2; } }` after `for i in 0..1 { forget(v2); v2:=dup(j); }`)
 			undoFirst[i]=iota(i+1,statements.length).all!(j=>undoFirst[j]||dead[j]||noop(statements[j])||!changed[i].any!(n=>reads(statements[j],n))&&!changed[j].any!(n=>read.canFind(n)));
 		}
 		auto early=new bool[](statements.length); // (the invariant definitions that the statements which are reversed first read, also indirectly)
@@ -3798,7 +3799,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			}
 			auto lostAt=new Id[][](statements.length+1); // (local classical variables that a statement, or the end of the block, forgets without their values, and which the reversal of the block does not recompute, e.g., as a later statement changes what their definitions read: the reversal of the block does not restore them, so the reversals of earlier statements cannot read them, see `reversed`, e.g., `v1` for `if c { for i in 0..3 { v2+=1; forget(v1); v1:=2; } }` after `v1:=(v2+j)%4;` in the body of a `with` statement, or `v5` for `v5:=dup(v2); v2+=v5*2;` in a branch)
 			Id[] lostReported;
-			foreach(j,s;statements) if(!recomputed[j]&&!projections[j]&&!dead[j]) foreach(n;mentionsOf[j]) if(innerAt(j,n)&&innerFrom[n]<j&&!lostAt[j].canFind(n)&&!availableAfter(s,n)&&!given.canFind(n)&&!hoistedBefore(j,n)&&forgetsUnchecked(s,n)) lostAt[j]~=n;
+			foreach(j,s;statements) if(!recomputed[j]&&!dead[j]) foreach(n;mentionsOf[j]) if(innerAt(j,n)&&innerFrom[n]<j&&!lostAt[j].canFind(n)&&!availableAfter(s,n)&&!given.canFind(n)&&!hoistedBefore(j,n)&&forgetsUnchecked(s,n)&&!(projections[j]&&chain(projectionChanges[j],definedNames(projections[j])).canFind(n))) lostAt[j]~=n; // (with a projection, those that it does not recompute, e.g., `v2` for `if c { k+=2; v2+=dup(u); v1+=dup(v0); }` at the last uses of `v1` and `v2`, whose projection only changes `v1`, as `v2:=k+v0` is not recomputed)
 			foreach(n;forgotten) if(n in innerFrom&&classicalDefined[innerFrom[n]].canFind(n)&&!given.canFind(n)&&!hoistedAll.canFind(n)&&!lostAt[$-1].canFind(n)) lostAt[$-1]~=n;
 		}
 		enum redefinitionError="reversal of redefinitions of classical variables not supported yet";
@@ -4001,7 +4002,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			}
 			auto r=reversal(i);
 			if(saves[i].length) foreach(h;headers(r)) walkIdentifiers(h,(Identifier id){ if(!id.meaning) foreach(j,n;headerChanges[i]) if(id.id==n) id.id=saves[i][j]; });
-			static if(language==silq) if(auto lost=iota(i+1,statements.length+1).map!(j=>lostAt[j]).joiner.filter!(n=>innerFrom[n]<=i&&readsBeforeDefining(r,n,true)).array){ // (the reversal of the statement reads a version that no reversal restores)
+			static if(language==silq) if(auto lost=iota(i,statements.length+1).map!(j=>lostAt[j]).joiner.filter!(n=>innerFrom[n]<=i&&readsBeforeDefining(r,n,true)).array){ // (the reversal of the statement reads a version that no reversal restores, also one that the statement loses itself, e.g., `v1` for `if c { v0+=dup(v1); v1+=v0+1; }` at the last use of `v1`)
 				if(lost.any!(n=>!lostReported.canFind(n))){ // (the last statement that reads it, otherwise the reversal of a later statement reports it)
 					auto vars=blockedAt.joiner.array; // (an enclosing block may resolve it with copies of the versions before the block, see `NeedOld`)
 					if(needOld&&vars.length) needOld.errors~=q(vars,statements[i].loc,redefinitionError);
