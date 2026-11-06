@@ -3744,7 +3744,7 @@ class ReturnExp: Expression{
 	override ReturnExp copyImpl(CopyArgs args){
 		auto r=new ReturnExp(e.copy(args));
 		r.expected=expected;
-		if(args.mapDecl) r.forgottenVars=forgottenVars.map!(d=>args.mapDecl(d)).array;
+		if(args.mapDecl) r.forgottenVars=forgottenVars.map!(d=>args.mapDecl(d)).filter!(d=>!!d).array; // (a variable that the copy substitutes away by its value is not forgotten, as for the forgotten variables of blocks)
 		return r;
 	}
 	override string toString(){ return "return"~(e?" "~e.toString():"")~(forgottenVars.length?text(" /+",forgottenVars,"+/"):""); }

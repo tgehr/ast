@@ -5060,10 +5060,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}
 	Expression bdy;
 	static if(isDoWhile){{
-		// `B; if c{}else{ exit } R; return f(…);`, or, with quantum definitions of the body that are available after the loop,
-		// `B; if c{ R; return f(…); }else{ v:=[(x₁,…,xₙ)]; } [(x₁,…,xₙ)]:=v; exit`
-		// (the reset does not forget values in a branch while its sibling consumes what they depend on, and loops in the reset
-		// continue with the next iteration)
+		// `B; if c{}else{ exit } R; return f(…);` (the code after the conditional continues the branch that does not exit and
+		// is interleaved with the exit, see `continuedBranches`; loops in the reset continue with the next iteration)
 		if(!isCertainReturn){ // (otherwise, the condition and the reset are not reached)
 			auto contr=new ReturnExp(ce); // (the reset continues with the next iteration)
 			contr.loc=ce.loc;
@@ -5072,7 +5070,6 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				nbdy.s~=nrst.s~next;
 			}else{
 				T at(T)(T e){ e.loc=loop.loc; return e; }
-				Identifier mk(Id n){ return at(new Identifier(n)); }
 				Expression[] exit;
 				if(continuation) exit=continuation.map!(st=>st.copy(cargsDefault)).array;
 				else{
@@ -5082,60 +5079,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					if(hasEarlyReturns) retexp=inj(retexp,false);
 					exit=[at(new ReturnExp(retexp))];
 				}
-				Expression[] forgets; // (of recomputed definitions that the reset uses)
-				foreach(r;replays){
-					if(r[1].type&&r[1].type.isClassical()) continue;
-					bool used=false;
-					visitStm(loop.reset,(Expression x){ if(auto id=cast(Identifier)x) if(varName(id)==r[0]) used=true; });
-					if(used) forgets~=at(new ForgetExp(mk(r[0]),r[1].copy(cargsDefault)));
-				}
-				bool hold=forgets.length||exitLocals.any!(e=>e[1]&&!e[1].isClassical());
-				if(!hold){
-					auto ite=at(new IteExp(ncond,at(new CompoundExp([])),at(new CompoundExp(forgets~exit))));
-					nbdy.s~=[cast(Expression)ite]~nrst.s~next;
-				}else{
-					auto v=freshName();
-					Expression tupleOf(Expression[] es){ return es.length==1?es[0]:at(new TupleExp(es)); }
-					Expression unfolded(Expression t){ return unfoldTypeVariables(t,(Declaration d)=>d.name&&d.name.id in changed); } // (the type variables of the body stand for their values, which mention the definitions that are defined again, e.g., `n` in `x:a` after `a:=𝔹^n`)
-					bool mentions(Expression t,scope bool delegate(Identifier) dg){ return t.freeIdentifiers.any!dg||unfolded(t).freeIdentifiers.any!dg; }
-					// (the branch consumes the definitions, which are defined again after it: a definition precedes those its type mentions)
-					typeof(exitLocals) packed,rest=exitLocals.filter!(e=>!e[1]||!isTypeTy(e[1])).array; // (but not the type variables, which keep their values, e.g., `a` for `x:a`, see `typeVariableValue`)
-					while(rest.length){
-						auto i=rest.countUntil!(x=>!rest.any!(y=>y[1]&&mentions(y[1],(Identifier fv)=>fv.id==x[0].id)));
-						if(i<0) i=0;
-						packed~=rest[i];
-						rest=rest[0..i]~rest[i+1..$];
-					}
-					Expression pack(Q!(Identifier,Expression,Expression) e){
-						auto id=e[0].copy(cargsDefault);
-						id.moved=true; // (also a lifted quantum value, which the analysis would otherwise `dup` for the reset branch, where it is still available)
-						if(e[2] is e[1]) return id;
-						return at(new TypeAnnotationExp(id,e[2].copy(cargsDefault),weakeningAnnotation(e[1],e[2])));
-					}
-					auto vals=packed.map!pack.array;
-					typeof(strongerExits) weakened; // (parameters whose types mention the definitions that the exit branch moves, e.g., `x` after `w:=x coerce 𝔹^n; x:=dup(w);`)
-					foreach(s;strongerExits) if(mentions(s[1],(Identifier fv)=>packed.any!(e=>e[0].id==fv.id||fv.meaning&&fv.meaning.name&&e[0].id==fv.meaning.name.id))) weakened~=s;
-					Expression annotated(Id name,Expression type,TypeAnnotationType kind){
-						auto use=mk(name);
-						use.moved=true;
-						return at(new DefineExp(mk(name),at(new TypeAnnotationExp(use,type.copy(cargsDefault),kind))));
-					}
-					auto then=at(new CompoundExp(nrst.s~next)); // (only the exit branch joins with the code after the `if`)
-					auto othw=at(new CompoundExp(weakened.map!(s=>annotated(s[0],s[2],weakeningAnnotation(s[1],s[2]))).array~forgets~[cast(Expression)at(new DefineExp(mk(v),at(new VectorExp([tupleOf(vals)]))))]));
-					nbdy.s~=at(new IteExp(ncond,then,othw));
-					Expression[] lhs,coercions;
-					foreach(e;packed){
-						if(e[2] is e[1]){
-							lhs~=e[0].copy(cargsDefault);
-							continue;
-						}
-						auto tmp=freshName();
-						lhs~=mk(tmp);
-						coercions~=at(new DefineExp(e[0].copy(cargsDefault),at(new TypeAnnotationExp(mk(tmp),unfolded(e[1]).copy(cargsDefault),TypeAnnotationType.coercion))));
-					}
-					nbdy.s~=at(new DefineExp(at(new VectorExp([tupleOf(lhs)])),mk(v)));
-					nbdy.s~=coercions~weakened.map!(s=>annotated(s[0],unfolded(s[1]),TypeAnnotationType.coercion)).array~exit; // (as before the exit branch, e.g., for a continuation)
-				}
+				auto ite=at(new IteExp(ncond,at(new CompoundExp([])),at(new CompoundExp(exit))));
+				nbdy.s~=[cast(Expression)ite]~nrst.s~next;
 			}
 			if(continuation) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
 		}

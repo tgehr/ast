@@ -676,6 +676,9 @@ private Expression useSubstitute(Expression e,ref BlockSubst ctx){
 
 private T finishStatement(T)(T r,Expression orig,ref BlockSubst ctx){
 	r.loc=orig.loc;
+	r.constLookup=orig.constLookup; // (as for copies, e.g., an argument that a call consumes)
+	r.byRef=orig.byRef;
+	r.implicitDup=orig.implicitDup;
 	ctx.changed=true;
 	if(orig.isSemError()){ r.sstate=SemState.error; return r; }
 	if(orig.isSemCompleted()){
