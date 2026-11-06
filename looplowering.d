@@ -1900,8 +1900,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	Id[Id] fNames;
 	foreach(i,p;carried[0]) if(rank[classOf[i]]>P) fNames[p[1].name.id]=freshName();
+	bool skip(int X){ return !iota(atoms.length).any!(a=>atomColor[a]==X&&!dropped(a,X))&&!(X==P&&atomColor.any!(c=>c>P))&&!logs.any!(l=>l.src==X&&l.primary); }
+	auto counting=cast(int)max(0,iota(cast(int)classDeps.length+1).countUntil!(X=>!skip(X))); // (for a `while` loop: the first loop, which evaluates the condition and counts the iterations, e.g., the main loop for `while k<2 { if n>0 { …; assert(false); } }`)
 	foreach(X;0..cast(int)classDeps.length+1){
-		if(!iota(atoms.length).any!(a=>atomColor[a]==X&&!dropped(a,X))&&!(X==P&&atomColor.any!(c=>c>P))&&!logs.any!(l=>l.src==X&&l.primary)) continue;
+		if(skip(X)&&!(is(T==WhileExp)&&X==counting)) continue;
 		if(X==P) foreach(v,fv;fNames) stmts~=define(mkId(fv),dupOf(mkId(v)));
 		bool readsLogs=logs.any!(l=>l.dst==X&&!l.rLevel);
 		Id counter;
@@ -2484,7 +2486,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			inc.loc=loc;
 			bdy~=inc;
 		}
-		static if(is(T==WhileExp)) if(X==0){
+		static if(is(T==WhileExp)) if(X==counting){
 			auto inc=new AddAssignExp(mkId(num),LiteralExp.makeInteger(1));
 			inc.loc=loc;
 			bdy~=inc;
@@ -2496,7 +2498,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			auto nl=new ForExp(mkId(loop.loopVar.name.id),null,ForAggregate(nrange),nbdy);
 		}else static if(is(T==WhileExp)){
 			Expression nl;
-			if(X==0){
+			if(X==counting){
 				auto nw=new WhileExp(loop.cond.copy(),nbdy);
 				nw.noSplit=true;
 				nl=nw;

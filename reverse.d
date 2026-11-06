@@ -3785,6 +3785,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 			}
 		}else Id[] aliveFor(size_t i){ return aliveAt[i]; }
 		auto oldVersions=new Id[2][][](statements.length); // (copies of the versions before a statement whose classical part is recomputed, for its reversal, see `NeedOld`)
+		static if(language==silq) auto consumedOld=new Id[2][][](statements.length); // (copies of the versions before a statement that its reversal consumes, see `reversal`)
 		Id[][] consumedBy=new Id[][](statements.length); // (variables in `oldVersions` that do not exist after the recomputed statement, e.g., `v` for `with { … } do { forget(v); if c { v:=1; … } }`, also where it only changes them and forgets them at their last uses, e.g., `v` for `with { … } do { t:=dup(u); v+=1; (w,v):=(j*2,v); }` after `forget(t)`, as its recomputation keeps the forgets of its own variables, see `recomputation`)
 		enum headerChangeError="reversal of `if` statement or loop that changes a variable of its condition or range not supported yet";
 		static if(language==silq){
@@ -3952,6 +3953,9 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 					r=reverseStatement(statements[i],sc,unchecked,noImplicitDup,hoistClassical,defer,receivedAfter(i)~projected,aliveFor(i),null,&need);
 				}
 			}
+			static if(language==silq) if(!recomputed[i]&&!projections[i]&&sc.handler.nerrors==nerrors){ // (its reversal consumes versions before it that the reversals of earlier statements read, e.g., `b` for `with { … } do { with { … } do { for i in 0..3 { forget(a); a:=i+1; forget(b); b:=i*2; } } xs[a]:=X(xs[a]); }` after `xs[b]:=X(xs[b]);`: the recomputation saves copies of them, which replace them after the reversal, as for `oldVersions`)
+				consumedOld[i]=aliveAt[i].filter!(n=>!changed[i].canFind(n)&&!shadowed[i].canFind(n)&&readEarlier(i,n)&&consumesVariable(r,n)&&!availableAfter(r,n)).map!(n=>cast(Id[2])[n,freshName()]).array;
+			}
 			static if(language==silq) if((projections[i]||recomputed[i]&&undone[i])&&readsOld(statements[i])){ // (also a recomputed statement that is reversed in place, e.g., a loop that a conditional in it changes, for earlier statements that read the versions before it)
 				auto pc=projections[i]?chain(projectionChanges[i],definedNames(projections[i])).array:chain(changed[i],definedNames(statements[i])).array;
 				if(chain(need.vars,need.errors.map!(e=>e[0]).joiner).any!(n=>pc.canFind(n))||lossy[i].length||projections[i]&&changed[i].any!(n=>consumesVariable(projections[i],n)&&neededBefore(i,n))) foreach(n;pc) if(!old.canFind(n)) old~=n; // (all of them, as the reversal of the statement may need more once it recomputes some, e.g., an update that it would otherwise reverse first; also for changes that it cannot reverse in place, see `lossyChanges`, and where the projection forgets a version before it that it changes on another path and that an enclosing block or the reversal of an earlier statement reads, e.g., `v` for `if v%4==0 { with { … } do { for i in 0..2 { forget(v); v:=i; } w+=j; xs[0]:=X(xs[0]); } } else { v+=2; }` after `xs[v%4]:=X(xs[v%4]);`, where `changes` does not count the definitions again in the body of the `with` statement)
@@ -4081,6 +4085,13 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				if(!consumedBy[i].canFind(o[0])) quantumStatements~=fe;
 				quantumStatements~=de;
 			}
+			static if(language==silq) foreach(o;consumedOld[i]){
+				auto lhs=new Identifier(o[0]),rhs=new Identifier(o[1]);
+				lhs.loc=rhs.loc=statements[i].loc;
+				auto de=new DefineExp(lhs,rhs);
+				de.loc=statements[i].loc;
+				quantumStatements~=de;
+			}
 			static if(language==silq) foreach(k,n;saving[i]){
 				auto loc=statements[i].loc;
 				auto lhs=new Identifier(n),rhs=new Identifier(saved[k]);
@@ -4092,7 +4103,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 		}
 		Expression[] classicalStatements;
 		foreach(i;0..statements.length){
-			static if(language==silq) foreach(o;chain(oldVersions[i],preserved[i])){
+			static if(language==silq) foreach(o;chain(oldVersions[i],preserved[i],consumedOld[i])){
 				auto loc=statements[i].loc;
 				auto lhs=new Identifier(o[1]),var=new Identifier(o[0]);
 				lhs.loc=var.loc=loc;
