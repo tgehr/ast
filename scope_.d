@@ -2109,6 +2109,7 @@ abstract class Scope{
 				if(!symtabLookup(p[0].getId,false,null)&&!rnsymtab.get(p[0].getId,null))
 					recordConsumption(p[0],p[1]);
 		}
+		static if(language==silq) bool continued=scopes.any!((sc){ auto bs=cast(BlockScope)sc; return bs&&bs.diverges&&bs.returningBeforeContinuation; }); // (the code after the conditional continues the other branch, see `continuedBranches`)
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
@@ -2354,7 +2355,7 @@ abstract class Scope{
 			auto vd=cast(VarDecl)sym;
 			if(vd&&vd.vtype&&vd.scope_ is this) vd.vtype=vd.vtype.substitute(mergeTypeSubst);
 		}
-		static if(language==silq) if(scopes.length==1){ // (versions merged after branches that diverge do not depend on each other, as for merges of several branches: the backend uncomputes a value right after its last use, here its merge, which comes after the splits of the others, e.g., of `x` for `o:=dup(x)` in `if c { y:=x&o; forget(y); assert(false); } forget(o);`)
+		static if(language==silq) if(scopes.length==1&&!continued){ // (versions merged after branches that diverge do not depend on each other, as for merges of several branches: the backend uncomputes a value right after its last use, here its merge, which comes after the splits of the others, e.g., of `x` for `o:=dup(x)` in `if c { y:=x&o; forget(y); assert(false); } forget(o);`)
 			auto merged=producedOuter[numProducedOuter..$];
 			foreach(m;merged) if(dependencyTracked(m)){
 				auto dep=getDependency(m).dup;
@@ -3081,6 +3082,7 @@ class NestedScope: Scope{
 	Scope parent;
 	private bool splitForDivergingSibling=false; // (a sibling that diverges consumes a variable from outside, see `closeUnreachable`: the variables of this scope keep depending on its split here, as merges ignore the sibling)
 	private bool splitForSibling=false; // (another branch consumes a variable from outside: without a known dependency, the variables of this branch keep depending on its version from before the split, see `checkBranchOrder`)
+	static if(language==silq) BlockScope[] continuedBranches; // (of the conditionals in this scope whose other branch returns: the code after them runs as part of them, see `checkBranchOrder`)
 	Q!(Declaration,LastUse)[] forgottenAtSplit; // (versions that are uncomputed at their split, with the last uses that keep their dependencies there, see `dependenciesAtSplit`)
 	final Q!(Declaration,Dependency)[] dependenciesAtSplit(){ // (they are split before the variables that those mention)
 		return forgottenAtSplit.map!(f=>q(f[0],f[1].kind==LastUse.Kind.lazySplit?f[1].depAtSplit:f[1].dep)).array;
@@ -3610,6 +3612,7 @@ class BlockScope: NestedScope{
 	Q!(Declaration,LastUse)[] outerConsumptions; // (of versions of variables of the enclosing scope)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
 	bool returningConditional=false; // (a branch of the conditional returns on some path: the code generator does not interleave the branches)
+	bool returningBeforeContinuation=false; // (it returns on every path, and the code after the conditional continues the other branch, see `continuedBranches`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;

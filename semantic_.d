@@ -1264,7 +1264,9 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
-	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=containsReturn(ite.then)||containsReturn(ite.othw);
+	auto continued=insideLoopBody(sc)?null:continuedBranch(ite); // (not in a loop body: `--remove-loops` rewrites the returns there, and the code after the conditional is then guarded by another conditional, see `erpLoopExplicit`)
+	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=!continued&&(containsReturn(ite.then)||containsReturn(ite.othw));
+	if(continued) (continued is ite.then?ite.othw:ite.then).blscope_.returningBeforeContinuation=true;
 	auto dep=ite.cond.getDependency(sc);
 	static if(language==silq){
 		Dependency guardDeps;
@@ -1293,7 +1295,10 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
-	static if(language==silq) imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
+	static if(language==silq){
+		imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
+		if(continued&&imported!"ast.lastuse".LastUse.interleavable(continued.blscope_)) if(auto nsc=cast(NestedScope)sc) nsc.continuedBranches~=continued.blscope_;
+	}
 	static if(language==silq) Identifier[] condForgetUses;
 	static if(language==silq) // TODO: can we avoid doing this?
 	if(quantumControl&&!diverges&&!ite.isSemError()&&sc.componentConstBlockRedefined(condConstContext)&&!sc.componentConstBlockConsumedDuringBorrow(condConstContext)){
@@ -11426,6 +11431,13 @@ bool containsReturn(CompoundExp ce){ // (on some path)
 	foreach(x;ce.subexpressions) if(cast(ReturnExp)x) return true;
 	return false;
 }
+CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibling returns on every path: the code after the conditional runs as part of it, see `ItePartialReturn`)
+	foreach(i,b;[ite.then,ite.othw]){
+		auto o=i?ite.then:ite.othw;
+		if(definitelyReturns(b)&&returnsOnEveryPath(b)&&!containsReturn(o)&&!definitelyReturns(o)) return o;
+	}
+	return null;
+}
 bool definitelyReturns(Expression e){
 	if(e.type) return isEmpty(e.type);
 	return dispatchStm!(definitelyReturnsImpl,definitelyReturnsImplDefault)(e);
@@ -11443,7 +11455,7 @@ private bool definitelyReturnsImpl(CompoundExp ce){
 	return ce.s.any!(x=>definitelyReturns(x));
 }
 private bool definitelyReturnsImpl(IteExp ite){
-	return definitelyReturns(ite.then) && definitelyReturns(ite.othw);
+	return ite.othw && definitelyReturns(ite.then) && definitelyReturns(ite.othw); // (before its analysis, an `if` statement may lack the `else` branch)
 }
 private bool definitelyReturnsImpl(ForExp fe){
 	/+auto lle=cast(LiteralExp)fe.left;

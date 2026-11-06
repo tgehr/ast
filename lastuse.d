@@ -304,15 +304,23 @@ final class LastUse{
 		else updateDependenciesOnConsumptionLocal(!fromNested);
 	}
 	private void noteBranchEvent(){ // (for the order of the branches of the enclosing conditionals, see `checkBranchOrder`)
-		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=cast(NestedScope)nsc.parent){
-			auto bs=cast(BlockScope)nsc;
-			if(!interleavable(bs)) continue;
+		void note(BlockScope bs){
+			if(!interleavable(bs)) return;
 			if(kind==Kind.synthesizedForget) bs.uncomputations~=this;
 			else if(auto outer=outerVersion(decl,bs)) bs.outerConsumptions~=q(outer,this);
+		}
+		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=cast(NestedScope)nsc.parent){
+			note(cast(BlockScope)nsc);
+			foreach(bs;nsc.continuedBranches) note(bs);
 		}
 	}
 	static Declaration outerVersion(Declaration d,NestedScope sc){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`)
 		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=d.splitFrom;
+		while(d&&d.scope_&&d.scope_ !is sc.parent&&d.scope_.isNestedIn(sc.parent)) d=d.splitFrom; // (in the code after the conditional, see `continuedBranches`)
+		if(d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ is sc){ // (the version of the branch, which the code after the conditional continues)
+			d=d.mergedFrom[0];
+			while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=d.splitFrom;
+		}
 		if(d&&d.scope_&&d.scope_ !is sc.parent&&sc.parent.isNestedIn(d.scope_)) d=sc.parent.getSplit(d); // (a version from further out)
 		return d&&d.scope_ is sc.parent?d:null;
 	}
@@ -510,6 +518,7 @@ final class LastUse{
 				}
 			}
 			if(lu is this||lu.discarded||before(lu)) continue;
+			if(splitFrom&&!fromBranch&&lu.kind==Kind.synthesizedForget&&lu.time<consumption.consumedAt) continue; // (forgotten before the consumption, e.g., in a block whose lazy splits come before it: the walk starts at them)
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
@@ -882,7 +891,15 @@ final class LastUse{
 				assert(!dep.isTop);
 				assert(!forceConsumed);
 				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",splitFrom," ",splitFrom.canForget(forceConsumed));
-				scope_.forgetOnEntry(decl);
+				auto before=decl;
+				auto forgotten=scope_.forgetOnEntry(decl);
+				if(earlyReturn&&enclosing&&before.forgottenBeforeEarlyReturn is earlyReturn){ // (a nested branch returns where it cannot forget it: forgotten on entry of this branch instead of before its split, so a later use in this branch is explained as for a version forgotten before the conditional)
+					before.forgottenBeforeEarlyReturn=null;
+					forgotten.forgottenBeforeEarlyReturn=earlyReturn;
+					explanationUse=new Identifier(forgotten.getId);
+					explanationUse.loc=forgotten.loc;
+					explanationUse.meaning=forgotten;
+				}
 				if(isBranch(scope_)){
 					atSplit=true;
 					(cast(NestedScope)scope_).forgottenAtSplit~=q(decl,this);
