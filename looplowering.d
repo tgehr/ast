@@ -563,6 +563,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					foreach(j;usedBy[v]){
 						if(infos[j].isForget){
 							foreach(u,w;useVer[j]) if(!defDead(w)) ok=false;
+							if(!cannotFail(stms[j])) ok=false; // (a forget that may fail stays, with the definition, e.g., `forget(c=0:𝔹)` after `c:=1:𝔹`)
 						}else if(!dead[j]) ok=false;
 					}
 				}

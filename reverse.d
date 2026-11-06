@@ -2444,8 +2444,7 @@ private CompoundExp classicalPart(CompoundExp b,Scope sc,Id[] drop,Id[] vars,Exp
 			defined=defined.filter!(n=>!names.canFind(n)).array;
 			continue;
 		}
-		if(skipped[j]) continue;
-		auto consumed=defined.filter!(n=>!availableAfter(s,n)&&(!parts[j]||availableAfter(parts[j],n))).array; // (e.g., `v` for `if c { … } else { w:=move(v); }`, also if the classical part leaves the statement out)
+		auto consumed=defined.filter!(n=>!availableAfter(s,n)&&(!parts[j]||availableAfter(parts[j],n))).array; // (e.g., `v` for `if c { … } else { w:=move(v); }`, also if the classical part leaves the statement out or skips it, e.g., `v` for `w:=move(v)` if the reversal receives `w`)
 		if(parts[j]){
 			defined=defined.filter!(n=>availableAfter(parts[j],n)).array;
 			foreach(n;definedNames(parts[j])) if(!defined.canFind(n)&&!readsBeforeDefining(b,n)) defined~=n; // (not a variable of an enclosing block that the block defines again, e.g., `j` for `(xs,j):=let{ j-=1; … } in (xs,j);`, whose version after the classical part the reversal of the block reads)
@@ -3298,11 +3297,13 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 		return r;
 	}
 	ForgetFrame* block(CompoundExp b,ForgetFrame* parent,Expression loop){ // (returns the frame at its end)
+		Expression[] onEntry; // (the variables that it forgets on entry, which change before its statements, e.g., `t` for `forget(s)` in `else { forget(s); }` after `t:=dup(x); s:=dup(t);` if the `then` branch forgets `t`)
 		if(b.blscope_){
 			auto ids=identifiersOf(b.blscope_.forgottenVarsOnEntry,b.loc);
 			if(ids.length) b.entryUncomputation=site(cast(Expression[])ids,new ForgetFrame([],parent,loop),[],b.loc);
+			onEntry=cast(Expression[])ids;
 		}
-		auto end=statements(flatten(b.s),parent,loop);
+		auto end=statements(flatten(b.s),parent,loop,onEntry);
 		if(b.blscope_){
 			auto ids=identifiersOf(b.blscope_.forgottenVars,b.loc);
 			if(ids.length) b.exitUncomputation=site(cast(Expression[])ids,end,[],b.loc);
@@ -3310,12 +3311,12 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 		return end;
 	}
 	Expression statement; // (during `statements`: the innermost statement that contains the current expression)
-	ForgetFrame* statements(Expression[] stmts,ForgetFrame* parent,Expression loop){ // (returns the frame at their end)
+	ForgetFrame* statements(Expression[] stmts,ForgetFrame* parent,Expression loop,Expression[] onEntry=null){ // (returns the frame at their end)
 		auto outer=statement;
 		scope(exit) statement=outer;
 		Expression[] before; // (the statements before the current one, with the definitions of the components of tuple definitions, see `components`)
 		foreach(i,s;stmts){
-			auto f=new ForgetFrame(before,parent,loop);
+			auto f=new ForgetFrame(before,parent,loop,onEntry);
 			before~=components([s]);
 			if(auto fe=cast(ForgetExp)s){
 				if(!fe.val) fe.uncomputation=site(forgottenVariables(fe),f,[],fe.loc);
@@ -3330,7 +3331,7 @@ private struct ForgetResolution{ // (the reversal of a function recomputes the q
 			expression(s,f);
 			embedded(s,f);
 		}
-		return new ForgetFrame(before,parent,loop);
+		return new ForgetFrame(before,parent,loop,onEntry);
 	}
 	void embedded(Expression s,ForgetFrame* f){ // (the forgets of variables of enclosing blocks within the parts of a statement that the reversal evaluates again, after the statement, see `embeddedForgets`)
 		auto forgets=embeddedForgets(s);
@@ -3568,7 +3569,7 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				foreach(t;statements) avail=availableAfter(t,n,avail);
 				return avail&&!forgotten.canFind(n);
 			}
-			auto before=outer.filter!(n=>!copied.canFind(n)&&!given.canFind(n)&&lossy.joiner.canFind(n)&&!availableAtEnd(n)).array; // (variables of enclosing blocks that a statement of the block changes such that the reversal cannot recompute their versions before it, see `lossyChanges`, and that are not available after the block, other than those whose versions after it the reversal receives, e.g., `v` for `forget(v); v:=2;` in a branch of a conditional whose other branch updates `v`: the reversal of the block receives their versions before it and recomputes all of their changes, e.g., `v` for `v+=1; xs[v]:=X(xs[v]); forget(v); v:=2; forget(v);` in the body of a `with` statement)
+			auto before=outer.filter!(n=>!copied.canFind(n)&&!given.canFind(n)&&(lossy.joiner.canFind(n)||statements.any!(t=>changes(t)[1].canFind(n)))&&!availableAtEnd(n)).array; // (variables of enclosing blocks that a statement of the block changes such that the reversal cannot recompute their versions before it, see `lossyChanges`, also where the statement does not leave them available, e.g., `v` for `if c { forget(v); v:=2; }` after `v+=1; xs[v]:=X(xs[v]);` in the body of a `with` statement, and that are not available after the block, other than those whose versions after it the reversal receives, e.g., `v` for `forget(v); v:=2;` in a branch of a conditional whose other branch updates `v`: the reversal of the block receives their versions before it and recomputes all of their changes, e.g., `v` for `v+=1; xs[v]:=X(xs[v]); forget(v); v:=2; forget(v);` in the body of a `with` statement)
 		}
 		auto headerChanges=new Id[][](statements.length); // (the variables of the condition or bounds of an `if` statement or a loop that it changes: the reversal reads copies of the versions before it)
 		foreach(i,s;statements) foreach(h;headers(s)) foreach(x;h.subexpressions) if(auto id=cast(Identifier)x) if(changed[i].canFind(nameOf(id))&&!headerChanges[i].canFind(nameOf(id))) headerChanges[i]~=nameOf(id);
@@ -3898,7 +3899,13 @@ Expression[] reverseStatements(Expression[] statements,Expression[] middle,Scope
 				if(!copies[i]) copies[i]=recomputation(statements[i],sc);
 				projected~=changed[i].filter!(n=>availableAfter(copies[i],n)&&!availableAfter(statements[i],n)).array; // (as for a projection, e.g., `w` for `with { … } do { (s,w):=(dup(n),w); w+=t+s; }` at the last use of `w`)
 			}
-			static if(language==silq) if(!projections[i]&&!recomputed[i]) projected~=definedNames(statements[i]).filter!(n=>excluded.canFind(n)).array; // (the reversal of a later statement that changes it in place gives back the version after it, e.g., `v` for `with { … } do { v:=u*2; xs[u]:=X(xs[u]); }` before `v+=j`, see `excluded`)
+			static if(language==silq){
+				bool changedInPlaceAfter(Id n){ // (only by later statements whose reversals change it back in place, or that move it into its own new version, e.g., `v7` for `with { … } do { v1+=2; v7:=v1+1; }`, which the reversal does not recompute, before `v7+=1`)
+					auto js=iota(i+1,statements.length).filter!(j=>!dead[j]&&inPlace(j).canFind(n)).array;
+					return js.length&&!usesUp(n,iota(i+1,statements.length).filter!(j=>!js.canFind(j)&&!movedIntoItself(statements[j],n)).map!(j=>statements[j]).array);
+				}
+				if(!projections[i]&&!recomputed[i]) projected~=definedNames(statements[i]).filter!(n=>excluded.canFind(n)||changedInPlaceAfter(n)).array; // (the reversal of a later statement that changes it in place gives back the version after it, e.g., `v` for `with { … } do { v:=u*2; xs[u]:=X(xs[u]); }` before `v+=j`, see `excluded`)
+			}
 			static if(language==silq) Id[] receivedAfter(size_t i){ // (not a variable that the statement neither changes nor leaves available if it has no classical part, which an enclosing block would recompute: the reversal of the block receives the version before it, e.g., `v` for `with { … } do { for i in 0..1 { forget(v); v:=i; } xs[0]:=X(xs[0]); v+=j; }` in a branch of a conditional whose other branch updates `v`)
 				bool leftOut(){ return classifyStatement(statements[i])!=ComputationClass.classical&&!projection(statements[i],sc); }
 				return givenAfter(i).filter!(n=>changed[i].canFind(n)||availableAfter(statements[i],n)||!leftOut()).array;
