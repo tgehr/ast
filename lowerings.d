@@ -190,16 +190,76 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 			return r;
 		}else assert(0);
 	}
-	Parameter makeParam(Expression arg){
+	Declaration capturedVersion(Declaration cur){ // (the version of a variable that a type mentions at the comparison)
+		if(cur.scope_.isNestedIn(context.sc)){
+			while(cur.scope_ !is context.sc&&cur.splitFrom) // (e.g., the split of a parameter that is forgotten after its last use, in `vector(n,0:!𝔹)==vector(n,0:!𝔹)`)
+				cur=cur.splitFrom;
+			assert(cur.scope_ is context.sc);
+		}else for(bool found=true;found;){ // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., into the scope of a return that forgets it)
+			found=false;
+			foreach(d;cur.splitInto) if(context.sc.isNestedIn(d.scope_)){ cur=d; found=true; break; }
+		}
+		return cur;
+	}
+	// (the variables that the types of the operands mention are parameters of an enclosing closure: the closure is analyzed
+	// after the analysis of the function, whose symbol tables then no longer have the versions at the comparison, e.g., of `n`
+	// for `vector(n,0:!𝔹)==vector(n,0:!𝔹)` in a branch, so it must not look them up, e.g., in the lowering of its loop)
+	Declaration[] mentioned;
+	foreach(ty;[ty0,ty1]) foreach(id;ty.freeVars){
+		auto decl=id.meaning;
+		if(!decl||!decl.scope_||!decl.scope_.getFunction()||mentioned.canFind!(d=>d is decl)) continue;
+		mentioned~=decl;
+	}
+	bool closed=mentioned.length&&mentioned.all!((decl){
+		auto type=typeForDecl(decl);
+		if(!type||!type.isClassical()||isTypeTy(type)) return false;
+		foreach(id;type.freeVars) return false;
+		return true;
+	});
+	Parameter[] outerParams;
+	Expression[] outerArgs;
+	import util: MapX;
+	MapX!(Declaration,Id) outerNames;
+	if(closed) foreach(decl;mentioned){
+		auto pname=new Identifier(freshName());
+		pname.loc=loc;
+		auto ptype=typeForDecl(decl).copy(cargs);
+		ptype.loc=loc;
+		auto p=new Parameter(true,pname,ptype);
+		p.loc=loc;
+		outerParams~=p;
+		outerNames[decl]=pname.id;
+		auto version_=capturedVersion(decl);
+		auto a=new Identifier(version_.getId);
+		a.loc=loc;
+		a.meaning=version_;
+		outerArgs~=a;
+	}
+	Expression paramType(Expression type,Expression unfolded){
+		if(!closed) return type.copy(cargs);
+		Expression.CopyArgs pcargs={ preserveMeanings: true };
+		pcargs.mapExp=(Expression e,ref Expression.CopyArgs args){
+			auto id=cast(Identifier)e;
+			if(!id||!id.meaning) return null;
+			if(id.meaning in outerNames){
+				auto r=new Identifier(outerNames[id.meaning]);
+				r.loc=id.loc;
+				return r;
+			}
+			return null;
+		};
+		return unfolded.copy(pcargs);
+	}
+	Parameter makeParam(Expression arg,Expression unfolded){
 		auto name=new Identifier(freshName());
 		name.loc=arg.loc;
-		auto dtype=arg.type.copy(cargs);
+		auto dtype=paramType(arg.type,unfolded);
 		dtype.loc=arg.loc;
 		auto r=new Parameter(true,name,dtype);
 		r.loc=arg.loc;
 		return r;
 	}
-	auto params=[makeParam(e0),makeParam(e1)];
+	auto params=[makeParam(e0,ty0),makeParam(e1,ty1)];
 	auto p0=params[0].name.copy(cargs),p1=params[1].name.copy(cargs);
 	p0.type=e0.type,p1.type=e1.type;
 	Expression[] body_;
@@ -381,19 +441,33 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	auto fd=new FunctionDef(null,params,true,null,fbdy);
 	fd.annotation=Annotation.qfree;
 	fd.loc=loc;
+	if(closed){
+		auto inner=new LambdaExp(fd);
+		inner.loc=loc;
+		auto oret=new ReturnExp(inner);
+		oret.loc=loc;
+		auto obdy=new CompoundExp([cast(Expression)oret]);
+		obdy.loc=loc;
+		auto outer=new FunctionDef(null,outerParams,true,null,obdy);
+		outer.annotation=Annotation.qfree;
+		outer.loc=loc;
+		auto olambda=new LambdaExp(outer);
+		olambda.loc=loc;
+		auto oarg=new TupleExp(outerArgs);
+		oarg.loc=loc;
+		auto oce=new CallExp(olambda,oarg,false,false);
+		oce.loc=loc;
+		auto arg=new TupleExp(args);
+		arg.loc=loc;
+		auto ce=new CallExp(oce,arg,false,false);
+		ce.loc=loc;
+		return expressionSemantic(ce,context);
+	}
 	void visId(Identifier id){
 		auto cur=id.meaning;
 		assert(!!cur);
 		if(!cur.scope_.getFunction()) return; // no need to capture global declarations
-		if(cur.scope_.isNestedIn(context.sc)){
-			while(cur.scope_ !is context.sc&&cur.splitFrom) // (e.g., the split of a parameter that is forgotten after its last use, in `vector(n,0:!𝔹)==vector(n,0:!𝔹)`)
-				cur=cur.splitFrom;
-			assert(cur.scope_ is context.sc);
-		}else for(bool found=true;found;){ // TODO: get rid of this (the types that mention a variable are not updated when it is split, e.g., into the scope of a return that forgets it)
-			found=false;
-			foreach(d;cur.splitInto) if(context.sc.isNestedIn(d.scope_)){ cur=d; found=true; break; }
-		}
-		fd.addCapture(cur,id);
+		fd.addCapture(capturedVersion(cur),id);
 	}
 	foreach(arg;[e0,e1])
 		foreach(id;arg.type.freeVars) // (of the analyzed type: e.g., a lambda within the copy is not analyzed yet)
