@@ -2177,7 +2177,7 @@ abstract class Scope{
 		}
 		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc) bs.eagerMerges=null; // (of an earlier analysis)
 		SetX!Id eagerIds; // (variables whose versions in the branches have no known dependency in some branch, but values that are merged as well depend on them: those depend on the merged versions instead, which the code generator merges first, see `genEagerMerges` in hqir.d)
-		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s))){
+		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s)&&!(cast(BlockScope)s).returnsOnSomePath)){
 			import ast.semantic_:typeForDecl;
 			Q!(Id,Declaration[])[] candidates;
 			foreach(id,d0;scopes[0].rnsymtab){
@@ -3641,7 +3641,8 @@ class BlockScope: NestedScope{
 	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
 	Q!(Declaration,LastUse)[] outerConsumptions; // (of versions of variables of the enclosing scope)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
-	bool returningConditional=false; // (a branch of the conditional returns on some path: the code generator does not interleave the branches)
+	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path: the code generator does not interleave the branches)
+	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
 	bool returningBeforeContinuation=false; // (it returns on every path, and the code after the conditional continues the other branch, see `continuedBranches`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
