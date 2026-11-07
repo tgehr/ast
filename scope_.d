@@ -2396,14 +2396,47 @@ abstract class Scope{
 				dependencies.dependencies[m]=dep;
 			}
 		}
-		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged)
+		SetX!Declaration forgotten; // (or not consumed, after an error)
+		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged, or when forgetting another variable)
 			changed=false;
 			foreach(sym;rnsymtab.dup){
-				if(cast(DeadDecl)sym||!scopes.any!(sc=>!!cast(DeadDecl)sc.rnsymtab.get(sym.getId,null))) continue;
+				if(cast(DeadDecl)sym){ // (before it was split into the branches: its versions in the other branches are forgotten below)
+					symtabRemove(sym);
+					continue;
+				}
+				if(!scopes.any!(sc=>!!cast(DeadDecl)sc.rnsymtab.get(sym.getId,null))) continue;
 				addDeadMerge(sym);
 				symtabRemove(sym);
+				foreach(sc;scopes) if(sc.mergedVars.any!(d=>d.mergedInto is sym)) sc.mergedVars=sc.mergedVars.filter!(d=>d.mergedInto !is sym).array; // (not merged after all: the versions that are not consumed are forgotten below)
 				if(dependencyTracked(sym)) pushDependencies(sym,false);
 				changed=true;
+			}
+			foreach(sc;scopes){
+				foreach(sym;sc.rnsymtab.dup){
+					if(sc.rnsymtab.get(sym.getId,null) !is sym) continue; // (consumed when pushing the dependencies of another variable)
+					if(cast(DeadDecl)sym||sym.getId in rnsymtab||sym in forgotten) continue;
+					if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // (see below)
+					if(sym.scope_ !is sc&&sym.isSemError()){ // (not split into `sc` after an error in another branch)
+						sc.symtabRemove(sym);
+						continue;
+					}
+					if(sym.scope_ !is this&&sym.scope_ !is sc) if(auto cur=getSplit(sym)) if(cur.scope_ is this){ // (split into this scope after the branches started, e.g., when a branch of an enclosing conditional consumed it while merging, see `LastUse.consume`)
+						sc.symtabRemove(sym);
+						sc.reinsert(cur);
+						sc.replaceDecl(sym,cur);
+						sym=cur;
+					}
+					sym=sc.split(sym,null);
+					forgotten.insert(sym);
+					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
+						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
+						sc.explainUnforgettable(sym);
+						errors=true;
+					}
+					if(sc.dependencyTracked(sym))
+						sc.pushDependencies(sym,false);
+					changed=true;
+				}
 			}
 		}
 		foreach(sc;scopes){
@@ -2421,21 +2454,6 @@ abstract class Scope{
 					if(force||dm.mergedFrom.all!(d=>cast(DeadDecl)d))
 					   dm.mergedFrom~=dd;
 					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
-					continue;
-				}
-				if(sym.getId !in rnsymtab){
-					if(sym.scope_ !is sc&&sym.isSemError()){ // (not split into `sc` after an error in another branch)
-						sc.symtabRemove(sym);
-						continue;
-					}
-					sym=sc.split(sym,null);
-					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
-						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
-						sc.explainUnforgettable(sym);
-						errors=true;
-					}
-					if(sc.dependencyTracked(sym))
-						sc.pushDependencies(sym,false);
 				}
 			}
 		}
@@ -3234,6 +3252,8 @@ class NestedScope: Scope{
 						}
 						if(odecl !is cdecl)
 							sc.replaceDecl(odecl,cdecl);
+						if(ndecl !is odecl&&ndecl !is cdecl&&parent.mergedNestedScopes.any!(s=>s.canFind(sc)))
+							sc.replaceDecl(ndecl,cdecl); // (the split in the parent already replaced `odecl` in its merged nested scopes, see `replaceDecl`, e.g., when a merge cancels an implicit `dup` in a branch)
 						sc.splitIntoActiveNestedScopes(odecl,cdecl,use,consumedComponent,splitting);
 					}
 				}

@@ -5977,6 +5977,13 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			else if(auto we=cast(WhileExp)st) definedFirst(we.bdy.s,consumed,later,loops);
 		}
 	}
+	static bool returningBranch(Expression e){ // (a conditional with a branch that returns on every path, while the other one does not return: the code after it continues the other branch, see `guard`)
+		auto ite=cast(IteExp)e;
+		if(!ite) return false;
+		bool r1=endsWithReturn(ite.then),r2=ite.othw&&endsWithReturn(ite.othw);
+		bool c1=containsReturn(ite.then),c2=ite.othw&&containsReturn(ite.othw);
+		return r1&&!c2||r2&&!c1;
+	}
 	// (`prefix`: the variables that the code before `stms` mentions; the variables after the loop that it does not mention
 	// may be forgotten when the loop body starts, e.g., if it only defines them again)
 	void checkGuards(Expression[] stms,Expression[] cont,SetX!Id prefix){
@@ -5998,7 +6005,7 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			foreach(n;carried) usedLater.insert(n);
 			SetX!Id consumedBefore;
 			definedFirst([st],consumedBefore,usedLater,false);
-			auto used=names(rest~cont),inStm=names([st]);
+			auto used=names(returningBranch(st)?cont:rest~cont),inStm=names([st]);
 			visitStm(st,(Expression x){
 				if(auto ret=cast(ReturnExp)x) if(auto consumed=erpKey(ret) in erpConsumedBeforeReturn)
 					foreach(n;*consumed) if(n in inStm&&n in used) ok=false;
@@ -6093,6 +6100,23 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			if(!containsReturn(s)){
 				r~=s;
 				continue;
+			}
+			if(returningBranch(s)){ // (as in normal mode, where the branch that returns diverges)
+				auto ite=cast(IteExp)s,rest=stms[i+1..$];
+				CompoundExp continued(CompoundExp b){
+					auto nb=at(new CompoundExp(guard((b?b.s:[])~rest)));
+					if(b) nb.loc=b.loc;
+					return nb;
+				}
+				if(endsWithReturn(ite.then)){
+					ite.then=guardBlock(ite.then);
+					ite.othw=continued(ite.othw);
+				}else{
+					ite.then=continued(ite.then);
+					ite.othw=guardBlock(ite.othw);
+				}
+				r~=ite;
+				break;
 			}
 			bool returns=endsWithReturn(s);
 			r~=explicitStm(s);
