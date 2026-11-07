@@ -155,6 +155,7 @@ final class LastUse{
 	LastUse forwardTo=null;
 	LastUse constConsume=null;
 	LastUse prevImplicitDup=null;
+	BlockScope[] noted; // (the branches that record it as an event, see `noteBranchEvent`)
 	LastUse splitFrom=null;
 	LastUse splitSource=null;
 	NestedScope[] nestedScopes;
@@ -305,7 +306,8 @@ final class LastUse{
 	}
 	private void noteBranchEvent(){ // (for the order of the branches of the enclosing conditionals, see `checkBranchOrder`)
 		void note(BlockScope bs){
-			if(!interleavable(bs)) return;
+			if(!isBranch(bs)) return;
+			noted~=bs;
 			if(kind==Kind.synthesizedForget) bs.uncomputations~=this;
 			else if(auto outer=outerVersion(decl,bs)) bs.outerConsumptions~=q(outer,this);
 		}
@@ -314,8 +316,11 @@ final class LastUse{
 			foreach(bs;nsc.continuedBranches) note(bs);
 		}
 	}
-	static Declaration outerVersion(Declaration d,NestedScope sc){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`)
-		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=d.splitFrom;
+	private static Declaration sourceVersion(Declaration x,bool continued){ // (`continued`: also the version of the branch that the code after a nested conditional whose other branch returns continues)
+		return x.splitFrom?x.splitFrom:continued&&x.mergedFrom.length==1?x.mergedFrom[0]:null;
+	}
+	static Declaration outerVersion(Declaration d,NestedScope sc,bool continued=false){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`; `continued`: also through the code after nested conditionals whose other branch returns)
+		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=sourceVersion(d,continued);
 		while(d&&d.scope_&&d.scope_ !is sc.parent&&d.scope_.isNestedIn(sc.parent)) d=d.splitFrom; // (in the code after the conditional, see `continuedBranches`)
 		if(d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ is sc){ // (the version of the branch, which the code after the conditional continues)
 			d=d.mergedFrom[0];
@@ -412,8 +417,14 @@ final class LastUse{
 	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
 		return readsSplitAtDefinition(scope_,decl,d,forgetDep);
 	}
-	static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way)
-		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
+	static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep,bool continued=false){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way; `continued`: see `outerVersion`)
+		bool version_(Declaration x,Declaration y){
+			static bool derived(Declaration x,Declaration y,bool continued){
+				for(;x;x=sourceVersion(x,continued)) if(x is y) return true;
+				return false;
+			}
+			return derived(x,y,continued)||derived(y,x,continued);
+		}
 		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
 		SetX!Declaration visited;
 		bool reads=false;
@@ -1590,7 +1601,7 @@ struct LastUses{
 }
 
 void queueBranchOrder(Scope sc,BlockScope[] branches){ // (the forgets in the branches are only known after the analysis of the function)
-	if(!branches.all!(b=>LastUse.interleavable(b))) return;
+	if(!branches.all!(b=>LastUse.isBranch(b))) return;
 	if(auto fd=sc.getFunction()) if(fd.fscope_){
 		fd.fscope_.pendingBranchOrders~=q(sc,branches);
 		return;
@@ -1598,6 +1609,7 @@ void queueBranchOrder(Scope sc,BlockScope[] branches){ // (the forgets in the br
 	checkBranchOrder(sc,branches);
 }
 void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator splits a variable that a branch consumes after the uncomputations in the branches that recompute values from its version from before the split, and before the consumptions of its versions: without such an order, those cannot be forgotten, see `interleaveBranches` in hqir.d)
+	auto fixed=!branches.all!(b=>LastUse.interleavable(b)); // (the code generator does not interleave the branches: it splits the variables before them)
 	static struct Event{
 		size_t branch,time,var;
 		LastUse lu; // (the consumption or the uncomputation)
@@ -1646,10 +1658,10 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		foreach(lu;b.uncomputations){
 			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies){
-				auto outer=LastUse.outerVersion(d,b);
+				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
 				if(p==size_t.max) continue;
-				if(lu.decl.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(b))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep)){ // (it reads the version of the branch)
+				if(lu.decl.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(b))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep,true)){ // (it reads the version of the branch)
 					events~=Event(i,lu.time,p,lu,true,false,events.length+1);
 					events~=Event(i,definitionTime(lu.decl,b),p);
 				}else events~=Event(i,lu.time,p,lu,true,true);
@@ -1657,16 +1669,23 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 	}
 	auto edges=new size_t[][](events.length);
+	bool ordered(size_t k,size_t l){ // (in program order, unless one is in the branch that returns of a nested conditional whose code after it continues the other branch and the other one is in that branch or in that code: the code generator interleaves them, see `ItePartialReturn`)
+		if(!events[k].lu||!events[l].lu) return true;
+		foreach(x;events[k].lu.noted) foreach(y;events[l].lu.noted)
+			if(x !is y&&(x.returningBeforeContinuation||y.returningBeforeContinuation)&&LastUse.interleavable(x)&&LastUse.interleavable(y)&&x.getSiblingScopes().canFind(y)) return false;
+		return true;
+	}
 	foreach(i;0..branches.length){
 		auto inBranch=iota(numVars,events.length).filter!(k=>events[k].branch==i).array;
 		inBranch.sort!((k,l)=>events[k].time<events[l].time||events[k].time==events[l].time&&k<l);
-		foreach(j;1..inBranch.length) edges[inBranch[j-1]]~=inBranch[j];
+		foreach(j;0..inBranch.length) foreach(l;j+1..inBranch.length) if(ordered(inBranch[j],inBranch[l])) edges[inBranch[j]]~=inBranch[l];
 	}
 	foreach(k;numVars..events.length){
 		auto e=events[k];
 		if(e.lu&&!e.need) edges[e.var]~=k;
 		if(e.need&&e.active) edges[k]~=e.var;
 	}
+	if(fixed) foreach(p;0..numVars) foreach(k;numVars..events.length) edges[p]~=k;
 	foreach(b;branches) foreach(f;b.dependenciesAtSplit()){ // (a version without uses in a branch is uncomputed at its split, before the splits of the variables it depends on)
 		auto outer=LastUse.outerVersion(f[0],b);
 		auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
@@ -1748,7 +1767,7 @@ SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] c
 		foreach(lu;bs.uncomputations){
 			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies){
-				auto outer=LastUse.outerVersion(d,b);
+				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varNode.get(outer,none):none;
 				if(p==none) continue;
 				auto k=newNode();
