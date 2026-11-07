@@ -1362,7 +1362,7 @@ struct LastUses{
 			else e.setSemCompleted();
 		}
 		LetExp getLet(){
-			if(auto le=cast(LetExp) parent) return le;
+			if(auto le=cast(LetExp) parent) if(canAddForget(le)) return le; // (not a `let` with a block, e.g., in a `const` position, see `generalLetExpSemantic`)
 			import ast.type:unit;
 			import ast.semantic_:freshName;
 			auto name=new Identifier(freshName());
@@ -1393,7 +1393,7 @@ struct LastUses{
 			auto le=new LetExp(s,makeId);
 			le.loc=parent.loc;
 			le.type=parent.type;
-			le.constLookup=false;
+			le.constLookup=parent.constLookup; // (it takes the place of `parent`, which can be a `const` result, see below)
 			finish(le);
 			return le;
 		}
@@ -1413,7 +1413,7 @@ struct LastUses{
 						parent=s;
 					}
 				}
-			}else if(!parent.constLookup&&!cast(Identifier)parent)
+			}else if((!parent.constLookup||parent.type&&parent.type.isClassical())&&!cast(Identifier)parent) // (a classical value does not borrow from the variable)
 				parent=getLet();
 		}
 		//imported!"util.io".writeln("MADE: ",parent);
