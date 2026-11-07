@@ -2175,6 +2175,32 @@ abstract class Scope{
 			static if(language==silq) if(type) return unfoldTypeVariables(type,(Declaration d)=>d.scope_&&scopes.any!(sc=>d.scope_.isNestedIn(sc)));
 			return type;
 		}
+		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc) bs.eagerMerges=null; // (of an earlier analysis)
+		SetX!Id eagerIds; // (variables whose versions in the branches have no known dependency in some branch, but values that are merged as well depend on them: those depend on the merged versions instead, which the code generator merges first, see `genEagerMerges` in hqir.d)
+		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s))){
+			import ast.semantic_:typeForDecl;
+			Q!(Id,Declaration[])[] candidates;
+			foreach(id,d0;scopes[0].rnsymtab){
+				Declaration[] versions;
+				bool dependents=false; // (on a version without a known dependency)
+				foreach(s;scopes){
+					auto d=s.rnsymtab.get(id,null);
+					if(!d||cast(DeadDecl)d||d.isSemError()||!s.dependencyTracked(d)){ versions=null; break; }
+					auto ty=typeForDecl(d);
+					if(!ty||!isQuantum(ty)||versions.length&&ty!=typeForDecl(versions[0])){ versions=null; break; }
+					bool readsOnly=true; // (the values computed from `d` only read it, so they can be recomputed from the merged version, whose reads replace those of `d`, see `genEagerMerges`)
+					foreach(k,ref v;s.dependencies.dependencies){
+						if(k is d||v.isTop||!(d in v.dependencies)) continue;
+						if(!LastUse.readsSplitAtDefinition(s,d,k,v)) readsOnly=false;
+						else if(s.getDependency(d).isTop&&scopes.all!(t=>t.rnsymtab.get(k.getId,null)&&!cast(DeadDecl)t.rnsymtab.get(k.getId,null))) dependents=true; // (merged as well)
+					}
+					if(!readsOnly){ versions=null; break; }
+					versions~=d;
+				}
+				if(versions.length&&dependents&&!versions.all!(v=>v is versions[0])) candidates~=q(id,versions);
+			}
+			if(candidates.length) eagerIds=eagerMergeOrder(this,scopes,candidates);
+		}
 		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
 			type=unfoldBranchTypeVariables(type);
 			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
@@ -2217,7 +2243,7 @@ abstract class Scope{
 				auto dep=getDependency(sym);
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
-				if(scopes.length==1) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`)
+				if(scopes.length==1||sym.getId in eagerIds) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`, or values computed from it depend on the merged version, see `eagerIds`)
 				else pushDependencies(sym,false);
 				if(sym.isSemError())
 					var.setSemForceError();
@@ -2329,7 +2355,10 @@ abstract class Scope{
 						// dep.joinWith(sc.controlDependency); // TODO
 						dep.joinWith(nestedControlDependency);
 						sc.addDependency(sym,dep);
-						sc.pushDependencies(osym,false);
+						if(sym.getId in eagerIds){
+							if(auto bs=cast(BlockScope)sc) bs.eagerMerges~=sym;
+							sc.continueDependencies(osym,sym);
+						}else sc.pushDependencies(osym,false);
 					}
 					if(!cast(DeadDecl)sym){
 						if(auto mtype=typeForDecl(sym)){
@@ -3609,6 +3638,7 @@ class BlockScope: NestedScope{
 	bool isLoopReset=false; // (of a `do`-`while` loop)
 	bool isBranch=false; // (of a conditional, see `LastUses.dependencyAtSplit`)
 	LastUse[] uncomputations; // (in the branch and its nested scopes, see `checkBranchOrder`)
+	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
 	Q!(Declaration,LastUse)[] outerConsumptions; // (of versions of variables of the enclosing scope)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
 	bool returningConditional=false; // (a branch of the conditional returns on some path: the code generator does not interleave the branches)

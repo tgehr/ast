@@ -412,7 +412,7 @@ final class LastUse{
 	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
 		return readsSplitAtDefinition(scope_,decl,d,forgetDep);
 	}
-	private static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way)
+	static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way)
 		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
 		SetX!Declaration visited;
@@ -1721,4 +1721,117 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		e.lu.reportUnforgettable();
 	}
 	if(interleave) foreach(b;branches) b.interleave=true;
+}
+SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] candidates){ // (the candidates for eager merges whose merges can come after the last changes of their versions in the branches and before their first reads, which read the merged versions instead, see `genEagerMerges` in hqir.d, in an order with the splits of `checkBranchOrder` for the events known so far)
+	enum none=size_t.max;
+	static struct Event{ size_t branch,time,node; }
+	Event[] events;
+	size_t[][] edges;
+	size_t newNode(){ edges~=null; return edges.length-1; }
+	void edge(size_t a,size_t b){ if(a!=none&&b!=none&&a!=b) edges[a]~=b; }
+	MapX!(Declaration,size_t) varNode;
+	foreach(i,b;branches){
+		auto bs=cast(BlockScope)b;
+		if(!bs) continue;
+		foreach(c;bs.outerConsumptions){
+			if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||!c[1].dep.isTop||c[0].scope_ !is sc) continue;
+			auto p=varNode.get(c[0],none);
+			if(p==none) varNode[c[0]]=p=newNode();
+			auto k=newNode();
+			events~=Event(i,c[1].consumedAt,k);
+			edge(p,k);
+		}
+	}
+	foreach(i,b;branches){
+		auto bs=cast(BlockScope)b;
+		if(!bs) continue;
+		foreach(lu;bs.uncomputations){
+			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			foreach(d;lu.dep.dependencies){
+				auto outer=LastUse.outerVersion(d,b);
+				auto p=outer?varNode.get(outer,none):none;
+				if(p==none) continue;
+				auto k=newNode();
+				events~=Event(i,lu.time,k);
+				edge(k,p);
+			}
+		}
+		foreach(f;bs.dependenciesAtSplit()){
+			auto outer=LastUse.outerVersion(f[0],b);
+			auto p=outer?varNode.get(outer,none):none;
+			if(p==none||f[1].isTop) continue;
+			foreach(d;f[1].dependencies){
+				auto od=LastUse.outerVersion(d,b);
+				edge(p,od?varNode.get(od,none):none);
+			}
+		}
+	}
+	static size_t definitionTime(Declaration d){
+		if(!d.scope_) return 0;
+		auto lus=d.scope_.lastUses.retired.get(d,null);
+		if(auto lu=lus.length?lus[0]:d.scope_.lastUses.lastUses.get(d,null)) return lu.time;
+		return 0;
+	}
+	static size_t firstRead(Declaration d,Scope b,size_t after){ // (in `b` and its nested scopes)
+		size_t r=none;
+		void visit(Scope s){
+			void consider(LastUse lu){
+				if(lu&&!lu.discarded&&lu.time>after&&lu.kind.among(LastUse.Kind.constUse,LastUse.Kind.implicitDup,LastUse.Kind.constPinned,LastUse.Kind.capture)) r=min(r,lu.time);
+			}
+			foreach(lu;s.lastUses.retired.get(d,null)) consider(lu);
+			consider(s.lastUses.lastUses.get(d,null));
+			foreach(group;s.mergedNestedScopes) foreach(n;group) visit(n);
+		}
+		visit(b);
+		return r;
+	}
+	size_t[] merges;
+	foreach(c;candidates){
+		auto m=newNode();
+		merges~=m;
+		foreach(i,d;c[1]){
+			auto def=definitionTime(d),read=firstRead(d,branches[i],def);
+			auto k=newNode();
+			events~=Event(i,def,k);
+			edge(k,m);
+			if(read==none) continue;
+			auto l=newNode();
+			events~=Event(i,read,l);
+			edge(m,l);
+		}
+	}
+	foreach(i;0..branches.length){ // (program order)
+		auto inBranch=events.filter!(e=>e.branch==i).array;
+		inBranch.sort!((a,b)=>a.time<b.time||a.time==b.time&&a.node<b.node);
+		foreach(j;1..inBranch.length) edge(inBranch[j-1].node,inBranch[j].node);
+	}
+	auto active=new bool[](candidates.length);
+	active[]=true;
+	bool onCycle(size_t m){
+		auto visited=new bool[](edges.length);
+		bool visit(size_t k){
+			foreach(l;edges[k]){
+				if(l==m) return true;
+				if(visited[l]) continue;
+				visited[l]=true;
+				auto j=merges.countUntil(l);
+				if(j>=0&&!active[j]) continue;
+				if(visit(l)) return true;
+			}
+			return false;
+		}
+		return visit(m);
+	}
+	for(bool changed=true;changed;){
+		changed=false;
+		foreach(j,m;merges){
+			if(!active[j]||!onCycle(m)) continue;
+			active[j]=false;
+			changed=true;
+			break;
+		}
+	}
+	SetX!Id r;
+	foreach(j,c;candidates) if(active[j]) r.insert(c[0]);
+	return r;
 }
