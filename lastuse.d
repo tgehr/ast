@@ -345,9 +345,11 @@ final class LastUse{
 		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		Declaration[] reached=[decl];
 		LastUse[] indirect;
+		auto candidates=scope_.lastUses.orderedCancelCandidates();
 		for(bool changed=true;changed;){
 			changed=false;
-			foreach(d,lu;scope_.lastUses.lastUses){
+			foreach(d;candidates){
+				auto lu=scope_.lastUses.lastUses[d];
 				while(lu.forwardTo) lu=lu.forwardTo;
 				if(lu is this||lu.dep.isTop||reached.canFind(d)) continue;
 				bool viaReached=false,direct=false;
@@ -905,7 +907,10 @@ final class LastUse{
 						return;
 					}
 				}
-				if(dep.isTop&&forgettableAtSplit(earlyReturn,enclosing)) dep=depAtSplit.dup; // (forgotten at the split, before the branch consumes what it depends on)
+				if(dep.isTop&&forgettableAtSplit(earlyReturn,enclosing)){ // (forgotten at the split, before the branch consumes what it depends on)
+					dep=depAtSplit.dup;
+					scope_.lastUses.noteCancelCandidate(decl);
+				}
 				assert(!dep.isTop);
 				assert(!forceConsumed);
 				//imported!"util.io".writeln("FORGETTING ON ENTRY: ",decl," ",splitFrom," ",splitFrom.canForget(forceConsumed));
@@ -961,7 +966,7 @@ final class LastUse{
 				assert(canAddForget(parent));
 				use=addForget(parent,decl,scope_);
 				assert(!!use);
-				scope_.updateDeclProps(decl).accesses~=use; // TODO: this is out of order, ok?
+				scope_.declProps.history(decl).accesses~=use; // TODO: this is out of order, ok?
 				isForget=true;
 				break;
 			case consumption:
@@ -1089,6 +1094,10 @@ struct LastUses{
 	LastUses* parent;
 	MapX!(Declaration,LastUse) lastUses;
 	MapX!(Declaration,LastUse[]) retired;
+	SetX!Declaration cancelCandidates; // (the declarations whose last uses `LastUse.recordCancelable` considers: those that depend on something known, unless it does not need them, see `pruneCancelCandidates`)
+	SetX!Declaration prunedCandidates;
+	MapX!(Declaration,Declaration[]) prunedByVersion; // (by the versions they are split from, see `includeCancelCandidate`)
+	size_t numCancelCandidates; // (after the last pruning)
 	LastUse lastLastUse;
 	size_t numAdded=0;
 	bool discarded=false;
@@ -1219,6 +1228,7 @@ struct LastUses{
 		}
 		lastUse.index=numAdded++;
 		lastUses[lastUse.decl]=lastUse;
+		noteCancelCandidate(lastUse.decl);
 		if(lastLastUse) lastLastUse.append(lastUse);
 		lastLastUse=lastUse;
 		if(lastUse.isConsumption()||lastUse.use&&lastUse.use.implicitDup) lastUse.recordCancelable();
@@ -1467,6 +1477,7 @@ struct LastUses{
 		}
 		foreach(d,lu;src.lastUses)
 			if(auto nd=mapDecl(d)) if(auto r=remap(lu)) lastUses[nd]=r;
+		foreach(d,_;lastUses) noteCancelCandidate(d);
 		foreach(d,lus;src.retired)
 			if(auto nd=mapDecl(d)) foreach(lu;lus) if(auto r=remap(lu)) retired[nd]~=r;
 		lastLastUse=remap(src.lastLastUse);
@@ -1540,6 +1551,9 @@ struct LastUses{
 		if(splitFrom in lastUses){
 			lastUses[splitInto]=lastUses[splitFrom];
 			lastUses.remove(splitFrom);
+			cancelCandidates.remove(splitFrom);
+			prunedCandidates.remove(splitFrom);
+			noteCancelCandidate(splitInto);
 		}
 		foreach(lu;lastUses) lu.replaceDecl(splitFrom,splitInto);
 		if(splitFrom in retired){
@@ -1598,6 +1612,68 @@ struct LastUses{
 					nlu.kind=LastUse.Kind.constPinned;
 				}
 			}
+			noteCancelCandidate(d); // (e.g., consumed after the snapshot, see `pruneCancelCandidates`)
+		}
+	}
+	private static LastUse target(LastUse lu){
+		while(lu&&lu.forwardTo) lu=lu.forwardTo;
+		return lu;
+	}
+	private void noteCancelCandidate(Declaration decl){ // (when its last use changes: a dependency that is unknown or empty stays that way)
+		prunedCandidates.remove(decl);
+		auto lu=target(lastUses.get(decl,null));
+		if(lu&&!lu.dep.isTop&&lu.dep.dependencies.length) includeCancelCandidate(decl);
+		else cancelCandidates.remove(decl);
+	}
+	private void includeCancelCandidate(Declaration decl){ // (and the pruned candidates that one of its dependencies is a version of, see `pruneCancelCandidates`)
+		cancelCandidates.insert(decl);
+		void include(Declaration d){
+			if(d !in prunedCandidates) return;
+			prunedCandidates.remove(d);
+			if(d in lastUses) includeCancelCandidate(d);
+		}
+		foreach(x;target(lastUses.get(decl,null)).dep.dependencies){
+			foreach(y;x.splitSequence) include(y);
+			foreach(d;prunedByVersion.get(x,null)) include(d);
+		}
+	}
+	Declaration[] orderedCancelCandidates(){ // (in the order of `lastUses`)
+		if(cancelCandidates.length>2*numCancelCandidates+16){
+			pruneCancelCandidates();
+			numCancelCandidates=cancelCandidates.length;
+		}
+		Q!(size_t,Declaration)[] r;
+		foreach(d;cancelCandidates){
+			size_t pos;
+			if(lastUses.tryGetPosition(d,pos)) r~=q(pos,d);
+		}
+		sort!"a[0]<b[0]"(r);
+		return r.map!(x=>x[1]).array;
+	}
+	private void pruneCancelCandidates(){ // (one that consumes its variable only matters while the dependency of another candidate mentions a version of it: it is included again when one does)
+		for(bool changed=true;changed;){
+			SetX!Declaration mentioned,versions; // (`versions`: also those that they were split from)
+			foreach(d;cancelCandidates){
+				auto lu=target(lastUses.get(d,null));
+				if(!lu||lu.dep.isTop) continue;
+				foreach(x;lu.dep.dependencies){
+					mentioned.insert(x);
+					foreach(y;x.splitSequence) versions.insert(y);
+				}
+			}
+			Declaration[] stale,gone;
+			foreach(d;cancelCandidates){
+				auto lu=target(lastUses.get(d,null));
+				if(!lu||lu.dep.isTop||!lu.dep.dependencies.length) stale~=d; // (see `noteCancelCandidate`)
+				else if(lu.isConsumption()&&d !in versions&&!d.splitSequence.any!(y=>y in mentioned)) gone~=d;
+			}
+			foreach(d;stale) cancelCandidates.remove(d);
+			foreach(d;gone){
+				cancelCandidates.remove(d);
+				prunedCandidates.insert(d);
+				foreach(y;d.splitSequence) prunedByVersion[y]~=d;
+			}
+			changed=gone.length!=0;
 		}
 	}
 }

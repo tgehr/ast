@@ -2702,6 +2702,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		propErr(e,ce);
+		if(blscope&&resetConst) bsc.afterStatement();
 		static if(language==silq){
 			erpAfterStatement(original,ce.s,i,bsc);
 			if(offered&&bsc.loopContinuation.finish(original)){

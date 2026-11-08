@@ -308,14 +308,15 @@ abstract class Scope{
 		}
 		/+private+/ Identifier[] accesses;
 		/+private+/ Declaration[] capturers;
+		size_t seq; // (in the order of recording, see `DeclProps.inOrder`)
 		static DeclProp default_(){
 			return DeclProp.init;
 		}
 		DeclProp dup(){
-			return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup);
+			return DeclProp(constBlock,componentReplacements.dup,accesses.dup,capturers.dup,seq);
 		}
 		DeclProp move(){
-			auto r=DeclProp(constBlock,componentReplacements,accesses,capturers);
+			auto r=DeclProp(constBlock,componentReplacements,accesses,capturers,seq);
 			this=typeof(this).init;
 			return r;
 		}
@@ -362,42 +363,136 @@ abstract class Scope{
 			}
 		}
 	}
+	static final class RetiredDeclProps{ // (of the declarations that are no longer live in a scope, see `afterStatement`)
+		MapSX!(Declaration,DeclProp) props;
+		MapX!(Declaration,Declaration[]) typeMentions; // (by the variables that their types mention, see `Scope.replaceDecl`)
+		size_t numRecorded; // (see `DeclProp.seq`)
+	}
 	static struct DeclProps{
-		private MapSX!(Declaration,DeclProp) props;
-		DeclProps dup(){ return DeclProps(props.dup); }
-		void clear(){ props.clear(); }
+		private MapSX!(Declaration,DeclProp) props; // (the properties that statements change, e.g., `const` blocks, are only those of live declarations)
+		private RetiredDeclProps retired; // (snapshots share it without changing it, see `resetDeclProps`)
+		private bool snapshot;
+		private size_t numRemoved; // (from `props` since it was compacted)
+		DeclProps dup(){ return DeclProps(props.dup,retired,true,numRemoved); }
+		private size_t nextSeq(){
+			if(!retired) retired=new RetiredDeclProps;
+			return retired.numRecorded++;
+		}
 		DeclProp* tryGet(Declaration decl){ return props.getPtr(decl); }
+		private DeclProp* tryGetRetired(Declaration decl){
+			if(snapshot||!retired) return null;
+			return retired.props.getPtr(decl);
+		}
+		DeclProp* tryGetAny(Declaration decl){ // (also of a declaration that is no longer live, e.g., its accesses)
+			if(auto r=tryGet(decl)) return r;
+			return tryGetRetired(decl);
+		}
 		ref DeclProp set(Declaration decl,DeclProp prop){
+			if(auto p=tryGet(decl)) prop.seq=p.seq;
+			else if(auto p=tryGetRetired(decl)) prop.seq=p.seq;
+			else prop.seq=nextSeq();
 			return props[decl]=prop;
 		}
-		void remove(Declaration decl){
-			props.remove(decl);
+		DeclProp* active(Declaration decl){
+			if(auto r=tryGet(decl)) return r;
+			if(auto r=tryGetRetired(decl)) return &set(decl,*r); // (e.g., a `const` block of a version that a statement consumes)
+			return &set(decl,DeclProp.default_());
+		}
+		DeclProp* history(Declaration decl){ // (for accesses and capturers)
+			if(auto r=tryGetAny(decl)) return r;
+			return &set(decl,DeclProp.default_());
+		}
+		Q!(Declaration,DeclProp*)[] inOrder(){ // (also the retired properties)
+			Q!(Declaration,DeclProp*)[] r;
+			foreach(decl,ref prop;props) r~=q(decl,&prop);
+			if(!snapshot&&retired) foreach(decl,ref prop;retired.props) if(decl !in props) r~=q(decl,&prop);
+			sort!"a[1].seq<b[1].seq"(r);
+			return r;
 		}
 		void merge(ref DeclProps nested){
-			foreach(decl,ref prop;nested.props){
-				if(decl !in props) props[decl]=prop.merged();
-				else props[decl].merge(prop);
+			foreach(e;nested.inOrder){
+				if(auto prop=tryGetAny(e[0])) prop.merge(*e[1]);
+				else set(e[0],e[1].merged());
 			}
 		}
 		void replaceDecl(Declaration splitFrom,Declaration splitInto){
 			if(auto declProp=tryGet(splitFrom)){
 				declProp.replaceDecl(splitFrom,splitInto);
-				props[splitInto]=declProp.move();
+				set(splitInto,declProp.move());
 				props.remove(splitFrom);
+				numRemoved++;
+				if(tryGetRetired(splitFrom)) retired.props.remove(splitFrom); // (from before it was active again, see `active`)
+			}else if(auto declProp=tryGetRetired(splitFrom)){
+				declProp.replaceDecl(splitFrom,splitInto);
+				auto moved=declProp.move();
+				if(tryGet(splitInto)) set(splitInto,moved);
+				else{
+					if(auto p=tryGetRetired(splitInto)) moved.seq=p.seq;
+					else moved.seq=nextSeq();
+					retired.props[splitInto]=moved;
+					indexRetired(splitInto);
+				}
+				retired.props.remove(splitFrom);
 			}
 		}
 		void moveComponentReplacements(Declaration prev,Declaration new_){
-			if(auto prevProp=tryGet(prev)){
-				if(new_ !in props) set(new_,DeclProp.default_());
-				auto newProp=tryGet(new_);
+			if(auto prevProp=tryGetAny(prev)){
+				auto newProp=active(new_);
 				assert(newProp&&!newProp.componentReplacements.length);
 				newProp.componentReplacements=prevProp.componentReplacements;
 				prevProp.componentReplacements=[];
 			}
 		}
+		private void retire(scope bool delegate(Declaration) live){
+			Declaration[] gone;
+			foreach(decl,ref prop;props)
+				if(!prop.constBlock.length&&!prop.componentReplacements.length&&!live(decl))
+					gone~=decl;
+			if(!gone.length) return;
+			if(!retired) retired=new RetiredDeclProps;
+			foreach(decl;gone){
+				retired.props[decl]=*tryGet(decl);
+				indexRetired(decl);
+				props.remove(decl);
+			}
+			numRemoved+=gone.length;
+			if(numRemoved>props.length+16){ // (the entries of a stable map stay where they are)
+				MapSX!(Declaration,DeclProp) nprops;
+				foreach(decl,ref prop;props) nprops[decl]=prop;
+				props=nprops;
+				numRemoved=0;
+			}
+		}
+		private void indexRetired(Declaration decl){
+			auto vd=cast(VarDecl)decl;
+			if(!vd||!vd.vtype) return;
+			foreach(id;vd.vtype.freeIdentifiers)
+				if(id.meaning&&!retired.typeMentions.get(id.meaning,null).canFind!(d=>d is decl))
+					retired.typeMentions[id.meaning]~=decl;
+		}
+		private Declaration[] retiredMentioning(Declaration decl){
+			if(snapshot||!retired) return null;
+			return retired.typeMentions.get(decl,null).filter!(d=>tryGetRetired(d)&&!tryGet(d)).array;
+		}
 	}
 	final DeclProps saveDeclProps(){ return declProps.dup; }
-	final void resetDeclProps(DeclProps previous){ declProps=previous; }
+	final void resetDeclProps(DeclProps previous){
+		auto retired=declProps.retired;
+		declProps=previous;
+		declProps.retired=retired;
+		declProps.snapshot=false;
+		if(retired) foreach(decl,ref _;declProps.props) retired.props.remove(decl); // (retired after the snapshot)
+	}
+	final void afterStatement(){
+		// (the properties of a declaration that is no longer live only matter when its accesses are renamed or retyped, or when a use of a version that it derives from is cancelled)
+		declProps.retire((Declaration decl)=>!decl.scope_||(decl.scope_ is this?rnsymtab.get(decl.getId,null) is decl:!decl.scope_.isNestedIn(this)));
+		// (no later statement refers to a temporary that the statement consumed)
+		foreach(cd;consumedTemporaries){
+			if(symtab.get(cd.name.id,null) is cd) symtab.remove(cd.name.id);
+			if(rnsymtab.get(cd.getId,null) is cd) rnsymtab.remove(cd.getId);
+		}
+		consumedTemporaries=[];
+	}
 	final void mergeDeclProps(ref DeclProps nested,ComponentConstBlock[] nestedComponentConstBlocks){
 		foreach(decl,ref prop;nested.props){
 			if(!prop.constBlock.length) continue;
@@ -448,7 +543,7 @@ abstract class Scope{
 				return &declProps.set(decl,prop.inherit);
 			}
 		}
-		return &declProps.set(decl,DeclProp.default_());
+		return declProps.active(decl);
 	}
 	final void recordAccess(Identifier id,Declaration meaning){
 		if(id.typeofSuppressedCapture) return;
@@ -457,7 +552,7 @@ abstract class Scope{
 			static if(language==silq) pinTypeMentions(meaning); // (as are the variables that its type mentions)
 			if(!id.constLookup&&!id.implicitDup)
 				lastUses.consumption(meaning,id,this); // TODO: ok?
-			updateDeclProps(meaning).accesses~=id;
+			declProps.history(meaning).accesses~=id;
 		}
 	}
 	static if(language==silq)
@@ -489,7 +584,7 @@ abstract class Scope{
 	}
 	final void recordCapturer(Declaration capturer,Declaration meaning){
 		if(!meaning.isToplevelDeclaration){
-			updateDeclProps(meaning).capturers~=capturer;
+			declProps.history(meaning).capturers~=capturer;
 		}
 	}
 	final void recordCapturers(Expression type){ // (the closures in a type whose uses are recorded as accesses: their captures are renamed with the uses, e.g., to later splits)
@@ -707,9 +802,9 @@ abstract class Scope{
 		if(use&&use.isSemError()) return false;
 		bool ok=true;
 		Identifier[] accesses; // TODO: use ranges?
-		if(auto declProp=declProps.tryGet(decl)) accesses=declProp.accesses;
+		if(auto declProp=declProps.tryGetAny(decl)) accesses=declProp.accesses;
 		if(use&&use.scope_ !is this) // (all accesses here are after `use`, also those of versions split from `decl` in nested scopes)
-			foreach(d,ref prop;declProps.props) if(d !is decl&&d.isDerivedFrom(decl)) accesses~=prop.accesses;
+			foreach(e;declProps.inOrder) if(e[0] !is decl&&e[0].isDerivedFrom(decl)) accesses~=e[1].accesses;
 		if(accesses.length){
 			bool seen=false;
 			DeadDecl[] failures;
@@ -749,9 +844,9 @@ abstract class Scope{
 		static Declaration origin(Declaration d){ while(d.splitFrom) d=d.splitFrom; return d; }
 		void visitActive(Scope sc){ // (accesses in nested scopes after the use that are still being analyzed)
 			foreach(nsc;sc.activeNestedScopes){
-				foreach(d,ref nprop;nsc.declProps.props){
-					if(origin(d) !is origin(decl)) continue;
-					foreach(access;nprop.accesses) if(!access.isSemError()) reportLater(access,nsc);
+				foreach(e;nsc.declProps.inOrder){
+					if(origin(e[0]) !is origin(decl)) continue;
+					foreach(access;e[1].accesses) if(!access.isSemError()) reportLater(access,nsc);
 				}
 				visitActive(nsc);
 			}
@@ -761,7 +856,7 @@ abstract class Scope{
 			if(!outer||outer.getFunction() !is getFunction()) break;
 			if(!outer.activeNestedScopes.canFind(inner)) visitActive(outer);
 			DeclProp* prop=null;
-			for(auto d=decl;d&&!prop;d=d.splitFrom) prop=outer.declProps.tryGet(d);
+			for(auto d=decl;d&&!prop;d=d.splitFrom) prop=outer.declProps.tryGetAny(d);
 			if(!prop) continue;
 			auto siblings=inner.getSiblingScopes();
 			bool seen=false;
@@ -860,8 +955,7 @@ abstract class Scope{
 			for(auto d=prev;d&&!done;d=d.splitFrom)
 				if(auto prop=props.tryGet(d))
 					if(prop.constBlock.length){
-						if(!props.tryGet(new_)) props.set(new_,DeclProp.default_());
-						props.tryGet(new_).constBlock~=prop.constBlock;
+						props.active(new_).constBlock~=prop.constBlock;
 						done=true;
 					}
 		}
@@ -1088,10 +1182,16 @@ abstract class Scope{
 		}
 		cd.scope_=decl.scope_;
 		cd.setSemCompleted();
-		if(canInsert(cd.name.id))
+		if(canInsert(cd.name.id)){
 			symtabInsert(cd);
+			if(decl.scope_ is this){
+				auto vd=cast(VarDecl)decl;
+				if(vd&&vd.isTemporary||consumedTemporaries.any!(t=>t.name.id==decl.name.id)) consumedTemporaries~=cd; // (also a later version, e.g., the component of an index replacement)
+			}
+		}
 		return cd;
 	}
+	private ConsumedDecl[] consumedTemporaries; // (in the current statement, see `afterStatement`)
 	final Identifier isConstThroughSplits(Declaration decl){
 		for(auto d=decl;d;d=d.splitFrom)
 			if(auto read=isConst(d))
@@ -1244,6 +1344,10 @@ abstract class Scope{
 		}
 		foreach(_,d;rnsymtab) retype(d);
 		foreach(d,ref prop;declProps.props) retype(d);
+		foreach(d;declProps.retiredMentioning(splitFrom)){
+			retype(d);
+			declProps.indexRetired(d);
+		}
 	}
 	// (the types of the declarations of a scope mention the versions of the variables in that scope)
 	private void retypeDeclaration(Declaration decl,scope Declaration delegate(Declaration) current){
@@ -1276,7 +1380,7 @@ abstract class Scope{
 	}
 
 	final void updateType(Declaration decl){
-		if(auto prop=declProps.tryGet(decl)){
+		if(auto prop=declProps.tryGetAny(decl)){
 			foreach(id;prop.accesses){
 				if(auto ty=id.typeFromMeaning)
 					id.type=ty;
