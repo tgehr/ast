@@ -53,6 +53,8 @@ abstract class Declaration: Expression{
 	bool isLinear(){ return true; }
 	bool isConst(){ return false; }
 	bool isPinned(){ return false; } // `const` parameters
+	Expression typeNoAnalyze(){ return null; } // (see `typeForDeclNoAnalyze`)
+	Expression typeWithoutMentions; // (its type, if that mentions no variable, see `isLiveTypeDependent`)
 
 	override Expression evalImpl(){ return this; }
 
@@ -72,7 +74,6 @@ abstract class Declaration: Expression{
 	DefinitionSources definitionSources; // (what the dependency is formed from)
 	ReturnExp forgottenBeforeEarlyReturn=null; // if forgotten before a conditional because of this early return in a branch
 
-	bool loopExitSplit=false; // (at the exit of a `do`-`while` loop whose earlier iterations may change the value)
 	final void cutDerivation(){
 		loopExitSplit=true;
 		canonicalSource_=this;
@@ -134,6 +135,7 @@ abstract class Declaration: Expression{
 	// semantic information
 	Expression typeConstBlocker=null;
 	uint typeConstBlockDepth=0;
+	bool loopExitSplit=false; // (at the exit of a `do`-`while` loop whose earlier iterations may change the value)
 }
 
 class CompoundDecl: Expression{
@@ -171,6 +173,8 @@ class VarDecl: Declaration{
 	}
 	bool isConst_=false;
 	bool isTemporary=false; // introduced by the compiler for an intermediate value
+	bool explicitType; // (for diagnostics) whether the type of the variable is annotated in its definition, e.g., `q:=1/2:!ℚ`
+	bool replaceType; // (with the flags together, a `VarDecl` fits into the 368-byte size class of the GC)
 	void setTemporary(bool isTemporary){
 		this.isTemporary=isTemporary;
 		if(isTemporary) name.meaning=this;
@@ -187,6 +191,7 @@ class VarDecl: Declaration{
 	override bool isLinear(){
 		return vtype&&!vtype.isClassical();
 	}
+	override Expression typeNoAnalyze(){ return vtype; }
 	// semantic information
 	Expression vtype;
 	Expression initializer;
@@ -194,9 +199,7 @@ class VarDecl: Declaration{
 	DefineExp definition;
 	Expression typeSource; // (for diagnostics) the loop or assignment that determines the type of the variable, e.g., `x = n/2`
 	VarDecl loweredFrom; // (for diagnostics) the variable after the loop in the analysis before the loop was lowered
-	bool explicitType; // (for diagnostics) whether the type of the variable is annotated in its definition, e.g., `q:=1/2:!ℚ`
 	Identifier outOfScopeCause;
-	bool replaceType;
 	Identifier outOfScopeDup;
 }
 
@@ -454,6 +457,7 @@ class FunctionDef: FixedPointDeclaration{
 	}
 	Expression ret; // return type
 	FunTy ftype;
+	override Expression typeNoAnalyze(){ return ftype; }
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined
 	bool hasReturn;
 	bool isConstructor;

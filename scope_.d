@@ -108,9 +108,8 @@ struct Dependencies{
 		}
 	}
 	Dependencies dup(){
-		typeof(Dependencies.dependencies) result;
-		foreach(k,ref v;dependencies)
-			result[k]=v.dup;
+		auto result=dependencies.dup; // (the table, whose dependencies are copied next)
+		foreach(k,ref v;result) v=v.dup;
 		return Dependencies(result);
 	}
 	bool canForget(Declaration decl)in{

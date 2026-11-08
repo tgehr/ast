@@ -1147,7 +1147,6 @@ bool foldable(Expression e,ref MapSX!(Id,Expression) subst){ // (the evaluation 
 }
 
 class Identifier: Expression{
-	Id id;
 	bool moved=false;
 	@property string name(){return id.str;}
 	@property auto ptr(){return id.ptr;}
@@ -1442,18 +1441,19 @@ class Identifier: Expression{
 		implicitDup=true;
 		this.constLookup=false;
 	}
-	Declaration meaning;
 	bool consumedDuringBorrow=false;
 	bool lazyCapture=false;
 	bool typeofSuppressedCapture=false;
 	bool erroneousUse=false; // (in the argument of an erroneous call: consumption is not reported again)
-	Scope scope_;
 	static if(language==silq){
 		bool outerWanted=true; // (use user friendly type of result of adapted reverse result)
 		bool classical=false;
 		bool opaqueTypeVariable=false; // (a use of a local type variable whose value mentions a version that is no longer available, e.g., `t` after `t:=𝔹^n; n+=1;`, see `typeVariableValue`)
 	}
 	else enum classical=false;
+	Id id; // (after the flags, which fill the end of `Expression`: an `Identifier` fits into the 128-byte size class of the GC)
+	Declaration meaning;
+	Scope scope_;
 	Identifier[] recaptures;
 }
 

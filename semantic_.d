@@ -5607,19 +5607,21 @@ Scope.DeclProp.ComponentReplacement[][] unnestComponentReplacements(Scope.DeclPr
 
 Expression typeForDeclNoAnalyze(Declaration decl){
 	// like typeForDecl, but never triggers further semantic analysis
-	if(auto vd=cast(VarDecl)decl) return vd.vtype;
-	if(auto fd=cast(FunctionDef)decl) return fd.ftype;
-	return null;
+	return decl.typeNoAnalyze();
 }
 
 private bool mentionsVersionOf(Expression e,Declaration decl){
 	return e.freeIdentifiers.any!(id=>id.meaning&&id.meaning.canonicalSource is decl.canonicalSource);
 }
 private bool isLiveTypeDependent(Declaration d,Declaration decl){
+	auto type=typeForDeclNoAnalyze(d);
+	if(!type||d.typeWithoutMentions is type) return false;
 	if(cast(DeadDecl)d) return false;
 	if(d.isSemError()) return false;
-	auto type=typeForDeclNoAnalyze(d);
-	if(!type) return false;
+	if(type.isSemEvaluated()&&!type.freeIdentifiers.any!(id=>!!id.meaning)){ // (e.g., `𝔹`: an analyzed type does not come to mention a variable, see `liveTypeDependent`)
+		d.typeWithoutMentions=type;
+		return false;
+	}
 	if(!mentionsVersionOf(type,decl)){
 		static if(language==silq){ // (or the values of the type variables that it mentions, e.g., `x:t` after `t:=𝔹^n`, see `unfoldTypeVariables`)
 			auto utype=unfoldTypeVariables(type);
@@ -5655,15 +5657,14 @@ Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 }
 private int enclosingDecls(Declaration decl,Scope sc,scope int delegate(Declaration) dg){ // (the declarations of the scopes between `sc` and the scope of `decl`, e.g., of the body of a loop that contains a closure that captures `decl`)
 	if(!decl.scope_) return 0;
-	SetX!Id shadowed; // (e.g., versions consumed in an inner scope)
-	foreach(id,_;sc.rnsymtab) shadowed.insert(id);
+	Scope[] visited; // (the declarations of `sc` and of the scopes visited so far shadow those of the scopes around them, e.g., versions consumed in an inner scope)
 	for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent){
 		auto csc=nsc.parent;
 		if(!csc||csc is decl.scope_||!csc.isNestedIn(decl.scope_)) break;
 		foreach(id,d;csc.rnsymtab)
-			if(id !in shadowed)
+			if(id !in sc.rnsymtab&&!visited.any!(vsc=>id in vsc.rnsymtab))
 				if(auto r=dg(d)) return r;
-		foreach(id,_;csc.rnsymtab) shadowed.insert(id);
+		visited~=csc;
 	}
 	return 0;
 }

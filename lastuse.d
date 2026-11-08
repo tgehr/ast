@@ -142,6 +142,8 @@ final class LastUse{
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
 	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
+	bool loopGuard=false; // (a use in a `while` condition, which is also evaluated on the path that exits the loop)
+	bool cancelableRecorded=false; // (see `recordCancelable`; with the flags together, a `LastUse` fits into the 368-byte size class of the GC)
 	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
 	static bool interleavable(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch&&!bs.returningConditional; } // (the code generator can interleave the statements of the branches of its conditional, see `checkBranchOrder`)
@@ -163,7 +165,6 @@ final class LastUse{
 	LastUse prev=null,next=null;
 	size_t index; // (in the order the last uses of the scope were added)
 	IndexExp consumedComponent=null; // (a consumption allowed because this specific component is not borrowed)
-	bool loopGuard=false; // (a use in a `while` condition, which is also evaluated on the path that exits the loop)
 
 	bool isConsumption(){
 		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;
@@ -220,8 +221,8 @@ final class LastUse{
 	static bool canForgetMerge(Declaration decl,scope NestedScope[] nestedScopes,bool forceHere,bool forceConsumed){
 		return getMergeForgettability(decl,nestedScopes,forceHere,forceConsumed)>=(forceConsumed?Forgettability.consumable:Forgettability.forgettable);
 	}
-	static bool mergesSameValue(Declaration decl,NestedScope nsc){
-		return decl.isDerivedFrom(versionIn(decl,nsc).canonicalSource);
+	static bool mergesSameValue(Declaration decl,NestedScope nsc){ // (as `decl.isDerivedFrom(versionIn(decl,nsc).canonicalSource)`, but without going through the merges of the same value of all earlier conditionals)
+		return decl.canonicalSource is versionIn(decl,nsc).canonicalSource;
 	}
 	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes){
 		return iota(nestedScopes.length).map!((i){
@@ -338,7 +339,6 @@ final class LastUse{
 		return null;
 	}
 	Q!(LastUse,Dependency)[] cancelable; // (last uses that could have been cancelled when this consumption happened, with their dependencies at that time)
-	bool cancelableRecorded=false;
 	private void recordCancelable(){ // (only those that depend on `decl` indirectly, the others are cancelled directly)
 		if(cancelableRecorded) return; // (an implicit `dup` that is cancelled later consumes at the time of the `dup`)
 		cancelableRecorded=true;
@@ -412,9 +412,16 @@ final class LastUse{
 		auto ty=typeForDecl(d);
 		return ty&&ty.isClassical();
 	}
-	private bool definedInScope(Declaration d){
-		import std.algorithm:all;
-		return d.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(scope_));
+	private bool definedInScope(Declaration d){ // (also the versions that it is derived from, see `Declaration.derivedSequence`)
+		SetX!Declaration visited;
+		bool visit(Declaration x){ // (stops at the first one that is not, e.g., a version from before the split)
+			if(!x.scope_||!x.scope_.isNestedIn(scope_)) return false;
+			if(x in visited) return true;
+			visited.insert(x);
+			if(x.splitFrom&&!visit(x.splitFrom)) return false;
+			return x.mergedFrom.all!visit;
+		}
+		return visit(d);
 	}
 	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
 		return readsSplitAtDefinition(scope_,decl,d,forgetDep);
@@ -672,7 +679,8 @@ final class LastUse{
 				if(d !is cdecl){
 					csc.symtabRemove(d);
 					csc.reinsert(cdecl);
-					csc.replaceDecl(d,cdecl,!(d.scope_&&d.scope_ !is csc&&d.scope_.isNestedIn(csc))); // (while merging, the table holds a branch's version, which stays in the branch)
+					if(!cast(DeadDecl)d) // (a marker of a consumption is only in the tables, see `recordConsumption`)
+						csc.replaceDecl(d,cdecl,!(d.scope_&&d.scope_ !is csc&&d.scope_.isNestedIn(csc))); // (while merging, the table holds a branch's version, which stays in the branch)
 				}
 			}else csc.reinsert(cdecl);
 			if(csc is decl.scope_) break;
@@ -1257,6 +1265,8 @@ struct LastUses{
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplitSink,sc,decl,null,null);
 		lu.forwardTo=sc.lastUses.lastUses.get(decl,null);
+		while(lu.forwardTo&&lu.forwardTo.kind==LastUse.Kind.lazySplitSink&&lu.forwardTo.forwardTo) // (an earlier sink stands for the same last use, e.g., where the variable is not used between two conditionals; a pinned one stays, see `removeFromUnusedSiblings`)
+			lu.forwardTo=lu.forwardTo.forwardTo;
 		add(lu);
 	}
 	void lazySplit(Declaration decl,NestedScope sc)in{
@@ -1665,7 +1675,7 @@ struct LastUses{
 			foreach(d;cancelCandidates){
 				auto lu=target(lastUses.get(d,null));
 				if(!lu||lu.dep.isTop||!lu.dep.dependencies.length) stale~=d; // (see `noteCancelCandidate`)
-				else if(lu.isConsumption()&&d !in versions&&!d.splitSequence.any!(y=>y in mentioned)) gone~=d;
+				else if((lu.isConsumption()||lastUses.get(d,null).kind.among(LastUse.Kind.consumption,LastUse.Kind.synthesizedForget))&&d !in versions&&!d.splitSequence.any!(y=>y in mentioned)) gone~=d; // (also one whose last use is forwarded to the one before a nested scope consumed it, e.g., a sink of a variable that a branch consumes)
 			}
 			foreach(d;stale) cancelCandidates.remove(d);
 			foreach(d;gone){
