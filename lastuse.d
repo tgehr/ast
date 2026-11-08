@@ -285,14 +285,14 @@ final class LastUse{
 			slu.markConsumed(null,false);
 		}
 	}
-	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false,IndexExp component=null,bool copy=false){ // (`copy`: of a version that an enclosing scope consumes)
+	private void markConsumed(Identifier theUse,bool isForget,bool fromNested=false,IndexExp component=null,bool copy=false,Scope from=null){ // (`copy`: of a version that an enclosing scope consumes; `from`: the nested scope that consumes it)
 		if(!use) use=theUse;
 		if(!consumedComponent&&use is theUse) consumedComponent=component; // (consumed by the same use)
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
 		if(isConsumption()) return;
 		if(splitSource&&splitSource.splitFrom)
-			splitSource.splitFrom.markConsumed(theUse,false,true,component);
-		if(splitFrom) splitFrom.markConsumed(theUse,false,true,component);
+			splitSource.splitFrom.markConsumed(theUse,false,true,component,false,scope_);
+		if(splitFrom) splitFrom.markConsumed(theUse,false,true,component,false,scope_);
 		if(isForget){
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
@@ -301,7 +301,7 @@ final class LastUse{
 		consumedAt=fromNested?scope_.lastUses.tick():time; // (a nested scope consumes it now)
 		if(!fromNested&&!copy) noteBranchEvent();
 		recordCancelable();
-		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(); // (consumed in a nested scope)
+		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(from); // (consumed in a nested scope)
 		else updateDependenciesOnConsumptionLocal(!fromNested);
 	}
 	private void noteBranchEvent(){ // (for the order of the branches of the enclosing conditionals, see `checkBranchOrder`)
@@ -391,7 +391,7 @@ final class LastUse{
 	private bool isBranchSplit(){
 		return decl.splitFrom&&decl.splitFrom.splitInto.length>1&&decl.splitFrom.splitInto.canFind(decl);
 	}
-	private void updateDependenciesOnConsumption(){
+	private void updateDependenciesOnConsumption(Scope from=null){
 		//imported!"util.io".writeln("UPDATING ALL: ",this);
 		if(auto parent=decl.splitFrom){
 			assert(parent.splitInto.canFind(decl));
@@ -400,7 +400,7 @@ final class LastUse{
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
-					lu.updateDependenciesOnConsumptionLocal(true,parent.splitInto.length>1,this); // (including forgets in nested scopes of the branches)
+					lu.updateDependenciesOnConsumptionLocal(true,parent.splitInto.length>1,this,from); // (including forgets in nested scopes of the branches)
 				}
 			}
 		}else updateDependenciesOnConsumptionLocal();
@@ -476,7 +476,7 @@ final class LastUse{
 		}
 		return ok(d)&&reads;
 	}
-	private void updateDependenciesOnConsumptionLocal(bool descend=true,bool fromBranch=false,LastUse consumption=null){
+	private void updateDependenciesOnConsumptionLocal(bool descend=true,bool fromBranch=false,LastUse consumption=null,Scope from=null){ // (`from`: the nested scope that consumes it, whose conditional updates the last uses in its branches with the dependency there)
 		//imported!"util.io".writeln("UPDATING DEPENDENCIES FROM: ",this);
 		// TODO: perform necessary updates
 		auto cdep=dep.dup;
@@ -495,6 +495,7 @@ final class LastUse{
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
 		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
+		auto fromConditional=from&&splitBranch(consumption)?from:null; // (not in loop bodies, whose next iterations come after the consumption)
 		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
 		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch)
 			if(!(lu.use&&lu.use.implicitDup)) return false;
@@ -527,6 +528,7 @@ final class LastUse{
 				if(!lu.forwardTo) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
 				if(descend) foreach(nsc;lu.nestedAfter){
 					if(nsc.lastUses.discarded) continue;
+					if(fromConditional&&nsc.getSiblingScopes().any!(s=>fromConditional.isNestedIn(s))) continue;
 					auto head=nsc.lastUses.lastLastUse;
 					if(!head) continue;
 					while(head.prev) head=head.prev;
@@ -1223,7 +1225,7 @@ struct LastUses{
 		if(lastUse.isConsumption()){
 			lastUse.noteBranchEvent();
 			if(lastUse.splitSource&&lastUse.splitSource.splitFrom)
-				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent);
+				lastUse.splitSource.splitFrom.markConsumed(lastUse.use,false,true,lastUse.consumedComponent,false,lastUse.scope_);
 			lastUse.updateDependenciesOnConsumption();
 		}
 	}
@@ -1669,10 +1671,10 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 	}
 	auto edges=new size_t[][](events.length);
-	bool ordered(size_t k,size_t l){ // (in program order, unless one is in the branch that returns of a nested conditional whose code after it continues the other branch and the other one is in that branch or in that code: the code generator interleaves them, see `ItePartialReturn`)
+	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `continuedBranches`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`)
 		if(!events[k].lu||!events[l].lu) return true;
 		foreach(x;events[k].lu.noted) foreach(y;events[l].lu.noted)
-			if(x !is y&&(x.returningBeforeContinuation||y.returningBeforeContinuation)&&LastUse.interleavable(x)&&LastUse.interleavable(y)&&x.getSiblingScopes().canFind(y)) return false;
+			if(x !is y&&LastUse.interleavable(x)&&LastUse.interleavable(y)&&x.getSiblingScopes().canFind(y)) return false;
 		return true;
 	}
 	foreach(i;0..branches.length){

@@ -3168,22 +3168,29 @@ class NestedScope: Scope{
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=getDefaultDependency(ndecl);
-		Dependency splitDependency(NestedScope sc){ // (without a known dependency in the enclosing scope, a branch keeps the one it has there: a sibling consumed something it depends on, see `checkBranchOrder`)
-			if(!pdep.isTop||!LastUse.interleavable(sc)||!sc.dependencyTracked(odecl)) return pdep.dup;
-			auto own=sc.getDependency(odecl);
+		bool merged(NestedScope sc){ return sc.siblingsFinal; } // (see `merge`)
+		Declaration oldVersion(NestedScope sc){ // (the version that `sc` refers to: the split in the enclosing scope already replaced `odecl` in its merged nested scopes, see `replaceDecl`)
+			return ndecl !is odecl&&merged(sc)?ndecl:odecl;
+		}
+		Dependency splitDependency(NestedScope sc){ // (without a known dependency in the enclosing scope, a branch keeps the one it has there: a sibling consumed something it depends on, see `checkBranchOrder`; a branch that already ended keeps the one it has at its end, as the enclosing scope continues another branch while merging)
+			auto old=oldVersion(sc);
+			if(merged(sc)&&sc.dependencyTracked(old)) return sc.getDependency(old).dup;
+			if(!pdep.isTop||!LastUse.interleavable(sc)||!sc.dependencyTracked(old)) return pdep.dup;
+			auto own=sc.getDependency(old);
 			return own.isTop?pdep.dup:own.dup;
 		}
 		Declaration result=ndecl;
 		void processCurrent(){
 			result=ndecl;
 			if(type){
+				auto old=oldVersion(this);
 				symtabRemove(odecl);
-				if(dependencyTracked(odecl)&&!splitForDivergingSibling&&!(splitForSibling&&getDependency(odecl).isTop)){
+				if(dependencyTracked(old)&&!splitForDivergingSibling&&!(splitForSibling&&getDependency(old).isTop)){
 					// if(odecl !is ndecl) dependencies.replace(odecl,ndecl); // reverse-inherit dependencies through split
 					auto prevConsumingUse=consumingUse;
 					consumingUse=use;
 					scope(exit) consumingUse=prevConsumingUse;
-					pushDependencies(odecl,true,splitting?null:use);
+					pushDependencies(old,true,splitting?null:use);
 				}
 				// TODO: backtrace forgets and last usages
 				if(auto added=addVariable(ndecl,type,true)){
@@ -3198,15 +3205,15 @@ class NestedScope: Scope{
 					if(remove){ // TODO: can we get rid of this?
 						if(parent.getFunction() is getFunction()){
 							auto ndep=splitDependency(this);
-							if(dependencyTracked(odecl))
-								removeDependency(odecl);
+							if(dependencyTracked(old))
+								removeDependency(old);
 							//imported!"util.io".writeln("DEPS: ",dependencies);
 							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)this);
-							addDependency(odecl,ndep);
+							addDependency(old,ndep);
 							//imported!"util.io".writeln("DEP IS NOW: ",getDependency(odecl));
 						}
-						assert(odecl !is result);
-						replaceDecl(odecl,result);
+						assert(old !is result);
+						replaceDecl(old,result);
 					}
 				}
 			}
@@ -3241,19 +3248,18 @@ class NestedScope: Scope{
 					auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting);
 					sc.splitForDivergingSibling=sc.splitForSibling=false;
 					if(cdecl){
+						auto old=oldVersion(sc);
 						if(parent.getFunction() is sc.getFunction()){
 							auto ndep=splitDependency(sc);
-							if(sc.dependencyTracked(odecl)) // TODO: can we get rid of this?
-								sc.removeDependency(odecl);
+							if(sc.dependencyTracked(old)) // TODO: can we get rid of this?
+								sc.removeDependency(old);
 							//imported!"util.io".writeln("DEPS: ",sc.dependencies);
 							//imported!"util.io".writeln("ADDING DEP: ",odecl," ",result," ",pdep," ",cast(void*)sc);
-							sc.addDependency(odecl,ndep);
+							sc.addDependency(old,ndep);
 							//imported!"util.io".writeln("DEP IS NOW: ",sc.getDependency(odecl));
 						}
-						if(odecl !is cdecl)
-							sc.replaceDecl(odecl,cdecl);
-						if(ndecl !is odecl&&ndecl !is cdecl&&parent.mergedNestedScopes.any!(s=>s.canFind(sc)))
-							sc.replaceDecl(ndecl,cdecl); // (the split in the parent already replaced `odecl` in its merged nested scopes, see `replaceDecl`, e.g., when a merge cancels an implicit `dup` in a branch)
+						if(old !is cdecl)
+							sc.replaceDecl(old,cdecl);
 						sc.splitIntoActiveNestedScopes(odecl,cdecl,use,consumedComponent,splitting);
 					}
 				}
@@ -3263,11 +3269,12 @@ class NestedScope: Scope{
 			processCurrent();
 		}
 		if(!type&&remove){
+			auto old=oldVersion(this);
 			symtabRemove(odecl);
-			if(dependencyTracked(odecl))
-				pushDependencies(odecl,true,splitting?null:use);
-			if(odecl !is result)
-				replaceDecl(odecl,result);
+			if(dependencyTracked(old))
+				pushDependencies(old,true,splitting?null:use);
+			if(old !is result)
+				replaceDecl(old,result);
 			return result;
 		}
 		return remove?consume(result,use,consumedComponent,splitting):result;
