@@ -145,6 +145,7 @@ abstract class Expression: Node{
 	bool isCompound(){ return false; }
 	bool isConstant(){ return false; }
 	bool isTotal(){ return false; }
+	bool isLeafType(){ return false; } // (a type without components, e.g., `𝔹` or `*`, which mentions no variable, see `freeIdentifiers`)
 
 	Maybe!ℤ asIntegerConstant(bool eval=false) {
 		if(!eval) return none!(ℤ);
@@ -1109,7 +1110,7 @@ else Expression unfoldTypeVariable(Expression e){ return e; }
 static if(language==silq)
 Expression unfoldTypeVariables(Expression e,scope bool delegate(Declaration) which=null){ // (`e` with the values of the local type variables that it mentions, e.g., `𝔹^n` for `t` after `t:=𝔹^n`, see `typeVariableValue`; `which`: only those)
 	import ast.type:freeIdentifiers;
-	if(!e||!e.isSemCompleted()) return e;
+	if(!e||e.isLeafType()||!e.isSemCompleted()) return e;
 	MapSX!(Id,Expression) subst;
 	SetX!Id other;
 	foreach(id;e.freeIdentifiers){

@@ -165,6 +165,10 @@ bool isFloat(Expression e){ return preludeNumericTypeName(e)=="float"; }
 bool isRat(Expression e){ return preludeNumericTypeName(e)=="rat"; }
 
 bool isSubtype(Expression lhs,Expression rhs,EqualityContext* ctx=null){
+	if(!ctx&&lhs&&lhs.isLeafType()) if(auto tt=cast(TypeTy)rhs) return tt.hasLeafSubtype(lhs); // (e.g., `isTypeTy(𝔹)`)
+	return isSubtypeUncached(lhs,rhs,ctx);
+}
+private bool isSubtypeUncached(Expression lhs,Expression rhs,EqualityContext* ctx){
 	if(isSubtypeShallow(lhs,rhs,ctx)) return true;
 	static if(language==silq) if(lhs&&rhs){ // (through the values of type variables, see `unfoldTypeVariables`)
 		auto ul=unfoldTypeVariables(lhs),ur=unfoldTypeVariables(rhs);
@@ -177,11 +181,12 @@ private bool isSubtypeShallow(Expression lhs,Expression rhs,EqualityContext* ctx
 	assert(lhs.isSemEvaluated());
 	assert(rhs.isSemEvaluated());
 	if(lhs is rhs) return true;
-	if(lhs.isClassical()&&!rhs.isClassical()&&!isEmpty(lhs)) { // (empty types are classical, but may have quantum components)
+	auto lhsClassical=lhs.isClassical(),rhsClassical=rhs.isClassical();
+	if(lhsClassical&&!rhsClassical&&!isEmpty(lhs)) { // (empty types are classical, but may have quantum components)
 		rhs = rhs.getClassical();
 		if(!rhs) return false;
 		if(lhs is rhs) return true;
-	} else if(!lhs.isClassical()&&rhs.isClassical()) {
+	} else if(!lhsClassical&&rhsClassical) {
 		return false;
 	}
 	return lhs.isSubtypeImpl(rhs,ctx);
@@ -281,6 +286,7 @@ class NumericTy: Type{
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -399,6 +405,7 @@ class ContextTy: Type{
 		return contextTy(true);
 	}
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0;
@@ -438,6 +445,7 @@ class BottomTy: Type{
 		return this;
 	}
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) e){
 		return 0;
@@ -904,6 +912,7 @@ class StringTy: Type{
 	override bool isConstant(){ return true; }
 	override bool isTotal(){ return true; }
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -1823,6 +1832,7 @@ struct FreeIdentifiers{
 	Expression self;
 	int opApply(scope int delegate(Identifier) dg){
 		int rec(Expression e){
+			if(e.isLeafType()) return 0;
 			if(auto id=cast(Identifier)e) return dg(id);
 			if(auto pt=cast(ProductTy)e){
 				foreach(id;pt.dom.freeIdentifiers)
@@ -1913,6 +1923,14 @@ private immutable TypeType[5][5] typeMeet = [
 
 class TypeTy: Type{
 	private TypeType tyty;
+	private bool[const(void)*] leafSubtypes; // (the results of `isSubtype` for leaf types, which are singletons)
+	final bool hasLeafSubtype(Expression lhs)in{
+		assert(lhs.isLeafType());
+	}do{
+		auto key=cast(const(void)*)lhs;
+		if(auto r=key in leafSubtypes) return *r;
+		return leafSubtypes[key]=isSubtypeUncached(lhs,this,null);
+	}
 	private this(TypeType tyty){
 		assert(theTypeTys[tyty] is null, "types are singletons");
 		static if(language==psi) assert(tyty!=TypeType.mtype);
@@ -1947,6 +1965,7 @@ class TypeTy: Type{
 		return this;
 	}
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;
@@ -2015,6 +2034,7 @@ class QNumericTy: Type{ // (only used in Silq)
 		return !!cast(QNumericTy)rhs;
 	}
 	override Expression evalImpl(){ return this; }
+	override bool isLeafType(){ return true; }
 	mixin VariableFree;
 	override int componentsImpl(scope int delegate(Expression) dg){
 		return 0;

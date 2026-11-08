@@ -1239,6 +1239,10 @@ abstract class Scope{
 	// `with{ t:=x[1]; }do{ … }`), with the versions they are registered for
 	final Q!(Declaration,DeclProp.ComponentReplacement*)[] versionComponentReplacements(Declaration decl){
 		typeof(return) r=[];
+		if(!decl.replacementVersions.length){ // (the versions of one chain of splits are distinct)
+			for(auto d=decl;d;d=d.splitFrom) foreach(crepl;componentReplacements(d)) r~=q(d,crepl);
+			return r;
+		}
 		Declaration[] visited;
 		void add(Declaration version_){
 			for(auto d=version_;d;d=d.splitFrom){ // (the replacements may move to a split, see `DeclProps.replaceDecl`)
@@ -3336,13 +3340,18 @@ class TopScope: Scope{
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
 		if(auto decl=super.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)) return decl;
 		if(lookupImports){
-			Declaration[] ds;
+			Declaration first=null;
+			Declaration[] ds; // (if there are several)
 			foreach(sc;imports){
 				if(auto d=sc.lookupImpl(ident,rnsym,false,kind,origin,failures)){
-					ds~=d;
+					if(!first) first=d;
+					else{
+						if(!ds.length) ds~=first;
+						ds~=d;
+					}
 				}
 			}
-			if(ds.length==1||ds.length>=1&&rnsym) return ds[0];
+			if(first&&(!ds.length||rnsym)) return first;
 			if(ds.length>1){
 				error(format("multiple imports of %s",ident.name),ident.loc);
 				foreach(d;ds) note("declaration here",d.loc);

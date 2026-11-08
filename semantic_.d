@@ -4940,10 +4940,13 @@ private bool mayBeSortType(Expression type){ // (whether the values of `type` ca
 }
 static if(language==silq)
 private Expression[] arithmeticOperands(Expression e){ // (of an operator on numbers and Booleans, whose result is not a type)
-	static foreach(op;["+","-","sub","·","/","div","%","|","⊕","&","<","≤",">","≥","=","≠","||","&&","∨","⊻","∧"])
-		if(auto be=cast(BinaryExp!(Tok!op))e) return [be.e1,be.e2];
-	static foreach(op;["-","~","¬"])
-		if(auto ue=cast(UnaryExp!(Tok!op))e) return [ue.e];
+	if(auto be=cast(ABinaryExp)e){
+		static foreach(op;["+","-","sub","·","/","div","%","|","⊕","&","<","≤",">","≥","=","≠","||","&&","∨","⊻","∧"])
+			if(cast(BinaryExp!(Tok!op))e) return [be.e1,be.e2];
+	}else if(auto ue=cast(AUnaryExp)e){
+		static foreach(op;["-","~","¬"])
+			if(cast(UnaryExp!(Tok!op))e) return [ue.e];
+	}
 	return null;
 }
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
@@ -4952,7 +4955,8 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		CallExp[] initializers;
 		unwrapConstLocals(be.e1,&be.e2,constIds,checkLiftedIds,initializers);
 		if(constIds.length){
-			auto previous=constIds.map!(id=>sc.peekSymtab(id.id,false)).array;
+			auto previous=new Declaration[](constIds.length); // (without a closure, which `defineSemantic` would allocate on each call)
+			foreach(i,id;constIds) previous[i]=sc.peekSymtab(id.id,false);
 			Expression r=defineSemantic(be,sc,flags,resetConst);
 			if(auto ce=cast(CompoundExp)r) if(!ce.blscope_&&ce.s.length!=1){ // (`be` was lowered)
 				auto s=new CompoundExp([r]);
@@ -5133,7 +5137,8 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			return DefinitionSources.empty;
 		}
 		void addDependenciesWithSources(Q!(Declaration,Dependency)[] dependencies,DefinitionSources[] sources){
-			auto tracked=dependencies.map!(d=>sc.dependencyTracked(d[0])).array;
+			auto tracked=new bool[](dependencies.length);
+			foreach(i,d;dependencies) tracked[i]=sc.dependencyTracked(d[0]);
 			sc.addDependencies(dependencies,true);
 			foreach(i,d;dependencies){
 				if(tracked[i]) d[0].definitionSources.join(sources[i]); // (replaced component)
