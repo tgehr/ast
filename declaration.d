@@ -193,7 +193,13 @@ class VarDecl: Declaration{
 	}
 	override Expression typeNoAnalyze(){ return vtype; }
 	// semantic information
-	Expression vtype;
+	private Expression vtype_;
+	@property Expression vtype(){ return vtype_; }
+	@property Expression vtype(Expression type){
+		vtype_=type;
+		if(scope_) scope_.noteType(this); // (see `Scope.typeMentioning`)
+		return type;
+	}
 	Expression initializer;
 	Expression knownValue; // (see `knownValueOf`)
 	DefineExp definition;
@@ -456,7 +462,13 @@ class FunctionDef: FixedPointDeclaration{
 		return CaptureAnnotation.once;
 	}
 	Expression ret; // return type
-	FunTy ftype;
+	private FunTy ftype_;
+	@property FunTy ftype(){ return ftype_; }
+	@property FunTy ftype(FunTy type){
+		ftype_=type;
+		if(scope_) scope_.noteType(this); // (see `Scope.typeMentioning`)
+		return type;
+	}
 	override Expression typeNoAnalyze(){ return ftype; }
 	void delegate(Expression)[] ftypeCallbacks; // called as soon as ftype has been determined
 	bool hasReturn;

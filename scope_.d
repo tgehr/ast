@@ -6,7 +6,7 @@ import astopt;
 import std.format, std.conv, std.range, std.algorithm;
 import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
-import util, util.hashtable: HashMap;
+import util, util.hashtable: HashMap, Storage;
 
 struct Dependency{
 	bool isTop;
@@ -60,73 +60,166 @@ struct Dependency{
 }
 
 struct Dependencies{
-	HashMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash()) dependencies;
+	private HashMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash()) table;
+	private HashMap!(Declaration,SetX!Declaration,(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy; // (for each declaration, the variables whose dependencies may mention it: those that no longer do are removed when they are looked up, see `mentioning`, or when the index is built again)
+	private bool unindexed; // (`mentionedBy` is built when it is needed, see `ensureIndex`)
+	private size_t numIndexed,numIndexedAtBuild; // (insertions into `mentionedBy`, also of entries that become stale)
+	private void index(Declaration k,Dependency v){
+		if(unindexed) return;
+		if(numIndexed>2*numIndexedAtBuild+16) buildIndex(); // (without the stale entries)
+		insertIndex(k,v);
+	}
+	private void insertIndex(Declaration k,Dependency v){
+		if(v.isTop) return;
+		foreach(x;v.dependencies){
+			numIndexed++;
+			if(auto s=mentionedBy.getPtr(x)) s.insert(k);
+			else{
+				SetX!Declaration s;
+				s.insert(k);
+				mentionedBy[x]=s;
+			}
+		}
+	}
+	private void buildIndex(){
+		mentionedBy.clear();
+		unindexed=false;
+		numIndexed=0;
+		foreach(k,v;table) insertIndex(k,v);
+		numIndexedAtBuild=numIndexed;
+	}
+	void ensureIndex(){ if(unindexed) buildIndex(); }
+	bool tracked(Declaration decl){ return !!(decl in table); }
+	Dependency get(Declaration decl){ return table[decl]; }
+	Declaration[] keys(){ return table.keys.array; }
+	void set(Declaration decl,Dependency dep){
+		table[decl]=dep;
+		index(decl,table[decl]);
+	}
+	void remove(Declaration decl){ table.remove(decl); } // (the entries of `mentionedBy` for it are removed later)
+	Declaration[] mentioning(Declaration decl){ // (the variables whose dependencies mention `decl`, in the order of the table)
+		ensureIndex();
+		auto s=mentionedBy.getPtr(decl);
+		if(!s) return null;
+		Q!(size_t,Declaration)[] r;
+		Declaration[] stale;
+		foreach(k;*s){
+			size_t pos;
+			if(!table.tryGetPosition(k,pos)){ stale~=k; continue; }
+			auto v=table[k];
+			if(v.isTop||decl !in v.dependencies){ stale~=k; continue; }
+			r~=q(pos,k);
+		}
+		foreach(k;stale) s.remove(k);
+		if(!s.length) mentionedBy.remove(decl);
+		sort!"a[0]<b[0]"(r);
+		return r.map!(x=>x[1]).array;
+	}
+	void update(scope void delegate(Declaration,ref Dependency) dg){ // (of all variables)
+		foreach(k,ref v;table){
+			dg(k,v);
+			index(k,v);
+		}
+	}
 	void joinWith(Dependencies rhs){
-		foreach(k,ref v;dependencies){
-			if(k in rhs.dependencies){
-				v.joinWith(rhs.dependencies[k]);
+		foreach(k,ref v;table){
+			if(k in rhs.table){
+				v.joinWith(rhs.table[k]);
 				if(k in v.dependencies)
 					v=Dependency(true); // TODO: get rid of this
+				else index(k,v);
 			}
 		}
 	}
 	void pushUp(Declaration removed, bool keep, Identifier consumedAt=null)in{
-		assert(removed in dependencies,text(removed," ",removed.loc," ",dependencies));
+		assert(removed in table,text(removed," ",removed.loc," ",table));
 	}do{
-		Dependency x=dependencies[removed];
-		if(!keep) dependencies.remove(removed);
-		foreach(k,ref v;dependencies){
+		Dependency x=table[removed];
+		if(!keep) table.remove(removed);
+		foreach(k;mentioning(removed)){
+			auto v=table[k];
 			v.replace(removed, x, consumedAt);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
+			else index(k,v);
+			table[k]=v;
 		}
 	}
 	void replace(Declaration decl,Declaration ndecl)in{
-		assert(decl in dependencies,text(decl.loc," ",dependencies));
-		assert(ndecl !in dependencies,text(ndecl.loc," ",dependencies));
+		assert(decl in table,text(decl.loc," ",table));
+		assert(ndecl !in table,text(ndecl.loc," ",table));
 	}do{
-		foreach(k,ref v;dependencies) v.replace(decl,ndecl);
-		dependencies[ndecl]=dependencies[decl];
-		dependencies.remove(decl);
+		replaceInDependencies(decl,ndecl);
+		set(ndecl,table[decl]);
+		table.remove(decl);
+	}
+	void replaceInDependencies(Declaration decl,Declaration ndecl,Declaration except=null){ // (in those of all variables except `except`)
+		foreach(k;mentioning(decl)){
+			if(k is except) continue;
+			auto v=table[k];
+			v.replace(decl,ndecl);
+			index(k,v);
+			table[k]=v;
+		}
 	}
 	void merge(Declaration decl,Declaration ndecl)in{ // (`ndecl` is another version of the variable of `decl`)
-		assert(decl in dependencies&&ndecl in dependencies);
+		assert(decl in table&&ndecl in table);
 	}do{
-		auto dep=dependencies[decl];
-		dependencies.remove(decl);
-		foreach(k,ref v;dependencies) v.replace(decl,ndecl);
-		dependencies[ndecl].joinWith(dep);
-		foreach(k,ref v;dependencies)
+		auto dep=table[decl];
+		table.remove(decl);
+		auto changed=mentioning(decl);
+		foreach(k;changed){
+			auto v=table[k];
+			v.replace(decl,ndecl);
+			index(k,v);
+			table[k]=v;
+		}
+		auto nv=table[ndecl];
+		nv.joinWith(dep);
+		index(ndecl,nv);
+		table[ndecl]=nv;
+		foreach(k;chain(changed,only(ndecl))){ // (only these can come to mention themselves)
+			auto v=table[k];
 			if(k in v.dependencies)
-				v=Dependency(true); // TODO: get rid of this
+				table[k]=Dependency(true); // TODO: get rid of this
+		}
 	}
 	void substitute(Declaration decl,Dependency dep){ // substitute `decl` by `dep` inside all tracked sets (`decl` itself has no entry)
-		foreach(k,ref v;dependencies){
+		foreach(k;mentioning(decl)){
+			auto v=table[k];
 			v.replace(decl,dep);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
+			else index(k,v);
+			table[k]=v;
 		}
 	}
-	Dependencies dup(){
-		auto result=dependencies.dup; // (the table, whose dependencies are copied next)
+	Dependencies dup(){ // (without the index, which the copy builds when it needs it)
+		auto result=table.dup; // (the table, whose dependencies are copied next)
 		foreach(k,ref v;result) v=v.dup;
-		return Dependencies(result);
+		Dependencies r;
+		r.table=result;
+		r.unindexed=true;
+		return r;
 	}
 	bool canForget(Declaration decl)in{
-		assert(decl in dependencies||decl.isSemError(),text(decl," ",dependencies));
+		assert(decl in table||decl.isSemError(),text(decl," ",table));
 	}do{
-		if(decl !in dependencies) return true;
-		return !dependencies[decl].isTop;
+		if(decl !in table) return true;
+		return !table[decl].isTop;
 	}
 	void clear(){
-		dependencies.clear();
+		table.clear();
+		mentionedBy.clear();
+		unindexed=false;
+		numIndexed=numIndexedAtBuild=0;
 	}
 	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
-		foreach(decl,ref dependency;dependencies){
+		foreach(decl,ref dependency;table){
 			auto id=decl.getId;
 			if(id==Id()) continue;
-			assert(id !in result,text(decl," ",dependencies," ",result));
+			assert(id !in result,text(decl," ",table," ",result));
 			result[id]=dependency.getIds();
 		}
 		return result;
@@ -135,6 +228,7 @@ struct Dependencies{
 		auto ids=getIds,rids=rhs.getIds;
 		return ids==rids;
 	}
+	string toString(){ return text(table); }
 }
 
 struct DummyWitnessContext{
@@ -278,6 +372,53 @@ abstract class Scope{
 		if(decl.name.id !in symtab||cast(DeadDecl)symtab[decl.name.id])
 			symtab[decl.name.id]=decl;
 		rnsymtab[decl.getId]=decl;
+		if(mayMentionInType(decl)) noteTypeMentioning(decl);
+	}
+	private SetX!Declaration typeMentioning_; // (the declarations of `rnsymtab` whose types may mention variables, see `typeMentioning`; and others that are no longer there)
+	private size_t numTypeMentioningAtPrune; // (the size of `typeMentioning_` after its last pruning)
+	private void noteTypeMentioning(Declaration decl){
+		typeMentioning_.insert(decl);
+		if(typeMentioning_.length>2*numTypeMentioningAtPrune+16) pruneTypeMentioning();
+	}
+	private void pruneTypeMentioning(){ // (removes the declarations that are no longer in `rnsymtab` or whose types mention no variable)
+		Declaration[] gone;
+		foreach(d;typeMentioning_) if(rnsymtab.get(d.getId,null) !is d||!mayMentionInType(d)) gone~=d;
+		foreach(d;gone) typeMentioning_.remove(d);
+		numTypeMentioningAtPrune=typeMentioning_.length;
+	}
+	static bool mayMentionInType(Declaration decl){ // (or its type is still to be determined)
+		import ast.semantic_: typeForDeclNoAnalyze;
+		auto type=typeForDeclNoAnalyze(decl);
+		if(!type) return cast(VarDecl)decl||cast(FunctionDef)decl; // (e.g., `addVariable` determines the type after the insertion)
+		return decl.typeWithoutMentions !is type&&!(type.isSemEvaluated()&&!type.freeIdentifiers.any!(id=>!!id.meaning));
+	}
+	final void noteType(Declaration decl){ // (its type changed: it may be in the tables of the nested scopes as well)
+		if(!mayMentionInType(decl)) return;
+		void add(Scope sc){
+			sc.noteTypeMentioning(decl);
+			foreach(nsc;sc.activeNestedScopes) add(nsc);
+		}
+		add(this);
+		for(auto nsc=cast(NestedScope)this;nsc&&nsc.parent;nsc=cast(NestedScope)nsc.parent) // (e.g., merged into the enclosing scopes)
+			if(nsc.parent.rnsymtab.get(decl.getId,null) is decl) add(nsc.parent);
+	}
+	final Declaration[] typeMentioning(){ // (the declarations of `rnsymtab` whose types may mention variables, in the order of `rnsymtab`)
+		Q!(size_t,Declaration)[] r;
+		Declaration[] gone;
+		foreach(d;typeMentioning_){
+			size_t pos;
+			if(rnsymtab.get(d.getId,null) !is d||!mayMentionInType(d)||!rnsymtab.tryGetPosition(d.getId,pos)){ gone~=d; continue; }
+			r~=q(pos,d);
+		}
+		foreach(d;gone) typeMentioning_.remove(d);
+		numTypeMentioningAtPrune=typeMentioning_.length;
+		sort!"a[0]<b[0]"(r);
+		return r.map!(x=>x[1]).array;
+	}
+	private void resetTypeMentioning(){ // (after `rnsymtab` was replaced)
+		typeMentioning_=typeof(typeMentioning_).init;
+		foreach(_,d;rnsymtab) if(mayMentionInType(d)) typeMentioning_.insert(d);
+		numTypeMentioningAtPrune=typeMentioning_.length;
 	}
 	void symtabRemove(Declaration decl)in{
 		assert(!!decl);
@@ -1417,7 +1558,7 @@ abstract class Scope{
 	final void pushUp(ref Dependency dependency,Declaration removed){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		if(!dependencyTracked(removed)) return; // TODO: ideally can be removed
-		dependency.replace(removed,dependencies.dependencies[removed]);
+		dependency.replace(removed,dependencies.get(removed));
 	}
 	final void clearConsumed(){
 		foreach(removed;toRemove)
@@ -1738,7 +1879,7 @@ abstract class Scope{
 		size_t[] mentioned(Declaration d){ // (the variables of the scope that the dependency of `d` mentions)
 			for(Scope sc=this;sc;sc=sc.parentScope()){
 				if(!sc.dependencyTracked(d)) continue;
-				auto dep=sc.dependencies.dependencies[d];
+				auto dep=sc.dependencies.get(d);
 				size_t[] r;
 				if(!dep.isTop) foreach(x;dep.dependencies) if(auto j=cast(const(void)*)x in index) if(decls[*j] !is d) r~=*j;
 				return r;
@@ -1817,7 +1958,7 @@ abstract class Scope{
 			if(decl in seen) continue;
 			seen.insert(decl);
 			if(!dependencyTracked(decl)) continue;
-			auto d=dependencies.dependencies[decl];
+			auto d=dependencies.get(decl);
 			if(!d.isTop) foreach(x;d.dependencies) worklist~=x;
 		}
 		auto all=Dependency(false);
@@ -1873,7 +2014,6 @@ abstract class Scope{
 		static if(language==silq) assert(!dependencyTracked(decl));
 	}do{
 		addDependency(decl,getDefaultDependency(decl));
-		//foreach(ddecl,ref dep;dependencies.dependencies) imported!"util.io".writeln(ddecl," ",cast(void*)ddecl);
 		//imported!"util.io".writeln("ADDED DEFAULT: ",decl," ",dependencies," ",cast(void*)decl);
 		//imported!"util.io".writeln(dependencies.getIds());
 		//assert(decl.getName!="rrr");
@@ -1885,7 +2025,7 @@ abstract class Scope{
 	void removeDependency(Declaration decl){
 		//imported!"util.io".writeln("REMOVING: ",decl," ",cast(void*)decl);
 		static int counter=0;
-		dependencies.dependencies.remove(decl);
+		dependencies.remove(decl);
 	}
 	void addDependencies(scope Q!(Declaration,Dependency)[] deps,bool sourcesTracked=false){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
@@ -1893,21 +2033,21 @@ abstract class Scope{
 		foreach(i,ref dep;deps){
 			assert(!!dep[0]);
 			substituteConsumed(dep[1],consumedDepLog);
-			if(dep[0] in dependencies.dependencies){
+			if(dependencies.tracked(dep[0])){
 				//writeln(dep[0]," ",toRemove," ",dependencies)
 				dep[1].remove(dep[0]); // (its previous value is joined, e.g., a replaced component computed from other components)
-				dep[1].joinWith(dependencies.dependencies[dep[0]]);
+				dep[1].joinWith(dependencies.get(dep[0]));
 				if(!sourcesTracked) dep[0].definitionSources=DefinitionSources.init;
 			}
 		}
 		foreach(decl,dep;deps.map!(x=>x)){
 			assert(decl&&!cast(DeadDecl)decl);
-			dependencies.dependencies[decl]=dep;
+			dependencies.set(decl,dep);
 		}
 	}
 	final bool dependencyTracked(Declaration decl){
 		static if(language==psi) return true; // (in PSI, all data is classical: dependencies are not tracked)
-		return !!(decl in dependencies.dependencies);
+		return dependencies.tracked(decl);
 	}
 	final Scope dependencyScope(Declaration decl){ // (the dependencies of a merged scope are those of the scope it was merged into, e.g., for its last uses)
 		for(Scope sc=this;sc&&sc.dependenciesMerged;sc=sc.parentScope())
@@ -1930,7 +2070,7 @@ abstract class Scope{
 	}do{
 		static if(language==psi) return Dependency(false); // (in PSI, all data is classical: dependencies are not tracked)
 		if(!dependencyTracked(decl)){
-			if(auto dsc=dependencyScope(decl)) if(dsc !is this) return dsc.dependencies.dependencies[decl];
+			if(auto dsc=dependencyScope(decl)) if(dsc !is this) return dsc.dependencies.get(decl);
 			auto cur=rnsymtab.get(decl.getId,null);
 			if(cur&&cur !is decl&&!cast(DeadDecl)cur) return getDefaultDependency(decl);
 			static if(language==silq) if(cast(DeadDecl)cur){ // (the variable was consumed here: its dependency is not tracked again)
@@ -1939,7 +2079,7 @@ abstract class Scope{
 			}
 			addDefaultDependency(decl); // TODO: ideally can be removed
 		}
-		return dependencies.dependencies[decl];
+		return dependencies.get(decl);
 	}
 	final void replaceDependencies(Declaration decl,Declaration rhs){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
@@ -1972,8 +2112,8 @@ abstract class Scope{
 	final void continueDependencies(Declaration decl,Declaration ndecl){ // (`ndecl` has the value of `decl`, which it replaces)
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
-		dependencies.dependencies.remove(decl);
-		foreach(k,ref v;dependencies.dependencies) if(k !is ndecl) v.replace(decl,ndecl);
+		dependencies.remove(decl);
+		dependencies.replaceInDependencies(decl,ndecl,ndecl);
 		controlDependency.replace(decl,ndecl);
 		foreach(ref tt;trackedTemporaries) tt.dep.replace(decl,ndecl);
 	}
@@ -1985,7 +2125,7 @@ abstract class Scope{
 			bool done=false;
 			do{ // TODO: improve
 				done=true;
-				foreach(ndecl;dependencies.dependencies.keys.array){
+				foreach(ndecl;dependencies.mentioning(decl)){
 					auto v=getDependency(ndecl);
 					//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
 					if(decl in v.dependencies){
@@ -2153,6 +2293,8 @@ abstract class Scope{
 		r.dependencies=dependencies.dup;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
+		r.typeMentioning_=typeMentioning_.dup;
+		r.numTypeMentioningAtPrune=numTypeMentioningAtPrune;
 		if(!allowMerge) lastUses.prepareNesting(this);
 		allowMerge=true;
 		activeNestedScopes~=r;
@@ -2240,6 +2382,8 @@ abstract class Scope{
 		}
 		symtab=scopes[0].symtab.dup;
 		rnsymtab=scopes[0].rnsymtab.dup;
+		typeMentioning_=scopes[0].typeMentioning_.dup;
+		numTypeMentioningAtPrune=scopes[0].numTypeMentioningAtPrune;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
 		MapX!(Declaration,Dependency) carryOverDependencies;
 		static if(language==silq) foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
@@ -2292,8 +2436,9 @@ abstract class Scope{
 					auto ty=typeForDecl(d);
 					if(!ty||!isQuantum(ty)||versions.length&&ty!=typeForDecl(versions[0])){ versions=null; break; }
 					bool readsOnly=true; // (the values computed from `d` only read it, so they can be recomputed from the merged version, whose reads replace those of `d`, see `genEagerMerges`)
-					foreach(k,ref v;s.dependencies.dependencies){
-						if(k is d||v.isTop||!(d in v.dependencies)) continue;
+					foreach(k;s.dependencies.mentioning(d)){
+						if(k is d) continue;
+						auto v=s.dependencies.get(k);
 						if(!LastUse.readsSplitAtDefinition(s,d,k,v)) readsOnly=false;
 						else if(s.getDependency(d).isTop&&scopes.all!(t=>t.rnsymtab.get(k.getId,null)&&!cast(DeadDecl)t.rnsymtab.get(k.getId,null))) dependents=true; // (merged as well)
 					}
@@ -2496,7 +2641,7 @@ abstract class Scope{
 					foreach(n;merged) if(n !is m&&n in dep.dependencies) dep.replace(n,getDependency(n));
 				}
 				if(merged.any!(n=>n in dep.dependencies)) dep=Dependency(true);
-				dependencies.dependencies[m]=dep;
+				dependencies.set(m,dep);
 			}
 		}
 		SetX!Declaration forgotten; // (or not consumed, after an error)
@@ -2567,9 +2712,8 @@ abstract class Scope{
 				if(decl !in consumedDepLog)
 					consumedDepLog[decl]=dep;
 		}
-		foreach(k,ref v;dependencies.dependencies)
-			substituteConsumed(v,consumedDepLog);
-		foreach(k,v;dependencies.dependencies.dup){
+		dependencies.update((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); });
+		foreach(k;dependencies.keys){
 			if(k.getId !in rnsymtab)
 				if(dependencyTracked(k))
 					removeDependency(k);
@@ -2590,13 +2734,12 @@ abstract class Scope{
 		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
 		foreach(decl,ref dep;carryOverDependencies){
-			if(decl !in dependencies.dependencies)
-				dependencies.dependencies[decl]=dep;
+			if(!dependencies.tracked(decl))
+				dependencies.set(decl,dep);
 		}
 		lastUses.merge(isLoop,this,scopes);
 		// TODO: needed?
-		foreach(k,ref v;dependencies.dependencies)
-			substituteConsumed(v,consumedDepLog);
+		dependencies.update((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); });
 		return errors;
 	}
 
@@ -2878,8 +3021,8 @@ abstract class Scope{
 			return current&&current.isDerivedFrom(split);
 		}
 		Dependency dependencyOf(Declaration decl){
-			if(decl !in dependencies.dependencies) return Dependency(true);
-			return dependencies.dependencies[decl].dup;
+			if(!dependencies.tracked(decl)) return Dependency(true);
+			return dependencies.get(decl).dup;
 		}
 	private:
 		Dependencies dependencies;
@@ -2944,7 +3087,7 @@ abstract class Scope{
 						state.symtab[decl.name.id]=decl;
 					state.rnsymtab[decl.getId]=decl;
 					auto tracked=trackingDecl(decl);
-					if(tracked !is decl&&tracked in state.dependencies.dependencies&&decl !in state.dependencies.dependencies)
+					if(tracked !is decl&&state.dependencies.tracked(tracked)&&!state.dependencies.tracked(decl))
 						state.dependencies.replace(tracked,decl);
 				}
 			}
@@ -2961,7 +3104,7 @@ abstract class Scope{
 				auto splt=getSplit(decl);
 				if(splt !is decl){
 					if(replace){
-						if(decl in state.dependencies.dependencies)
+						if(state.dependencies.tracked(decl))
 							state.dependencies.replace(decl,splt);
 						state.declProps.replaceDecl(decl,splt);
 						if(auto lu=state.lastUses.get(decl,null)){ // (e.g., forgotten on entry)
@@ -3036,6 +3179,7 @@ abstract class Scope{
 			rnsymtab[decl.getId]=updateDecl(decl);
 		}
 		foreach(_,decl;rnsymtab) consumedDepLog.remove(decl); // (logged after the snapshot, e.g., the version before a loop that the merge of the loop replaced)
+		resetTypeMentioning();
 		lastUses.restoreSnapshot(state.lastUses,state.numLastUses,this);
 		foreach(scopes;mergedNestedScopes[state.numMergedNestedScopes..$])
 			foreach(sc;scopes) sc.lastUses.discarded=true;

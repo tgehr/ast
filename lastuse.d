@@ -146,6 +146,10 @@ final class LastUse{
 	bool cancelableRecorded=false; // (see `recordCancelable`; with the flags together, a `LastUse` fits into the 368-byte size class of the GC)
 	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
+	static bool inBranch(Scope sc){ // (or nested in one)
+		for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent) if(isBranch(nsc)) return true;
+		return false;
+	}
 	static bool interleavable(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch&&!bs.returningConditional; } // (the code generator can interleave the statements of the branches of its conditional, see `checkBranchOrder`)
 	Scope scope_;
 	Declaration decl=null;
@@ -291,6 +295,7 @@ final class LastUse{
 		if(!consumedComponent&&use is theUse) consumedComponent=component; // (consumed by the same use)
 		//imported!"util.io".writeln("MARKING CONSUMED: ",this," ",use?text(use.loc):"<?>");
 		if(isConsumption()) return;
+		auto unread=kind==Kind.definition&&!splitFrom&&!splitSource&&!decl.splitInto.length; // (no other dependency mentions the variable, see `updateDependenciesOnConsumptionLocal`)
 		if(splitSource&&splitSource.splitFrom)
 			splitSource.splitFrom.markConsumed(theUse,false,true,component,false,scope_);
 		if(splitFrom) splitFrom.markConsumed(theUse,false,true,component,false,scope_);
@@ -303,7 +308,7 @@ final class LastUse{
 		if(!fromNested&&!copy) noteBranchEvent();
 		recordCancelable();
 		if(fromNested&&isBranchSplit()) updateDependenciesOnConsumption(from); // (consumed in a nested scope)
-		else updateDependenciesOnConsumptionLocal(!fromNested);
+		else if(!unread||fromNested) updateDependenciesOnConsumptionLocal(!fromNested);
 	}
 	private void noteBranchEvent(){ // (for the order of the branches of the enclosing conditionals, see `checkBranchOrder`)
 		void note(BlockScope bs){
@@ -1141,6 +1146,7 @@ struct LastUses{
 		}
 	}
 	private void retire(LastUse lastUse){
+		if(!LastUse.inBranch(lastUse.scope_)) return; // (only the checks of the branch order read the history, see `checkBranchOrder`)
 		retired[lastUse.decl]~=lastUse;
 	}
 	private void add(LastUse lastUse,Dependency* atSplit=null)in{

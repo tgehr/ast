@@ -4872,6 +4872,80 @@ void unwrapConstLocals(ref Expression lhs,Expression* rhs,ref Identifier[] ids,r
 		unwrapConstLocals(cat.e2,null,ids,checkLifted,initializers);
 	}
 }
+static if(language==silq)
+private bool mayBeLowered(DefineExp be,Scope sc){ // (by `lowerNondeterministicType` or `lowerDefine` after the analysis of the right-hand side, which needs the state from before it: otherwise, `defineSemantic` does not copy it)
+	static bool entry(Expression e){ return !e.implicitDup&&(cast(Identifier)e||cast(IndexExp)e||cast(SliceExp)e); } // (see `validDefLhs`)
+	if(sc.getWithTransInverse()) return true; // (a definition of a variable that is still defined checks its value, see `makeDeclaration`)
+	if(auto tpl=cast(TupleExp)be.e1) return !tpl.e.all!entry;
+	if(!entry(be.e1)) return true;
+	return cast(Identifier)be.e1&&mayHaveSortType(be.e2,sc,true); // (only a variable can get a type that is not deterministic)
+}
+static if(language==silq)
+private bool mayHaveSortType(Expression e,Scope sc,bool whole=false){ // (before its analysis: whether its type can be a sort or empty, e.g., `*` or `⊥`, see `isTypeTy`; `whole`: the right-hand side of a definition, which `lowerNondeterministicType` lowers only if it is a type construction, see `isTypeConstruction`)
+	if(cast(LiteralExp)e) return false;
+	if(auto tae=cast(TypeAnnotationExp)e){
+		if(whole&&tae.annotationType!=TypeAnnotationType.annotation) return false; // (e.g., `measure(x) as !ℕ`: not a type construction)
+		return !cast(LiteralExp)tae.e; // (e.g., `0:𝔹`)
+	}
+	Declaration probe(Expression e){
+		auto id=cast(Identifier)e;
+		if(!id) return null;
+		auto probe=new Identifier(id.id);
+		probe.loc=id.loc;
+		return sc.lookup(probe,false,true,Lookup.probing,null);
+	}
+	if(cast(Identifier)e){
+		if(whole) return false; // (not a type construction)
+		auto vd=cast(VarDecl)probe(e);
+		return !vd||!vd.vtype||mayBeSortType(vd.vtype);
+	}
+	if(auto operands=arithmeticOperands(e)) return operands.any!(x=>mayHaveSortType(x,sc)); // (e.g., `a+b`, whose type is numeric, or empty if the type of an operand is, see `arithmeticType`)
+	auto ce=cast(CallExp)e;
+	if(!ce||ce.isSquare) return true;
+	auto fd=cast(FunctionDef)probe(ce.e);
+	if(!fd||!fd.isToplevelDeclaration()) return true;
+	auto ft=fd.ftype;
+	if(!ft||!ft.cod) return true;
+	auto callee=ft; // (after an implicit instantiation, e.g., `measure[τ]` for `measure(x)`, see `tryCall`)
+	if(ft.isSquare){
+		callee=cast(FunTy)ft.cod;
+		if(!callee||callee.isSquare||!callee.cod) return true;
+	}
+	if(whole&&callee.annotation<deterministic) return false; // (a call of a function that measures is not a type construction)
+	if(!ft.isSquare) return mayBeSortType(ft.cod);
+	auto id=cast(Identifier)callee.cod;
+	if(!id||ft.names.countUntil(id.id)<0) return mayBeSortType(callee.cod);
+	Expression[] args=[ce.arg]; // (the type parameter is the type of the arguments of its parameters, e.g., `τ` for `dup(x)`)
+	if(callee.isTuple){
+		auto tpl=cast(TupleExp)ce.arg;
+		if(!tpl||tpl.e.length!=callee.names.length) return true;
+		args=tpl.e;
+	}else if(callee.names.length!=1) return true;
+	bool bound=false;
+	foreach(i,type;callee.params.map!(p=>p.vtype).enumerate){
+		if(!type) return true;
+		if(!type.freeIdentifiers.any!(x=>x.id==id.id)) continue;
+		auto tid=cast(Identifier)type;
+		if(!tid||tid.id!=id.id||mayHaveSortType(args[i],sc)) return true;
+		bound=true;
+	}
+	return !bound;
+}
+static if(language==silq)
+private bool mayBeSortType(Expression type){ // (whether the values of `type` can be types, or `type` can be empty, e.g., `*` or `⊥`, or `T` for a type variable `T`)
+	return isTypeTy(type)||isEmptyTy(type)||type.freeIdentifiers.any!((id){
+		auto t=id.meaning?typeForDeclNoAnalyze(id.meaning):null;
+		return !t||isTypeTy(t);
+	});
+}
+static if(language==silq)
+private Expression[] arithmeticOperands(Expression e){ // (of an operator on numbers and Booleans, whose result is not a type)
+	static foreach(op;["+","-","sub","·","/","div","%","|","⊕","&","<","≤",">","≥","=","≠","||","&&","∨","⊻","∧"])
+		if(auto be=cast(BinaryExp!(Tok!op))e) return [be.e1,be.e2];
+	static foreach(op;["-","~","¬"])
+		if(auto ue=cast(UnaryExp!(Tok!op))e) return [ue.e];
+	return null;
+}
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq){
 		Identifier[] constIds,checkLiftedIds;
@@ -4976,7 +5050,10 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		makeDeclaration(be,success,sc,attemptLowering||be.isSemError(),false);
 	}
 	if(attemptLowering){
-		auto preState=sc.getStateSnapshot(true);
+		static if(language==silq) auto mayLower=mayBeLowered(be,sc);
+		else enum mayLower=true;
+		Scope.ScopeState preState;
+		if(mayLower) preState=sc.getStateSnapshot(true);
 		be.e2=expressionSemantic(be.e2,context.nestConsumed);
 		propErr(be.e2,be);
 		static if(language==silq) resolvePatternComponentForgets(patternComponentForgets,be,sc);
@@ -4984,6 +5061,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		updateLhs();
 		if(!be.isSemError()){
 			static if(language==silq) if(auto e=lowerNondeterministicType(be)){
+				assert(mayLower,text("not expected to be lowered: ",be));
 				sc.restoreStateSnapshot(preState);
 				auto r=statementSemantic(e,sc,flags);
 				finishIndexReplacement(be,sc);
@@ -4995,6 +5073,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			}
 			if(auto e=lowerDefine!ldflags(be,sc,unchecked,noImplicitDup)){
 				if(!e.isSemError()){
+					assert(mayLower,text("not expected to be lowered: ",be));
 					sc.restoreStateSnapshot(preState);
 					//imported!"util.io".writeln("SEMANTIC ON: ",e);
 					auto r=statementSemantic(e,sc,flags);
@@ -5655,28 +5734,23 @@ Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
 		foreach(_,d;decl.scope_.rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
 	return null;
 }
-private int enclosingDecls(Declaration decl,Scope sc,scope int delegate(Declaration) dg){ // (the declarations of the scopes between `sc` and the scope of `decl`, e.g., of the body of a loop that contains a closure that captures `decl`)
-	if(!decl.scope_) return 0;
+Declaration liveTypeDependent(Declaration decl,Scope sc){ // (as `liveTypeDependent(decl,sc.rnsymtab)`, and then among the declarations of the scopes between `sc` and the scope of `decl`, e.g., of the body of a loop that contains a closure that captures `decl`, but only of those whose types may mention variables)
+	foreach(d;sc.typeMentioning) if(isLiveTypeDependent(d,decl)) return d;
+	if(decl.scope_&&decl.scope_ !is sc&&decl.scope_.rnsymtab !is sc.rnsymtab)
+		foreach(d;decl.scope_.typeMentioning) if(isLiveTypeDependent(d,decl)) return d;
+	if(!decl.scope_) return null;
 	Scope[] visited; // (the declarations of `sc` and of the scopes visited so far shadow those of the scopes around them, e.g., versions consumed in an inner scope)
 	for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent){
 		auto csc=nsc.parent;
 		if(!csc||csc is decl.scope_||!csc.isNestedIn(decl.scope_)) break;
-		foreach(id,d;csc.rnsymtab)
+		foreach(d;csc.typeMentioning){
+			auto id=d.getId;
 			if(id !in sc.rnsymtab&&!visited.any!(vsc=>id in vsc.rnsymtab))
-				if(auto r=dg(d)) return r;
+				if(isLiveTypeDependent(d,decl)) return d;
+		}
 		visited~=csc;
 	}
-	return 0;
-}
-Declaration liveTypeDependent(Declaration decl,Scope sc){
-	if(auto r=liveTypeDependent(decl,sc.rnsymtab)) return r;
-	Declaration r=null;
-	enclosingDecls(decl,sc,(Declaration d){
-		if(!isLiveTypeDependent(d,decl)) return 0;
-		r=d;
-		return 1;
-	});
-	return r;
+	return null;
 }
 
 Declaration[] liveTypeDependents(Declaration decl,MapX!(Id,Declaration) rnsymtab){
