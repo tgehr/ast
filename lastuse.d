@@ -138,6 +138,7 @@ final class LastUse{
 		constUse,
 		consumption,
 		capture,
+		marker, // (of a nesting in the list of the last uses, see `LastUses.Batch`)
 	}
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
@@ -185,8 +186,8 @@ final class LastUse{
 		auto ndecl=nsc.parent.getSplit(decl);
 		while(ndecl.splitFrom&&ndecl.splitFrom.scope_.isNestedIn(nsc.parent))
 			ndecl=ndecl.splitFrom;
-		auto plu=nsc.parent.lastUses.lastUses.get(ndecl,null);
-		assert(!!plu,text(ndecl," ",decl," ",nsc.parent.lastUses.lastUses," ",nsc.parent.lastUses.lastUses.get(decl,null)," ",cast(void*)decl," ",cast(void*)ndecl));
+		auto plu=nsc.parent.lastUses.here(ndecl);
+		assert(!!plu,text(ndecl," ",decl," ",nsc.parent.lastUses.lastUses," ",nsc.parent.lastUses.here(decl)," ",cast(void*)decl," ",cast(void*)ndecl));
 		return splitFrom=plu;
 	}
 
@@ -201,7 +202,7 @@ final class LastUse{
 			auto cdecl=decl;
 			foreach(d;decl.mergedFrom) if(d.scope_ is nsc) cdecl=d;
 			if(decl !is cdecl) return true;
-			auto nlu=nsc.lastUses.lastUses.get(cdecl,null);
+			auto nlu=nsc.lastUses.peek(cdecl);
 			if(!nlu) return false;
 			while(nlu.forwardTo) nlu=nlu.forwardTo;
 			if(nlu.kind!=Kind.lazySplit) return true;
@@ -213,7 +214,7 @@ final class LastUse{
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
 			auto cdecl=versionIn(decl,nestedScopes[i]);
-			//imported!"util.io".writeln("CHECKING: ",decl," ",nsc.lastUses.getForgettability(cdecl,forceHere,false)," ",nsc.lastUses.getForgettability(decl,forceHere,false)," ",nsc.lastUses.lastUses.get(cdecl,null)," ",cdecl is decl);
+			//imported!"util.io".writeln("CHECKING: ",decl," ",nsc.lastUses.getForgettability(cdecl,forceHere,false)," ",nsc.lastUses.getForgettability(decl,forceHere,false)," ",nsc.lastUses.here(cdecl)," ",cdecl is decl);
 			return nsc.lastUses.getForgettability(cdecl,forceHere,forceConsumed);
 		}).fold!((a,b){
 			auto r=min(a,b);
@@ -283,7 +284,7 @@ final class LastUse{
 		foreach(sib;nsc.getSiblingScopes()){
 			if(sib is nsc) continue;
 			if(sib.rnsymtab.get(decl.getId,null) !is decl) continue;
-			auto slu=sib.lastUses.lastUses.get(decl,null);
+			auto slu=sib.lastUses.here(decl);
 			while(slu&&slu.kind==Kind.lazySplitSink) slu=slu.forwardTo;
 			if(!slu||slu.kind!=Kind.lazySplit||slu.forwardTo) continue;
 			sib.symtabRemove(decl);
@@ -303,7 +304,10 @@ final class LastUse{
 			assert(!dep.isTop);
 			kind=Kind.synthesizedForget;
 			scope_.noteDependencyResolved(dep);
-		}else kind=Kind.consumption;
+		}else{
+			kind=Kind.consumption;
+			scope_.lastUses.noteConsumed(decl,scope_);
+		}
 		consumedAt=fromNested?scope_.lastUses.tick():time; // (a nested scope consumes it now)
 		if(!fromNested&&!copy) noteBranchEvent();
 		recordCancelable();
@@ -350,11 +354,11 @@ final class LastUse{
 		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
 		Declaration[] reached=[decl];
 		LastUse[] indirect;
-		auto candidates=scope_.lastUses.orderedCancelCandidates();
+		auto candidates=scope_.lastUses.orderedCancelCandidates(scope_);
 		for(bool changed=true;changed;){
 			changed=false;
 			foreach(d;candidates){
-				auto lu=scope_.lastUses.lastUses[d];
+				auto lu=scope_.lastUses.here(d);
 				while(lu.forwardTo) lu=lu.forwardTo;
 				if(lu is this||lu.dep.isTop||reached.canFind(d)) continue;
 				bool viaReached=false,direct=false;
@@ -513,7 +517,7 @@ final class LastUse{
 		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
 		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch)
 			if(!(lu.use&&lu.use.implicitDup)) return false;
-			auto last=lu.scope_.lastUses.lastUses.get(lu.decl,null);
+			auto last=lu.scope_.lastUses.here(lu.decl);
 			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
 		}
 		SetX!LastUse visited;
@@ -539,7 +543,7 @@ final class LastUse{
 		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
 		for(auto lu=start;lu;lu=lu.next){
 			scope(success){
-				if(!lu.forwardTo) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
+				if(!lu.forwardTo&&lu.kind!=Kind.marker) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
 				if(descend) foreach(nsc;lu.nestedAfter){
 					if(nsc.lastUses.discarded) continue;
 					if(fromConditional&&nsc.getSiblingScopes().any!(s=>fromConditional.isNestedIn(s))) continue;
@@ -696,11 +700,15 @@ final class LastUse{
 			if(auto prop=scope_.updateDeclProps(decl)){
 				oldConstBlock=prop.constBlock;
 				prop.constBlock=constBlock;
+				scope_.declProps.noteBlocked(decl);
 			}
 		}
 		result=scope_.consume(result,use);
 		if(!use&&explanationUse) scope_.recordConsumption(result,explanationUse);
-		if(constBlock.length) scope_.updateDeclProps(decl).constBlock=oldConstBlock;
+		if(constBlock.length){
+			scope_.updateDeclProps(decl).constBlock=oldConstBlock;
+			if(oldConstBlock.length) scope_.declProps.noteBlocked(decl);
+		}
 		assert(!!result);
 		scope_.unsplit(result);
 		assert(scope_.getSplit(decl) is result);
@@ -772,7 +780,7 @@ final class LastUse{
 			//imported!"util.io".writeln("CHECKING SIBLINGS: ",ssc.forgottenVarsOnEntry," ",decl," ",ndecl," ",ssc.forgottenVarsOnEntry.canFind(ndecl)," ",ssc.forgottenVarsOnEntry.canFind(decl)," ",decl.scope_ is this," ",decl.splitFrom," ",decl.splitFrom&&decl.splitFrom.scope_ is nsc.parent);
 			if(ssc.forgottenVarsOnEntry.canFind(ndecl)) continue;
 			if(auto bs=cast(BlockScope)ssc) if(bs.isLoopBody&&bs.diverges){ // (a loop body that diverges without using the variable, which `closeUnreachable` only drops)
-				auto slu=ssc.lastUses.lastUses.get(ndecl,null);
+				auto slu=ssc.lastUses.here(ndecl);
 				if(slu&&slu.kind==Kind.lazySplit&&!slu.forwardTo&&!slu.use) continue;
 			}
 			return false;
@@ -809,7 +817,7 @@ final class LastUse{
 					foreach(ssc;nsc.siblingScopes){
 						if(auto bs=cast(BlockScope)ssc){
 							if(bs.isLoopBody&&bs.diverges){ // (forgets in the scope of the path that skips such a loop are not generated: the variable can only be forgotten before the loop)
-								auto nlu=nsc.lastUses.lastUses.get(versionIn(decl,nsc),null);
+								auto nlu=nsc.lastUses.here(versionIn(decl,nsc));
 								if(!nlu||nlu.forwardTo||nlu.kind!=Kind.lazySplit||!nlu.isLastSplitSibling()||!nlu.splitFrom.canForget(false))
 									return Forgettability.none;
 							}
@@ -839,6 +847,8 @@ final class LastUse{
 				return Forgettability.none;
 			case capture:
 				return Forgettability.none; // TODO
+			case marker:
+				assert(0);
 		}
 	}
 	bool canRedefine(){
@@ -860,6 +870,8 @@ final class LastUse{
 				return false; // (not handled by `forget`)
 			case capture:
 				return false; // TODO?
+			case marker:
+				assert(0);
 		}
 	}
 
@@ -882,6 +894,8 @@ final class LastUse{
 				assert(0,text(this," ",sc.getFunction()));
 			case capture:
 				return false;
+			case marker:
+				assert(0);
 		}
 	}
 
@@ -891,7 +905,7 @@ final class LastUse{
 			forwardTo.forget(forceConsumed,earlyReturn,enclosing);
 			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
 			assert(isConsumption(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption()));
-			if(scope_.lastUses.lastUses.get(decl,null) is this)
+			if(scope_.lastUses.here(decl) is this)
 				scope_.lastUses.lastUses[decl]=forwardTo;
 			return;
 		}
@@ -947,7 +961,7 @@ final class LastUse{
 				consume(false);
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=versionIn(decl,nestedScopes[i]);
-					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
+					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.here(cdecl)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.here(decl));
 					assert(nsc.lastUses.canForget(cdecl,false,false));
 					auto declBefore=decl;
 					if(!use){
@@ -987,6 +1001,8 @@ final class LastUse{
 			case capture:
 				assert(0); // TODO
 				break;
+			case marker:
+				assert(0);
 		}
 		consume(isForget);
 	}
@@ -994,7 +1010,7 @@ final class LastUse{
 		if(forwardTo) return forwardTo.canCancelImplicitDup();
 		if(splitFrom) return false;
 		final switch(kind)with(Kind){
-			case definition,lazySplitSink,lazySplit:
+			case definition,lazySplitSink,lazySplit,marker:
 				return false;
 			case lazyMerge:
 				return canCancelImplicitDupMerge(decl,nestedScopes);
@@ -1032,7 +1048,7 @@ final class LastUse{
 		if(forwardTo) return forwardTo.cancelImplicitDup();
 		if(splitFrom) return false;
 		final switch(kind)with(Kind){
-			case definition,lazySplitSink,lazySplit:
+			case definition,lazySplitSink,lazySplit,marker:
 				return assert(0);
 			case lazyMerge:
 				bool ok=true;
@@ -1040,7 +1056,7 @@ final class LastUse{
 				ok&=consume(false);
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=versionIn(decl,nestedScopes[i]);
-					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.lastUses.get(cdecl,null)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.lastUses.get(decl,null));
+					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.here(cdecl)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.here(decl));
 					if(!use){
 						if(auto lu=nsc.lastUses.get(cdecl,true))
 							use=lu.use;
@@ -1105,7 +1121,7 @@ final class LastUse{
 
 struct LastUses{
 	LastUses* parent;
-	MapX!(Declaration,LastUse) lastUses;
+	private MapX!(Declaration,LastUse) lastUses; // (see `here`)
 	MapX!(Declaration,LastUse[]) retired;
 	SetX!Declaration cancelCandidates; // (the declarations whose last uses `LastUse.recordCancelable` considers: those that depend on something known, unless it does not need them, see `pruneCancelCandidates`)
 	SetX!Declaration prunedCandidates;
@@ -1114,14 +1130,210 @@ struct LastUses{
 	LastUse lastLastUse;
 	size_t numAdded=0;
 	bool discarded=false;
-
-	LastUse nestingPoint;
-	void prepareNesting(Scope parent)do{
-		foreach(k,d;parent.rnsymtab){
-			if(cast(DeadDecl)d) continue;
-			lazySplitSink(d,parent);
+	LastUse here(Declaration decl){ // (the last use of `decl` in this scope)
+		pragma(inline,true);
+		if(!sinks&&!splits) return lastUses.get(decl,null);
+		return hereNested(decl);
+	}
+	private LastUse hereNested(Declaration decl){
+		auto lu=hereSplit(decl);
+		if(sinks&&(!lu||lu.time<sinks.time)&&sinks.isDeferred(decl)){
+			lazySplitSink(decl,sinks.sc,sinks,true);
+			return lastUses.get(decl,null);
 		}
-		nestingPoint=lastLastUse;
+		return lu;
+	}
+	private LastUse hereSplit(Declaration decl){ // (as `here`, but without the sinks of the latest nesting)
+		auto lu=lastUses.get(decl,null);
+		if(!lu&&splits&&splits.isDeferred(decl)){
+			createSplit(decl);
+			return lastUses.get(decl,null);
+		}
+		return lu;
+	}
+	private void createSplit(Declaration decl){ // (as `nest` does, from the sink of the nesting, which the enclosing scope may have changed since)
+		auto b=splits;
+		if(decl.sstate!=SemState.completed){
+			b.created[decl]=null;
+			return;
+		}
+		auto from=b.source.created.get(decl,null);
+		if(!from){
+			assert(parent.sinks is b.source);
+			from=parent.here(decl);
+			assert(from&&from is b.source.created.get(decl,null));
+		}
+		lazySplit(decl,cast(NestedScope)b.sc,b,true,from);
+	}
+	void prepareChange(Declaration decl){ // (before the scope changes the variable: its last uses as at the nestings, see `createSplit`)
+		here(decl);
+	}
+	LastUse peek(Declaration decl){ // (as `here`, but without creating the last uses of the nestings, whose variables are not used in their scopes: their sinks forward to the last uses that this returns, and their splits are lazy splits that remain such)
+		return lastUses.get(decl,null);
+	}
+	void createDeferred(){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables)
+		foreach(b;only(splits,sinks)) if(b&&b.deferred) foreach(k,d;b.order) here(d);
+		release();
+	}
+	private void release(){ // (the last uses of the variables that the nestings did not use are not observable any more, e.g., after the merge)
+		createDependents();
+		foreach(b;only(splits,sinks)) if(b){
+			b.deferred=false;
+			b.order=SymbolTable.init;
+			b.created=b.created.init;
+			b.deps=Dependencies.init;
+			b.source=null;
+		}
+	}
+	static Declaration[] prepareMerge(scope NestedScope[] nestedScopes){ // (before the merge changes the scopes: in each of them, the last uses of the variables that one of them uses; those, or `null` for all)
+		bool all=false;
+		Declaration[] used;
+		foreach(nsc;nestedScopes){
+			if(nsc.diverges) continue; // (see `Scope.closeUnreachable`)
+			auto b=nsc.lastUses.splits;
+			if(!b||!b.deferred){ all=true; break; }
+			foreach(d,lu;b.created) if(lu) used~=d;
+		}
+		foreach(nsc;nestedScopes){
+			if(all) nsc.lastUses.createDeferred();
+			else foreach(d;used) nsc.lastUses.prepareChange(d);
+		}
+		return all?null:used;
+	}
+	private static bool deferNesting(Scope sc){ // (the variables that a nesting does not use have no observable last uses in it, only those of the nestings of blocks of functions that analyze without errors, see `prepareNesting`)
+		static if(language==silq) if(sc.getWithTransTrial()) return false;
+		return cast(BlockScope)sc&&!sc.handler.nerrors&&sc.restrictsToChanges();
+	}
+	@property size_t numEntries(){ return lastUses.length; }
+	@property MapX!(Declaration,LastUse) entries(){ return lastUses; } // (those that exist, see `here`)
+
+	static final class Batch{ // (the last uses of a nesting, in the order of the table of the variables at the nesting, see `prepareNesting` and `nest`)
+		Scope sc;
+		SymbolTable order;
+		size_t time,index,size; // (reserved, see `slot`)
+		bool sinks; // (or splits)
+		LastUse marker; // (in the list of the last uses of `sc`: after the sinks, which precede the nested scopes, or before the splits)
+		bool deferred; // (the last uses of the variables that are not in `created` are only created when needed, see `here`)
+		MapX!(Declaration,LastUse) created; // (`null` for a variable that the nesting does not split, see `nest`)
+		Batch source; // (of deferred splits: the sinks of the nesting in the enclosing scope)
+		Batch[] dependents; // (of sinks: the deferred splits whose source they are, see `createDependents`)
+		Dependencies deps; // (of the deferred last uses: those of the scope at the nesting)
+		size_t depsChanges;
+		bool isDeferred(Declaration decl){
+			return deferred&&decl !in created&&order.get(decl.getId,null) is decl&&!cast(DeadDecl)decl;
+		}
+		size_t slot(Declaration decl){ // (the position of the variable in the table at the nesting)
+			size_t pos;
+			auto ok=order.tryGetPosition(decl.getId,pos);
+			assert(ok&&order.get(decl.getId,null) is decl);
+			return pos;
+		}
+		bool inRegion(LastUse lu){ return lu.kind!=LastUse.Kind.marker&&lu.time>=time&&lu.time<time+size; }
+	}
+	Batch sinks,splits; // (of the latest nesting into the nested scopes of this scope, and of the nesting of this scope)
+	private size_t reserveTime(size_t n){
+		auto root=&this;
+		while(root.parent) root=root.parent;
+		auto r=root.clock;
+		root.clock+=n;
+		return r;
+	}
+	private Batch newBatch(Scope sc,SymbolTable order,bool sinks_){
+		auto b=new Batch;
+		b.sc=sc;
+		b.order=order;
+		b.size=order.positionLimit;
+		b.sinks=sinks_;
+		b.time=reserveTime(b.size+1);
+		b.index=numAdded;
+		numAdded+=b.size+1;
+		return b;
+	}
+	private void addMarker(Batch b){
+		auto lu=new LastUse(LastUse.Kind.marker,b.sc,null,null,null);
+		lu.discarded=true; // (the walks only descend into the nested scopes after it, see `updateDependenciesOnConsumptionLocal`)
+		lu.time=lu.consumedAt=b.sinks?b.time+b.size:b.time;
+		lu.index=b.sinks?b.index+b.size:b.index;
+		if(lastLastUse) lastLastUse.append(lu);
+		lastLastUse=lu;
+		b.marker=lu;
+	}
+	private void place(LastUse lu,Batch b){ // (in the order of the slots)
+		auto at=b.marker;
+		if(b.sinks){
+			while(at.prev&&b.inRegion(at.prev)&&at.prev.time>lu.time) at=at.prev;
+			lu.prev=at.prev;
+			lu.next=at;
+			if(at.prev) at.prev.next=lu;
+			at.prev=lu;
+		}else{
+			while(at.next&&b.inRegion(at.next)&&at.next.time<lu.time) at=at.next;
+			lu.next=at.next;
+			lu.prev=at;
+			if(at.next) at.next.prev=lu;
+			at.next=lu;
+			if(lastLastUse is at) lastLastUse=lu;
+		}
+	}
+	LastUse nestingPoint;
+	private Declaration[] consumedLive; // (whose last uses may be consumptions, e.g., temporaries until the end of their statements)
+	private size_t numConsumedLiveAtPrune;
+	private void noteConsumed(Declaration decl,Scope sc){
+		consumedLive~=decl;
+		if(consumedLive.length>2*numConsumedLiveAtPrune+16){
+			consumedLive=consumedLive.filter!(d=>sc.rnsymtab.get(d.getId,null) is d).array;
+			numConsumedLiveAtPrune=consumedLive.length;
+		}
+	}
+	private Declaration[] prunedLive; // (the pruned candidates that may be in the table, see `pruneCancelCandidates`)
+	private size_t numPrunedLiveAtPrune;
+	private void notePruned(Declaration decl,Scope sc){
+		prunedLive~=decl;
+		if(prunedLive.length>2*numPrunedLiveAtPrune+16){
+			prunedLive=prunedLive.filter!(d=>d in prunedCandidates&&sc.rnsymtab.get(d.getId,null) is d).array;
+			numPrunedLiveAtPrune=prunedLive.length;
+		}
+	}
+	private Declaration[] eagerNesting(Batch b,Scope sc){ // (the variables whose last uses a nesting creates at once: those whose dependencies or the dependencies at their last uses mention variables, those that are `const`, and those whose last uses are consumptions, in the order of the table)
+		Declaration[] candidates=cancelCandidates.dup.array~prunedLive~sc.dependencies.nontrivialKeys()~consumedLive;
+		foreach(d;sc.constBlocked()) if(sc.isConst(d)) candidates~=d;
+		Q!(size_t,Declaration)[] r;
+		SetX!Declaration seen;
+		foreach(d;candidates){
+			if(d in seen||!b.isDeferred(d)) continue;
+			seen.insert(d);
+			r~=q(b.slot(d),d);
+		}
+		sort!"a[0]<b[0]"(r);
+		return r.map!(x=>x[1]).array;
+	}
+	private void createDependents(){ // (before the sinks of the latest nesting are released or replaced: the deferred last uses of its nested scopes that were not merged, e.g., of an analysis that is discarded, which a later renaming can still reach)
+		if(!sinks) return;
+		foreach(c;sinks.dependents) if(c.deferred) c.sc.lastUses.createDeferred();
+		sinks.dependents=null;
+	}
+	void prepareNesting(Scope parent)do{
+		createDependents();
+		if(!deferNesting(parent)){
+			foreach(k,d;parent.rnsymtab){
+				if(cast(DeadDecl)d) continue;
+				lazySplitSink(d,parent,null);
+			}
+			nestingPoint=lastLastUse;
+			sinks=null;
+			return;
+		}
+		auto b=newBatch(parent,parent.rnsymtab.dup,true);
+		bool any=!!lastLastUse;
+		if(!any) foreach(k,d;b.order) if(!cast(DeadDecl)d){ any=true; break; }
+		if(any) addMarker(b);
+		b.deferred=true;
+		b.deps=parent.dependencies.dup;
+		b.depsChanges=parent.dependencies.numChanges;
+		auto eager=eagerNesting(b,parent);
+		foreach(d;eager) lazySplitSink(d,parent,b);
+		nestingPoint=b.marker;
+		sinks=b;
 	}
 	void nest(NestedScope r)in{
 		with(r.lastUses){
@@ -1134,22 +1346,48 @@ struct LastUses{
 		//imported!"util.io".writeln("NESTING IN: ",r.parent.dependencies," ",r.dependencies);
 		r.lastUses.parent=&this;
 		if(nestingPoint) nestingPoint.nestedAfter~=r;
-		foreach(k,d;r.parent.rnsymtab){
-			if(cast(DeadDecl)d) continue;
-			if(d.sstate!=SemState.completed) continue;
-			auto lu=lastUses.get(d,null);
-			if(!lu) continue; // TODO: ok?
+		Batch b=null;
+		void split(Declaration d){
+			if(cast(DeadDecl)d) return;
+			if(d.sstate!=SemState.completed) return;
+			auto lu=here(d);
+			if(!lu) return; // TODO: ok?
 			while(lu.forwardTo) lu=lu.forwardTo;
-			if(lu.kind==LastUse.Kind.consumption) continue;
+			if(lu.kind==LastUse.Kind.consumption) return;
 			//imported!"util.io".writeln("SPLITTING: ",d," ",d.mergedFrom," ",d.splitInto);
-			r.lastUses.lazySplit(d,r);
+			r.lastUses.lazySplit(d,r,b);
 		}
+		if(!sinks||!sinks.deferred){ // (as the sinks, see `prepareNesting`)
+			foreach(k,d;r.parent.rnsymtab) split(d);
+			return;
+		}
+		b=r.lastUses.newBatch(r,r.parent.rnsymtab.dup,false);
+		r.lastUses.addMarker(b);
+		if(sinks.sc is r.parent&&sinks.order.numChanges==r.parent.rnsymtab.numChanges&&sinks.depsChanges==r.parent.dependencies.numChanges){ // (the variables whose sinks were created, see `prepareNesting`)
+			b.deferred=true;
+			b.source=sinks;
+			sinks.dependents~=b;
+			b.deps=sinks.deps;
+			Declaration[] eager;
+			foreach(d,_;sinks.created) if(b.isDeferred(d)) eager~=d;
+			eager~=eagerNesting(b,r.parent);
+			Q!(size_t,Declaration)[] ordered;
+			SetX!Declaration seen;
+			foreach(d;eager){
+				if(d in seen) continue;
+				seen.insert(d);
+				ordered~=q(b.slot(d),d);
+			}
+			sort!"a[0]<b[0]"(ordered);
+			foreach(x;ordered) split(x[1]);
+		}else foreach(k,d;r.parent.rnsymtab) split(d);
+		r.lastUses.splits=b;
 	}
 	private void retire(LastUse lastUse){
 		if(!LastUse.inBranch(lastUse.scope_)) return; // (only the checks of the branch order read the history, see `checkBranchOrder`)
 		retired[lastUse.decl]~=lastUse;
 	}
-	private void add(LastUse lastUse,Dependency* atSplit=null)in{
+	private void add(LastUse lastUse,Dependency* atSplit=null,Batch batch=null,bool deferred=false)in{
 		assert(!!lastUse.scope_);
 		with(LastUse.Kind){
 			assert(lastUse.kind!=constUse||lastUse.parent);
@@ -1165,8 +1403,10 @@ struct LastUses{
 		assert(!lastUse.prev&&!lastUse.next);
 	}do{
 		//imported!"util.io".writeln("ADDING LU: ",lastUse);
-		lastUse.time=lastUse.consumedAt=tick();
-		lastUse.dep=atSplit?atSplit.dup:lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
+		lastUse.time=lastUse.consumedAt=batch?batch.time+batch.slot(lastUse.decl):tick();
+		if(atSplit) lastUse.dep=atSplit.dup;
+		else if(deferred&&lastUse.scope_.trackingDecl(lastUse.decl) is lastUse.decl&&batch.deps.tracked(lastUse.decl)) lastUse.dep=batch.deps.getCopy(lastUse.decl); // (as at the nesting)
+		else lastUse.dep=lastUse.scope_.getDependency(lastUse.scope_.trackingDecl(lastUse.decl)).dup;
 		lastUse.atSplit=!!atSplit;
 		if(lastUse.dep.isTop){
 			// TODO: make sure classical variables have dependency ∅ instead?
@@ -1177,7 +1417,8 @@ struct LastUses{
 		assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
 		if(lastUse.kind==LastUse.Kind.synthesizedForget)
 			lastUse.scope_.noteDependencyResolved(lastUse.dep);
-		if(auto read=lastUse.scope_.isConst(lastUse.decl)){
+		if(deferred){} // (not `const` at the nesting, see `eagerNesting`)
+		else if(auto read=lastUse.scope_.isConst(lastUse.decl)){
 			//imported!"util.io".writeln("ADDING CONST BLOCK: ",lastUse," ",read," ",read.loc);
 			if(auto prop=lastUse.scope_.declProps.tryGet(lastUse.decl)){
 				//imported!"util.io".writeln(read," ",prop.constBlock," ",lastUse.dep);
@@ -1187,7 +1428,7 @@ struct LastUses{
 					lastUse.constBlock.popBack(); // TODO: ok?
 			}
 		}
-		if(auto prevLastUse=lastUses.get(lastUse.decl,null)){
+		if(auto prevLastUse=batch?lastUses.get(lastUse.decl,null):here(lastUse.decl)){
 			//imported!"util.io".writeln("PREVIOUS: ",prevLastUse);
 			bool keep=lastUse.kind==LastUse.Kind.lazySplitSink;
 			auto prev=prevLastUse; // (the last use that a `lazySplitSink` stands for)
@@ -1240,11 +1481,17 @@ struct LastUses{
 			lastUses.remove(lastUse.decl);
 			retire(prevLastUse); // TODO: needed?
 		}
-		lastUse.index=numAdded++;
+		lastUse.index=batch?batch.index+batch.slot(lastUse.decl)+!batch.sinks:numAdded++;
 		lastUses[lastUse.decl]=lastUse;
+		if(lastUse.kind==LastUse.Kind.consumption) noteConsumed(lastUse.decl,lastUse.scope_);
 		noteCancelCandidate(lastUse.decl);
-		if(lastLastUse) lastLastUse.append(lastUse);
-		lastLastUse=lastUse;
+		if(batch){
+			batch.created[lastUse.decl]=lastUse;
+			place(lastUse,batch);
+		}else{
+			if(lastLastUse) lastLastUse.append(lastUse);
+			lastLastUse=lastUse;
+		}
 		if(lastUse.isConsumption()||lastUse.use&&lastUse.use.implicitDup) lastUse.recordCancelable();
 		if(lastUse.isConsumption()){
 			lastUse.noteBranchEvent();
@@ -1266,23 +1513,24 @@ struct LastUses{
 		Identifier use=null;
 		add(new LastUse(LastUse.Kind.definition,decl.scope_,decl,use,defExp));
 	}
-	void lazySplitSink(Declaration decl,Scope sc)in{
+	private void lazySplitSink(Declaration decl,Scope sc,Batch batch,bool deferred=false)in{
 		assert(decl.scope_&&sc);
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplitSink,sc,decl,null,null);
-		lu.forwardTo=sc.lastUses.lastUses.get(decl,null);
+		lu.forwardTo=sc.lastUses.hereSplit(decl);
 		while(lu.forwardTo&&lu.forwardTo.kind==LastUse.Kind.lazySplitSink&&lu.forwardTo.forwardTo) // (an earlier sink stands for the same last use, e.g., where the variable is not used between two conditionals; a pinned one stays, see `removeFromUnusedSiblings`)
 			lu.forwardTo=lu.forwardTo.forwardTo;
-		add(lu);
+		add(lu,null,batch,deferred);
 	}
-	void lazySplit(Declaration decl,NestedScope sc)in{
+	private void lazySplit(Declaration decl,NestedScope sc,Batch batch,bool deferred=false,LastUse from=null)in{
 		assert(decl.scope_&&sc);
 		assert(sc.isNestedIn(decl.scope_));
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazySplit,sc,decl,null,null);
+		lu.splitFrom=from;
 		auto splitFrom=lu.getSplitFrom();
 		//assert(splitFrom.kind==LastUse.Kind.lazySplitSink,text(splitFrom)); // TODO (fails in nested scopes in lowerings e.g. && and ||)
-		add(lu);
+		add(lu,null,batch,deferred);
 		lu.depAtSplit=lu.dep.dup;
 		if(splitFrom){
 			auto p=splitFrom;
@@ -1300,7 +1548,7 @@ struct LastUses{
 		if(!lu.prevImplicitDup){
 			foreach(nsc;nestedScopes){
 				if(!LastUse.mergesSameValue(decl,nsc)) continue;
-				auto nlu=nsc.lastUses.lastUses.get(LastUse.versionIn(decl,nsc),null);
+				auto nlu=nsc.lastUses.here(LastUse.versionIn(decl,nsc));
 				while(nlu&&nlu.forwardTo) nlu=nlu.forwardTo;
 				if(!nlu) continue;
 				if(nlu.prevImplicitDup){
@@ -1332,7 +1580,7 @@ struct LastUses{
 	}
 	private bool splitDependency(Declaration decl,ref Dependency result,ref LastUse split){ // (in terms of the versions here)
 		static bool isLoop(NestedScope nsc){ return nsc.getSiblingScopes().any!(s=>cast(BlockScope)s&&((cast(BlockScope)s).isLoopBody||(cast(BlockScope)s).isLoopEntry)); }
-		auto lu=lastUses.get(decl,null);
+		auto lu=here(decl);
 		if(!lu) return false;
 		while(lu.forwardTo) lu=lu.forwardTo;
 		if(lu.kind==LastUse.Kind.lazyMerge){ // (continues the version of the only branch that reaches the merge, e.g., after the other one returns)
@@ -1448,7 +1696,7 @@ struct LastUses{
 		add(new LastUse(LastUse.Kind.constUse,use.scope_,use.meaning,use,parent));
 	}
 	void consumption(Declaration decl,Identifier use,Scope sc,IndexExp consumedComponent=null)in{
-		assert(decl in lastUses||decl.isSemError(),text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
+		assert(here(decl)||decl.isSemError(),text(decl," ",lastUses," ",cast(void*)decl," ",lastUses.keys.filter!(d=>d.getName is decl.getName).map!(d=>cast(void*)d)));
 		assert(!!sc);
 		if(use){
 			assert(!use.meaning||use.meaning is decl,text(use," ",decl," ",use.meaning));
@@ -1469,6 +1717,7 @@ struct LastUses{
 	// copy another scope's final state, translating declarations and scopes
 	// (used to give independently scoped instantiation twins their own state)
 	void remapFrom(ref LastUses src,Declaration delegate(Declaration) mapDecl,Scope delegate(Scope) mapScope){
+		src.createDeferred();
 		MapSX!(LastUse,LastUse) nmap;
 		LastUse remap(LastUse lu){
 			if(!lu) return null;
@@ -1502,7 +1751,7 @@ struct LastUses{
 	}
 
 	LastUse get(Declaration decl,bool forceHere){
-		if(auto lu=lastUses.get(decl,null))
+		if(auto lu=here(decl))
 			return lu;
 		if(forceHere||!parent) return null;
 		return parent.get(decl,false);
@@ -1512,19 +1761,19 @@ struct LastUses{
 		return getForgettability(decl,forceHere,forceConsumed,earlyReturn)>=(forceConsumed?LastUse.Forgettability.consumable:LastUse.Forgettability.forgettable);
 	}
 	private LastUse.Forgettability getForgettability(Declaration decl,bool forceHere,bool forceConsumed,ReturnExp earlyReturn=null){
-		auto lastUse=lastUses.get(decl,null);
+		auto lastUse=here(decl);
 		if(!lastUse&&!forceHere&&parent)
 			return parent.getForgettability(decl,false,forceConsumed,earlyReturn);
 		return lastUse?lastUse.getForgettability(forceConsumed,earlyReturn):LastUse.Forgettability.none;
 	}
 	bool canRedefine(Declaration decl){
 		//imported!"util.io".writeln("CAN REDEFINE: ",decl," ",lastUses," ",lastUses.get(decl,null));
-		if(auto lastUse=lastUses.get(decl,null))
+		if(auto lastUse=here(decl))
 			return lastUse.canRedefine();
 		return parent&&parent.canRedefine(decl);
 	}
 	bool betterUnforgettableError(Declaration decl,Scope sc){
-		auto lastUse=lastUses.get(decl,null);
+		auto lastUse=here(decl);
 		if(!lastUse&&parent)
 			return parent.betterUnforgettableError(decl,sc);
 		return lastUse&&lastUse.betterUnforgettableError(sc);
@@ -1532,7 +1781,7 @@ struct LastUses{
 	void forget(Declaration decl,bool forceConsumed,ReturnExp earlyReturn=null)in{
 		assert(canForget(decl,false,forceConsumed,earlyReturn));
 	}do{
-		auto lastUse=lastUses.get(decl,null);
+		auto lastUse=here(decl);
 		if(!lastUse){
 			assert(!!parent);
 			return parent.forget(decl,forceConsumed,earlyReturn);
@@ -1541,7 +1790,7 @@ struct LastUses{
 	}
 	void pin(Declaration decl,bool forceHere){
 		if(!decl.scope_) return;
-		if(auto lastUse=lastUses.get(decl,null)) lastUse.pin();
+		if(auto lastUse=here(decl)) lastUse.pin();
 		else if(!forceHere&&parent) parent.pin(decl,false);
 		//decl.scope_.lastUses.lastUses.remove(decl);
 		foreach(split;decl.splitInto){
@@ -1550,12 +1799,12 @@ struct LastUses{
 		}
 	}
 	bool canCancelImplicitDup(Declaration decl){
-		if(auto lastUse=lastUses.get(decl,null))
+		if(auto lastUse=here(decl))
 			return lastUse.canCancelImplicitDup();
 		return false;
 	}
 	bool cancelImplicitDup(Declaration decl){
-		if(auto lastUse=lastUses.get(decl,null))
+		if(auto lastUse=here(decl))
 			return lastUse.cancelImplicitDup();
 		return false;
 	}
@@ -1567,6 +1816,7 @@ struct LastUses{
 		if(splitFrom in lastUses){
 			lastUses[splitInto]=lastUses[splitFrom];
 			lastUses.remove(splitFrom);
+			if(auto t=target(lastUses[splitInto])) if(t.kind==LastUse.Kind.consumption&&t.scope_) noteConsumed(splitInto,t.scope_);
 			cancelCandidates.remove(splitFrom);
 			prunedCandidates.remove(splitFrom);
 			noteCancelCandidate(splitInto);
@@ -1581,18 +1831,22 @@ struct LastUses{
 				lu.replaceDecl(splitFrom,splitInto);
 	}
 
-	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes){
+	void merge(bool isLoop,Scope parent,scope NestedScope[] nestedScopes,Declaration[] candidates=null,bool all=true){ // (`candidates`: unless `all`, the variables of `parent` whose merges may not be trivial, in the order of its table)
 		//imported!"util.io".writeln("MERGING: ",parent," ",nestedScopes);
-		foreach(k,decl;parent.rnsymtab){
-			if(cast(DeadDecl)decl) continue;
+		void mergeVariable(Declaration decl){
+			if(cast(DeadDecl)decl) return;
 			//imported!"util.io".writeln("CHECKING MERGE: ",decl," ",decl.mergedFrom," ",decl.splitInto," ",lastUses," ",nestedScopes," ",LastUse.isNontrivialMerge(decl,nestedScopes)," ",LastUse.canForgetMerge(decl,nestedScopes,true,false));
-			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) continue;
+			if(!LastUse.isNontrivialMerge(decl,nestedScopes)) return;
+			foreach(nsc;nestedScopes) if(nsc.lastUses.splits) nsc.lastUses.here(LastUse.versionIn(decl,nsc)); // (while the sinks of the nesting are those of the enclosing scope)
 			if(isLoop) pin(decl,true);
 			//if(!LastUse.canForgetMerge(decl,nestedScopes,true,false)) continue;
 			lazyMerge(decl,parent,nestedScopes.dup);
 			if(isLoop) pin(decl,true);
 			//imported!"util.io".writeln("MERGED: ",decl," ",decl.mergedFrom," ",nestedScopes.map!(sc=>cast(void*)sc));
 		}
+		if(all) foreach(k,decl;parent.rnsymtab) mergeVariable(decl);
+		else foreach(decl;candidates) mergeVariable(decl);
+		foreach(nsc;nestedScopes) nsc.lastUses.release(); // (the variables whose merges are trivial are not used in the nested scopes)
 	}
 
 	// TODO: snapshotting is a bit hacky
@@ -1618,12 +1872,13 @@ struct LastUses{
 		return nlastUses;
 	}
 	void restoreSnapshot(MapX!(Declaration,LastUse) snapshot,size_t numAdded,Scope sc){
+		createDeferred();
 		for(auto lu=lastLastUse;lu&&lu.index>=numAdded;lu=lu.prev){
 			lu.use=null; // (from the discarded analysis, cannot be consumed)
 			lu.discarded=true; // (does not constrain later consumptions either)
 		}
 		foreach(_,d;sc.rnsymtab){
-			if(auto nlu=lastUses.get(d,null)){
+			if(auto nlu=here(d)){
 				if(nlu.isConsumption()||nlu!is snapshot.get(d,null)){
 					nlu.kind=LastUse.Kind.constPinned;
 				}
@@ -1653,9 +1908,9 @@ struct LastUses{
 			foreach(d;prunedByVersion.get(x,null)) include(d);
 		}
 	}
-	Declaration[] orderedCancelCandidates(){ // (in the order of `lastUses`)
+	Declaration[] orderedCancelCandidates(Scope sc){ // (in the order of `lastUses`; `sc`: the scope of these last uses)
 		if(cancelCandidates.length>2*numCancelCandidates+16){
-			pruneCancelCandidates();
+			pruneCancelCandidates(sc);
 			numCancelCandidates=cancelCandidates.length;
 		}
 		Q!(size_t,Declaration)[] r;
@@ -1666,7 +1921,7 @@ struct LastUses{
 		sort!"a[0]<b[0]"(r);
 		return r.map!(x=>x[1]).array;
 	}
-	private void pruneCancelCandidates(){ // (one that consumes its variable only matters while the dependency of another candidate mentions a version of it: it is included again when one does)
+	private void pruneCancelCandidates(Scope sc){ // (one that consumes its variable only matters while the dependency of another candidate mentions a version of it: it is included again when one does)
 		for(bool changed=true;changed;){
 			SetX!Declaration mentioned,versions; // (`versions`: also those that they were split from)
 			foreach(d;cancelCandidates){
@@ -1687,6 +1942,7 @@ struct LastUses{
 			foreach(d;gone){
 				cancelCandidates.remove(d);
 				prunedCandidates.insert(d);
+				notePruned(d,sc);
 				foreach(y;d.splitSequence) prunedByVersion[y]~=d;
 			}
 			changed=gone.length!=0;
@@ -1736,7 +1992,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			if(x in visited||!x.scope_||!x.scope_.isNestedIn(b)) return;
 			visited.insert(x);
 			auto lus=x.scope_.lastUses.retired.get(x,null);
-			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.lastUses.get(x,null)) r=min(r,lu.time);
+			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.here(x)) r=min(r,lu.time);
 			foreach(y;x.derivedSequence) visit(y);
 			foreach(c;x.definitionSources.consumes) visit(c[0]);
 		}
@@ -1882,7 +2138,7 @@ SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] c
 	static size_t definitionTime(Declaration d){
 		if(!d.scope_) return 0;
 		auto lus=d.scope_.lastUses.retired.get(d,null);
-		if(auto lu=lus.length?lus[0]:d.scope_.lastUses.lastUses.get(d,null)) return lu.time;
+		if(auto lu=lus.length?lus[0]:d.scope_.lastUses.here(d)) return lu.time;
 		return 0;
 	}
 	static size_t firstRead(Declaration d,Scope b,size_t after){ // (in `b` and its nested scopes)
@@ -1892,7 +2148,7 @@ SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] c
 				if(lu&&!lu.discarded&&lu.time>after&&lu.kind.among(LastUse.Kind.constUse,LastUse.Kind.implicitDup,LastUse.Kind.constPinned,LastUse.Kind.capture)) r=min(r,lu.time);
 			}
 			foreach(lu;s.lastUses.retired.get(d,null)) consider(lu);
-			consider(s.lastUses.lastUses.get(d,null));
+			consider(s.lastUses.here(d));
 			foreach(group;s.mergedNestedScopes) foreach(n;group) visit(n);
 		}
 		visit(b);

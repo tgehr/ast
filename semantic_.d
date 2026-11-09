@@ -1770,7 +1770,7 @@ Declaration[] dummyAnalysisCandidates(Scope sc, ref Scope.ScopeState prevState, 
 	if(!oldLoopScope) return [];
 	Declaration[] result;
 	SetX!Declaration consumedOuterSet;
-	MapX!(Id,Declaration) allDecls=sc.rnsymtab.dup;
+	SymbolTable allDecls=sc.rnsymtab.dup;
 	foreach(decl;oldLoopScope.consumedOuter){
 		if(!decl||cast(DeadDecl)decl) continue;
 		consumedOuterSet[decl]=[];
@@ -1833,7 +1833,7 @@ MapX!(Declaration,Declaration) collectDummyResults(Scope sc, ref FixedPointIterS
 	}
 	void scanLastUses(ref imported!"ast.lastuse".LastUses lastUses){
 		alias LastUse=imported!"ast.lastuse".LastUse;
-		foreach(decl,lu;lastUses.lastUses){
+		foreach(decl,lu;lastUses.entries){
 			if(lu.kind==LastUse.Kind.synthesizedForget)
 				resolveTransitively(lu.dep);
 		}
@@ -1945,7 +1945,7 @@ Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,Bloc
 		if(decl.isToplevelDeclaration()) continue;
 		auto type=typeForDecl(decl);
 		if(!type) continue;
-		auto lastUse=sc.lastUses.lastUses.get(decl,null);
+		auto lastUse=sc.lastUses.here(decl);
 		while(lastUse&&lastUse.kind==LastUse.Kind.lazySplitSink) lastUse=lastUse.forwardTo; // (e.g., from the nested scopes of the condition of a `while` loop on the path that exits it, e.g., `false||k<2`)
 		if(!lastUse||lastUse.kind!=LastUse.Kind.constPinned) continue;
 		if(!lastUse.nestedScopes.any!(nsc=>nsc is loopScope)) continue;
@@ -1964,7 +1964,7 @@ Declaration[] discardedLoopForgetCandidates(Scope sc){
 	foreach(_,decl;sc.rnsymtab){
 		if(cast(DeadDecl)decl||decl.isSemError()) continue;
 		if(decl.isToplevelDeclaration()) continue;
-		auto lastUse=sc.lastUses.lastUses.get(decl,null);
+		auto lastUse=sc.lastUses.here(decl);
 		if(!lastUse||!lastUse.discarded||lastUse.kind!=LastUse.Kind.constPinned) continue;
 		if(!sc.canSplit(decl)) continue;
 		if(!sc.dependencyTracked(decl)) continue;
@@ -5733,7 +5733,7 @@ string typeDependency(Declaration dependent,Declaration decl){ // (the type of `
 	}
 	return format("type `%s`",type);
 }
-Declaration liveTypeDependent(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+Declaration liveTypeDependent(Declaration decl,SymbolTable rnsymtab){
 	foreach(_,d;rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
 	if(decl.scope_&&decl.scope_.rnsymtab!is rnsymtab)
 		foreach(_,d;decl.scope_.rnsymtab) if(isLiveTypeDependent(d,decl)) return d;
@@ -5758,9 +5758,9 @@ Declaration liveTypeDependent(Declaration decl,Scope sc){ // (as `liveTypeDepend
 	return null;
 }
 
-Declaration[] liveTypeDependents(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+Declaration[] liveTypeDependents(Declaration decl,SymbolTable rnsymtab){
 	Declaration[] r;
-	void scan(MapX!(Id,Declaration) rnsymtab){
+	void scan(SymbolTable rnsymtab){
 		foreach(_,d;rnsymtab)
 			if(isLiveTypeDependent(d,decl)&&!r.canFind(d)) r~=d;
 	}
@@ -5770,16 +5770,16 @@ Declaration[] liveTypeDependents(Declaration decl,MapX!(Id,Declaration) rnsymtab
 	return r;
 }
 
-bool typeConstBlocked(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+bool typeConstBlocked(Declaration decl,SymbolTable rnsymtab){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,rnsymtab);
 }
 bool typeConstBlocked(Declaration decl,Scope sc){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,sc);
 }
-bool typeConstBlockedInState(Declaration decl,MapX!(Id,Declaration) rnsymtab){ // (`rnsymtab` is a state of the scope of `decl`, which may differ from its current state, e.g., before a loop)
+bool typeConstBlockedInState(Declaration decl,SymbolTable rnsymtab){ // (`rnsymtab` is a state of the scope of `decl`, which may differ from its current state, e.g., before a loop)
 	return decl.typeConstBlocker!is null||rnsymtab.byValue.any!(d=>isLiveTypeDependent(d,decl));
 }
-Declaration[] liveTypeDependentsInState(Declaration decl,MapX!(Id,Declaration) rnsymtab){
+Declaration[] liveTypeDependentsInState(Declaration decl,SymbolTable rnsymtab){
 	return rnsymtab.byValue.filter!(d=>isLiveTypeDependent(d,decl)).array;
 }
 

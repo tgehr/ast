@@ -204,7 +204,7 @@ private bool dependsTransitivelyOnLoopState(ref FixedPointIterState state,Scope 
 }
 
 // (for diagnostics, the variables after a lowered loop are linked to those of the analysis of the loop itself)
-private void linkLoweredVariables(Scope sc,ref MapX!(Id,Declaration) before){
+private void linkLoweredVariables(Scope sc,ref SymbolTable before){
 	foreach(id,d;sc.rnsymtab)
 		if(auto vd=cast(VarDecl)d) if(auto od=cast(VarDecl)before.get(id,null))
 			if(od !is vd&&!vd.loweredFrom&&!vd.typeSource&&!od.isSemError()) vd.loweredFrom=od;

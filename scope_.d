@@ -6,7 +6,9 @@ import astopt;
 import std.format, std.conv, std.range, std.algorithm;
 import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
-import util, util.hashtable: HashMap, Storage;
+import util, util.hashtable: HashMap, LayeredMap, Storage;
+
+alias SymbolTable=LayeredMapX!(Id,Declaration); // (the copies for nested scopes share the entries that did not change)
 
 struct Dependency{
 	bool isTop;
@@ -60,10 +62,30 @@ struct Dependency{
 }
 
 struct Dependencies{
-	private HashMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash()) table;
-	private HashMap!(Declaration,SetX!Declaration,(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy; // (for each declaration, the variables whose dependencies may mention it: those that no longer do are removed when they are looked up, see `mentioning`, or when the index is built again)
+	private LayeredMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash(),(ref Dependency d)=>d.dup) table; // (the copies for nested scopes share the entries that did not change)
+	private HashMap!(Declaration,SetX!Declaration,(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy; // (for each declaration, the variables with changed entries whose dependencies may mention it: those that no longer do are removed when they are looked up, see `mentioning`, or when the index is built again; the shared entries have an index of their own, see `baseIndex`)
 	private bool unindexed; // (`mentionedBy` is built when it is needed, see `ensureIndex`)
 	private size_t numIndexed,numIndexedAtBuild; // (insertions into `mentionedBy`, also of entries that become stale)
+	private static final class BaseIndex{
+		HashMap!(Declaration,Declaration[],(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy;
+		Declaration[] nontrivial; // (whose dependencies mention some variable)
+	}
+	private BaseIndex baseIndex(){ // (for the shared entries, which do not change)
+		auto cache=table.baseCache();
+		if(!cache) return null;
+		if(auto r=cast(BaseIndex)*cache) return r;
+		auto r=new BaseIndex;
+		foreach(k,v;&table.opApplyBase){
+			if(v.isTop) continue;
+			if(v.dependencies.length) r.nontrivial~=k;
+			foreach(x;v.dependencies){
+				if(auto p=r.mentionedBy.getPtr(x)) *p~=k;
+				else r.mentionedBy[x]=[k];
+			}
+		}
+		*cache=r;
+		return r;
+	}
 	private void index(Declaration k,Dependency v){
 		if(unindexed) return;
 		if(numIndexed>2*numIndexedAtBuild+16) buildIndex(); // (without the stale entries)
@@ -85,59 +107,137 @@ struct Dependencies{
 		mentionedBy.clear();
 		unindexed=false;
 		numIndexed=0;
-		foreach(k,v;table) insertIndex(k,v);
+		foreach(k;&table.opApplyChanged) if(auto v=table.own(k)) insertIndex(k,*v);
 		numIndexedAtBuild=numIndexed;
 	}
 	void ensureIndex(){ if(unindexed) buildIndex(); }
-	bool tracked(Declaration decl){ return !!(decl in table); }
-	Dependency get(Declaration decl){ return table[decl]; }
-	Declaration[] keys(){ return table.keys.array; }
+	Declaration[] nontrivialKeys(){ // (the variables whose dependencies mention some variable)
+		Declaration[] r;
+		if(auto bi=baseIndex()) foreach(k;bi.nontrivial) if(!table.owns(k)) r~=k;
+		foreach(k;&table.opApplyChanged){
+			auto v=table.own(k);
+			if(v&&!v.isTop&&v.dependencies.length) r~=k;
+		}
+		return r;
+	}
+	bool tracked(Declaration decl){ pragma(inline,true); return !!(decl in table); }
+	@property size_t numChanges(){ return table.numChanges; } // (equal for a copy and the table it was copied from while neither changes)
+	void startLog(Declaration[] initial=null){ table.startLog(initial); }
+	void stopLog(){ table.stopLog(); }
+	@property bool isLogging(){ return table.isLogging; }
+	@property Declaration[] changeLog(){ return table.changeLog; } // (see `LayeredMap.changeLog`)
+	Dependency getCopy(Declaration decl){ return table[decl].dup; } // (does not change the table, as `get` may)
+	private static bool same(ref Dependency a,ref Dependency b){
+		return a.isTop==b.isTop&&a.lostVar is b.lostVar&&a.lostAt is b.lostAt&&a.dependencies==b.dependencies;
+	}
+	private ref Dependency entry(Declaration decl){ // (not shared with the copies, to be changed)
+		auto v=table.own(decl);
+		if(v) table.noteChanged(decl);
+		assert(!!v,text("key not found: ",decl));
+		return *v;
+	}
+	Dependency get(Declaration decl){
+		if(table.isLayered&&!table.owns(decl)){
+			auto v=table[decl];
+			if(v.dependencies.isSmall) return v; // (a copy: the caller cannot change the entry)
+		}
+		auto v=table.own(decl);
+		assert(!!v,text("key not found: ",decl));
+		return *v;
+	}
+	Declaration[] keys(){ return table.keys; }
 	void set(Declaration decl,Dependency dep){
 		table[decl]=dep;
-		index(decl,table[decl]);
+		index(decl,dep);
 	}
 	void remove(Declaration decl){ table.remove(decl); } // (the entries of `mentionedBy` for it are removed later)
 	Declaration[] mentioning(Declaration decl){ // (the variables whose dependencies mention `decl`, in the order of the table)
 		ensureIndex();
-		auto s=mentionedBy.getPtr(decl);
-		if(!s) return null;
 		Q!(size_t,Declaration)[] r;
-		Declaration[] stale;
-		foreach(k;*s){
-			size_t pos;
-			if(!table.tryGetPosition(k,pos)){ stale~=k; continue; }
-			auto v=table[k];
-			if(v.isTop||decl !in v.dependencies){ stale~=k; continue; }
-			r~=q(pos,k);
+		if(auto s=mentionedBy.getPtr(decl)){
+			Declaration[] stale;
+			foreach(k;*s){
+				size_t pos;
+				if(!table.tryGetPosition(k,pos)||table.isLayered&&!table.owns(k)){ stale~=k; continue; }
+				auto v=table[k];
+				if(v.isTop||decl !in v.dependencies){ stale~=k; continue; }
+				r~=q(pos,k);
+			}
+			foreach(k;stale) s.remove(k);
+			if(!s.length) mentionedBy.remove(decl);
 		}
-		foreach(k;stale) s.remove(k);
-		if(!s.length) mentionedBy.remove(decl);
+		if(auto bi=baseIndex()){
+			foreach(k;bi.mentionedBy.get(decl,null)){
+				size_t pos;
+				if(table.owns(k)||!table.tryGetPosition(k,pos)) continue; // (a changed entry is in `mentionedBy`)
+				r~=q(pos,k);
+			}
+		}
 		sort!"a[0]<b[0]"(r);
 		return r.map!(x=>x[1]).array;
 	}
 	void update(scope void delegate(Declaration,ref Dependency) dg){ // (of all variables)
-		foreach(k,ref v;table){
+		if(table.isLayered){
+			updateKeys(dg,table.keys);
+			return;
+		}
+		foreach(k,ref v;&table.opApplyOwned){
 			dg(k,v);
 			index(k,v);
 		}
 	}
+	void updateKeys(scope void delegate(Declaration,ref Dependency) dg,Declaration[] keys){ // (of the variables `keys` that have entries)
+		foreach(k;keys){
+			if(k !in table) continue;
+			if(table.owns(k)){
+				auto v=&entry(k);
+				dg(k,*v);
+				index(k,*v);
+			}else{ // (no one else refers to a shared entry, see `get`)
+				auto v=table[k],nv=v.dup;
+				dg(k,nv);
+				if(!same(nv,v)) set(k,nv);
+			}
+		}
+	}
 	void joinWith(Dependencies rhs){
-		foreach(k,ref v;table){
-			if(k in rhs.table){
-				v.joinWith(rhs.table[k]);
+		if(table.isLayered){
+			joinWithKeys(rhs,table.keys);
+			return;
+		}
+		foreach(k,ref v;&table.opApplyOwned){
+			if(k !in rhs.table) continue;
+			v.joinWith(rhs.table[k]);
+			if(k in v.dependencies)
+				v=Dependency(true); // TODO: get rid of this
+			else index(k,v);
+		}
+	}
+	void joinWithKeys(Dependencies rhs,Declaration[] keys){ // (of the variables `keys` that have entries in both)
+		foreach(k;keys){
+			if(k !in table||k !in rhs.table) continue;
+			auto r=rhs.table[k];
+			if(table.owns(k)){
+				auto v=&entry(k);
+				v.joinWith(r);
 				if(k in v.dependencies)
-					v=Dependency(true); // TODO: get rid of this
-				else index(k,v);
+					*v=Dependency(true); // TODO: get rid of this
+				else index(k,*v);
+			}else{ // (no one else refers to a shared entry, see `get`)
+				auto v=table[k],nv=v.dup;
+				nv.joinWith(r);
+				if(k in nv.dependencies) nv=Dependency(true); // TODO: get rid of this
+				if(!same(nv,v)) set(k,nv);
 			}
 		}
 	}
 	void pushUp(Declaration removed, bool keep, Identifier consumedAt=null)in{
 		assert(removed in table,text(removed," ",removed.loc," ",table));
 	}do{
-		Dependency x=table[removed];
+		Dependency x=entry(removed);
 		if(!keep) table.remove(removed);
 		foreach(k;mentioning(removed)){
-			auto v=table[k];
+			auto v=entry(k);
 			v.replace(removed, x, consumedAt);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
@@ -150,13 +250,13 @@ struct Dependencies{
 		assert(ndecl !in table,text(ndecl.loc," ",table));
 	}do{
 		replaceInDependencies(decl,ndecl);
-		set(ndecl,table[decl]);
+		set(ndecl,entry(decl));
 		table.remove(decl);
 	}
 	void replaceInDependencies(Declaration decl,Declaration ndecl,Declaration except=null){ // (in those of all variables except `except`)
 		foreach(k;mentioning(decl)){
 			if(k is except) continue;
-			auto v=table[k];
+			auto v=entry(k);
 			v.replace(decl,ndecl);
 			index(k,v);
 			table[k]=v;
@@ -165,16 +265,16 @@ struct Dependencies{
 	void merge(Declaration decl,Declaration ndecl)in{ // (`ndecl` is another version of the variable of `decl`)
 		assert(decl in table&&ndecl in table);
 	}do{
-		auto dep=table[decl];
+		auto dep=entry(decl);
 		table.remove(decl);
 		auto changed=mentioning(decl);
 		foreach(k;changed){
-			auto v=table[k];
+			auto v=entry(k);
 			v.replace(decl,ndecl);
 			index(k,v);
 			table[k]=v;
 		}
-		auto nv=table[ndecl];
+		auto nv=entry(ndecl);
 		nv.joinWith(dep);
 		index(ndecl,nv);
 		table[ndecl]=nv;
@@ -186,7 +286,7 @@ struct Dependencies{
 	}
 	void substitute(Declaration decl,Dependency dep){ // substitute `decl` by `dep` inside all tracked sets (`decl` itself has no entry)
 		foreach(k;mentioning(decl)){
-			auto v=table[k];
+			auto v=entry(k);
 			v.replace(decl,dep);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
@@ -194,11 +294,9 @@ struct Dependencies{
 			table[k]=v;
 		}
 	}
-	Dependencies dup(){ // (without the index, which the copy builds when it needs it)
-		auto result=table.dup; // (the table, whose dependencies are copied next)
-		foreach(k,ref v;result) v=v.dup;
+	Dependencies dup(){ // (without the index of the changed entries, which the copy builds when it needs it)
 		Dependencies r;
-		r.table=result;
+		r.table=table.dup;
 		r.unindexed=true;
 		return r;
 	}
@@ -216,7 +314,7 @@ struct Dependencies{
 	}
 	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
-		foreach(decl,ref dependency;table){
+		foreach(decl,dependency;table){
 			auto id=decl.getId;
 			if(id==Id()) continue;
 			assert(id !in result,text(decl," ",table," ",result));
@@ -371,9 +469,16 @@ abstract class Scope{
 	}do{
 		if(decl.name.id !in symtab||cast(DeadDecl)symtab[decl.name.id])
 			symtab[decl.name.id]=decl;
+		if(auto old=rnsymtab.get(decl.getId,null)){
+			if(isRenamedDead(old)) numRenamedDead--;
+			if(declProps.tracked) leftTable~=old;
+			if(sinceMergeLogged&&dependencyTracked(old)) removedTracked~=old;
+		}
 		rnsymtab[decl.getId]=decl;
+		if(isRenamedDead(decl)) numRenamedDead++;
 		if(mayMentionInType(decl)) noteTypeMentioning(decl);
 	}
+	private static bool isRenamedDead(Declaration decl){ return cast(DeadDecl)decl&&decl.name&&decl.getId!=decl.name.id; }
 	private SetX!Declaration typeMentioning_; // (the declarations of `rnsymtab` whose types may mention variables, see `typeMentioning`; and others that are no longer there)
 	private size_t numTypeMentioningAtPrune; // (the size of `typeMentioning_` after its last pruning)
 	private void noteTypeMentioning(Declaration decl){
@@ -427,7 +532,11 @@ abstract class Scope{
 		if(symtab.get(decl.name.id,null) is decl)
 			symtab.remove(decl.name.id);
 		rnsymtab.remove(decl.getId);
+		if(isRenamedDead(decl)) numRenamedDead--;
+		if(sinceMergeLogged&&dependencyTracked(decl)) removedTracked~=decl;
+		if(declProps.tracked) leftTable~=decl;
 	}
+	private Declaration[] leftTable; // (the declarations that left `rnsymtab` since the last statement, see `afterStatement`)
 
 	static struct DeclProp{
 		Identifier[] constBlock;
@@ -449,6 +558,7 @@ abstract class Scope{
 		/+private+/ Identifier[] accesses;
 		/+private+/ Declaration[] capturers;
 		size_t seq; // (in the order of recording, see `DeclProps.inOrder`)
+		size_t activated; // (in the order of `DeclProps.props`, see `DeclProps.set`)
 		static DeclProp default_(){
 			return DeclProp.init;
 		}
@@ -513,7 +623,66 @@ abstract class Scope{
 		private RetiredDeclProps retired; // (snapshots share it without changing it, see `resetDeclProps`)
 		private bool snapshot;
 		private size_t numRemoved; // (from `props` since it was compacted)
-		DeclProps dup(){ return DeclProps(props.dup,retired,true,numRemoved); }
+		private Declaration[] blocked; // (the declarations whose `const` blocks may be nonempty, see `noteBlocked`)
+		private size_t numBlockedAtPrune;
+		private Declaration[] replaced; // (the declarations whose component replacements may be nonempty, see `noteReplaced`)
+		private size_t numReplacedAtPrune;
+		private Declaration[] added; // (those whose properties became active since the last retirement, or are not retired because of nonempty `const` blocks or component replacements, see `retire`)
+		private bool tracked; // (whether `added` is maintained, otherwise each retirement considers all properties)
+		private bool retireAll; // (whether the next retirement considers all properties)
+		private size_t numActivated; // (see `DeclProp.activated`)
+		private Q!(Declaration,size_t)[] removedLog; // (from `props`, with `DeclProp.activated`, while component replacements are moved, see `ComponentReplacementContext`)
+		private size_t numMoves;
+		DeclProps dup(){
+			auto r=DeclProps(props.dup,retired,true,numRemoved);
+			r.blocked=blocked.dup;
+			r.numBlockedAtPrune=numBlockedAtPrune;
+			r.replaced=replaced.dup;
+			r.numReplacedAtPrune=numReplacedAtPrune;
+			r.retireAll=true;
+			r.tracked=tracked;
+			r.numActivated=numActivated;
+			return r;
+		}
+		void noteAdded(Declaration decl){ if(tracked) added~=decl; } // (see `retire`)
+		void noteReplaced(Declaration decl){ // (its component replacements may be nonempty)
+			replaced~=decl;
+			if(replaced.length>2*numReplacedAtPrune+16){
+				replaced=ordered(replaced,(ref DeclProp p)=>p.componentReplacements.length!=0);
+				numReplacedAtPrune=replaced.length;
+			}
+		}
+		private Declaration[] ordered(Declaration[] decls,scope bool delegate(ref DeclProp) has){ // (the declarations with active properties that `has`, without repetitions, in the order of `props`)
+			if(!decls.length) return null;
+			Q!(size_t,Declaration)[] r;
+			SetX!Declaration seen;
+			foreach(d;decls){
+				if(d in seen) continue;
+				seen.insert(d);
+				if(auto p=tryGet(d)) if(has(*p)) r~=q(p.activated,d);
+			}
+			sort!"a[0]<b[0]"(r);
+			return r.map!(x=>x[1]).array;
+		}
+		Declaration[] withConstBlocks(){ // (in the order of `props`)
+			if(!blocked.length) return null;
+			blocked=ordered(blocked,(ref DeclProp p)=>p.constBlock.length!=0);
+			numBlockedAtPrune=blocked.length;
+			return blocked.dup;
+		}
+		Declaration[] withReplacements(){ // (in the order of `props`)
+			if(!replaced.length) return null;
+			replaced=ordered(replaced,(ref DeclProp p)=>p.componentReplacements.length!=0);
+			numReplacedAtPrune=replaced.length;
+			return replaced.dup;
+		}
+		void noteBlocked(Declaration decl){ // (its `const` block may be nonempty)
+			blocked~=decl;
+			if(blocked.length>2*numBlockedAtPrune+16){
+				blocked=ordered(blocked,(ref DeclProp p)=>p.constBlock.length!=0);
+				numBlockedAtPrune=blocked.length;
+			}
+		}
 		private size_t nextSeq(){
 			if(!retired) retired=new RetiredDeclProps;
 			return retired.numRecorded++;
@@ -528,10 +697,19 @@ abstract class Scope{
 			return tryGetRetired(decl);
 		}
 		ref DeclProp set(Declaration decl,DeclProp prop){
-			if(auto p=tryGet(decl)) prop.seq=p.seq;
-			else if(auto p=tryGetRetired(decl)) prop.seq=p.seq;
-			else prop.seq=nextSeq();
-			return props[decl]=prop;
+			if(auto p=tryGet(decl)){
+				prop.seq=p.seq;
+				prop.activated=p.activated;
+			}else{
+				if(auto p=tryGetRetired(decl)) prop.seq=p.seq;
+				else prop.seq=nextSeq();
+				prop.activated=++numActivated;
+				noteAdded(decl);
+			}
+			auto r=&(props[decl]=prop);
+			if(prop.constBlock.length) noteBlocked(decl); // (after it is stored, which a pruning keeps)
+			if(prop.componentReplacements.length) noteReplaced(decl);
+			return *r;
 		}
 		DeclProp* active(Declaration decl){
 			if(auto r=tryGet(decl)) return r;
@@ -558,7 +736,9 @@ abstract class Scope{
 		void replaceDecl(Declaration splitFrom,Declaration splitInto){
 			if(auto declProp=tryGet(splitFrom)){
 				declProp.replaceDecl(splitFrom,splitInto);
+				auto activated=declProp.activated;
 				set(splitInto,declProp.move());
+				if(numMoves) removedLog~=q(splitFrom,activated);
 				props.remove(splitFrom);
 				numRemoved++;
 				if(tryGetRetired(splitFrom)) retired.props.remove(splitFrom); // (from before it was active again, see `active`)
@@ -581,18 +761,32 @@ abstract class Scope{
 				assert(newProp&&!newProp.componentReplacements.length);
 				newProp.componentReplacements=prevProp.componentReplacements;
 				prevProp.componentReplacements=[];
+				if(newProp.componentReplacements.length) noteReplaced(new_);
+				noteAdded(prev);
 			}
 		}
-		private void retire(scope bool delegate(Declaration) live){
-			Declaration[] gone;
-			foreach(decl,ref prop;props)
-				if(!prop.constBlock.length&&!prop.componentReplacements.length&&!live(decl))
-					gone~=decl;
+		private void retire(scope bool delegate(Declaration) live,Declaration[] left){ // (`left`: the declarations that left the table since the last retirement)
+			Declaration[] gone,pending;
+			if(retireAll||!tracked){
+				foreach(decl,ref prop;props){
+					if(live(decl)) continue;
+					if(!prop.constBlock.length&&!prop.componentReplacements.length) gone~=decl;
+					else pending~=decl;
+				}
+			}else foreach(decl;ordered(added~left,(ref DeclProp p)=>true)){
+				auto prop=tryGet(decl);
+				if(live(decl)) continue;
+				if(!prop.constBlock.length&&!prop.componentReplacements.length) gone~=decl;
+				else pending~=decl;
+			}
+			added=pending;
+			retireAll=false;
 			if(!gone.length) return;
 			if(!retired) retired=new RetiredDeclProps;
 			foreach(decl;gone){
 				retired.props[decl]=*tryGet(decl);
 				indexRetired(decl);
+				if(numMoves) removedLog~=q(decl,tryGet(decl).activated);
 				props.remove(decl);
 			}
 			numRemoved+=gone.length;
@@ -619,17 +813,27 @@ abstract class Scope{
 	final void resetDeclProps(DeclProps previous){
 		auto retired=declProps.retired;
 		declProps=previous;
+		declProps.retireAll=true;
 		declProps.retired=retired;
 		declProps.snapshot=false;
 		if(retired) foreach(decl,ref _;declProps.props) retired.props.remove(decl); // (retired after the snapshot)
 	}
 	final void afterStatement(){
 		// (the properties of a declaration that is no longer live only matter when its accesses are renamed or retyped, or when a use of a version that it derives from is cancelled)
-		declProps.retire((Declaration decl)=>!decl.scope_||(decl.scope_ is this?rnsymtab.get(decl.getId,null) is decl:!decl.scope_.isNestedIn(this)));
+		auto tracked=restrictsToChanges();
+		if(tracked&&!declProps.tracked) declProps.retireAll=true;
+		declProps.tracked=tracked;
+		declProps.retire((Declaration decl)=>!decl.scope_||(decl.scope_ is this?rnsymtab.get(decl.getId,null) is decl:!decl.scope_.isNestedIn(this)),leftTable);
+		leftTable=null;
 		// (no later statement refers to a temporary that the statement consumed)
 		foreach(cd;consumedTemporaries){
 			if(symtab.get(cd.name.id,null) is cd) symtab.remove(cd.name.id);
-			if(rnsymtab.get(cd.getId,null) is cd) rnsymtab.remove(cd.getId);
+			if(rnsymtab.get(cd.getId,null) is cd){
+				rnsymtab.remove(cd.getId);
+				if(isRenamedDead(cd)) numRenamedDead--;
+				if(sinceMergeLogged&&dependencyTracked(cd)) removedTracked~=cd;
+				if(declProps.tracked) leftTable~=cd;
+			}
 		}
 		consumedTemporaries=[];
 	}
@@ -761,6 +965,7 @@ abstract class Scope{
 		if(!decl.isToplevelDeclaration){
 			if(auto props=updateDeclProps(decl))
 				props.constBlock~=constBlock;
+			declProps.noteBlocked(decl);
 		}
 	}
 	static struct ComponentConstBlock{
@@ -1089,6 +1294,11 @@ abstract class Scope{
 		}
 		return null;
 	}
+	final Declaration[] constBlocked(){ // (a superset of the declarations that `isConst` holds for)
+		Declaration[] r;
+		foreach(ref props;&nestedDeclProps) r~=props.blocked;
+		return r;
+	}
 	final void inheritConstBlocks(Declaration prev,Declaration new_){ // new_ replaces prev, so it inherits prev's active const blocks
 		foreach(ref props;&nestedDeclProps){
 			bool done=false;
@@ -1096,6 +1306,7 @@ abstract class Scope{
 				if(auto prop=props.tryGet(d))
 					if(prop.constBlock.length){
 						props.active(new_).constBlock~=prop.constBlock;
+						props.noteBlocked(new_);
 						done=true;
 					}
 		}
@@ -1107,10 +1318,7 @@ abstract class Scope{
 	}
 	final ConstBlockContext saveConst(){
 		MapX!(Declaration,Identifier[]) constBlock;
-		foreach(decl,ref prop;declProps.props){
-			auto r=prop.constBlock;
-			if(r.length) constBlock[decl]=r;
-		}
+		foreach(decl;declProps.withConstBlocks()) constBlock[decl]=declProps.tryGet(decl).constBlock;
 		return ConstBlockContext(constBlock,trackedTemporaries.length,componentConstBlocks.length);
 	}
 	private void recordResetConst(Declaration decl,Identifier constBlock,ref Expression parent,bool isStatement,bool inType)in{
@@ -1142,24 +1350,38 @@ abstract class Scope{
 			}
 			return null;
 		}
+		Declaration[] versions(Declaration decl){ // (with properties, also those split from it, in the order of the properties)
+			Declaration[] r;
+			SetX!Declaration seen;
+			void visit(Declaration d){
+				if(d in seen) return;
+				seen.insert(d);
+				r~=d;
+				foreach(s;d.splitInto) visit(s);
+			}
+			visit(decl);
+			return declProps.ordered(r,(ref DeclProp p)=>true);
+		}
 		Declaration lookupCurrent(Declaration decl){
 			if(declProps.tryGet(decl)) return decl;
-			foreach(d,ref prop;declProps.props){
-				for(auto s=d.splitFrom; s; s=s.splitFrom){
-					if(s is decl) return d;
-				}
-			}
-			return null;
+			auto r=versions(decl);
+			return r.length?r[0]:null;
 		}
-		foreach(decl,ref prop;declProps.props){
+		auto affected=declProps.withConstBlocks(); // (the others keep their empty `const` blocks)
+		foreach(decl,_;context.constBlock) affected~=versions(decl);
+		foreach(decl;declProps.ordered(affected,(ref DeclProp p)=>true)){
+			auto prop=declProps.tryGet(decl);
 			auto nconstBlock=lookupSnapshot(decl);
 			if(prop.constBlock.length&&prop.constBlock!=nconstBlock){
 				auto reads=prop.constBlock;
 				recordOuterConstReads(decl,reads.filter!(read=>!nconstBlock.canFind(read)));
 				prop.constBlock=nconstBlock; // (the forget after the last use follows the reads that end here, e.g., both in `t⊕t`)
+				if(nconstBlock.length) declProps.noteBlocked(decl);
 				recordResetConst(decl,reads[$-1],parent,isStatement,inType);
 			}
 			prop.constBlock=nconstBlock;
+			if(nconstBlock.length) declProps.noteBlocked(decl);
+			else declProps.noteAdded(decl);
 		}
 		foreach(decl,constBlock;context.constBlock){
 			auto current=lookupCurrent(decl);
@@ -1187,11 +1409,13 @@ abstract class Scope{
 		}
 	}
 	final bool resetConst(ref Expression parent,bool isStatement,bool inType){
-		foreach(decl,ref prop;declProps.props){
+		foreach(decl;declProps.withConstBlocks()){
+			auto prop=declProps.tryGet(decl);
 			if(prop.constBlock.length){
 				auto reads=prop.constBlock;
 				recordOuterConstReads(decl,reads);
 				prop.constBlock=[];
+				declProps.noteAdded(decl);
 				recordResetConst(decl,reads[$-1],parent,isStatement,inType);
 			}
 		}
@@ -1201,31 +1425,35 @@ abstract class Scope{
 		return success;
 	}
 	final void resetLocalComponentReplacements(){
-		foreach(decl,ref prop;declProps.props)
-			prop.componentReplacements=[];
+		foreach(decl;declProps.withReplacements()){
+			declProps.tryGet(decl).componentReplacements=[];
+			declProps.noteAdded(decl);
+		}
 	}
 	final DeclProp.ComponentReplacement[] localComponentReplacements(){
 		typeof(return) r;
-		foreach(decl,ref prop;declProps.props)
-			r~=prop.componentReplacements;
+		foreach(decl;declProps.withReplacements())
+			r~=declProps.tryGet(decl).componentReplacements;
 		return r;
 	}
 	final DeclProp.ComponentReplacement[][] localComponentReplacementsByDecl(){
 		Declaration[] decls;
 		typeof(return) r;
-		foreach(decl,ref prop;declProps.props){
-			if(!prop.componentReplacements.length) continue;
+		foreach(decl;declProps.withReplacements()){
 			decls~=decl;
-			r~=prop.componentReplacements;
+			r~=declProps.tryGet(decl).componentReplacements;
 		}
 		sort!"a[0].getName<b[0].getName"(zip(decls,r));
 		return r;
 	}
 	DeclProp.ComponentReplacement*[] allComponentReplacements(){ // TODO: get rid of this?
 		typeof(return) r=[];
-		foreach(ref props;&nestedDeclProps)
-			foreach(decl,ref prop;props.props)
+		foreach(ref props;&nestedDeclProps){
+			foreach(decl;props.withReplacements()){
+				auto prop=props.tryGet(decl);
 				r~=iota(prop.componentReplacements.length).map!(i=>&prop.componentReplacements[i]).array;
+			}
+		}
 		return r;
 	}
 	final DeclProp.ComponentReplacement*[] componentReplacements(Declaration decl){ // TODO: get rid of this?
@@ -1276,28 +1504,51 @@ abstract class Scope{
 		newDecl.setSemError();
 		return true;
 	}
-	static struct ComponentReplacementContext{
-		private MapX!(Declaration,DeclProp.ComponentReplacement[]) componentReplacements;
-		bool empty(){ // (also with the properties of declarations without replacements, e.g., of a `const` variable that a branch reads)
-			foreach(decl,crepls;componentReplacements) if(crepls.length) return false;
-			return true;
-		}
+	static struct ComponentReplacementContext{ // (of the declarations whose properties were active, in the order of the properties: only the nonempty ones, see `restoreLocalComponentReplacements`)
+		private MapX!(Declaration,Q!(size_t,DeclProp.ComponentReplacement[])) componentReplacements; // (with `DeclProp.activated`)
+		private size_t numActivated,numRetired; // (at the move; `numRetired`: the length of `DeclProps.removedLog`)
+		bool empty(){ return !componentReplacements.length; }
 	}
 	final ComponentReplacementContext moveLocalComponentReplacements(){ // TODO: get rid of this
-		MapX!(Declaration,DeclProp.ComponentReplacement[]) r;
-		foreach(decl,ref prop;declProps.props){
-			r[decl]=prop.componentReplacements;
+		MapX!(Declaration,Q!(size_t,DeclProp.ComponentReplacement[])) r;
+		foreach(decl;declProps.withReplacements()){
+			auto prop=declProps.tryGet(decl);
+			r[decl]=q(prop.activated,prop.componentReplacements);
 			prop.componentReplacements=[];
+			declProps.noteAdded(decl);
 		}
-		return typeof(return)(r);
+		if(!declProps.numMoves++) declProps.removedLog=null;
+		return typeof(return)(r,declProps.numActivated,declProps.removedLog.length);
 	}
 	final void isolateComponentReplacements(){ // TODO: this is a bit hacky
-		foreach(decl,ref prop;declProps.props)
+		foreach(decl;declProps.withReplacements()){
+			auto prop=declProps.tryGet(decl);
 			prop.componentReplacements=prop.componentReplacements.dup;
+		}
 	}
 	final void restoreLocalComponentReplacements(ComponentReplacementContext previous){ // TODO: get rid of this
-		foreach(decl,crepls;previous.componentReplacements)
-			updateDeclProps(decl).componentReplacements=crepls;
+		// (as for all properties that were active at the move, in their order: those with replacements then, and those that are empty now or still retired are not changed)
+		Q!(size_t,Declaration,DeclProp.ComponentReplacement[])[] todo;
+		foreach(decl,e;previous.componentReplacements) todo~=q(e[0],decl,e[1]);
+		auto log=declProps.removedLog;
+		if(previous.numRetired<=log.length) foreach(e;log[previous.numRetired..$]){ // (active at the move, then retired or renamed: activated again or recorded anew, or emptied)
+			if(e[0] in previous.componentReplacements||e[1]>previous.numActivated) continue;
+			todo~=q(e[1],e[0],cast(DeclProp.ComponentReplacement[])null);
+		}
+		foreach(d;declProps.withReplacements()){ // (emptied)
+			if(d in previous.componentReplacements) continue;
+			if(auto p=declProps.tryGet(d)) if(p.activated<=previous.numActivated) todo~=q(p.activated,d,cast(DeclProp.ComponentReplacement[])null);
+		}
+		sort!"a[0]<b[0]"(todo);
+		SetX!Declaration seen;
+		foreach(t;todo){
+			if(t[1] in seen) continue;
+			seen.insert(t[1]);
+			updateDeclProps(t[1]).componentReplacements=t[2];
+			if(t[2].length) declProps.noteReplaced(t[1]);
+			else declProps.noteAdded(t[1]);
+		}
+		if(declProps.numMoves) declProps.numMoves--;
 	}
 	Q!(Declaration,Identifier)[] pendingConsumptions;
 	final ConsumedDecl recordConsumption(Declaration decl,Identifier use){
@@ -1464,6 +1715,7 @@ abstract class Scope{
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto,bool nested=true)in{
 		assert(splitFrom !is splitInto);
 	}do{
+		lastUses.prepareChange(splitFrom);
 		if(splitFrom.isSemError())
 			splitInto.setSemForceError();
 		if(nested) foreach(scopes;mergedNestedScopes){
@@ -1536,6 +1788,7 @@ abstract class Scope{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
+		lastUses.prepareChange(odecl);
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		if(remove){
 			symtabRemove(odecl);
@@ -1867,6 +2120,7 @@ abstract class Scope{
 
 	bool diverges=false;
 	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,bool delegate(Declaration) mentions=null){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`)
+		lastUses.createDeferred();
 		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
@@ -2116,6 +2370,7 @@ abstract class Scope{
 	final void continueDependencies(Declaration decl,Declaration ndecl){ // (`ndecl` has the value of `decl`, which it replaces)
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
+		if(sinceMergeLogged) consumedLogged~=decl;
 		dependencies.remove(decl);
 		dependencies.replaceInDependencies(decl,ndecl,ndecl);
 		controlDependency.replace(decl,ndecl);
@@ -2124,6 +2379,7 @@ abstract class Scope{
 	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null){
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
+		if(sinceMergeLogged) consumedLogged~=decl;
 		noteDependencyConsumed(decl,getDependency(decl));
 		if(getDependency(decl).isTop){
 			bool done=false;
@@ -2288,6 +2544,14 @@ abstract class Scope{
 
 	bool allowMerge=false;
 	NestedScope[] activeNestedScopes;
+	final bool restrictsToChanges(){ return rnsymtab.length>=64; } // (whether the nestings and merges only consider the variables that change, see `MergeKeys` and `LastUses.prepareNesting`: in a small scope, visiting all of them costs less)
+	private size_t nestChanges,nestDepsChanges,nestRenamedDead; // (of the enclosing scope at the nesting, see `MergeKeys`)
+	private size_t numRenamedDead; // (of the dead declarations in `rnsymtab` whose identifiers are renamed, see `MergeKeys`)
+	private size_t nestLogMark; // (the length of the log of `rnsymtab` at the latest nesting)
+	private bool sinceMergeLogged; // (whether `removedTracked`, `consumedLogged` and the log of `dependencies` from `depsMark` hold all changes since the last merge, also of the enclosing scopes before the nestings, see `MergeKeys`)
+	private size_t depsMark;
+	private Declaration[] removedTracked; // (variables with tracked dependencies that may not be the entries of their identifiers in `rnsymtab`: removed, replaced, merged, or changed in an enclosing scope since its last merge, see `merge`)
+	private Declaration[] consumedLogged; // (the variables added to `consumedDepLog`)
 	void nest(NestedScope r)in{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
@@ -2297,9 +2561,22 @@ abstract class Scope{
 		r.dependencies=dependencies.dup;
 		r.symtab=symtab.dup;
 		r.rnsymtab=rnsymtab.dup;
+		if(restrictsToChanges()){ // (the nested scope logs its changes, see `MergeKeys`)
+			r.dependencies.startLog();
+			r.rnsymtab.startLog();
+			r.logSinceNesting=true;
+			r.sinceMergeLogged=sinceMergeLogged;
+			if(sinceMergeLogged) r.removedTracked=removedTracked~dependencies.changeLog[depsMark..$];
+		}
+		r.numRenamedDead=r.nestRenamedDead=numRenamedDead;
+		r.nestChanges=rnsymtab.numChanges;
+		r.nestDepsChanges=dependencies.numChanges;
 		r.typeMentioning_=typeMentioning_.dup;
 		r.numTypeMentioningAtPrune=numTypeMentioningAtPrune;
-		if(!allowMerge) lastUses.prepareNesting(this);
+		if(!allowMerge){
+			lastUses.prepareNesting(this);
+			nestLogMark=rnsymtab.changeLog.length;
+		}
 		allowMerge=true;
 		activeNestedScopes~=r;
 		lastUses.nest(r);
@@ -2307,6 +2584,53 @@ abstract class Scope{
 
 	NestedScope[][] mergedNestedScopes;
 
+	private static final class MergeKeys{ // (the variables that the loops of a merge visit: all, or those whose entries in the tables of the nested scopes changed since the nesting, also during the merge, in the order of the table that a loop visits; the merge does not change the others, except for the positions of dead entries that no nested scope changed)
+		bool all;
+		private Id[] ids;
+		private SetX!Id seen;
+		private Q!(SymbolTable*,size_t)[] logs;
+		this(Scope sc,NestedScope[] scopes){
+			all=sc.handler.nerrors||!sc.restrictsToChanges()||!sc.sinceMergeLogged||scopes.any!(s=>s.parent !is sc||!s.logSinceNesting||!s.rnsymtab.isLogging||!s.dependencies.isLogging||s.nestChanges!=scopes[0].nestChanges||s.nestDepsChanges!=scopes[0].nestDepsChanges||s.nestRenamedDead);
+			if(!all) foreach(s;scopes) watch(&s.rnsymtab,true);
+		}
+		void watch(SymbolTable* table,bool logged){ // (`logged`: also the changes so far)
+			auto log=(*table).changeLog;
+			if(logged) add(log);
+			logs~=q(table,log.length);
+		}
+		void add(Id[] changed){
+			foreach(id;changed) if(id !in seen){ seen.insert(id); ids~=id; }
+		}
+		bool has(Id id){ return all||id in seen; }
+		private void poll(){
+			foreach(ref l;logs){
+				auto log=(*l[0]).changeLog;
+				if(log.length>l[1]) add(log[l[1]..$]);
+				l[1]=log.length;
+			}
+		}
+		Id[] changed(){ poll(); return ids; }
+		void forEach(SymbolTable order,scope void delegate(Declaration) dg){ // (the entries of `order` whose variables changed so far, also those that change before their turns)
+			if(all){ foreach(_,d;order) dg(d); return; }
+			poll();
+			import std.container.binaryheap: heapify;
+			Q!(size_t,Id)[] entries;
+			foreach(id;ids){ size_t pos; if(order.tryGetPosition(id,pos)) entries~=q(pos,id); }
+			auto queue=heapify!"a[0]>b[0]"(entries); // (by position)
+			while(!queue.empty){
+				auto cur=queue.front;
+				queue.removeFront();
+				dg(order[cur[1]]);
+				auto n=ids.length;
+				poll();
+				foreach(id;ids[n..$]){
+					size_t pos;
+					if(order.tryGetPosition(id,pos)&&pos>cur[0]) queue.insert(q(pos,id));
+				}
+			}
+		}
+	}
+	private bool logSinceNesting; // (whether the logs of `rnsymtab` and `dependencies` hold all changes since the nesting, see `MergeKeys`)
 	final bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
 	}do{
@@ -2337,6 +2661,7 @@ abstract class Scope{
 			assert(activeNestedScopes.empty);
 			return false; // (no nesting, so no merge)
 		}
+		auto used=LastUses.prepareMerge(scopes);
 		clearConsumed(); // TODO: why needed?
 		foreach(sc;scopes) sc.clearConsumed();
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
@@ -2362,16 +2687,18 @@ abstract class Scope{
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
+		auto keys=new MergeKeys(this,scopes);
+		auto numErrors=handler.nerrors;
 		SetX!Declaration goneConstLocals; // (the types of the merged variables do not mention them)
 		static if(language==silq){
 			foreach(sc;scopes){
 				if(auto bsc=cast(BlockScope)sc) if(bsc.keepConstLocals) continue;
-				foreach(_,d;sc.rnsymtab.dup){
-					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) continue;
-					if(sc.rnsymtab.get(d.getId,null) !is d) continue;
+				keys.forEach(sc.rnsymtab.dup,(Declaration d){
+					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) return;
+					if(sc.rnsymtab.get(d.getId,null) !is d) return;
 					auto origin=d;
 					while(origin.splitFrom) origin=origin.splitFrom;
-					if(!origin.scope_||!origin.scope_.isNestedIn(sc)) continue;
+					if(!origin.scope_||!origin.scope_.isNestedIn(sc)) return;
 					if(!sc.canForgetAppend(d)){
 						if(!sc.lastUses.betterUnforgettableError(d,sc))
 							sc.error(format("`const` variable `%s` cannot be forgotten at the end of its scope",d.getName),d.loc);
@@ -2381,17 +2708,36 @@ abstract class Scope{
 						sc.clearConsumed();
 						for(auto x=d;x;x=x.splitFrom) goneConstLocals.insert(x);
 					}
-				}
+				});
 			}
 		}
 		symtab=scopes[0].symtab.dup;
+		auto log=rnsymtab.changeLog,logged=logSinceNesting&&rnsymtab.isLogging&&scopes[0].logSinceNesting;
+		auto oldTable=rnsymtab;
+		Id[] changedHere=rnsymtab.isLogging&&nestLogMark<=log.length?log[nestLogMark..$]:null; // (while the nested scopes were analyzed)
+		bool leftLogged=rnsymtab.isLogging&&nestLogMark<=log.length;
+		if(logged) log~=scopes[0].rnsymtab.changeLog;
 		rnsymtab=scopes[0].rnsymtab.dup;
+		auto logs=logged||!keys.all||restrictsToChanges(); // (for the enclosing scope or for the next merge)
+		if(logs) rnsymtab.startLog(logged?log:null);
+		keys.watch(&rnsymtab,false);
+		numRenamedDead=scopes[0].numRenamedDead;
 		typeMentioning_=scopes[0].typeMentioning_.dup;
 		numTypeMentioningAtPrune=scopes[0].numTypeMentioningAtPrune;
 		//imported!"util.io".writeln("TO REMOVE: ",toRemove," DEPS: ",dependencies," ",toRemove.map!(t=>!!(t in dependencies.dependencies)));
 		MapX!(Declaration,Dependency) carryOverDependencies;
 		static if(language==silq) foreach(decl;toRemove) if(dependencyTracked(decl)) carryOverDependencies[decl]=getDependency(decl); // TODO: this is a bit hacky
+		Declaration[] depKeys; // (whose entries may change in the loops over the entries of the dependencies below: those that changed since the nesting or the last merge, see `MergeKeys`)
+		if(!keys.all){
+			depKeys=dependencies.changeLog[depsMark..$]~removedTracked;
+			foreach(sc;scopes) depKeys~=sc.dependencies.changeLog~sc.removedTracked;
+		}
+		auto depLog=dependencies.changeLog;
+		if(logged) depLog~=scopes[0].dependencies.changeLog;
 		dependencies=scopes[0].dependencies.dup;
+		if(logs) dependencies.startLog(logged?depLog:null);
+		auto depLogStart=dependencies.changeLog.length;
+		logSinceNesting=logged;
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
 		bool consumedByError(Id id){ // (by an erroneous expression in a branch: not reported again)
@@ -2431,7 +2777,8 @@ abstract class Scope{
 		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s)&&!(cast(BlockScope)s).returnsOnSomePath)){
 			import ast.semantic_:typeForDecl;
 			Q!(Id,Declaration[])[] candidates;
-			foreach(id,d0;scopes[0].rnsymtab){
+			keys.forEach(scopes[0].rnsymtab,(Declaration d0){
+				auto id=d0.getId;
 				Declaration[] versions;
 				bool dependents=false; // (on a version without a known dependency)
 				foreach(s;scopes){
@@ -2450,14 +2797,14 @@ abstract class Scope{
 					versions~=d;
 				}
 				if(versions.length&&dependents&&!versions.all!(v=>v is versions[0])) candidates~=q(id,versions);
-			}
+			});
 			if(candidates.length) eagerIds=eagerMergeOrder(this,scopes,candidates);
 		}
 		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
 			type=unfoldBranchTypeVariables(type);
 			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
 		}
-		foreach(psym;rnsymtab.dup){
+		keys.forEach(rnsymtab.dup,(Declaration psym){
 			auto sym=psym;
 			import ast.semantic_: typeForDecl;
 			bool symExists=true,needMerge=sym.scope_ is scopes[0];
@@ -2504,12 +2851,12 @@ abstract class Scope{
 			}
 			if(cast(DeadDecl)sym){
 				removeOSym(this,sym);
-				continue;
+				return;
 			}
 			auto cur=scopes[0].rnsymtab.get(sym.getId,null);
 			if(!cur||cast(DeadDecl)cur){ // (consumed when merging the dependencies of another variable)
 				removeOSym(this,sym);
-				continue;
+				return;
 			}
 			foreach(sc;scopes[1..$]){
 				auto osym=sc.rnsymtab.get(sym.getId,null);
@@ -2631,7 +2978,7 @@ abstract class Scope{
 				}
 				if(symExists) producedOuter~=sym;
 			}
-		}
+		});
 		if(mergeTypeSubst.length) foreach(sym;producedOuter[numProducedOuter..$]){ // (the types of the merged variables mention the merged versions, independently of the order of merging)
 			auto vd=cast(VarDecl)sym;
 			if(vd&&vd.vtype&&vd.scope_ is this) vd.vtype=vd.vtype.substitute(mergeTypeSubst);
@@ -2649,28 +2996,29 @@ abstract class Scope{
 			}
 		}
 		SetX!Declaration forgotten; // (or not consumed, after an error)
+		if(handler.nerrors!=numErrors) keys.all=true;
 		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged, or when forgetting another variable)
 			changed=false;
-			foreach(sym;rnsymtab.dup){
+			keys.forEach(rnsymtab.dup,(Declaration sym){
 				if(cast(DeadDecl)sym){ // (before it was split into the branches: its versions in the other branches are forgotten below)
 					symtabRemove(sym);
-					continue;
+					return;
 				}
-				if(!scopes.any!(sc=>!!cast(DeadDecl)sc.rnsymtab.get(sym.getId,null))) continue;
+				if(!scopes.any!(sc=>!!cast(DeadDecl)sc.rnsymtab.get(sym.getId,null))) return;
 				addDeadMerge(sym);
 				symtabRemove(sym);
 				foreach(sc;scopes) if(sc.mergedVars.any!(d=>d.mergedInto is sym)) sc.mergedVars=sc.mergedVars.filter!(d=>d.mergedInto !is sym).array; // (not merged after all: the versions that are not consumed are forgotten below)
 				if(dependencyTracked(sym)) pushDependencies(sym,false);
 				changed=true;
-			}
+			});
 			foreach(sc;scopes){
-				foreach(sym;sc.rnsymtab.dup){
-					if(sc.rnsymtab.get(sym.getId,null) !is sym) continue; // (consumed when pushing the dependencies of another variable)
-					if(cast(DeadDecl)sym||sym.getId in rnsymtab||sym in forgotten) continue;
-					if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) continue; // (see below)
+				keys.forEach(sc.rnsymtab.dup,(Declaration sym){
+					if(sc.rnsymtab.get(sym.getId,null) !is sym) return; // (consumed when pushing the dependencies of another variable)
+					if(cast(DeadDecl)sym||sym.getId in rnsymtab||sym in forgotten) return;
+					if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))) return; // (see below)
 					if(sym.scope_ !is sc&&sym.isSemError()){ // (not split into `sc` after an error in another branch)
 						sc.symtabRemove(sym);
-						continue;
+						return;
 					}
 					if(sym.scope_ !is this&&sym.scope_ !is sc) if(auto cur=getSplit(sym)) if(cur.scope_ is this){ // (split into this scope after the branches started, e.g., when a branch of an enclosing conditional consumed it while merging, see `LastUse.consume`)
 						sc.symtabRemove(sym);
@@ -2688,16 +3036,18 @@ abstract class Scope{
 					if(sc.dependencyTracked(sym))
 						sc.pushDependencies(sym,false);
 					changed=true;
-				}
+				});
 			}
 		}
+		if(handler.nerrors!=numErrors) keys.all=true;
+		if(!keys.all) foreach(id;deadMergeIds(keys,scopes,deadMerges)) keys.add([id]);
 		foreach(sc;scopes){
-			foreach(sym;sc.rnsymtab.dup){
-				if(sc.rnsymtab.get(sym.getId,null) !is sym) continue; // (consumed when pushing the dependencies of another variable)
+			keys.forEach(sc.rnsymtab.dup,(Declaration sym){
+				if(sc.rnsymtab.get(sym.getId,null) !is sym) return; // (consumed when pushing the dependencies of another variable)
 				if(sym.isSemError()&&(!sym.scope_||!isNestedIn(sym.scope_))){
 					// TODO: why needed?
 					sym.scope_=this;
-					continue;
+					return;
 				}
 				if(auto dd=cast(DeadDecl)sym){
 					auto dm=addDeadMerge(sym);
@@ -2707,21 +3057,68 @@ abstract class Scope{
 					   dm.mergedFrom~=dd;
 					assert(sym.getId !in rnsymtab||cast(DeadDecl)rnsymtab[sym.getId]);
 				}
+			});
+		}
+		Declaration[] changedDeps;
+		MapX!(void*,bool) changedDepsSeen;
+		size_t[] depCursors; // (in the logs below)
+		Declaration[] changedDependencies(){ // (the variables whose entries in the dependencies may differ from those at the nesting or after the last merge, see `MergeKeys`)
+			void add(Declaration[] ds){
+				foreach(d;ds){
+					auto k=cast(void*)d;
+					if(k in changedDepsSeen) continue;
+					changedDepsSeen[k]=true;
+					changedDeps~=d;
+				}
+			}
+			if(!depCursors.length){
+				add(depKeys);
+				depCursors=new size_t[](2+2*scopes.length);
+				depCursors[0]=depLogStart;
+			}
+			void poll(size_t i,Declaration[] log){
+				if(log.length>depCursors[i]) add(log[depCursors[i]..$]);
+				depCursors[i]=log.length;
+			}
+			poll(0,dependencies.changeLog);
+			poll(1,removedTracked);
+			foreach(j,sc;scopes){
+				poll(2+2*j,sc.dependencies.changeLog);
+				poll(3+2*j,sc.removedTracked);
+			}
+			return changedDeps;
+		}
+		foreach(sc;scopes[1..$]){
+			if(keys.all) dependencies.joinWith(sc.dependencies);
+			else dependencies.joinWithKeys(sc.dependencies,changedDependencies());
+		}
+		foreach(sc;scopes){ // TODO: needed?
+			foreach(decl,ref dep;sc.consumedDepLog){
+				if(decl !in consumedDepLog){
+					consumedDepLog[decl]=dep;
+					if(!keys.all) consumedLogged~=decl;
+				}
 			}
 		}
-		foreach(sc;scopes[1..$])
-			dependencies.joinWith(sc.dependencies);
-		foreach(sc;scopes){ // TODO: needed?
-			foreach(decl,ref dep;sc.consumedDepLog)
-				if(decl !in consumedDepLog)
-					consumedDepLog[decl]=dep;
+		void substituteAllConsumed(){
+			if(keys.all) dependencies.update((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); });
+			else{
+				auto ks=changedDependencies().dup;
+				foreach(x;consumedLogged) ks~=dependencies.mentioning(x);
+				dependencies.updateKeys((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); },ks);
+			}
 		}
-		dependencies.update((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); });
-		foreach(k;dependencies.keys){
-			if(k.getId !in rnsymtab)
+		substituteAllConsumed();
+		Declaration[] nonCurrent;
+		foreach(k;keys.all?dependencies.keys:changedDependencies()){
+			if(k.getId !in rnsymtab){
 				if(dependencyTracked(k))
 					removeDependency(k);
+			}else if(dependencies.isLogging&&dependencyTracked(k)&&rnsymtab[k.getId] !is k) nonCurrent~=k; // (stale when its identifier is removed)
 		}
+		depsMark=dependencies.changeLog.length;
+		removedTracked=nonCurrent;
+		sinceMergeLogged=dependencies.isLogging;
 		foreach(sc;scopes){
 			mergeDeclProps(sc.declProps,sc.componentConstBlocks);
 		}
@@ -2732,19 +3129,58 @@ abstract class Scope{
 			}else symtabInsert(dm);
 		}
 		foreach(sc;scopes){
+			sc.rnsymtab.stopLog();
+			sc.dependencies.stopLog();
 			sc.dependencies.clear();
 			sc.dependenciesMerged=true;
 		}
-		foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
-		foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
+		if(keys.all){
+			foreach(k,v;symtab) assert(this.isNestedIn(v.scope_),text(v));
+			foreach(k,v;rnsymtab) assert(this.isNestedIn(v.scope_),text(v));
+		}else foreach(id;keys.changed) if(auto v=rnsymtab.get(id,null)){
+			assert(this.isNestedIn(v.scope_),text(v));
+			if(auto w=symtab.get(v.name.id,null)) assert(this.isNestedIn(w.scope_),text(w));
+		}
 		foreach(decl,ref dep;carryOverDependencies){
 			if(!dependencies.tracked(decl))
 				dependencies.set(decl,dep);
 		}
-		lastUses.merge(isLoop,this,scopes);
+		if(keys.all||used is null) lastUses.merge(isLoop,this,scopes);
+		else{
+			Q!(size_t,Declaration)[] ordered;
+			SetX!Declaration seen;
+			void consider(Id id){
+				size_t pos;
+				auto d=rnsymtab.get(id,null);
+				if(!d||d in seen||!rnsymtab.tryGetPosition(id,pos)) return;
+				seen.insert(d);
+				ordered~=q(pos,d);
+			}
+			foreach(id;keys.changed) consider(id);
+			foreach(d;used) consider(d.getId);
+			sort!"a[0]<b[0]"(ordered);
+			lastUses.merge(isLoop,this,scopes,ordered.map!(x=>x[1]).array,false);
+		}
 		// TODO: needed?
-		dependencies.update((Declaration k,ref Dependency v){ substituteConsumed(v,consumedDepLog); });
+		substituteAllConsumed();
+		consumedLogged=null;
+		if(keys.all||!leftLogged) declProps.retireAll=true;
+		else if(declProps.tracked) foreach(id;keys.changed~changedHere) if(auto o=oldTable.get(id,null)) if(rnsymtab.get(id,null) !is o) leftTable~=o; // (see `afterStatement`)
 		return errors;
+	}
+	private Id[] deadMergeIds(MergeKeys keys,NestedScope[] scopes,ref MapSX!(Id,DeadMerge) deadMerges){ // (the dead entries that no nested scope changed, but whose names merged dead entries have: their merges are not trivial, see `MergeKeys`)
+		SetX!Id names;
+		foreach(name,_;deadMerges) names.insert(name);
+		foreach(id;keys.changed) foreach(sc;scopes) if(auto d=cast(DeadDecl)sc.rnsymtab.get(id,null)) names.insert(d.name.id);
+		Id[] r;
+		foreach(name;names){
+			if(keys.has(name)) continue;
+			auto dd=cast(DeadDecl)scopes[0].rnsymtab.get(name,null);
+			if(!dd) continue;
+			if(rnsymtab.get(name,null) is dd) symtabRemove(dd); // (as the loop over the merged entries does)
+			r~=name;
+		}
+		return r;
 	}
 
 	final Declaration addVariable(Declaration decl,Expression type,bool isFirstDef=false)in{
@@ -2824,6 +3260,7 @@ abstract class Scope{
 		auto id=getIdFromIndex(index);
 		assert(id&&id.meaning);
 		updateDeclProps(id.meaning).nameIndex(index,name);
+		declProps.noteReplaced(id.meaning);
 	}
 	static if(language==silq)
 	void reregisterComponentReplacement(IndexExp write,Id name,IndexExp read){
@@ -2831,10 +3268,12 @@ abstract class Scope{
 		auto id=getIdFromIndex(write);
 		assert(id&&id.meaning);
 		updateDeclProps(id.meaning).componentReplacements~=DeclProp.ComponentReplacement(write,name,read);
+		declProps.noteReplaced(id.meaning);
 	}
 	static if(language==silq)
 	void blockConvertedAggregate(Declaration decl,IndexExp convertedWrite,Id name){
 		updateDeclProps(decl).componentReplacements~=DeclProp.ComponentReplacement(null,name,null,null,convertedWrite);
+		declProps.noteReplaced(decl);
 	}
 
 	struct ScopeState{
@@ -2854,7 +3293,7 @@ abstract class Scope{
 					return true;
 				return false;
 			}
-			bool compareTables(MapX!(Id,Declaration) symtab,MapX!(Id,Declaration) rsymtab){
+			bool compareTables(SymbolTable symtab,SymbolTable rsymtab){
 				foreach(name,decl;rsymtab){
 					if(cast(DeadDecl)decl) continue;
 					if(name !in symtab)
@@ -3033,8 +3472,8 @@ abstract class Scope{
 		DeclProps declProps;
 		Declaration[] toRemove;
 		TrackedTemporary[] trackedTemporaries;
-		MapX!(Id,Declaration) symtab;
-		MapX!(Id,Declaration) rnsymtab;
+		SymbolTable symtab;
+		SymbolTable rnsymtab;
 		MapX!(Declaration,LastUse) lastUses;
 		Declaration[] prevCapturedDecls; // TODO: only store how many there are?
 		bool restoreable=false;
@@ -3043,8 +3482,8 @@ abstract class Scope{
 		size_t numMovedCaptures;
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
-		MapX!(Id,Declaration) nsymtab=symtab.dup;
-		MapX!(Id,Declaration) nrnsymtab=rnsymtab.dup;
+		SymbolTable nsymtab=symtab.dup;
+		SymbolTable nrnsymtab=rnsymtab.dup;
 		MapX!(Declaration,LastUse) nlastUses;
 		DeclProps declProps;
 		TrackedTemporary[] trackedTemporaries;
@@ -3102,7 +3541,7 @@ abstract class Scope{
 			state.prevCapturedDecls=fd.capturedDecls;
 			state.numMovedCaptures=fd.movedCaptures.length;
 		}
-		void splitSymtab(ref MapX!(Id,Declaration) symtab,bool replace){
+		void splitSymtab(ref SymbolTable symtab,bool replace){
 			Q!(Declaration,Declaration)[] splits;
 			foreach(id,ref decl;symtab){
 				auto splt=getSplit(decl);
@@ -3138,12 +3577,15 @@ abstract class Scope{
 	}
 	static if(language==silq) private bool consumedOutside(Declaration decl){ // (in an enclosing scope, which is not restored)
 		if(!decl.scope_||decl.scope_ is this||decl.scope_.rnsymtab.get(decl.getId,null) is decl) return false;
-		auto lu=lastUses.lastUses.get(decl,null);
+		auto lu=lastUses.here(decl);
 		return lu&&lu.isConsumption();
 	}
 	void restoreStateSnapshot(ref ScopeState state,bool forWithTransTrial=false)in{
 		assert(state.restoreable);
 	}do{
+		lastUses.createDeferred();
+		logSinceNesting=sinceMergeLogged=false; // (see `MergeKeys`)
+		rnsymtab.stopLog();
 		updateStateSnapshot(state);
 		dependencies=state.dependencies;
 		resetDeclProps(state.declProps);
@@ -3169,7 +3611,7 @@ abstract class Scope{
 				}
 			}
 			static if(language==silq) if(!forWithTransTrial){
-				if(auto lu=lastUses.lastUses.get(decl,null)){
+				if(auto lu=lastUses.here(decl)){
 					if(lu.isConsumption()&&(forgottenBeforeEarlyReturn(decl)||consumedOutside(decl))){
 						if(!toRemove.canFind(lu.decl)){
 							toRemove~=lu.decl;
@@ -3310,8 +3752,8 @@ abstract class Scope{
 	Dependencies dependencies;
 	bool dependenciesMerged=false; // (after a merge, the dependencies of a nested scope are those of the scope it was merged into)
 	DeclProps declProps;
-	MapX!(Id,Declaration) symtab;
-	MapX!(Id,Declaration) rnsymtab;
+	SymbolTable symtab;
+	SymbolTable rnsymtab;
 }
 
 struct RestrictionCause{
@@ -3421,6 +3863,7 @@ class NestedScope: Scope{
 	}do{
 		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use,consumedComponent,splitting);
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
+		lastUses.prepareChange(odecl);
 		import ast.semantic_: typeForDecl;
 		if(!type) type=typeForDecl(ndecl);
 		auto pdep=getDefaultDependency(ndecl);
