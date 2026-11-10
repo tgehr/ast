@@ -2120,7 +2120,8 @@ abstract class Scope{
 
 	bool diverges=false;
 	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,bool delegate(Declaration) mentions=null){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`)
-		lastUses.createDeferred();
+		bool dropped(Declaration d){ return mentions&&d.scope_&&d.scope_ !is this&&!mentions(d); }
+		lastUses.createDeferred((Declaration d)=>!dropped(d)); // (the last uses of the variables that it drops cannot be observed: they are not split into it)
 		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
@@ -2160,7 +2161,7 @@ abstract class Scope{
 		}
 		foreach(i,d;decls) if(!done[i]) ordered~=d;
 		foreach(d;ordered){
-			if(mentions&&d.scope_&&d.scope_ !is this&&!mentions(d)){ symtabRemove(d); continue; } // (the conditional abort leaves it unsplit, as `assert` does, so that the backend can still uncompute values that depend on it at their last uses, e.g., `o:=dup(x)` in `if c { assert(false); } forget(o);`)
+			if(dropped(d)){ symtabRemove(d); continue; } // (the conditional abort leaves it unsplit, as `assert` does, so that the backend can still uncompute values that depend on it at their last uses, e.g., `o:=dup(x)` in `if c { assert(false); } forget(o);`)
 			if(d.isLinear()&&(!consumptionScope||!d.scope_||d.scope_.isNestedIn(consumptionScope))||d.scope_ is this){ // (variables of scopes that enclose the merge are not split into the branch, e.g., through the scope of a `let` expression)
 				if(auto p=cast(Parameter)d) if(p.isConst) continue;
 				consume(d,null);

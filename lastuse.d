@@ -1192,8 +1192,8 @@ struct LastUses{
 	LastUse peek(Declaration decl){ // (as `here`, but without creating the last uses of the nestings, whose variables are not used in their scopes: their sinks forward to the last uses that this returns, and their splits are lazy splits that remain such)
 		return lastUses.get(decl,null);
 	}
-	void createDeferred(){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables)
-		foreach(b;only(splits,sinks)) if(b&&b.deferred) foreach(k,d;b.order) here(d);
+	void createDeferred(scope bool delegate(Declaration) observable=null){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables; `observable`: only those of these variables)
+		foreach(b;only(splits,sinks)) if(b&&b.deferred) foreach(k,d;b.order) if(!observable||observable(d)) here(d);
 		release();
 	}
 	private void release(){ // (the last uses of the variables that the nestings did not use are not observable any more, e.g., after the merge)
@@ -2099,11 +2099,26 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			}
 		}
 	}
+	if(!events[numVars..$].any!(e=>e.need)) return; // (only the uncomputations are reported or interleaved)
 	auto edges=new size_t[][](events.length);
+	auto notedSets=new SetX!BlockScope[](events.length);
+	auto hasNotedSet=new bool[](events.length);
+	ref SetX!BlockScope notedSet(size_t k){
+		if(!hasNotedSet[k]){
+			foreach(y;events[k].lu.noted) notedSets[k].insert(y);
+			hasNotedSet[k]=true;
+		}
+		return notedSets[k];
+	}
 	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `continuedBranches`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`)
 		if(!events[k].lu||!events[l].lu) return true;
-		foreach(x;events[k].lu.noted) foreach(y;events[l].lu.noted)
-			if(x !is y&&LastUse.interleavable(x)&&LastUse.interleavable(y)&&x.getSiblingScopes().canFind(y)) return false;
+		foreach(x;events[k].lu.noted){
+			if(!LastUse.interleavable(x)) continue;
+			foreach(z;x.getSiblingScopes()){
+				auto y=cast(BlockScope)z;
+				if(y&&y !is x&&y in notedSet(l)&&LastUse.interleavable(y)) return false;
+			}
+		}
 		return true;
 	}
 	foreach(i;0..branches.length){
