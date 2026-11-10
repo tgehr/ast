@@ -1153,10 +1153,22 @@ final class LastUse{
 			}
 		}
 	}
+	private LastUse mergedLazily(){ // (the lazy merge in the enclosing scope of the version of `decl` in the branch of this last use, if this is its last use there)
+		auto nsc=cast(NestedScope)scope_;
+		if(!nsc||!decl||!nsc.parent) return null;
+		foreach(p;[decl.mergedInto,decl.splitFrom,decl]){
+			if(!p) continue;
+			auto lu=nsc.parent.lastUses.here(p);
+			while(lu&&lu.forwardTo) lu=lu.forwardTo;
+			if(lu&&lu.kind==Kind.lazyMerge&&lu.nestedScopes.canFind(nsc)&&versionIn(lu.decl,nsc) is decl) return lu;
+		}
+		return null;
+	}
 	bool cancelImplicitDup(){
 		//imported!"util.io".writeln("CANCELING: ",use.loc," ",dep);
 		if(forwardTo) return forwardTo.cancelImplicitDup();
 		if(splitFrom) return false;
+		if(auto merge=mergedLazily()) return merge.cancelImplicitDup(); // (consumed after the merge, e.g., when the walk of a later consumption loses its dependency: the merge is cancelled, so that the other branches forget their versions; also the merges of enclosing conditionals)
 		final switch(kind)with(Kind){
 			case definition,lazySplitSink,lazySplit,marker:
 				return assert(0);
@@ -1171,15 +1183,13 @@ final class LastUse{
 						if(auto lu=nsc.lastUses.get(cdecl,true))
 							use=lu.use;
 					}
+					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
+						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // (before the cancellation in the branch, see `mergedLazily`) TODO: make more efficient
 					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
 						nsc.lastUses.cancelImplicitDup(cdecl);
-						if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
-							nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
 						nsc.lastUses.forget(cdecl,false);
 						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
-						if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
-							nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // TODO: make more efficient
 					}else{
 						ok=false;
 						nsc.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
