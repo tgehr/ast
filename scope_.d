@@ -6,7 +6,7 @@ import astopt;
 import std.format, std.conv, std.range, std.algorithm;
 import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
-import util, util.hashtable: HashMap, LayeredMap, Storage;
+import util, util.hashtable: HashMap, PersistentMap, Storage;
 
 alias SymbolTable=PersistentMapX!(Id,Declaration); // (the copies for nested scopes share the entries that did not change)
 
@@ -62,62 +62,47 @@ struct Dependency{
 }
 
 struct Dependencies{
-	private LayeredMap!(Declaration,Dependency,(a,b)=>a is b,(a)=>a.toHash(),(ref Dependency d)=>d.dup) table; // (the copies for nested scopes share the entries that did not change)
-	private HashMap!(Declaration,SetX!Declaration,(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy; // (for each declaration, the variables with changed entries whose dependencies may mention it: those that no longer do are removed when they are looked up, see `mentioning`, or when the index is built again; the shared entries have an index of their own, see `baseIndex`)
-	private bool unindexed; // (`mentionedBy` is built when it is needed, see `ensureIndex`)
-	private size_t numIndexed,numIndexedAtBuild; // (insertions into `mentionedBy`, also of entries that become stale)
-	private static final class BaseIndex{
-		HashMap!(Declaration,Declaration[],(a,b)=>a is b,(a)=>a.toHash(),Storage.stable) mentionedBy;
-		Declaration[] nontrivial; // (whose dependencies mention some variable)
+	private alias Table=PersistentMap!(Declaration,Dependency*,(a,b)=>a is b,(a)=>a.toHash()); // (an entry is not changed in place: a change replaces it)
+	private alias Keys=PersistentMap!(Declaration,bool,(a,b)=>a is b,(a)=>a.toHash());
+	private alias Index=PersistentMap!(Declaration,Keys,(a,b)=>a is b,(a)=>a.toHash());
+	private static final class State{
+		Table table; // (the copies for nested scopes share the entries that did not change)
+		Index mentionedBy; // (for each declaration, the variables whose dependencies mention it)
+		Keys nontrivial; // (the variables whose dependencies mention some variable)
 	}
-	private BaseIndex baseIndex(){ // (for the shared entries, which do not change)
-		auto cache=table.baseCache();
-		if(!cache) return null;
-		if(auto r=cast(BaseIndex)*cache) return r;
-		auto r=new BaseIndex;
-		foreach(k,v;&table.opApplyBase){
-			if(v.isTop) continue;
-			if(v.dependencies.length) r.nontrivial~=k;
-			foreach(x;v.dependencies){
-				if(auto p=r.mentionedBy.getPtr(x)) *p~=k;
-				else r.mentionedBy[x]=[k];
-			}
-		}
-		*cache=r;
+	private State state; // (apart from the scope, which then stays within its size class of the garbage collector; a copy shares it, see `dup`)
+	private @property ref Table table(){ if(!state) state=new State; return state.table; }
+	private @property ref Index mentionedBy(){ if(!state) state=new State; return state.mentionedBy; }
+	private @property ref Keys nontrivial(){ if(!state) state=new State; return state.nontrivial; }
+	private static bool isNontrivial(ref Dependency v){ return !v.isTop&&v.dependencies.length; }
+	private static Dependency* box(Dependency v){
+		auto r=new Dependency;
+		*r=v;
 		return r;
 	}
-	private void index(Declaration k,Dependency v){
-		if(unindexed) return;
-		if(numIndexed>2*numIndexedAtBuild+16) buildIndex(); // (without the stale entries)
-		insertIndex(k,v);
+	private void addIndex(Declaration x,Declaration k){
+		auto s=mentionedBy.get(x,Keys.init);
+		s[k]=true;
+		mentionedBy[x]=s;
 	}
-	private void insertIndex(Declaration k,Dependency v){
-		if(v.isTop) return;
-		foreach(x;v.dependencies){
-			numIndexed++;
-			if(auto s=mentionedBy.getPtr(x)) s.insert(k);
-			else{
-				SetX!Declaration s;
-				s.insert(k);
-				mentionedBy[x]=s;
-			}
-		}
+	private void removeIndex(Declaration x,Declaration k){
+		auto s=mentionedBy.get(x,Keys.init);
+		if(k !in s) return;
+		s.remove(k);
+		if(s.length) mentionedBy[x]=s;
+		else mentionedBy.remove(x);
 	}
-	private void buildIndex(){
-		mentionedBy.clear();
-		unindexed=false;
-		numIndexed=0;
-		foreach(k;&table.opApplyChanged) if(auto v=table.own(k)) insertIndex(k,*v);
-		numIndexedAtBuild=numIndexed;
+	private void reindex(Declaration k,Dependency* old,ref Dependency nv){ // (`old`: the entry for `k` before, if any)
+		if(old&&!old.isTop) foreach(x;old.dependencies) if(nv.isTop||x !in nv.dependencies) removeIndex(x,k);
+		if(!nv.isTop) foreach(x;nv.dependencies) if(!old||old.isTop||x !in old.dependencies) addIndex(x,k);
+		auto was=old&&isNontrivial(*old),now=isNontrivial(nv);
+		if(was==now) return;
+		if(now) nontrivial[k]=true;
+		else nontrivial.remove(k);
 	}
-	void ensureIndex(){ if(unindexed) buildIndex(); }
 	Declaration[] nontrivialKeys(){ // (the variables whose dependencies mention some variable)
 		Declaration[] r;
-		if(auto bi=baseIndex()) foreach(k;bi.nontrivial) if(!table.owns(k)) r~=k;
-		foreach(k;&table.opApplyChanged){
-			auto v=table.own(k);
-			if(v&&!v.isTop&&v.dependencies.length) r~=k;
-		}
+		nontrivial.eachKey((Declaration k){ r~=k; });
 		return r;
 	}
 	bool tracked(Declaration decl){ pragma(inline,true); return !!(decl in table); }
@@ -125,183 +110,132 @@ struct Dependencies{
 	void startLog(Declaration[] initial=null){ table.startLog(initial); }
 	void stopLog(){ table.stopLog(); }
 	@property bool isLogging(){ return table.isLogging; }
-	@property Declaration[] changeLog(){ return table.changeLog; } // (see `LayeredMap.changeLog`)
-	Dependency getCopy(Declaration decl){ return table[decl].dup; } // (does not change the table, as `get` may)
+	@property Declaration[] changeLog(){ return table.changeLog; } // (see `PersistentMap.changeLog`)
+	Dependency getCopy(Declaration decl){ return table[decl].dup; }
 	private static bool same(ref Dependency a,ref Dependency b){
 		return a.isTop==b.isTop&&a.lostVar is b.lostVar&&a.lostAt is b.lostAt&&a.dependencies==b.dependencies;
 	}
-	private ref Dependency entry(Declaration decl){ // (not shared with the copies, to be changed)
-		auto v=table.own(decl);
-		if(v) table.noteChanged(decl);
-		assert(!!v,text("key not found: ",decl));
-		return *v;
-	}
 	Dependency get(Declaration decl){
-		if(table.isLayered&&!table.owns(decl)){
-			auto v=table[decl];
-			if(v.dependencies.isSmall) return v; // (a copy: the caller cannot change the entry)
-		}
-		auto v=table.own(decl);
-		assert(!!v,text("key not found: ",decl));
-		return *v;
+		auto v=*table[decl];
+		return v.dependencies.isSmall?v:v.dup; // (the caller cannot change the entry, which the copies share)
 	}
 	Declaration[] keys(){ return table.keys; }
 	void set(Declaration decl,Dependency dep){
-		table[decl]=dep;
-		index(decl,dep);
+		Dependency* old;
+		table.tryGet(decl,old);
+		reindex(decl,old,dep);
+		table[decl]=box(dep);
 	}
-	void remove(Declaration decl){ table.remove(decl); } // (the entries of `mentionedBy` for it are removed later)
+	void remove(Declaration decl){
+		Dependency* old;
+		if(table.tryGet(decl,old)){
+			auto top=Dependency(true);
+			reindex(decl,old,top);
+		}
+		table.remove(decl);
+	}
 	Declaration[] mentioning(Declaration decl){ // (the variables whose dependencies mention `decl`, in the order of the table)
-		ensureIndex();
+		auto s=mentionedBy.peek(decl);
+		if(!s) return null;
 		Q!(size_t,Declaration)[] r;
-		if(auto s=mentionedBy.getPtr(decl)){
-			Declaration[] stale;
-			foreach(k;*s){
-				size_t pos;
-				if(!table.tryGetPosition(k,pos)||table.isLayered&&!table.owns(k)){ stale~=k; continue; }
-				auto v=table[k];
-				if(v.isTop||decl !in v.dependencies){ stale~=k; continue; }
-				r~=q(pos,k);
-			}
-			foreach(k;stale) s.remove(k);
-			if(!s.length) mentionedBy.remove(decl);
-		}
-		if(auto bi=baseIndex()){
-			foreach(k;bi.mentionedBy.get(decl,null)){
-				size_t pos;
-				if(table.owns(k)||!table.tryGetPosition(k,pos)) continue; // (a changed entry is in `mentionedBy`)
-				r~=q(pos,k);
-			}
-		}
+		s.eachKey((Declaration k){
+			size_t pos;
+			auto found=table.tryGetPosition(k,pos);
+			assert(found);
+			r~=q(pos,k);
+		});
 		sort!"a[0]<b[0]"(r);
 		return r.map!(x=>x[1]).array;
 	}
-	void update(scope void delegate(Declaration,ref Dependency) dg){ // (of all variables)
-		if(table.isLayered){
-			updateKeys(dg,table.keys);
-			return;
-		}
-		foreach(k,ref v;&table.opApplyOwned){
-			dg(k,v);
-			index(k,v);
-		}
-	}
+	void update(scope void delegate(Declaration,ref Dependency) dg){ updateKeys(dg,table.keys); } // (of all variables)
 	void updateKeys(scope void delegate(Declaration,ref Dependency) dg,Declaration[] keys){ // (of the variables `keys` that have entries)
 		foreach(k;keys){
-			if(k !in table) continue;
-			if(table.owns(k)){
-				auto v=&entry(k);
-				dg(k,*v);
-				index(k,*v);
-			}else{ // (no one else refers to a shared entry, see `get`)
-				auto v=table[k],nv=v.dup;
-				dg(k,nv);
-				if(!same(nv,v)) set(k,nv);
-			}
+			Dependency* v;
+			if(!table.tryGet(k,v)) continue;
+			auto nv=v.dup;
+			dg(k,nv);
+			if(!same(nv,*v)) set(k,nv);
 		}
 	}
-	void joinWith(Dependencies rhs){
-		if(table.isLayered){
-			joinWithKeys(rhs,table.keys);
-			return;
-		}
-		foreach(k,ref v;&table.opApplyOwned){
-			if(k !in rhs.table) continue;
-			v.joinWith(rhs.table[k]);
-			if(k in v.dependencies)
-				v=Dependency(true); // TODO: get rid of this
-			else index(k,v);
-		}
-	}
-	void joinWithKeys(Dependencies rhs,Declaration[] keys){ // (of the variables `keys` that have entries in both)
+	void joinWith(ref Dependencies rhs){ joinWithKeys(rhs,table.keys); }
+	void joinWithKeys(ref Dependencies rhs,Declaration[] keys){ // (of the variables `keys` that have entries in both)
 		foreach(k;keys){
-			if(k !in table||k !in rhs.table) continue;
-			auto r=rhs.table[k];
-			if(table.owns(k)){
-				auto v=&entry(k);
-				v.joinWith(r);
-				if(k in v.dependencies)
-					*v=Dependency(true); // TODO: get rid of this
-				else index(k,*v);
-			}else{ // (no one else refers to a shared entry, see `get`)
-				auto v=table[k],nv=v.dup;
-				nv.joinWith(r);
-				if(k in nv.dependencies) nv=Dependency(true); // TODO: get rid of this
-				if(!same(nv,v)) set(k,nv);
-			}
+			Dependency* v,r;
+			if(!table.tryGet(k,v)||!rhs.table.tryGet(k,r)) continue;
+			auto nv=v.dup;
+			nv.joinWith(*r);
+			if(k in nv.dependencies) nv=Dependency(true); // TODO: get rid of this
+			if(!same(nv,*v)) set(k,nv);
 		}
 	}
 	void pushUp(Declaration removed, bool keep, Identifier consumedAt=null)in{
-		assert(removed in table,text(removed," ",removed.loc," ",table));
+		assert(removed in table,text(removed," ",removed.loc," ",toString()));
 	}do{
-		Dependency x=entry(removed);
-		if(!keep) table.remove(removed);
+		Dependency x=*table[removed];
+		if(!keep) remove(removed);
 		foreach(k;mentioning(removed)){
-			auto v=entry(k);
+			auto v=table[k].dup;
 			v.replace(removed, x, consumedAt);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
-			else index(k,v);
-			table[k]=v;
+			set(k,v);
 		}
 	}
 	void replace(Declaration decl,Declaration ndecl)in{
-		assert(decl in table,text(decl.loc," ",table));
-		assert(ndecl !in table,text(ndecl.loc," ",table));
+		assert(decl in table,text(decl.loc," ",toString()));
+		assert(ndecl !in table,text(ndecl.loc," ",toString()));
 	}do{
 		replaceInDependencies(decl,ndecl);
-		set(ndecl,entry(decl));
-		table.remove(decl);
+		set(ndecl,*table[decl]);
+		remove(decl);
 	}
 	void replaceInDependencies(Declaration decl,Declaration ndecl,Declaration except=null){ // (in those of all variables except `except`)
 		foreach(k;mentioning(decl)){
 			if(k is except) continue;
-			auto v=entry(k);
+			auto v=table[k].dup;
 			v.replace(decl,ndecl);
-			index(k,v);
-			table[k]=v;
+			set(k,v);
 		}
 	}
 	void merge(Declaration decl,Declaration ndecl)in{ // (`ndecl` is another version of the variable of `decl`)
 		assert(decl in table&&ndecl in table);
 	}do{
-		auto dep=entry(decl);
-		table.remove(decl);
+		auto dep=*table[decl];
+		remove(decl);
 		auto changed=mentioning(decl);
 		foreach(k;changed){
-			auto v=entry(k);
+			auto v=table[k].dup;
 			v.replace(decl,ndecl);
-			index(k,v);
-			table[k]=v;
+			set(k,v);
 		}
-		auto nv=entry(ndecl);
+		auto nv=table[ndecl].dup;
 		nv.joinWith(dep);
-		index(ndecl,nv);
-		table[ndecl]=nv;
+		set(ndecl,nv);
 		foreach(k;chain(changed,only(ndecl))){ // (only these can come to mention themselves)
 			auto v=table[k];
 			if(k in v.dependencies)
-				table[k]=Dependency(true); // TODO: get rid of this
+				set(k,Dependency(true)); // TODO: get rid of this
 		}
 	}
 	void substitute(Declaration decl,Dependency dep){ // substitute `decl` by `dep` inside all tracked sets (`decl` itself has no entry)
 		foreach(k;mentioning(decl)){
-			auto v=entry(k);
+			auto v=table[k].dup;
 			v.replace(decl,dep);
 			if(k in v.dependencies)
 				v=Dependency(true); // TODO: get rid of this
-			else index(k,v);
-			table[k]=v;
+			set(k,v);
 		}
 	}
-	Dependencies dup(){ // (without the index of the changed entries, which the copy builds when it needs it)
+	Dependencies dup(){
 		Dependencies r;
-		r.table=table.dup;
-		r.unindexed=true;
+		r.state=new State;
+		r.state.table=table.dup;
+		r.state.mentionedBy=mentionedBy.dup;
+		r.state.nontrivial=nontrivial.dup;
 		return r;
 	}
 	bool canForget(Declaration decl)in{
-		assert(decl in table||decl.isSemError(),text(decl," ",table));
+		assert(decl in table||decl.isSemError(),text(decl," ",toString()));
 	}do{
 		if(decl !in table) return true;
 		return !table[decl].isTop;
@@ -309,15 +243,14 @@ struct Dependencies{
 	void clear(){
 		table.clear();
 		mentionedBy.clear();
-		unindexed=false;
-		numIndexed=numIndexedAtBuild=0;
+		nontrivial.clear();
 	}
 	private HashMap!(Id,typeof(Dependency.getIds()),(a,b)=>a is b,(a)=>a.toHash) getIds(){
 		typeof(return) result;
 		foreach(decl,dependency;table){
 			auto id=decl.getId;
 			if(id==Id()) continue;
-			assert(id !in result,text(decl," ",table," ",result));
+			assert(id !in result,text(decl," ",toString()," ",result));
 			result[id]=dependency.getIds();
 		}
 		return result;
@@ -326,7 +259,12 @@ struct Dependencies{
 		auto ids=getIds,rids=rhs.getIds;
 		return ids==rids;
 	}
-	string toString(){ return text(table); }
+	string toString(){
+		string r="[";
+		foreach(k,v;table) r~=text(k,":",*v)~", ";
+		if(r.length>2) r=r[0..$-2];
+		return r~"]";
+	}
 }
 
 struct DummyWitnessContext{
