@@ -1445,7 +1445,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq){
 		SetX!Id outerNames; // (variables declared before the transformation, which it may redefine)
 		for(Scope osc=sc;osc&&!cast(TopScope)osc;osc=osc.parentScope())
-			foreach(_,d;osc.rnsymtab) if(!cast(DeadDecl)d&&d.name) outerNames.insert(d.name.id);
+			foreach(d;osc.rnsymtab.liveValues()) if(d.name) outerNames.insert(d.name.id);
 	}
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=sc;
@@ -1456,8 +1456,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	if(with_.isIndices&&!with_.trans.isSemError()) promoteQuantumReadAggregates(with_.trans.s,with_.trans,sc); // (as for the replacement of components it is lowered from, see `buildIndexReplacements`, e.g., in a copy of a loop body that is lowered)
 	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
 	if(auto bsc=with_.trans.blscope_){
-		static if(language==silq) foreach(_,d;bsc.rnsymtab){
-			if(cast(DeadDecl)d||d.isSemError()||!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
+		static if(language==silq) foreach(d;bsc.rnsymtab.liveValues()){
+			if(d.isSemError()||!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
 			auto origin=d;
 			while(origin.splitFrom) origin=origin.splitFrom;
 			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)) transLocals~=q(d.name.id,isConstLocal(d));

@@ -92,9 +92,46 @@ final class ContinuedLog{ // (of the conditionals of a scope whose other branch 
 	ContinuedEvent[] events;
 	size_t[] uncomputations; // (the indices of the uncomputations in `events`)
 	MapX!(LastUse,size_t[]) indices; // (of the events of each last use)
+	MapX!(BlockScope,size_t) numbers; // (of the branches, in the order in which they were added)
+	SymbolTable initial; // (the table of the scope when the log was created)
+	MapX!(Declaration,size_t) createdAt; // (the number of branches when a version of a variable of the scope that is not in `initial` was added to its table: a version added after a branch is part of the code after its conditional, see `checkBranchOrder`)
 	size_t[] startsOf(Scope b){ // (of a branch that the code after its conditional continues, or none)
 		auto bs=cast(BlockScope)b;
 		return bs?starts.get(bs,null):null;
+	}
+	private size_t[] horizons; // (by the numbers of the branches, see `window`)
+	private size_t horizonsAt=size_t.max; // (the number of events for `horizons`)
+	Q!(size_t,size_t) window(BlockScope b){ // (of the events that can mention a version from before the split of `b`: the later events consume, and their uncomputations depend on, versions that the code after the conditional creates)
+		if(horizonsAt!=events.length||horizons.length!=branches.length) computeHorizons(cast(NestedScope)b.parent);
+		auto start=starts[b][0];
+		return q(start,max(start,horizons[numbers[b]]));
+	}
+	private void computeHorizons(NestedScope nsc){
+		horizons=new size_t[](branches.length);
+		static Declaration generic(Declaration d,NestedScope nsc){ // (`LastUse.outerVersion` for the branches that do not contain `d` and that its version is not merged from)
+			d=LastUse.climbInto(d,nsc);
+			if(d&&d.scope_&&d.scope_ !is nsc&&nsc.isNestedIn(d.scope_)) d=nsc.getSplit(d);
+			return d&&d.scope_ is nsc?d:null;
+		}
+		foreach(i,ref e;events){
+			auto first=size_t.max; // (the number of the first branch that the event can mention a version from before the split of)
+			void note(Declaration v){ if(v) first=min(first,createdAt.get(v,0)); }
+			if(!e.uncomputation){
+				note(e.outer);
+				foreach(t;e.specials) if(t[1]) first=min(first,numbers[t[0]]);
+			}else if(!e.lu.dep.isTop) foreach(d;e.lu.dep.dependencies){
+				note(generic(d,nsc));
+				void special(Scope sc){ // (the branch that contains `sc`, for which the outer version can differ)
+					for(;sc&&sc.parentScope() !is nsc;sc=sc.parentScope()){}
+					if(auto bs=cast(BlockScope)sc) if(startsOf(bs).length&&LastUse.outerVersion(d,bs,true)) first=min(first,numbers[bs]);
+				}
+				if(d.scope_&&d.scope_ !is nsc&&d.scope_.isNestedIn(nsc)) special(d.scope_);
+				if(auto c=LastUse.climbInto(d,nsc)) if(c.scope_ is nsc&&c.mergedFrom.length==1&&c.mergedFrom[0].scope_) special(c.mergedFrom[0].scope_);
+			}
+			if(first<horizons.length) horizons[first]=i+1;
+		}
+		foreach(k;1..horizons.length) horizons[k]=max(horizons[k],horizons[k-1]);
+		horizonsAt=events.length;
 	}
 }
 final class LastUse{
@@ -2133,29 +2170,34 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		foreach(s;starts) if(s<=i) r++;
 		return r;
 	}
-	static Q!(Declaration,LastUse,size_t)[] outerConsumptions(BlockScope b){ // (also of the code after the conditional, if `b` is continued there, in the order of the events)
+	static Q!(Declaration,LastUse,size_t)[] outerConsumptions(BlockScope b){ // (also of the code after the conditional, if `b` is continued there, in the order of the events; not of the versions that the code after the conditional creates, which are versions in `b`)
 		auto log=logOf(b);
 		if(!log) return b.outerConsumptions;
 		auto starts=log.startsOf(b);
+		auto number=log.numbers[b];
 		Q!(Declaration,LastUse,size_t)[] r;
 		size_t j=0;
-		foreach(i,ref e;log.events){
+		auto w=log.window(b);
+		foreach(i;w[0]..w[1]){
 			for(;j<b.outerConsumptions.length&&b.outerConsumptions[j][2]<=i;j++) r~=b.outerConsumptions[j];
+			auto e=&log.events[i];
 			if(e.uncomputation) continue;
 			auto outer=e.outer;
-			foreach(t;e.specials) if(t[0] is b) outer=t[1];
-			if(!outer) continue;
+			bool special=false;
+			foreach(t;e.specials) if(t[0] is b){ outer=t[1]; special=true; }
+			if(!outer||!special&&log.createdAt.get(outer,0)>number) continue;
 			foreach(_;0..timesNoted(starts,i)) r~=q(outer,e.lu,i);
 		}
 		return r~b.outerConsumptions[j..$];
 	}
-	static Q!(LastUse,size_t)[] uncomputations(BlockScope b){ // (also of the code after the conditional, if `b` is continued there, in the order of the events)
+	static Q!(LastUse,size_t)[] uncomputations(BlockScope b,size_t end){ // (also of the code after the conditional, if `b` is continued there, in the order of the events before `end`)
 		auto log=logOf(b);
 		if(!log) return b.uncomputations;
 		auto starts=log.startsOf(b);
 		Q!(LastUse,size_t)[] r;
 		size_t j=0;
-		foreach(i;log.uncomputations){
+		foreach(i;log.uncomputations[log.uncomputations.assumeSorted.lowerBound(starts[0]).length..$]){
+			if(i>=end) break;
 			for(;j<b.uncomputations.length&&b.uncomputations[j][1]<=i;j++) r~=b.uncomputations[j];
 			foreach(_;0..timesNoted(starts,i)) r~=q(log.events[i].lu,i);
 		}
@@ -2171,15 +2213,28 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		varIndex[c[0]]=events.length;
 		events~=Event(size_t.max,0,events.length);
 	}
-	bool needsKnown(BlockScope b){ // (an uncomputation in `b` that may need the version from before the split of a variable of `consumedKnown`)
-		foreach(u;uncomputations(b)){
+	auto ends=new size_t[](branches.length); // (of the uncomputations of the code after the conditional that can depend on the variables, see `ContinuedLog.window`)
+	foreach(i,b;branches){
+		ends[i]=size_t.max;
+		auto log=logOf(b);
+		if(!log) continue;
+		auto number=log.numbers[b];
+		bool after(Declaration d){ return log.createdAt.get(d,0)>number; }
+		bool any=false;
+		foreach(d,_;varIndex) any|=after(d);
+		foreach(d;consumedKnown) any|=after(d);
+		if(!any) ends[i]=log.window(b)[1];
+	}
+	bool needsKnown(size_t i){ // (an uncomputation in `branches[i]` that may need the version from before the split of a variable of `consumedKnown`)
+		auto b=branches[i];
+		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
 			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies) if(auto outer=LastUse.outerVersion(d,b,true)) if(outer in consumedKnown) return true;
 		}
 		return false;
 	}
-	auto reorder=!fixed&&consumedKnown.length&&branches.any!needsKnown; // (the code generator orders those uncomputations, see `interleaveBranches` in hqir.d)
+	auto reorder=!fixed&&consumedKnown.length&&iota(branches.length).any!needsKnown; // (the code generator orders those uncomputations, see `interleaveBranches` in hqir.d)
 	if(!events.length){
 		if(reorder) foreach(b;branches) b.interleave=true;
 		return;
@@ -2215,7 +2270,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			auto p=varIndex.get(c[0],size_t.max);
 			if(p!=size_t.max) events~=Event(i,c[1].consumedAt,p,c[1]);
 		}
-		foreach(u;uncomputations(b)){
+		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
 			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies){

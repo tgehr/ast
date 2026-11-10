@@ -8,7 +8,7 @@ import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap, PersistentMap, Storage;
 
-alias SymbolTable=PersistentMapX!(Id,Declaration); // (the copies for nested scopes share the entries that did not change)
+alias SymbolTable=PersistentMap!(Id,Declaration,(a,b)=>a==b,hashOf,(Declaration d)=>!cast(DeadDecl)d); // (the copies for nested scopes share the entries that did not change; `liveValues` skips the dead entries, which accumulate in long scopes)
 
 struct Dependency{
 	bool isTop;
@@ -430,7 +430,9 @@ abstract class Scope{
 		rnsymtab[decl.getId]=decl;
 		if(isRenamedDead(decl)) numRenamedDead++;
 		if(mayMentionInType(decl)) noteTypeMentioning(decl);
+		static if(language==silq) noteInserted(decl);
 	}
+	static if(language==silq) void noteInserted(Declaration decl){} // (see `NestedScope.continuedLog`)
 	private static bool isRenamedDead(Declaration decl){ return cast(DeadDecl)decl&&decl.name&&decl.getId!=decl.name.id; }
 	private SetX!Declaration typeMentioning_; // (the declarations of `rnsymtab` whose types may mention variables, see `typeMentioning`; and others that are no longer there)
 	private size_t numTypeMentioningAtPrune; // (the size of `typeMentioning_` after its last pruning)
@@ -1997,10 +1999,13 @@ abstract class Scope{
 		import ast.semantic_: unrealizable,typeConstBlocked;
 		bool errors=false;
 		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
-		static if(is(T==ReturnExp)) auto dropsClassical=dropsClassicalAtReturn();
-		foreach(_,d;rnsymtab) pending~=d;
+		static if(is(T==ReturnExp)){
+			auto dropsClassical=dropsClassicalAtReturn();
+			bool dropped(Declaration d){ return dropsClassical&&d.scope_ !is this&&isClassicalValue(d); } // (forgetting it has no effect, while consuming it would split it into the other branches; dropping it does not change what blocks the others)
+		}else static bool dropped(Declaration d){ return false; }
+		pending=rnsymtab.liveValues();
 		SetX!Declaration blockedAtStart; // (forgotten after the live variables whose types mention them, e.g., `n` after `y:=vector(n,0:!𝔹)`)
-		foreach(d;pending) if(!cast(DeadDecl)d&&!d.isSemError()&&typeConstBlocked(d,this)) blockedAtStart.insert(d);
+		foreach(d;pending) if(!cast(DeadDecl)d&&!d.isSemError()&&!dropped(d)&&typeConstBlocked(d,this)) blockedAtStart.insert(d);
 		for(bool deferBlocked=true,firstPass=true;pending.length;firstPass=false){
 			Declaration[] blocked;
 			bool forgot=false;
@@ -2017,13 +2022,13 @@ abstract class Scope{
 					d.setSemForceError();
 					continue;
 				}
-				if(deferBlocked&&(firstPass&&d in blockedAtStart||typeConstBlocked(d,this))){
-					blocked~=d;
-					continue;
-				}
-				static if(is(T==ReturnExp)) if(dropsClassical&&d.scope_ !is this&&isClassicalValue(d)){ // (dropped: forgetting it has no effect, while consuming it would split it into the other branches)
+				static if(is(T==ReturnExp)) if(dropped(d)){
 					returnDropped=true;
 					forgot=true;
+					continue;
+				}
+				if(deferBlocked&&(firstPass&&d in blockedAtStart||typeConstBlocked(d,this))){
+					blocked~=d;
 					continue;
 				}
 				// (a blocked variable is forgotten here, after the variables whose types mention it, rather than at its last use,
@@ -2130,7 +2135,7 @@ abstract class Scope{
 			// branch splits it into the other branches, where the variables that are not split yet would lose their dependency on it)
 			Declaration[] decls;
 			size_t[const(void)*] index;
-			foreach(_,d;rnsymtab) if(!cast(DeadDecl)d){
+			foreach(d;rnsymtab.liveValues()){
 				index[cast(const(void)*)d]=decls.length;
 				decls~=d;
 			}
@@ -3864,10 +3869,17 @@ class NestedScope: Scope{
 	private bool splitForDivergingSibling=false; // (a sibling that diverges consumes a variable from outside, see `closeUnreachable`: the variables of this scope keep depending on its split here, as merges ignore the sibling)
 	private bool splitForSibling=false; // (another branch consumes a variable from outside: without a known dependency, the variables of this branch keep depending on its version from before the split, see `checkBranchOrder`)
 	static if(language==silq) ContinuedLog continuedLog; // (of the conditionals in this scope whose other branch returns: the code after them runs as part of them, see `checkBranchOrder`)
+	static if(language==silq) override void noteInserted(Declaration decl){
+		if(continuedLog&&decl !in continuedLog.createdAt&&continuedLog.initial.get(decl.getId,null) !is decl) continuedLog.createdAt[decl]=continuedLog.branches.length;
+	}
 	static if(language==silq) final void addContinuedBranch(BlockScope bs)in{
 		assert(bs.parent is this);
 	}do{
-		if(!continuedLog) continuedLog=new ContinuedLog;
+		if(!continuedLog){
+			continuedLog=new ContinuedLog;
+			continuedLog.initial=rnsymtab.dup;
+		}
+		if(bs !in continuedLog.numbers) continuedLog.numbers[bs]=continuedLog.branches.length;
 		continuedLog.branches~=bs;
 		continuedLog.starts[bs]=continuedLog.starts.get(bs,null)~continuedLog.events.length;
 	}
