@@ -2162,13 +2162,28 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		return r~b.uncomputations[j..$];
 	}
 	MapX!(Declaration,size_t) varIndex;
+	SetX!Declaration consumedKnown; // (with a known dependency: an uncomputation that needs its version from before the split recomputes it from that dependency, or keeps it until then where its dependency is consumed as well, see `interleaveBranches` in hqir.d)
 	Event[] events; // (first the splits of the variables)
 	foreach(b;branches) foreach(c;outerConsumptions(b)){
-		if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||!c[1].dep.isTop||c[0].scope_ !is sc||c[0] in varIndex) continue; // (with a known dependency, the uncomputations recompute it from that one instead, as before)
+		if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||c[0].scope_ !is sc) continue;
+		if(!c[1].dep.isTop){ consumedKnown.insert(c[0]); continue; }
+		if(c[0] in varIndex) continue;
 		varIndex[c[0]]=events.length;
 		events~=Event(size_t.max,0,events.length);
 	}
-	if(!events.length) return;
+	bool needsKnown(BlockScope b){ // (an uncomputation in `b` that may need the version from before the split of a variable of `consumedKnown`)
+		foreach(u;uncomputations(b)){
+			auto lu=u[0];
+			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			foreach(d;lu.dep.dependencies) if(auto outer=LastUse.outerVersion(d,b,true)) if(outer in consumedKnown) return true;
+		}
+		return false;
+	}
+	auto reorder=!fixed&&consumedKnown.length&&branches.any!needsKnown; // (the code generator orders those uncomputations, see `interleaveBranches` in hqir.d)
+	if(!events.length){
+		if(reorder) foreach(b;branches) b.interleave=true;
+		return;
+	}
 	auto numVars=events.length;
 	static bool reported(Declaration d){ // (an error about a version of the variable, e.g., for the forgets of a version in both branches of a nested conditional)
 		while(d.splitFrom) d=d.splitFrom;
@@ -2214,7 +2229,10 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			}
 		}
 	}
-	if(!events[numVars..$].any!(e=>e.need)) return; // (only the uncomputations are reported or interleaved)
+	if(!events[numVars..$].any!(e=>e.need)){ // (only the uncomputations are reported or interleaved)
+		if(reorder) foreach(b;branches) b.interleave=true;
+		return;
+	}
 	auto edges=new size_t[][](events.length);
 	auto notedSets=new SetX!BlockScope[](events.length);
 	auto hasNotedSet=new bool[](events.length);
@@ -2310,7 +2328,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		e.lu.reportUnforgettable();
 	}
-	if(interleave) foreach(b;branches) b.interleave=true;
+	if(interleave||reorder) foreach(b;branches) b.interleave=true;
 }
 SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] candidates){ // (the candidates for eager merges whose merges can come after the last changes of their versions in the branches and before their first reads, which read the merged versions instead, see `genEagerMerges` in hqir.d, in an order with the splits of `checkBranchOrder` for the events known so far)
 	enum none=size_t.max;
