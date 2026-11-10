@@ -8,7 +8,7 @@ import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap, LayeredMap, Storage;
 
-alias SymbolTable=LayeredMapX!(Id,Declaration); // (the copies for nested scopes share the entries that did not change)
+alias SymbolTable=PersistentMapX!(Id,Declaration); // (the copies for nested scopes share the entries that did not change)
 
 struct Dependency{
 	bool isTop;
@@ -372,6 +372,7 @@ abstract class Scope{
 	import ast.looplowering:LoopContinuation;
 	LoopContinuation loopContinuation; // loop lowering: code after a loop that the lowering may absorb
 	int droppedCodeAnalysis; // loop lowering: the code after a loop that the lowering drops is being analyzed, without lowering its loops (see `unreachableSemantic`)
+	uint typeofOperand=0; // block modifications while analyzing `typeof`
 	bool allowsLinear(){
 		return true;
 	}
@@ -2159,9 +2160,20 @@ abstract class Scope{
 	}
 
 	bool diverges=false;
+	bool quantumControlled=false;
+	bool allowMerge=false;
+	private bool sinceMergeLogged; // (whether `removedTracked`, `consumedLogged` and the log of `dependencies` from `depsMark` hold all changes since the last merge, also of the enclosing scopes before the nestings, see `MergeKeys`)
+	private bool logSinceNesting; // (whether the logs of `rnsymtab` and `dependencies` hold all changes since the nesting, see `MergeKeys`)
+	bool dependenciesMerged=false; // (after a merge, the dependencies of a nested scope are those of the scope it was merged into)
 	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,Mentions mentions=null){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`)
 		bool dropped(Declaration d){ return mentions&&d.scope_&&d.scope_ !is this&&!mentions(d); }
-		lastUses.createDeferred((Declaration d)=>!dropped(d)); // (the last uses of the variables that it drops cannot be observed: they are not split into it)
+		Id[] candidates; // (the variables that it does not drop: those that it mentions, and its own, which are among its changes)
+		auto restricted=mentions&&logSinceNesting&&rnsymtab.isLogging;
+		if(restricted){
+			SetX!Id seen;
+			foreach(id;chain(mentions.ids,rnsymtab.changeLog)) if(id !in seen){ seen.insert(id); candidates~=id; }
+		}
+		lastUses.createDeferred((Declaration d)=>!dropped(d),candidates,restricted); // (the last uses of the variables that it drops cannot be observed: they are not split into it)
 		clearConsumed();
 		activeNestedScopes=[];
 		allowMerge=false;
@@ -2349,7 +2361,6 @@ abstract class Scope{
 	}
 
 	auto controlDependency=Dependency(false,SetX!Declaration.init);
-	bool quantumControlled=false;
 	void addControlDependency(Dependency dep){
 		controlDependency.joinWith(dep);
 		quantumControlled=true;
@@ -2632,13 +2643,11 @@ abstract class Scope{
 		mergedVars~=mergedFrom;
 	}
 
-	bool allowMerge=false;
 	NestedScope[] activeNestedScopes;
 	final bool restrictsToChanges(){ return rnsymtab.length>=64; } // (whether the nestings and merges only consider the variables that change, see `MergeKeys` and `LastUses.prepareNesting`: in a small scope, visiting all of them costs less)
 	private size_t nestChanges,nestDepsChanges,nestRenamedDead; // (of the enclosing scope at the nesting, see `MergeKeys`)
 	private size_t numRenamedDead; // (of the dead declarations in `rnsymtab` whose identifiers are renamed, see `MergeKeys`)
 	private size_t nestLogMark; // (the length of the log of `rnsymtab` at the latest nesting)
-	private bool sinceMergeLogged; // (whether `removedTracked`, `consumedLogged` and the log of `dependencies` from `depsMark` hold all changes since the last merge, also of the enclosing scopes before the nestings, see `MergeKeys`)
 	private size_t depsMark;
 	private Declaration[] removedTracked; // (variables with tracked dependencies that may not be the entries of their identifiers in `rnsymtab`: removed, replaced, merged, or changed in an enclosing scope since its last merge, see `merge`)
 	private Declaration[] consumedLogged; // (the variables added to `consumedDepLog`)
@@ -2720,7 +2729,6 @@ abstract class Scope{
 			}
 		}
 	}
-	private bool logSinceNesting; // (whether the logs of `rnsymtab` and `dependencies` hold all changes since the nesting, see `MergeKeys`)
 	final bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
 	}do{
@@ -2751,7 +2759,8 @@ abstract class Scope{
 			assert(activeNestedScopes.empty);
 			return false; // (no nesting, so no merge)
 		}
-		auto used=LastUses.prepareMerge(scopes);
+		bool allUsed;
+		auto used=LastUses.prepareMerge(scopes,allUsed);
 		clearConsumed(); // TODO: why needed?
 		foreach(sc;scopes) sc.clearConsumed();
 		assert(scopes==activeNestedScopes,text(scopes," ",activeNestedScopes));
@@ -3235,7 +3244,7 @@ abstract class Scope{
 			if(!dependencies.tracked(decl))
 				dependencies.set(decl,dep);
 		}
-		if(keys.all||used is null) lastUses.merge(isLoop,this,scopes);
+		if(keys.all||allUsed) lastUses.merge(isLoop,this,scopes);
 		else{
 			Q!(size_t,Declaration)[] ordered;
 			SetX!Declaration seen;
@@ -3775,7 +3784,6 @@ abstract class Scope{
 			}
 		}
 	}
-	uint typeofOperand=0; // block modifications while analyzing `typeof`
 	MapX!(Declaration,Q!(Identifier,Scope)[])[] typeofConsumed; // simulate consumption while analyzing `typeof`
 	static if(language==silq){ // support component replacement within `with` transformations
 		Scope withTransConsumption=null;
@@ -3841,7 +3849,6 @@ abstract class Scope{
 	LastUses lastUses;
 //private: // TODO
 	Dependencies dependencies;
-	bool dependenciesMerged=false; // (after a merge, the dependencies of a nested scope are those of the scope it was merged into)
 	DeclProps declProps;
 	SymbolTable symtab;
 	SymbolTable rnsymtab;

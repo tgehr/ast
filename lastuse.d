@@ -144,7 +144,7 @@ final class LastUse{
 		r.consumedAt=consumedAt;
 		return r;
 	}
-	enum Kind{
+	enum Kind:ubyte{
 		definition,
 		constPinned,
 		lazySplitSink,
@@ -162,6 +162,8 @@ final class LastUse{
 	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
 	bool loopGuard=false; // (a use in a `while` condition, which is also evaluated on the path that exits the loop)
 	bool cancelableRecorded=false; // (see `recordCancelable`; with the flags together, a `LastUse` fits into the 368-byte size class of the GC)
+	bool chainPinned=false; // (`pin` pinned the last uses that it forwards to and is split from, which stay pinned: they need not be visited again)
+	bool splitsPinned=false; // (`LastUses.pin` pinned the last uses of this version and of the versions that its declaration was split into before it, see there)
 	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
 	static bool inBranch(Scope sc){ // (or nested in one)
@@ -293,8 +295,10 @@ final class LastUse{
 	}
 
 	void pin(){
+		if(chainPinned) return;
 		if(forwardTo) forwardTo.pin();
 		if(splitFrom) splitFrom.pin();
+		chainPinned=true;
 		if(isConsumption()) return;
 		//imported!"util.io".writeln("PINNING: ",this);
 		kind=Kind.constPinned;
@@ -1241,8 +1245,22 @@ struct LastUses{
 	LastUse peek(Declaration decl){ // (as `here`, but without creating the last uses of the nestings, whose variables are not used in their scopes: their sinks forward to the last uses that this returns, and their splits are lazy splits that remain such)
 		return lastUses.get(decl,null);
 	}
-	void createDeferred(scope bool delegate(Declaration) observable=null){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables; `observable`: only those of these variables)
-		foreach(b;only(splits,sinks)) if(b&&b.deferred) foreach(k,d;b.order) if(!observable||observable(d)) here(d);
+	void createDeferred(scope bool delegate(Declaration) observable=null,Id[] candidates=null,bool restricted=false){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables; `observable`: only those of these variables; `restricted`: the identifiers of all of them are among `candidates`)
+		foreach(b;only(splits,sinks)) if(b&&b.deferred){
+			if(!restricted){
+				foreach(k,d;b.order) if(!observable||observable(d)) here(d);
+				continue;
+			}
+			Q!(size_t,Declaration)[] found; // (in the order of the table)
+			foreach(id;candidates){
+				size_t pos;
+				if(!b.order.tryGetPosition(id,pos)) continue;
+				auto d=b.order[id];
+				if(!observable||observable(d)) found~=q(pos,d);
+			}
+			sort!"a[0]<b[0]"(found);
+			foreach(f;found) here(f[1]);
+		}
 		release();
 	}
 	private void release(){ // (the last uses of the variables that the nestings did not use are not observable any more, e.g., after the merge)
@@ -1255,8 +1273,7 @@ struct LastUses{
 			b.source=null;
 		}
 	}
-	static Declaration[] prepareMerge(scope NestedScope[] nestedScopes){ // (before the merge changes the scopes: in each of them, the last uses of the variables that one of them uses; those, or `null` for all)
-		bool all=false;
+	static Declaration[] prepareMerge(scope NestedScope[] nestedScopes,out bool all){ // (before the merge changes the scopes: in each of them, the last uses of the variables that one of them uses; those, unless `all`)
 		Declaration[] used;
 		foreach(nsc;nestedScopes){
 			if(nsc.diverges) continue; // (see `Scope.closeUnreachable`)
@@ -1649,6 +1666,8 @@ struct LastUses{
 		lu.forwardTo=sc.lastUses.hereSplit(decl);
 		while(lu.forwardTo&&lu.forwardTo.kind==LastUse.Kind.lazySplitSink&&lu.forwardTo.forwardTo) // (an earlier sink stands for the same last use, e.g., where the variable is not used between two conditionals; a pinned one stays, see `removeFromUnusedSiblings`)
 			lu.forwardTo=lu.forwardTo.forwardTo;
+		if(auto p=lu.forwardTo) while(p.forwardTo&&p.forwardTo.kind==LastUse.Kind.constPinned&&p.forwardTo.forwardTo) // (behind the pinned one, the pinned sinks before it stand for the same last use, e.g., where a condition reads a `const` variable)
+			p.forwardTo=p.forwardTo.forwardTo;
 		add(lu,null,batch,deferred);
 	}
 	private void lazySplit(Declaration decl,NestedScope sc,Batch batch,bool deferred=false,LastUse from=null)in{
@@ -1923,9 +1942,12 @@ struct LastUses{
 		if(auto lastUse=here(decl)) lastUse.pin();
 		else if(!forceHere&&parent) parent.pin(decl,false);
 		//decl.scope_.lastUses.lastUses.remove(decl);
-		foreach(split;decl.splitInto){
+		foreach_reverse(split;decl.splitInto){ // (from the latest one: those before one that this pinned are pinned already, as their scopes ended)
 			assert(!!split.scope_);
-			split.scope_.lastUses.pin(split,true);
+			auto lus=split.scope_.lastUses;
+			if(auto lu=lus.here(split)) if(lu.splitsPinned) break;
+			lus.pin(split,true);
+			if(auto lu=lus.here(split)) lu.splitsPinned=true;
 		}
 	}
 	bool canCancelImplicitDup(Declaration decl){
