@@ -1299,7 +1299,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	static if(language==silq){
 		imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
-		if(continued&&imported!"ast.lastuse".LastUse.interleavable(continued.blscope_)) if(auto nsc=cast(NestedScope)sc) nsc.continuedBranches~=continued.blscope_;
+		if(continued&&imported!"ast.lastuse".LastUse.interleavable(continued.blscope_)) if(auto nsc=cast(NestedScope)sc) nsc.addContinuedBranch(continued.blscope_);
 	}
 	static if(language==silq) Identifier[] condForgetUses;
 	static if(language==silq) // TODO: can we avoid doing this?
@@ -2005,10 +2005,10 @@ Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[
 	if(lowered) foreach(decl;discardedLoopForgetCandidates(sc)) anchor(decl);
 	return wrapper?wrapper:loopExp;
 }
-bool delegate(Declaration) mentionsOf(Expression e){ // (the variables that a branch or a loop body that diverges mentions, see `closeUnreachable`)
-	bool[Id] names;
-	foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) names[id.meaning?id.meaning.getId:id.id]=true;
-	return (Declaration d)=>!!(d.getId in names);
+Mentions mentionsOf(Expression e){ // (the variables that a branch or a loop body that diverges mentions, see `closeUnreachable`)
+	auto r=new Mentions;
+	foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) r.add(id.meaning?id.meaning.getId:id.id);
+	return r;
 }
 // Common tail for one iteration of a loop (for/while/repeat).
 bool finalizeLoopIteration(

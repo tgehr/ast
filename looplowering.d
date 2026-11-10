@@ -5084,7 +5084,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	Expression bdy;
 	static if(isDoWhile){{
 		// `B; if c{}else{ exit } R; return f(…);` (the code after the conditional continues the branch that does not exit and
-		// is interleaved with the exit, see `continuedBranches`; loops in the reset continue with the next iteration)
+		// is interleaved with the exit, see `NestedScope.continuedLog`; loops in the reset continue with the next iteration)
 		if(!isCertainReturn){ // (otherwise, the condition and the reset are not reached)
 			auto contr=new ReturnExp(ce); // (the reset continues with the next iteration)
 			contr.loc=ce.loc;

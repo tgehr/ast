@@ -253,10 +253,10 @@ class Checker {
 		}
 	}
 
-	void forgetClassical() {
+	void forgetClassical(bool onlySplits = false) {
 		Id[] names;
 		foreach(name, val; vars) {
-			if(!val) continue;
+			if(!val || onlySplits && !val.splitFrom) continue;
 			auto ty = typeForDecl(val);
 			if(ty && !ast_ty.hasQuantumComponent(ty)) names ~= name;
 		}
@@ -341,6 +341,7 @@ class Checker {
 			getVar(decl, false, "forgottenVars", e);
 		}
 		if(ast_ty.isEmpty(e.e.type)) return StmtResult.Diverges; // (the value diverges, so the function does not return)
+		if(nscope.returnDropped) forgetClassical(true); // (the versions of the classical variables from outside that the `return` dropped, which a consumption in another branch split into this one later, see `Scope.returnDropped`)
 		checkEmpty();
 		return StmtResult.MayReturn;
 	}
