@@ -171,6 +171,16 @@ final class LastUse{
 	size_t index; // (in the order the last uses of the scope were added)
 	IndexExp consumedComponent=null; // (a consumption allowed because this specific component is not borrowed)
 
+	private bool mentions(Declaration x,bool below){ // (whether the walks of `updateDependenciesOnConsumptionLocal` substitute `x`, or a version split from `x`, here, see `LastUses.mayReceive`)
+		bool has(ref Dependency d){
+			if(!below) return x in d.dependencies;
+			foreach(y;d.dependencies) if(y !is x&&y.isSplitFrom(x)) return true;
+			return false;
+		}
+		if(has(dep)||has(depAtSplit)) return true;
+		foreach(ref c;cancelable) if(has(c[1])) return true;
+		return false;
+	}
 	bool isConsumption(){
 		if(!!kind.among(Kind.consumption,Kind.synthesizedForget)) return true;
 		if(forwardTo) return forwardTo.isConsumption();
@@ -372,7 +382,10 @@ final class LastUse{
 				changed=true;
 			}
 		}
-		foreach(lu;indirect) if(lu.canCancelImplicitDup()) cancelable~=q(lu,lu.dep.dup);
+		foreach(lu;indirect) if(lu.canCancelImplicitDup()){
+			cancelable~=q(lu,lu.dep.dup);
+			scope_.lastUses.noteMentions(this,lu.dep);
+		}
 	}
 	private static Identifier cancelUse(LastUse lu){ // (where `lu` goes out of scope if cancelled)
 		if(lu.use) return lu.use;
@@ -575,10 +588,16 @@ final class LastUse{
 				continue;
 			}
 			auto byAtSplit=nested&&lu.scope_ is level&&isBranch(level)?atSplit:cdep; // (for the forgets at the split: `decl` is consumed before the split)
-			if(nested&&lu.kind==Kind.lazySplit) replaceVersions(lu.depAtSplit,decl,byAtSplit);
+			if(nested&&lu.kind==Kind.lazySplit&&hasVersion(lu.depAtSplit,decl)){
+				replaceVersions(lu.depAtSplit,decl,byAtSplit);
+				lu.scope_.lastUses.noteMentions(lu,lu.depAtSplit);
+			}
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			if(nested) replaceVersions(lu.dep,decl,lu.atSplit?byAtSplit:cdep);
-			else lu.dep.replace(decl,cdep);
+			if(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
+				if(nested) replaceVersions(lu.dep,decl,lu.atSplit?byAtSplit:cdep);
+				else lu.dep.replace(decl,cdep);
+				lu.scope_.lastUses.noteMentions(lu,lu.dep);
+			}
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
@@ -613,6 +632,7 @@ final class LastUse{
 			}
 		}
 		}
+		if(!scope_.lastUses.mayReceive(splitFrom?start:this,this,descend)) return; // (the walk would not change anything)
 		walk(splitFrom?start:this,cdep,false,cdep,null);
 	}
 
@@ -1116,6 +1136,7 @@ final class LastUse{
 		if(decl is splitFrom) decl=splitInto;
 		if(splitFrom in dep.dependencies) dep.replace(splitFrom,splitInto);
 		if(splitFrom in depAtSplit.dependencies) depAtSplit.replace(splitFrom,splitInto);
+		if(splitInto in dep.dependencies||splitInto in depAtSplit.dependencies) scope_.lastUses.noteMention(splitInto,this);
 	}
 }
 
@@ -1276,6 +1297,63 @@ struct LastUses{
 		}
 	}
 	LastUse nestingPoint;
+	private LastUse nestedAt; // (the last use of the enclosing scope that the walks descend into this scope after, at the nesting: `LastUse.remove` only moves it to an earlier one, see `mayReceive`)
+	private MapSX!(Declaration,LastUse[]) mentions,mentionsBelow; // (in the outermost scope of the nestings: for each variable, the last uses that may mention it or a version split from it, see `mayReceive`)
+	private bool unindexed; // (the walks always visit all last uses, e.g., of a copy for an instantiation, whose dependencies may share their sets with the original ones)
+	private LastUses* root(){
+		auto r=&this;
+		while(r.parent) r=r.parent;
+		return r;
+	}
+	private static void note(ref MapSX!(Declaration,LastUse[]) m,Declaration decl,LastUse lu){
+		if(auto p=m.getPtr(decl)){
+			if(!p.length||(*p)[$-1] !is lu) *p~=lu;
+		}else m[decl]=[lu];
+	}
+	void noteMention(Declaration decl,LastUse lu){ // (`lu` may mention `decl`, see `LastUse.mentions`)
+		auto r=root();
+		note(r.mentions,decl,lu);
+		for(auto d=decl.splitFrom;d;d=d.splitFrom) note(r.mentionsBelow,d,lu);
+	}
+	void noteSplitFromChanged(Declaration decl){ // (the last uses that may mention `decl` or a version split from it, for the new versions it is split from)
+		auto r=root();
+		foreach(m;only(r.mentions.get(decl,null),r.mentionsBelow.get(decl,null)))
+			foreach(lu;m)
+				for(auto d=decl.splitFrom;d;d=d.splitFrom) note(r.mentionsBelow,d,lu);
+	}
+	void noteMentions(LastUse lu,ref Dependency dep){
+		if(!dep.isTop) foreach(x;dep.dependencies) noteMention(x,lu);
+	}
+	bool mayReceive(LastUse start,LastUse consumed,bool descend){ // (whether the walk of `LastUse.updateDependenciesOnConsumptionLocal` from `start` in this scope visits a last use other than `consumed` whose dependencies mention a version of the consumed variable: the others are not changed, as their checks give the same results again)
+		if(unindexed||root().unindexed) return true;
+		auto r=root();
+		bool inRegion(LastUse lu){
+			if(lu is consumed||lu.discarded) return false;
+			if(!lu.prev&&!lu.next&&lu !is lu.scope_.lastUses.lastLastUse) return false; // (removed)
+			if(lu.scope_ is start.scope_) return lu.index>=start.index;
+			if(!descend) return false;
+			auto lus=&lu.scope_.lastUses;
+			while(lus.parent&&lus.parent !is &start.scope_.lastUses) lus=lus.parent;
+			return lus.parent&&lus.nestedAt&&lus.nestedAt.index>=start.index;
+		}
+		bool visit(ref MapSX!(Declaration,LastUse[]) m,Declaration x,bool below){
+			auto p=m.getPtr(x);
+			if(!p) return false;
+			bool found=false;
+			size_t j=0;
+			foreach(lu;*p){
+				if(!lu.mentions(x,below)) continue; // (stale)
+				(*p)[j++]=lu;
+				if(!found&&inRegion(lu)) found=true;
+			}
+			*p=(*p)[0..j];
+			return found;
+		}
+		auto decl=consumed.decl;
+		if(visit(r.mentionsBelow,decl,true)) return true;
+		for(auto x=decl;x;x=x.splitFrom) if(visit(r.mentions,x,false)) return true;
+		return false;
+	}
 	private Declaration[] consumedLive; // (whose last uses may be consumptions, e.g., temporaries until the end of their statements)
 	private size_t numConsumedLiveAtPrune;
 	private void noteConsumed(Declaration decl,Scope sc){
@@ -1345,6 +1423,7 @@ struct LastUses{
 		//imported!"util.io".writeln("NESTING IN: ",lastUses);
 		//imported!"util.io".writeln("NESTING IN: ",r.parent.dependencies," ",r.dependencies);
 		r.lastUses.parent=&this;
+		r.lastUses.nestedAt=nestingPoint;
 		if(nestingPoint) nestingPoint.nestedAfter~=r;
 		Batch b=null;
 		void split(Declaration d){
@@ -1415,6 +1494,7 @@ struct LastUses{
 			if(type&&type.isClassical) lastUse.dep=Dependency(false);
 		}
 		assert(lastUse.kind!=LastUse.kind.synthesizedForget||!lastUse.dep.isTop||lastUse.decl.isSemError());
+		noteMentions(lastUse,lastUse.dep);
 		if(lastUse.kind==LastUse.Kind.synthesizedForget)
 			lastUse.scope_.noteDependencyResolved(lastUse.dep);
 		if(deferred){} // (not `const` at the nesting, see `eagerNesting`)
@@ -1718,6 +1798,7 @@ struct LastUses{
 	// (used to give independently scoped instantiation twins their own state)
 	void remapFrom(ref LastUses src,Declaration delegate(Declaration) mapDecl,Scope delegate(Scope) mapScope){
 		src.createDeferred();
+		unindexed=true;
 		MapSX!(LastUse,LastUse) nmap;
 		LastUse remap(LastUse lu){
 			if(!lu) return null;
@@ -1851,16 +1932,16 @@ struct LastUses{
 
 	// TODO: snapshotting is a bit hacky
 	void substituteDependency(Declaration decl,Dependency dep){
-		foreach(_,lu;lastUses){
+		void substitute(LastUse lu){
+			if(decl !in lu.dep.dependencies&&decl !in lu.depAtSplit.dependencies) return;
 			lu.dep.replace(decl,dep);
 			lu.depAtSplit.replace(decl,dep);
+			noteMentions(lu,dep);
 		}
+		foreach(_,lu;lastUses) substitute(lu);
 		foreach(_,lus;retired)
 			foreach(lu;lus)
-				if(lu){
-					lu.dep.replace(decl,dep);
-					lu.depAtSplit.replace(decl,dep);
-				}
+				if(lu) substitute(lu);
 	}
 	MapX!(Declaration,LastUse) getSnapshot(Scope sc){
 		MapX!(Declaration,LastUse) nlastUses;

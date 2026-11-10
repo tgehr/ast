@@ -1738,7 +1738,7 @@ abstract class Scope{
 			if(d.scope_ !is this) return;
 			retypeDeclaration(d,(Declaration m)=>m is splitFrom?splitInto:m);
 		}
-		foreach(_,d;rnsymtab) retype(d);
+		foreach(d;typeMentioning()) retype(d); // (the others have types without variables)
 		foreach(d,ref prop;declProps.props) retype(d);
 		foreach(d;declProps.retiredMentioning(splitFrom)){
 			retype(d);
@@ -3679,6 +3679,7 @@ abstract class Scope{
 					newOuter.splitInto[k]=prevOuter.splitInto[k];
 					newOuter.splitInto[k].splitFrom=newOuter;
 					newOuter.splitInto[k].resetCanonicalSource();
+					lastUses.noteSplitFromChanged(newOuter.splitInto[k]);
 				}
 				outer=newOuter;
 			}
