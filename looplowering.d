@@ -5783,6 +5783,31 @@ void erpBeforeReturn(ReturnExp ret,Scope sc){
 	if(erpKey(ret) !in erpReturns) erpReturns[erpKey(ret)]=ERPReturn.init;
 	erpReturns[erpKey(ret)].types=types;
 }
+// (after the returned expression, which can cancel implicit `dup`s of variables from before the `return`, e.g., of `o` in `o:=dup(x); …
+// a:=measure(o); return (measure(x),a);`: the rewritten loop consumes them on that path as well)
+void erpBeforeClose(ReturnExp ret,Scope sc){
+	if(!erpRecording(sc)||!erpKey(ret)) return;
+	auto consumed=erpKey(ret) in erpConsumedBeforeReturn;
+	if(!consumed) return;
+	auto fun=sc.getFunction();
+	SetX!Identifier returned;
+	if(ret.e) visitStm(ret.e,(Expression x){ if(auto id=cast(Identifier)x) returned.insert(id); });
+	SetX!Id decided;
+	for(Scope c=sc;c;c=c.parentScope()){
+		foreach(_,d;c.rnsymtab){
+			if(!d.name||d.name.id in decided) continue;
+			decided.insert(d.name.id);
+			if(!cast(DeadDecl)d||cast(DeadMerge)d) continue; // (merged in the returned expression, e.g., `return if c then x else x;`)
+			auto cd=cast(ConsumedDecl)d;
+			if(cd&&cd.use in returned) continue; // (consumed by the returned expression: the rewrite replaces them by placeholders, see `erpRecordReturn`)
+			bool captured=cd&&cd.use.meaning&&cd.use.meaning.scope_&&cd.use.meaning.scope_.getFunction() !is fun;
+			if(cd&&typeid(cd) is typeid(ConsumedDecl)&&!cd.use.moved&&!cd.use.byRef&&cd.use.type&&cd.use.type.isClassical()&&!captured)
+				continue; // (as in `erpBeforeReturn`)
+			consumed.insert(d.name.id);
+		}
+		if(cast(FunctionScope)c) break;
+	}
+}
 void erpRecordReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)) return;
 	ERPReturn r;

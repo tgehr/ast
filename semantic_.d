@@ -4479,7 +4479,7 @@ void blockConvertedAggregates(Scope sc,ConvertedAggregateBlock[] blocks){
 		sc.blockConvertedAggregate(block.aggregate,block.convertedWrite,block.name);
 }
 bool prepareWithTransReplacements(WithExp with_,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,ref IndexExp[] unsupported,ref bool restructured){
-	if(with_.isIndices) return false;
+	if(with_.isIndices||mayReturn(with_.trans)) return false; // (a `return` in the transformation is an error, and the trial analysis cannot undo what it does to the enclosing scopes, e.g., the forgets of their variables)
 	bool hasIndexExp=false;
 	foreach(e;with_.trans.subexpressions){
 		if(cast(IndexExp)e){
@@ -11390,6 +11390,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	static if(language==silq){
 		sc.clearConsumed();
 		sc.releaseTypeConstBlocks(typeConstBlockSave,true); // (the value is converted to the return type, which does not mention local variables, e.g., `measure[𝔹^n](x)`)
+		erpBeforeClose(ret,sc);
 	}
 	if(sc.close(ret)){
 		sc.note("at function return",ret.loc);
