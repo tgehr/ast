@@ -8,7 +8,24 @@ import util.tuple:Q=Tuple,q=tuple;
 import ast.lexer, ast.expression, ast.declaration, ast.type, ast.error;
 import util, util.hashtable: HashMap, PersistentMap, Storage;
 
-alias SymbolTable=PersistentMap!(Id,Declaration,(a,b)=>a==b,hashOf,(Declaration d)=>!cast(DeadDecl)d); // (the copies for nested scopes share the entries that did not change; `liveValues` skips the dead entries, which accumulate in long scopes)
+alias SymbolTable=PersistentMap!(Id,Declaration,(a,b)=>a==b,hashOf,symbolProperties); // (the copies for nested scopes share the entries that did not change; `liveValues` skips the dead entries, which accumulate in long scopes)
+enum SymbolProperty:ubyte{
+	live=1,
+	notFixedClassical=2, // (live, and not a classical variable whose type mentions no variables, which stays classical, see `Scope.close`)
+}
+ubyte symbolProperties(Declaration d){
+	static bool quantum(Expression type){ // (as `hasQuantumComponent`, but without its lookup for the usual kinds of types)
+		if(type.type is qtypeTy) return true;
+		if(type.type is ctypeTy) return false;
+		return hasQuantumComponent(type);
+	}
+	if(auto vd=cast(VarDecl)d){
+		auto type=vd.vtype;
+		if(type&&type.isSemEvaluated()&&!quantum(type)&&!type.freeIdentifiers.any!(id=>!!id.meaning)) return SymbolProperty.live;
+		return SymbolProperty.live|SymbolProperty.notFixedClassical;
+	}
+	return cast(DeadDecl)d?0:SymbolProperty.live|SymbolProperty.notFixedClassical;
+}
 
 struct Dependency{
 	bool isTop;
@@ -2002,8 +2019,13 @@ abstract class Scope{
 		static if(is(T==ReturnExp)){
 			auto dropsClassical=dropsClassicalAtReturn();
 			bool dropped(Declaration d){ return dropsClassical&&d.scope_ !is this&&isClassicalValue(d); } // (forgetting it has no effect, while consuming it would split it into the other branches; dropping it does not change what blocks the others)
-		}else static bool dropped(Declaration d){ return false; }
-		pending=rnsymtab.liveValues();
+			if(dropsClassical) returnDropped=true;
+			if(dropsClassical&&logSinceNesting&&rnsymtab.isLogging) pending=rnsymtab.liveValues(SymbolProperty.notFixedClassical,rnsymtab.changeLog,SymbolProperty.live); // (the others are classical variables from outside, which are dropped: those of this scope are among its changes)
+			else pending=rnsymtab.liveValues();
+		}else{
+			static bool dropped(Declaration d){ return false; }
+			pending=rnsymtab.liveValues();
+		}
 		SetX!Declaration blockedAtStart; // (forgotten after the live variables whose types mention them, e.g., `n` after `y:=vector(n,0:!𝔹)`)
 		foreach(d;pending) if(!cast(DeadDecl)d&&!d.isSemError()&&!dropped(d)&&typeConstBlocked(d,this)) blockedAtStart.insert(d);
 		for(bool deferBlocked=true,firstPass=true;pending.length;firstPass=false){
@@ -2022,11 +2044,7 @@ abstract class Scope{
 					d.setSemForceError();
 					continue;
 				}
-				static if(is(T==ReturnExp)) if(dropped(d)){
-					returnDropped=true;
-					forgot=true;
-					continue;
-				}
+				if(dropped(d)) continue;
 				if(deferBlocked&&(firstPass&&d in blockedAtStart||typeConstBlocked(d,this))){
 					blocked~=d;
 					continue;
@@ -2511,7 +2529,7 @@ abstract class Scope{
 		if(canForget(decl)){
 			decl=split(decl,null);
 			assert(decl.scope_ is this);
-			if(cause.forgottenVars.canFind(decl)) return true; // (e.g., `const` locals are forgotten before merging)
+			static if(is(T==Scope)) if(cause.forgottenVars.canFind(decl)) return true; // (e.g., `const` locals are forgotten before merging; a `return` forgets each variable once)
 			cause.forgottenVars~=decl;
 			static if(is(T:Expression)) lastUses.synthesizedForget(decl,null,this,cause);
 			else lastUses.synthesizedForget(decl,null,this,null);
