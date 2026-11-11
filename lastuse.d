@@ -644,9 +644,19 @@ final class LastUse{
 		}
 		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level){ // (`atSplit`: the dependency at the split into `level`, for the forgets there)
 		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
+		LastUse[] consumedInNested; // (splits that the nested scopes after them consume: on one of their paths, so after their walks)
+		void consumeAfterNested(){
+			foreach(c;consumedInNested){
+				if(nested) replaceVersions(cdep,c.decl,c.dep,c.use);
+				else cdep.replace(c.decl,c.dep,c.use);
+			}
+			consumedInNested=[];
+		}
 		for(auto lu=start;lu;lu=lu.next){
+			if(consumedInNested.length&&!lu.forwardTo&&lu.kind!=Kind.marker) consumeAfterNested();
 			scope(success){
 				if(!lu.forwardTo&&lu.kind!=Kind.marker) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
+				if(consumedInNested.length&&!lu.nestedAfter.all!isBranch) consumeAfterNested(); // (e.g., a loop body, whose next iterations come after the consumption)
 				if(descend) foreach(nsc;lu.nestedAfter){
 					if(nsc.lastUses.discarded) continue;
 					if(fromConditional&&nsc.getSiblingScopes().any!(s=>fromConditional.isNestedIn(s))) continue;
@@ -655,6 +665,7 @@ final class LastUse{
 					while(head.prev) head=head.prev;
 					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
 				}
+				if(lu.nestedAfter.length) consumeAfterNested();
 			}
 			if(lu is this||lu.discarded||before(lu)||goneBefore(lu)) continue;
 			if(splitFrom&&!fromBranch&&lu.kind==Kind.synthesizedForget&&lu.time<consumption.consumedAt) continue; // (forgotten before the consumption, e.g., in a block whose lazy splits come before it: the walk starts at them)
@@ -703,7 +714,8 @@ final class LastUse{
 					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
 					outOfScope[id]=q(at?at:lu.use,dupUse,lu.use,lu.scope_,prev.scope_,prev.decl);
 				}
-				if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
+				if(lu.forwardTo&&lu.consumedAt>lu.time) consumedInNested~=lu;
+				else if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
 				else cdep.replace(lu.decl,lu.dep,lu.use);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
