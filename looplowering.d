@@ -5799,8 +5799,8 @@ void erpBeforeClose(ReturnExp ret,Scope sc){
 			decided.insert(d.name.id);
 			if(!cast(DeadDecl)d||cast(DeadMerge)d) continue; // (merged in the returned expression, e.g., `return if c then x else x;`)
 			auto cd=cast(ConsumedDecl)d;
-			if(cd&&cd.use in returned) continue; // (consumed by the returned expression: the rewrite replaces them by placeholders, see `erpRecordReturn`)
 			bool captured=cd&&cd.use.meaning&&cd.use.meaning.scope_&&cd.use.meaning.scope_.getFunction() !is fun;
+			if(cd&&cd.use in returned&&!(captured&&cd.use.type&&cd.use.type.isClassical())) continue; // (consumed by the returned expression: the rewrite replaces them by placeholders or keeps their values, see `erpRecordReturn`, but not those of the classical variables that nested functions consume, e.g., `s` in `return (λ()⇒move(s))();`)
 			if(cd&&typeid(cd) is typeid(ConsumedDecl)&&!cd.use.moved&&!cd.use.byRef&&cd.use.type&&cd.use.type.isClassical()&&!captured)
 				continue; // (as in `erpBeforeReturn`)
 			consumed.insert(d.name.id);

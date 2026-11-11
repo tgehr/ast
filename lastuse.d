@@ -1204,8 +1204,10 @@ final class LastUse{
 						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 					}else{
 						ok=false;
-						nsc.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
-						// TODO: needs a note indicating the end of scope
+						if(!nsc.lastUses.betterUnforgettableError(cdecl,nsc)){
+							nsc.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
+							nsc.explainUnforgettable(cdecl);
+						}
 					}
 				}
 				return ok;

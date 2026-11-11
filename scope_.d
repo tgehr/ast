@@ -3540,6 +3540,7 @@ abstract class Scope{
 		size_t numMergedNestedScopes;
 		size_t numLastUses;
 		size_t numMovedCaptures;
+		SetX!Declaration consumedBefore; // (in the tables, although their last uses before the snapshot consume them: the splits that a `return` hides and inserts again, see `close`)
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		SymbolTable nsymtab=symtab.dup;
@@ -3549,16 +3550,19 @@ abstract class Scope{
 		TrackedTemporary[] trackedTemporaries;
 		Declaration[] prevCapturedDecls;
 		size_t numMovedCaptures;
+		SetX!Declaration consumedBefore;
 		if(restoreable){
 			declProps=saveDeclProps();
 			trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			nlastUses=lastUses.getSnapshot(this);
+			foreach(d,lu;nlastUses) if(lu&&lu.isConsumption()) consumedBefore.insert(d);
 			if(auto fd=getFunction()){
 				prevCapturedDecls=fd.capturedDecls;
 				numMovedCaptures=fd.movedCaptures.length;
 			}
 		}
 		auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
+		r.consumedBefore=consumedBefore;
 		r.numMergedNestedScopes=mergedNestedScopes.length;
 		r.numLastUses=lastUses.numAdded;
 		r.numMovedCaptures=numMovedCaptures;
@@ -3653,7 +3657,7 @@ abstract class Scope{
 		symtab.clear();
 		foreach(_,decl;state.symtab){
 			if(auto lu=state.lastUses.get(decl,null))
-				if(lu.isConsumption()&&!forWithTransTrial)
+				if(lu.isConsumption()&&!forWithTransTrial&&decl !in state.consumedBefore) // (consumed after the snapshot was taken)
 					continue;
 			static if(language==silq) if(!forWithTransTrial&&consumedOutside(decl)) continue;
 			symtab[decl.name.id]=updateDecl(decl);
@@ -3661,7 +3665,7 @@ abstract class Scope{
 		rnsymtab.clear();
 		foreach(_,decl;state.rnsymtab){
 			if(auto lu=state.lastUses.get(decl,null)){
-				if(lu.isConsumption()&&!forWithTransTrial){
+				if(lu.isConsumption()&&!forWithTransTrial&&decl !in state.consumedBefore){
 					if(!toRemove.canFind(lu.decl)){ // TODO: make more efficient
 						toRemove~=lu.decl;
 						if(dependencyTracked(lu.decl)) pushDependencies(lu.decl,true); // (consumed after the snapshot was taken)

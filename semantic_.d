@@ -2503,22 +2503,18 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		resetReturns=definitelyReturns(rst);
 		if(resetReturns) rsc.closeUnreachable(lsc,sc); // (bounded like the closing of the loop scope that follows, while the exit scope still gets the splits)
 		exitDrops=[];
-		if(!resetReturns) foreach(_,d;xsc.rnsymtab.dup){ // (they are not available after the loop, which allows the next iteration to forget them)
-			if(d.scope_ !is xsc||cast(DeadDecl)d||d.isSemError()||!d.splitFrom) continue;
-			auto o=d.splitFrom,h=state.forgetScope.rnsymtab.get(o.getId,null);
-			if(h&&!cast(DeadDecl)h) continue; // (carried to the next iteration)
-			auto r=rsc.rnsymtab.get(o.getId,null);
-			if(!r||cast(DeadDecl)r||r !is o&&r.splitFrom !is o) continue; // (consumed or defined again by the reset)
-			if(rsc.canRecompute(r)||rsc.lastUses.canForget(r,true,false)) continue;
+		Q!(Declaration,Declaration)[] kept,dropped; // (the versions at the exit and in the reset)
+		void drop(Declaration d,Declaration r){ // (they are not available after the loop, which allows the next iteration to forget them)
 			xsc.forgottenVarsOnEntry~=d;
 			if(!rsc.lastUses.canForget(r,true,false)){
 				xsc.forgottenVarsOnEntry=xsc.forgottenVarsOnEntry[0..$-1];
-				continue;
+				return;
 			}
 			xsc.symtabRemove(d);
 			if(xsc.dependencyTracked(d)) xsc.pushDependencies(d,false);
 			exitDrops~=d;
-			auto ld=new LoopForgottenDecl(o);
+			dropped~=q(d,r);
+			auto ld=new LoopForgottenDecl(d.splitFrom);
 			if(d.rename){
 				ld.rename=new Identifier(d.rename.id);
 				ld.rename.loc=d.rename.loc;
@@ -2526,6 +2522,47 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 			ld.scope_=xsc;
 			ld.setSemCompleted();
 			if(xsc.canInsert(ld.name.id)) xsc.symtabInsert(ld);
+		}
+		if(!resetReturns) foreach(_,d;xsc.rnsymtab.dup){
+			if(d.scope_ !is xsc||cast(DeadDecl)d||d.isSemError()||!d.splitFrom) continue;
+			auto o=d.splitFrom,h=state.forgetScope.rnsymtab.get(o.getId,null);
+			if(h&&!cast(DeadDecl)h) continue; // (carried to the next iteration)
+			auto r=rsc.rnsymtab.get(o.getId,null);
+			if(!r||cast(DeadDecl)r||r !is o&&r.splitFrom !is o) continue; // (consumed or defined again by the reset)
+			if(rsc.canRecompute(r)) continue;
+			if(rsc.lastUses.canForget(r,true,false)) kept~=q(d,r);
+			else drop(d,r);
+		}
+		static Dependency resetDependency(BlockScope rsc,Declaration r){ // (with which the reset forgets `r`)
+			auto lu=rsc.lastUses.get(r,true);
+			while(lu&&lu.forwardTo) lu=lu.forwardTo;
+			return lu?lu.dep:Dependency(true);
+		}
+		bool throughDropped(Declaration r){ // (the reset would forget `r` after a dropped variable that its dependency mentions, which the next iteration forgets at its last use in the body, e.g., `u` after `t` for `t:=dup(p); u:=dup(t); p:=X(p);`)
+			auto dep=resetDependency(rsc,r);
+			if(dep.isTop) return false;
+			dep=dep.dup;
+			auto done=new bool[](dropped.length);
+			for(bool changed=true;changed&&!dep.isTop;){ // (also through the dependencies of the dropped variables, e.g., `w` after `u` and `t` for `w:=dup(u)`)
+				changed=false;
+				foreach(i,x;dropped){
+					if(done[i]) continue;
+					auto o=x[0].splitFrom;
+					Declaration[] vs;
+					foreach(y;dep.dependencies) if(y is o||y.isSplitFrom(o)||o.isSplitFrom(y)) vs~=y;
+					if(!vs.length) continue;
+					done[i]=changed=true;
+					foreach(y;vs) dep.replace(y,resetDependency(rsc,x[1]));
+				}
+			}
+			return dep.isTop;
+		}
+		for(size_t n=0;n!=dropped.length;){
+			n=dropped.length;
+			foreach(ref k;kept) if(k[0]&&throughDropped(k[1])){
+				if(lsc.lastUses.canForget(k[0].splitFrom,true,false)) drop(k[0],k[1]); // (at its last use in the body)
+				k[0]=null;
+			}
 		}
 		xsc.diverges=true; // (the exit does not continue the loop body)
 		if(lsc.merge(false,rsc,xsc)) dw.setSemError();
@@ -6506,6 +6543,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 							if(decl.getId !in defined){
 								auto origId=decl.name.id;
 								Expression ntype=indexed?null:rhsty;
+								if(!rhsty&&ae.e2.isSemError()) ntype=bottom; // (error recovery: the uses of the new version are not reported, as for the variable of a loop over an erroneous container)
 								if(id.type&&rhsty){
 									ntype=updatedType(olhs,rhsty);
 									if(!ntype){
