@@ -5426,6 +5426,7 @@ bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InTy
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
 	if(e1.isSemError()||e2.isSemError())
 		return false;
+	static if(language==silq) if(sameQfreeComputation(e1,e2)) return true;
 	if(!util.among(e1.type,Bool(true),ℕt(true),ℤt(true))||!util.among(e2.type,Bool(true),ℕt(true),ℤt(true)))
 		return false;
 	Expression eq=new EqExp(e1,e2);
@@ -5433,6 +5434,13 @@ bool guaranteedSameValues(Expression e1,Expression e2,Location loc,Scope sc,InTy
 	eq.loc=loc;
 	assert(eq.isSemCompleted());
 	return eq.eval()==LiteralExp.makeBoolean(1);
+}
+static if(language==silq)
+private bool sameQfreeComputation(Expression e1,Expression e2){ // (e.g., `i&3` for a quantum `i`: the same `qfree` computation from the same versions)
+	if(!e1.isSemCompleted()||!e2.isSemCompleted()||!e1.isQfree()||!e2.isQfree()||e1!=e2) return false;
+	import ast.type:freeIdentifiers;
+	auto ids1=e1.freeIdentifiers.array,ids2=e2.freeIdentifiers.array;
+	return ids1.length==ids2.length&&zip(ids1,ids2).all!(p=>p[0].meaning&&p[0].meaning is p[1].meaning);
 }
 bool guaranteedSameLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType,bool checkMeaning=false){
 	if(auto id1=cast(Identifier)e1){
