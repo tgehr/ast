@@ -2528,6 +2528,16 @@ abstract class Scope{
 			if(!rnsymtab.get(cur.getId,null)) recordConsumption(cur,e[1]); // (explained by the implicit `dup` and the consumption on this path)
 		}
 	}
+	private void keepDeadOnPaths(Q!(Declaration,Identifier,Identifier,Identifier,bool)[] entries){ // (those of the variables that the merge keeps, as it did not cancel their implicit `dup`s: unavailable after the consumption on its path, e.g., `p` for `m:=measure(p); if c { u:=!p; forget(u); } if p { w:=X(w); }`)
+		bool continues(Scope sc){
+			for(;sc&&sc !is this;sc=sc.parentScope()) if(sc.diverges) return false;
+			return true;
+		}
+		foreach(e;entries){
+			if(e[4]||e[3].scope_ is this||!continues(e[3].scope_)||e[0].isSemError()||rnsymtab.get(e[0].getId,null) !is e[0]) continue;
+			if(!deadOnPaths.any!(f=>f[0] is e[0]&&f[3] is e[3])) deadOnPaths~=q(e[0],e[1],e[2],e[3],true);
+		}
+	}
 	private void dropDeadOnPaths(){ // (those of the nested scopes, at their merge: the merge decides about the variables, see `cancelDeferredDups`)
 		if(deadOnPaths.length) deadOnPaths=deadOnPaths.filter!(e=>e[3].scope_ is this||e[4]).array; // (a version whose implicit `dup` is in an enclosing scope stays unavailable)
 	}
@@ -2545,6 +2555,7 @@ abstract class Scope{
 		Identifier dupUse=null;
 		if(!last.use.implicitDup){
 			if(!last.prevImplicitDup||last.kind!=LastUse.Kind.constUse&&last.kind!=LastUse.Kind.constPinned) return; // (a `const` use after an implicit `dup`)
+			if(!last.scope_.isNestedIn(last.prevImplicitDup.scope_)) return; // (on all paths: not after the merge of a conditional with an implicit `dup` in a branch, which keeps the variable, see `LastUse.keepsMergeOfImplicitDup`)
 			if(auto vd=cast(VarDecl)decl) if(!isConstLocal(vd)) dupUse=last.prevImplicitDup.use;
 		}
 		deadOnPaths~=q(decl,last.use,dupUse,consumingUse,last.scope_ !is this);
@@ -2821,8 +2832,10 @@ abstract class Scope{
 			assert(activeNestedScopes.empty);
 			return false; // (no nesting, so no merge)
 		}
+		auto entries=deadOnPaths;
 		if(deferredDupCancels.length) cancelDeferredDups();
 		dropDeadOnPaths();
+		keepDeadOnPaths(entries);
 		static if(language==silq) if(!isLoop&&activeNestedScopes.all!(LastUse.isBranch)) foreach(sc;scopes) if(!sc.diverges) sc.forgetDeadSplits();
 		bool allUsed;
 		auto used=LastUses.prepareMerge(scopes,allUsed);

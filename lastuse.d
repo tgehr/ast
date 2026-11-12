@@ -202,6 +202,7 @@ final class LastUse{
 	bool chainPinned=false; // (`pin` pinned the last uses that it forwards to and is split from, which stay pinned: they need not be visited again)
 	bool splitsPinned=false; // (`LastUses.pin` pinned the last uses of this version and of the versions that its declaration was split into before it, see there)
 	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
+	size_t walkMark; // (the walk of `updateDependenciesOnConsumptionLocal` that visited it last, see there)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
 	static bool inBranch(Scope sc){ // (or nested in one)
 		for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent) if(isBranch(nsc)) return true;
@@ -661,7 +662,13 @@ final class LastUse{
 			auto last=lu.scope_.lastUses.here(lu.decl);
 			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
 		}
-		SetX!LastUse visited;
+		auto root=scope_.lastUses.root();
+		auto mark=++root.numWalks,undoBase=root.walkUndo.length; // (the last uses that this walk visited have `walkMark==mark`; a walk that starts during it restores the marks of the last uses that it visits when it ends)
+		scope(exit){
+			foreach_reverse(ref u;root.walkUndo[undoBase..$]) u[0].walkMark=u[1];
+			root.walkUndo.length=undoBase;
+			root.walkUndo.assumeSafeAppend();
+		}
 		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by,Identifier consumedAt=null){
 			if(dep.isTop) return;
 			Declaration[] xs;
@@ -712,7 +719,10 @@ final class LastUse{
 			}
 			if(lu is this||lu.discarded||before(lu)||goneBefore(lu)) continue;
 			if(splitFrom&&!fromBranch&&lu.kind==Kind.synthesizedForget&&lu.time<consumption.consumedAt) continue; // (forgotten before the consumption, e.g., in a block whose lazy splits come before it: the walk starts at them)
-			visited.insert(lu);
+			if(lu.walkMark!=mark){
+				root.walkUndo~=q(lu,lu.walkMark);
+				lu.walkMark=mark;
+			}
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
 				if(oos[2]&&(lu.scope_.isNestedIn(oos[3])||lu.decl.getId in splitOutOfScope&&oos[3].isNestedIn(lu.scope_)&&continues(oos[3],lu.scope_))&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5]))){ // (used after it went out of scope)
@@ -723,9 +733,9 @@ final class LastUse{
 					outOfScope.remove(lu.decl.getId);
 				}
 			}
-			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo !in visited) continue;
+			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo.walkMark!=mark) continue;
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
-			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom !in visited&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
+			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			if(!nested&&lu.atSplit){ // (its dependency is the one at the split, which comes before the consumption)
 				cdep.replace(lu.decl,lu.dep,lu.use);
@@ -1772,6 +1782,8 @@ struct LastUses{
 		}
 	}
 	size_t clock=0;
+	private size_t numWalks; // (see `LastUse.updateDependenciesOnConsumptionLocal`)
+	private Q!(LastUse,size_t)[] walkUndo;
 	size_t tick(){ // (the analysis of a function adds the last uses of its scopes in program order)
 		auto root=&this;
 		while(root.parent) root=root.parent;
