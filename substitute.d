@@ -1101,6 +1101,7 @@ CompoundExp substituteBlockCompound(CompoundExp ce,ref BlockSubst ctx){
 	auto r=new CompoundExp(ns);
 	r.loc=ce.loc;
 	r.blscope_=ce.blscope_;
+	static if(language==silq) r.lowersLoop=ce.lowersLoop;
 	if(ctx.tt&&ce.blscope_&&ce.blscope_ in ctx.tt.codScopes){
 		Declaration[] filter(Declaration[] ds){
 			Declaration[] r;

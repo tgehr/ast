@@ -4418,7 +4418,10 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 	}
 	auto r=lowerLoopImpl(loop,state,sc,flags);
 	static if(language==silq){
-		if(auto ce=cast(CompoundExp)r) if(!loopContainsReturn(loop)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+		if(auto ce=cast(CompoundExp)r){
+			ce.lowersLoop=true;
+			if(!loopContainsReturn(loop)) ce.loweredFrom=loop; // (e.g., reversed as the loop)
+		}
 		if(auto u=state.unreachable){
 			assert(u.analyzed);
 			sc.loopContinuation.used=true; // (after analyzing `r`)

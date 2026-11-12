@@ -916,6 +916,16 @@ struct EqualityContext{
 		}
 		collect(sa,da);
 		collect(sb,db);
+		static if(language==silq) if(auto wa=cast(WithExp)sa) if(auto wb=cast(WithExp)sb) if(!wa.isIndices&&!wb.isIndices&&wa.itrans&&wb.itrans){ // (the versions that the inverse transformations define, e.g., of `r` in `with { for i in 0..n { r+=i; } } do { } return r;`)
+			static void collectInverse(Expression[] ss,ref Declaration[] acc){
+				foreach(x;ss){
+					if(auto ce=cast(CompoundExp)x) if(!ce.blscope_){ collectInverse(ce.s,acc); continue; }
+					collect(x,acc);
+				}
+			}
+			collectInverse(wa.itrans.s,da);
+			collectInverse(wb.itrans.s,db);
+		}
 		if(da.length!=db.length) return false;
 		foreach(i;0..da.length) bind(da[i],db[i]);
 		return true;
@@ -2511,8 +2521,12 @@ class WithExp: Expression{
 	}
 	override WithExp copyImpl(CopyArgs args){
 		auto r=new WithExp(trans.copy(args),bdy.copy(args),isIndices);
-		if(itrans&&(isIndices||args.preserveSemantic)) r.itrans=itrans.copy(args); // (e.g., a function in a type is copied with its analyzed body)
+		if(itrans&&(isIndices||args.preserveSemantic||hasLoweredLoop(trans))) r.itrans=itrans.copy(args); // (e.g., a function in a type is copied with its analyzed body; a copy of a lowered loop that is analyzed again is not reversed as the loop, see `CompoundExp.loweredFrom`)
 		return r;
+	}
+	private static bool hasLoweredLoop(Expression e){
+		static if(language==silq) if(auto ce=cast(CompoundExp)e) return ce.lowersLoop||ce.s.any!hasLoweredLoop;
+		return false;
 	}
 	override string toString(){ return _brk("with "~trans.toString()~" do "~bdy.toString()~(itrans?" /+"~itrans.toString()~"+/":"")); }
 	override @property string kind(){ return "with"; }
@@ -2928,7 +2942,10 @@ class CompoundExp: Expression{
 	override CompoundExp copyImpl(CopyArgs args){
 		auto r=new CompoundExp(s.map!(e=>e.copy(args)).array);
 		if(args.mapScope) r.blscope_=cast(BlockScope)args.mapScope(blscope_);
-		static if(language==silq) if(args.preserveSemantic) r.loweredFrom=loweredFrom;
+		static if(language==silq){
+			if(args.preserveSemantic) r.loweredFrom=loweredFrom;
+			r.lowersLoop=lowersLoop;
+		}
 		return r;
 	}
 
@@ -2962,6 +2979,7 @@ class CompoundExp: Expression{
 	// semantic information
 	BlockScope blscope_;
 	static if(language==silq) Expression loweredFrom; // (the analyzed loop that this block lowers, see `lowerLoop`)
+	static if(language==silq) bool lowersLoop; // (also in a copy that does not keep `loweredFrom`)
 	static if(language==silq) Expression[] entryUncomputation,exitUncomputation; // (as `ForgetExp.uncomputation`, for the quantum variables that its scope forgets on entry and at its end)
 
 	override int freeVarsImpl(scope int delegate(Identifier) dg){
@@ -2979,6 +2997,7 @@ class CompoundExp: Expression{
 		if(!chg) return this;
 		auto r=new CompoundExp(ns);
 		r.loc=loc;
+		static if(language==silq) r.lowersLoop=lowersLoop;
 		return r;
 
 	}
