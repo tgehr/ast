@@ -2482,6 +2482,7 @@ abstract class Scope{
 								continue;
 							}
 							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit) noteDeadOnPath(ndecl,splitBasis(last),consumingUse); // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
+							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
 							if(cancelDup(ndecl,last,consumingUse)) done=false;
 						}
@@ -2702,6 +2703,7 @@ abstract class Scope{
 	}
 
 	NestedScope[] activeNestedScopes;
+	NestedScope[] mergingScopes; // (the branches of the merge in progress, until it merges their tables: they hold copies of the variables of this scope, see `LastUse.consume`)
 	final bool restrictsToChanges(){ return rnsymtab.length>=64; } // (whether the nestings and merges only consider the variables that change, see `MergeKeys` and `LastUses.prepareNesting`: in a small scope, visiting all of them costs less)
 	private size_t nestChanges,nestDepsChanges,nestRenamedDead; // (of the enclosing scope at the nesting, see `MergeKeys`)
 	private size_t numRenamedDead; // (of the dead declarations in `rnsymtab` whose identifiers are renamed, see `MergeKeys`)
@@ -2832,6 +2834,7 @@ abstract class Scope{
 			sc.siblingsFinal=true;
 		}
 		mergedNestedScopes~=activeNestedScopes;
+		if(activeNestedScopes.all!(LastUse.isBranch)) mergingScopes=activeNestedScopes; // (the branches of a conditional, e.g., not the paths of a loop)
 		activeNestedScopes=[];
 		allowMerge=false;
 		static if(language==silq) foreach(sc;scopes){ // (released after the enclosing statement, e.g., for branches of an `if` expression whose types mention variables)
@@ -2845,6 +2848,7 @@ abstract class Scope{
 				if(!symtabLookup(p[0].getId,false,null)&&!rnsymtab.get(p[0].getId,null))
 					recordConsumption(p[0],p[1]);
 		}
+		scope(exit) mergingScopes=[];
 		static if(language==silq) bool continued=scopes.any!((sc){ auto bs=cast(BlockScope)sc; return bs&&bs.diverges&&bs.returningBeforeContinuation; }); // (the code after the conditional continues the other branch, see `NestedScope.continuedLog`)
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
@@ -3291,6 +3295,7 @@ abstract class Scope{
 				symtabInsert(dm.mergedFrom[0]);
 			}else symtabInsert(dm);
 		}
+		mergingScopes=[];
 		foreach(sc;scopes){
 			sc.rnsymtab.stopLog();
 			sc.dependencies.stopLog();

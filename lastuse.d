@@ -837,7 +837,7 @@ final class LastUse{
 		if(use&&use.meaning is decl) use.meaning=result; // TODO: this is a bit hacky
 		assert(!use||use.meaning is result);
 		void removeCopies(Scope sc){
-			foreach(nested;sc.activeNestedScopes){ // TODO: need to consider nested scopes at correct time
+			foreach(nested;chain(sc.activeNestedScopes,sc.mergingScopes)){ // TODO: need to consider nested scopes at correct time
 				if(nested.forgottenVarsOnEntry.canFind(result)){
 					nested.forgottenVarsOnEntry=nested.forgottenVarsOnEntry.filter!(d=>d!is result).array; // TODO: make more efficient
 				}
