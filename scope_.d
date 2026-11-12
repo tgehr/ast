@@ -2475,7 +2475,7 @@ abstract class Scope{
 						if(auto lu=lastUses.get(ndecl,true)){
 							auto last=lu;
 							while(last.forwardTo) last=last.forwardTo;
-							auto keptBy=last.use&&last.use.implicitDup?last:last.kind==LastUse.Kind.lazyMerge&&last.prevImplicitDup&&last.canCancelImplicitDup()?last.prevImplicitDup:null; // (also through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
+							auto keptBy=last.use&&last.use.implicitDup?last:last.keepsMergeOfImplicitDup()?last.prevImplicitDup:null; // (also through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
 							if(lu.forwardTo&&(lu.kind==LastUse.Kind.lazySplitSink||lu.kind==LastUse.Kind.constPinned)&&keptBy&&deferDupCancels()){ // (the value continues into the branches (lazy splitting), which may use it before they consume `decl`, e.g., `y0` for `y1:=y0; if c { z:=H(x); } else { w:=!y0; forget(w); z:=H(x); }`: decided at the merge, see `cancelDeferredDups`; not after a `const` use, e.g., `t:=dup(y0)`, where it is forgotten, as before)
 								deferredDupCancels~=q(ndecl,consumingUse);
 								noteDeadOnPath(ndecl,keptBy,consumingUse);
@@ -2534,8 +2534,8 @@ abstract class Scope{
 	private static LastUse splitBasis(LastUse lu){ // (the last use before the split, for a version that the nested scope has not used yet)
 		for(;;){
 			while(lu.forwardTo) lu=lu.forwardTo;
-			if(lu.kind==LastUse.Kind.lazyMerge&&lu.prevImplicitDup&&lu.canCancelImplicitDup()) return lu.prevImplicitDup; // (the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
-			if(lu.kind!=LastUse.Kind.lazySplit||!lu.splitFrom) return lu;
+			if(lu.keepsMergeOfImplicitDup()) return lu.prevImplicitDup; // (the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
+			if(lu.kind!=LastUse.Kind.lazySplit&&lu.kind!=LastUse.Kind.constPinned||!lu.splitFrom) return lu; // (also when only nested scopes use it, which pin it)
 			lu=lu.splitFrom;
 		}
 	}

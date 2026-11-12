@@ -508,7 +508,10 @@ final class LastUse{
 					}
 				}
 			}
-			visit(nsc.lastUses.nestedAt.next);
+			auto at=nsc.lastUses.nestedAt;
+			if(!at.prev&&!at.next&&at !is par.lastUses.lastLastUse) // (removed: `remove` moves the nested scopes to the last use before it)
+				for(at=par.lastUses.lastLastUse;at&&!at.nestedAfter.canFind(nsc);at=at.prev){}
+			if(at) visit(at.next);
 		}
 	}
 	private static Identifier cancelUse(LastUse lu){ // (where `lu` goes out of scope if cancelled)
@@ -1182,6 +1185,11 @@ final class LastUse{
 				assert(0);
 		}
 		consume(isForget);
+	}
+	bool keepsMergeOfImplicitDup(){ // (the merge of a conditional after an implicit `dup` that the branches allow to cancel; also when a later use pins it, if the implicit `dup` is on all paths into the conditional: otherwise the merge keeps the variable, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
+		if(!prevImplicitDup||!nestedScopes.length) return false;
+		if(kind!=Kind.lazyMerge&&(kind!=Kind.constPinned||!scope_.isNestedIn(prevImplicitDup.scope_))) return false;
+		return canCancelImplicitDupMerge(decl,nestedScopes);
 	}
 	bool canCancelImplicitDup(){
 		if(forwardTo) return forwardTo.canCancelImplicitDup();
