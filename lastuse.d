@@ -452,7 +452,7 @@ final class LastUse{
 	private void recordCancelable(){ // (only those that depend on `decl` indirectly, the others are cancelled directly)
 		if(cancelableRecorded) return; // (an implicit `dup` that is cancelled later consumes at the time of the `dup`)
 		cancelableRecorded=true;
-		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x); }
+		static bool version_(Declaration x,Declaration y){ return x is y||x.isSplitFrom(y)||y.isSplitFrom(x)||mergedVersion(y,x)||mergedVersion(x,y); } // (also a version that a merge has on one of its paths, e.g., the version of `w` before `if k { w:=X(w); }` for the merged one: through the `else` branch)
 		Declaration[] reached=[decl];
 		LastUse[] indirect;
 		auto candidates=scope_.lastUses.orderedCancelCandidates(scope_);
@@ -473,10 +473,16 @@ final class LastUse{
 				changed=true;
 			}
 		}
-		foreach(lu;indirect) if(lu.canCancelImplicitDup()||lu.kind==Kind.lazySplit&&lu.prevImplicitDup&&isBranch(lu.scope_)&&lu.scope_.isNestedIn(lu.prevImplicitDup.scope_)){ // (also a version that the branch does not use yet, whose value an implicit `dup` before the split keeps: cancelled on the path of the branch; not after a merge that keeps the variable on the other paths, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
+		foreach(lu;indirect) if(lu.canCancelImplicitDup()&&!lu.afterMergeOfImplicitDup()||lu.kind==Kind.lazySplit&&lu.prevImplicitDup&&isBranch(lu.scope_)&&lu.scope_.isNestedIn(lu.prevImplicitDup.scope_)){ // (also a version that the branch does not use yet, whose value an implicit `dup` before the split keeps: cancelled on the path of the branch; not after a merge that keeps the variable on the other paths, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
 			cancelable~=q(lu,lu.dep.dup);
 			scope_.lastUses.noteMentions(this,lu.dep);
 		}
+	}
+	private bool afterMergeOfImplicitDup(){ // (a `const` use after the merge of a conditional with the implicit `dup` in a branch, which keeps the variable, see `keepsMergeOfImplicitDup`)
+		return (kind==Kind.constUse||kind==Kind.constPinned)&&use&&!use.implicitDup&&prevImplicitDup&&!scope_.isNestedIn(prevImplicitDup.scope_);
+	}
+	static bool mergedVersion(Declaration d,Declaration x){ // (`x` is the version of `d` on one of the paths of the merge that defines `d`)
+		return d.mergedFrom.any!(m=>m is x||m.isSplitFrom(x)||x.isSplitFrom(m));
 	}
 	private void continueAfterBranches(ref MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope){ // (the code after a conditional continues the paths of its branches: the uses there of versions that went out of scope in the branch, e.g., `v1` for `if c { if d { } else { a:=X(a); } t:=measure(v1); }` when the inner `else` branch forgets `v0` at the split)
 		for(auto nsc=cast(NestedScope)scope_;nsc&&outOfScope.length;nsc=cast(NestedScope)nsc.parent){
@@ -663,11 +669,13 @@ final class LastUse{
 			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
 		}
 		auto root=scope_.lastUses.root();
-		auto mark=++root.numWalks,undoBase=root.walkUndo.length; // (the last uses that this walk visited have `walkMark==mark`; a walk that starts during it restores the marks of the last uses that it visits when it ends)
+		auto mark=++root.numWalks,undoBase=root.walkUndo.length,endsBase=root.branchEnds.length; // (the last uses that this walk visited have `walkMark==mark`; a walk that starts during it restores the marks of the last uses that it visits when it ends)
 		scope(exit){
 			foreach_reverse(ref u;root.walkUndo[undoBase..$]) u[0].walkMark=u[1];
 			root.walkUndo.length=undoBase;
 			root.walkUndo.assumeSafeAppend();
+			root.branchEnds.length=endsBase;
+			root.branchEnds.assumeSafeAppend();
 		}
 		static void replaceVersions(ref Dependency dep,Declaration d,Dependency by,Identifier consumedAt=null){
 			if(dep.isTop) return;
@@ -686,6 +694,9 @@ final class LastUse{
 			for(auto sc=inner;sc&&sc !is outer;sc=sc.parentScope()) if(sc.diverges) return false;
 			return true;
 		}
+		static bool onPathOf(Declaration d,Declaration x){ // (`d` is `x` on one of the paths of its merges)
+			return d is x||d.derivedSequence.canFind(x);
+		}
 		static bool onOtherPath(Scope a,Scope b){ // (in different branches of the same conditional)
 			for(auto x=cast(NestedScope)a;x;x=cast(NestedScope)x.parent)
 				for(auto y=cast(NestedScope)b;y;y=cast(NestedScope)y.parent)
@@ -700,6 +711,7 @@ final class LastUse{
 				if(nested) replaceVersions(cdep,c.decl,c.dep,c.use);
 				else cdep.replace(c.decl,c.dep,c.use);
 			}
+			if(consumedInNested.length) beforeSplits=cdep.dup; // (also at the splits into the scopes nested after them, e.g., of a later conditional)
 			consumedInNested=[];
 		}
 		for(auto lu=start;lu;lu=lu.next){
@@ -725,7 +737,8 @@ final class LastUse{
 			}
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
-				if(oos[2]&&(lu.scope_.isNestedIn(oos[3])||lu.decl.getId in splitOutOfScope&&oos[3].isNestedIn(lu.scope_)&&continues(oos[3],lu.scope_))&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5]))){ // (used after it went out of scope)
+				bool after=oos[2]&&!lu.scope_.isNestedIn(oos[3])&&oos[3].isNestedIn(lu.scope_)&&continues(oos[3],lu.scope_); // (after the conditional of the consumption, which continues its path)
+				if(oos[2]&&(lu.scope_.isNestedIn(oos[3])||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
 					lu.decl.setSemForceError();
@@ -772,10 +785,19 @@ final class LastUse{
 						if(lu.time<end) continue;
 						splitOutOfScope.insert(id);
 					}
+					bool onPath=false;
+					if(!prev.splitFrom&&prev.nestedScopes.length&&prev.prevImplicitDup) // (a merge whose implicit `dup` is in one of its branches: the dependency of `decl` on the path of that branch, which the consumptions in the other branches do not change)
+						foreach(b;prev.nestedScopes) if(prev.prevImplicitDup.scope_.isNestedIn(b)) foreach_reverse(e;root.branchEnds[endsBase..$]) if(e[0] is b){ by=e[1]; onPath=true; break; }
 					auto ndep=c[1].dup;
 					replaceVersions(ndep,decl,by);
-					if(!hasVersion(ndep,lu.decl)) continue;
-					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
+					if(onPath&&lu.decl.mergedFrom.length&&!ndep.isTop){ // (the version that the consumed merge has on that path)
+						Declaration[] xs;
+						foreach(x;ndep.dependencies) if(mergedVersion(lu.decl,x)) xs~=x;
+						foreach(x;xs) ndep.replace(x,lu.dep,lu.use);
+					}else{
+						if(!hasVersion(ndep,lu.decl)) continue;
+						replaceVersions(ndep,lu.decl,lu.dep,lu.use);
+					}
 					if(!ndep.isTop) continue;
 					auto at=cancelUse(prev);
 					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
@@ -791,7 +813,7 @@ final class LastUse{
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
 						lu.reportUnforgettable();
-					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup){
+					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup&&lu.kind!=Kind.consumption){ // (not one that is already consumed, e.g., cancelled through a walk of this one)
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
 						if(auto vd=cast(VarDecl)lu.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=lu.dep.lostAt;
 						if(lu.dep.lostAt&&lu.decl.getId !in outOfScope) outOfScope[lu.decl.getId]=q(lu.use,Identifier.init,lu.dep.lostAt,scope_,lu.scope_,lu.decl); // (the `dup` would not have been implicit if the dependency through `decl` had been known)
@@ -800,6 +822,7 @@ final class LastUse{
 				}
 			}
 		}
+		if(level&&isBranch(level)) root.branchEnds~=q(level,cdep);
 		}
 		if(!scope_.lastUses.mayReceive(splitFrom?start:this,this,descend)) return; // (the walk would not change anything)
 		walk(splitFrom?start:this,cdep,false,cdep,null);
@@ -1784,6 +1807,7 @@ struct LastUses{
 	size_t clock=0;
 	private size_t numWalks; // (see `LastUse.updateDependenciesOnConsumptionLocal`)
 	private Q!(LastUse,size_t)[] walkUndo;
+	private Q!(NestedScope,Dependency)[] branchEnds; // (the dependencies of the variables of the walks at the ends of the branches that they visited, see `LastUse.updateDependenciesOnConsumptionLocal`)
 	size_t tick(){ // (the analysis of a function adds the last uses of its scopes in program order)
 		auto root=&this;
 		while(root.parent) root=root.parent;
