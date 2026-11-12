@@ -3053,6 +3053,7 @@ abstract class Scope{
 							if(quantumControl&&!trivialSplit){ // automatically promote to quantum if possible
 								if(auto qt=ot.getQuantum)
 									ot=qt;
+								if(isEmpty(ot)) if(auto qt=st.getQuantum) st=qt; // (e.g., the version after an erroneous assignment)
 							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){

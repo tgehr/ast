@@ -1328,6 +1328,14 @@ class ProductTy: Type{
 		if(!isSubtype(arg.type,dom)) return null;
 		return applyUnchecked(arg,target);
 	}
+	private bool mentionsParameters(){
+		return names.any!(n=>n!=Id()&&cod.hasFreeVar(n));
+	}
+	private Expression codomainAt(Expression arg,bool isSquare){ // (`tryApply` for comparisons: a codomain that does not mention the parameters is compared as it is, without the transition of its type `let`s, which copies them, also those of the function types in it)
+		if(mentionsParameters()) return tryApply(arg,isSquare);
+		if(isSquare!=this.isSquare||!isSubtype(arg.type,dom)) return null;
+		return cod;
+	}
 	private Expression applyUnchecked(Expression arg,Scope target){
 		MapSX!(Id,Expression) subst;
 		if(isTuple){
@@ -1399,8 +1407,8 @@ class ProductTy: Type{
 			auto flipped=ctx.flipped(); // (the domain is contravariant)
 			if(!isSubtype(r.dom,dom,&flipped)) return false;
 		}else if(!isSubtype(r.dom,dom)) return false;
-		auto lCod=applyUnchecked(vars,null);
-		auto rCod=r.applyUnchecked(vars,null);
+		auto lCod=mentionsParameters()?applyUnchecked(vars,null):cod; // (see `codomainAt`)
+		auto rCod=r.mentionsParameters()?r.applyUnchecked(vars,null):r.cod;
 		if(!lCod) return false;
 		assert(!!rCod);
 		return isSubtype(lCod,rCod,ctx);
@@ -1438,8 +1446,8 @@ class ProductTy: Type{
 			auto vars=new TupleExp(iota(names.length).map!(i=>cast(Expression)varTy(names[i],tpl[i])).array);
 			vars.type=ndom;
 			vars.setSemCompleted();
-			auto lCod=tryApply(vars,isSquare);
-			auto rCod=r.tryApply(vars,isSquare);
+			auto lCod=codomainAt(vars,isSquare);
+			auto rCod=r.codomainAt(vars,isSquare);
 			if(!lCod||!rCod) return null;
 			auto ncod=combineTypes(lCod,rCod,meet);
 			if(!ncod) return null;
@@ -1454,8 +1462,8 @@ class ProductTy: Type{
 					nnames=[name];
 				}
 				auto var=varTy(name,ndom);
-				lCod=tryApply(var,isSquare);
-				rCod=r.tryApply(var,isSquare);
+				lCod=codomainAt(var,isSquare);
+				rCod=r.codomainAt(var,isSquare);
 			}else{
 				lCod=cod;
 				rCod=r.cod;

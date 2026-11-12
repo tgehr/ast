@@ -957,7 +957,7 @@ class DeadMerge: DeadDecl{
 				bool ok=false;
 				foreach(d;mergedFrom){
 					auto type=typeForDecl(d);
-					if(!type) continue;
+					if(!type||isEmpty(type)) continue; // (e.g., the version after an erroneous assignment)
 					if(!isType(type.getQuantum)){
 						sc.note(format("declaration under quantum `if` has type `%s` which cannot be promoted to quantum",type),d.loc);
 						if(type.isSubtype(ℤt(true))){
