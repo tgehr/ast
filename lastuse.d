@@ -472,13 +472,48 @@ final class LastUse{
 				changed=true;
 			}
 		}
-		foreach(lu;indirect) if(lu.canCancelImplicitDup()){
+		foreach(lu;indirect) if(lu.canCancelImplicitDup()||lu.kind==Kind.lazySplit&&lu.prevImplicitDup&&isBranch(lu.scope_)&&lu.scope_.isNestedIn(lu.prevImplicitDup.scope_)){ // (also a version that the branch does not use yet, whose value an implicit `dup` before the split keeps: cancelled on the path of the branch; not after a merge that keeps the variable on the other paths, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
 			cancelable~=q(lu,lu.dep.dup);
 			scope_.lastUses.noteMentions(this,lu.dep);
 		}
 	}
+	private void continueAfterBranches(ref MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope){ // (the code after a conditional continues the paths of its branches: the uses there of versions that went out of scope in the branch, e.g., `v1` for `if c { if d { } else { a:=X(a); } t:=measure(v1); }` when the inner `else` branch forgets `v0` at the split)
+		for(auto nsc=cast(NestedScope)scope_;nsc&&outOfScope.length;nsc=cast(NestedScope)nsc.parent){
+			if(!isBranch(nsc)||nsc.diverges||!nsc.lastUses.nestedAt) return;
+			auto par=nsc.parent;
+			auto after=nsc.lastUses.lastLastUse?nsc.lastUses.lastLastUse.time:nsc.lastUses.nestedAt.time;
+			void visit(LastUse start){
+				for(auto lu=start;lu&&outOfScope.length;lu=lu.next){
+					if(lu.time>after&&lu.decl&&lu.use&&!lu.use.isSemError()&&!(lu.use.scope_&&nsc.getSiblingScopes().any!(s=>lu.use.scope_.isNestedIn(s)))){ // (not the consumptions in the branches, which the enclosing scope records at the merge)
+						auto id=lu.decl.getId;
+						auto oos=outOfScope.get(id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
+						if(oos[2]){
+							auto origin=oos[5];
+							while(origin.splitFrom&&!(origin.scope_&&par.isNestedIn(origin.scope_))) origin=origin.splitFrom;
+							if(lu.decl is origin||lu.decl.isDerivedFrom(origin)){
+								import ast.semantic_:undefinedIdentifierError;
+								lu.use.setSemForceError();
+								lu.decl.setSemForceError();
+								undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,oos[0],oos[2],oos[1])],lu.scope_);
+								outOfScope.remove(id);
+							}
+						}
+					}
+					foreach(n;lu.nestedAfter){
+						if(n.lastUses.discarded) continue;
+						auto head=n.lastUses.lastLastUse;
+						if(!head||head.time<=after) continue;
+						while(head.prev) head=head.prev;
+						visit(head);
+					}
+				}
+			}
+			visit(nsc.lastUses.nestedAt.next);
+		}
+	}
 	private static Identifier cancelUse(LastUse lu){ // (where `lu` goes out of scope if cancelled)
 		if(lu.use) return lu.use;
+		if(lu.splitFrom&&lu.prevImplicitDup) return lu.prevImplicitDup.use; // (a version in a branch, see `recordCancelable`)
 		if(lu.constConsume) return cancelUse(lu.constConsume);
 		foreach(nsc;lu.nestedScopes)
 			if(auto nlu=nsc.lastUses.get(versionIn(lu.decl,nsc),true))
@@ -636,6 +671,11 @@ final class LastUse{
 			return false;
 		}
 		MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope; // (where a variable goes out of scope, the implicit `dup` before that, the consumption that causes it, the scopes of later uses and of going out of scope, and the version that goes out of scope)
+		SetX!Id splitOutOfScope; // (those of versions in branches, see `recordCancelable`: also after the conditional of the consumption, which continues its path)
+		bool continues(Scope inner,Scope outer){ // (the path of `inner` continues in `outer`)
+			for(auto sc=inner;sc&&sc !is outer;sc=sc.parentScope()) if(sc.diverges) return false;
+			return true;
+		}
 		static bool onOtherPath(Scope a,Scope b){ // (in different branches of the same conditional)
 			for(auto x=cast(NestedScope)a;x;x=cast(NestedScope)x.parent)
 				for(auto y=cast(NestedScope)b;y;y=cast(NestedScope)y.parent)
@@ -672,7 +712,7 @@ final class LastUse{
 			visited.insert(lu);
 			if(lu.decl&&lu.use&&!lu.use.isSemError()){
 				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
-				if(oos[2]&&lu.scope_.isNestedIn(oos[3])&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5]))){ // (used after it went out of scope)
+				if(oos[2]&&(lu.scope_.isNestedIn(oos[3])||lu.decl.getId in splitOutOfScope&&oos[3].isNestedIn(lu.scope_)&&continues(oos[3],lu.scope_))&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5]))){ // (used after it went out of scope)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
 					lu.decl.setSemForceError();
@@ -705,8 +745,22 @@ final class LastUse{
 				if(lu.use) foreach(c;lu.cancelable){ // (a last use that would have been cancelled here if the dependency through `decl` had been known)
 					auto prev=c[0],id=prev.decl.getId;
 					if(id==lu.decl.getId||id in outOfScope||!hasVersion(c[1],decl)) continue;
+					auto by=cdep; // (the dependency of `decl` where its version on this path ends)
+					if(prev.splitFrom){ // (a version in a branch, see `recordCancelable`: it keeps the value while the version of `decl` on this path is available)
+						auto end=consumption.consumedAt;
+						if(lu.scope_ !is consumption.scope_){ // (e.g., a branch of a nested conditional that does not use it, which forgets it at the split)
+							auto dv=lu.scope_.lastUses.peek(lu.scope_.getSplit(decl));
+							while(dv&&dv.forwardTo&&dv.kind==Kind.lazySplitSink) dv=dv.forwardTo;
+							if(!dv||dv.kind==Kind.lazySplit){
+								end=0;
+								by=dv?dv.depAtSplit:atSplit;
+							}else end=dv.isConsumption()?dv.consumedAt:dv.time;
+						}
+						if(lu.time<end) continue;
+						splitOutOfScope.insert(id);
+					}
 					auto ndep=c[1].dup;
-					replaceVersions(ndep,decl,cdep);
+					replaceVersions(ndep,decl,by);
 					if(!hasVersion(ndep,lu.decl)) continue;
 					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
 					if(!ndep.isTop) continue;
@@ -736,6 +790,7 @@ final class LastUse{
 		}
 		if(!scope_.lastUses.mayReceive(splitFrom?start:this,this,descend)) return; // (the walk would not change anything)
 		walk(splitFrom?start:this,cdep,false,cdep,null);
+		static if(language==silq) if(outOfScope.length&&isBranch(scope_)) continueAfterBranches(outOfScope);
 	}
 
 	private void reportUnforgettable(){ // (a forget whose dependency is unknown)
