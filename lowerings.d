@@ -151,7 +151,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	if(isEmpty(args[0].type)!=isEmpty(args[1].type)) // (compared at the type of the other operand, as in `cmpType`, e.g., `x==(1,)[2]`)
 		args=annotateEmpty(args,(isEmpty(args[0].type)?args[1]:args[0]).type,context);
 	auto e0=args[0],e1=args[1];
-	auto ty0=unfoldTypeVariables(e0.type),ty1=unfoldTypeVariables(e1.type); // (see `iterate`)
+	auto ty0=unfoldTypeVariables(e0.type),ty1=unfoldTypeVariables(e1.type); // (see `shape`)
 	if(!cast(TupleTy)ty0&&!cast(ArrayTy)ty0&&!cast(VectorTy)ty0){
 		assert(!cast(TupleTy)ty1&&!cast(ArrayTy)ty1&&!cast(VectorTy)ty1);
 		return makeFunctionCall(OB.comparison,name,original,args,loc,context);
@@ -262,183 +262,353 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	auto params=[makeParam(e0,ty0),makeParam(e1,ty1)];
 	auto p0=params[0].name.copy(cargs),p1=params[1].name.copy(cargs);
 	p0.type=e0.type,p1.type=e1.type;
-	Expression[] body_;
-	auto doneName=new Identifier(freshName());
-	doneName.loc=loc;
-	auto ddef=new DefineExp(doneName,makeConst(false));
-	ddef.loc=loc;
-	body_~=ddef;
-	auto resultName=new Identifier(freshName());
-	resultName.loc=loc;
-	auto rdef=new DefineExp(resultName,makeConst(false));
-	rdef.loc=loc;
-	body_~=rdef;
-	void checkDone(ref Expression[] s,Expression e){
-		auto cond=new UNotExp(doneName.copy(cargs));
-		cond.loc=e.loc;
-		CompoundExp then;
-		if(auto ce=cast(CompoundExp)e){
-			then=ce;
-		}else{
-			then=new CompoundExp([e]);
-			then.loc=e.loc;
-		}
-		auto r=new IteExp(cond,then,null);
-		r.loc=e.loc;
+	// (the classical components and the lengths are compared first, then only the quantum components that can still change the result)
+	bool isEq=cast(EqExp)original||cast(NeqExp)original;
+	bool less=cast(LtExp)original||cast(LeExp)original;
+	Expression lit(size_t n){
+		auto r=LiteralExp.makeInteger(n);
+		r.loc=loc;
+		return r;
+	}
+	Identifier fresh(Expression type=null){
+		auto r=new Identifier(freshName());
+		r.loc=loc;
+		r.type=type;
+		return r;
+	}
+	CompoundExp compound(Expression[] s){
+		auto r=new CompoundExp(s);
+		r.loc=loc;
+		return r;
+	}
+	void ifThen(ref Expression[] s,Expression cond,Expression[] then){
+		cond.loc=loc;
+		auto r=new IteExp(cond,compound(then),null);
+		r.loc=loc;
 		s~=r;
 	}
-	void stm(ref Expression[] s,Expression e){
-		// s~=e;
-		checkDone(s,e);
+	void ret(ref Expression[] s,Expression e){
+		auto r=new ReturnExp(e);
+		r.loc=loc;
+		s~=r;
 	}
-	void ret(ref Expression[] s,Expression e,bool check=false){
-		/+auto r=new ReturnExp(e);
-		r.loc=e.loc;
-		stm(s,r);+/
-		auto cond=new UNotExp(doneName.copy(cargs));
-		cond.loc=e.loc;
-		auto sdone=new AssignExp(doneName.copy(cargs),makeConst(true));
-		sdone.loc=e.loc;
-		if(!check) s~=sdone;
-		auto sret=new AssignExp(resultName.copy(cargs),e);
-		sret.loc=e.loc;
-		if(!check) s~=sret;
-		else{
-			auto ce=new CompoundExp([sdone,sret]);
-			ce.loc=e.loc;
-			checkDone(s,ce);
-		}
+	Expression pair(Expression a,Expression b){
+		auto r=new TupleExp([a,b]);
+		r.loc=loc;
+		return r;
 	}
-	void iterate(ref Expression[] body_,Expression p0,Expression p1){
-		Expression[] r;
-		static Expression makeIndex(Expression p,Expression t,Expression i){
-			auto r=new IndexExp(p,i);
-			r.loc=p.loc;
-			r.type=indexType(t,i);
-			assert(!!r.type,text(p," ",t," ",i," ",r," ",r.type));
+	Expression differ(Expression a,Expression b){
+		auto r=new NeqExp(a.copy(cargs),b.copy(cargs));
+		r.loc=loc;
+		return r;
+	}
+	Expression length(Expression p){
+		auto lenName=new Identifier(Id.s!"length");
+		lenName.loc=loc;
+		auto r=new FieldExp(p.copy(cargs),lenName);
+		r.loc=loc;
+		return r;
+	}
+	static Expression makeIndex(Expression p,Expression t,Expression i){
+		auto r=new IndexExp(p,i);
+		r.loc=p.loc;
+		r.type=indexType(t,i);
+		assert(!!r.type,text(p," ",t," ",i," ",r," ",r.type));
+		return r;
+	}
+	static struct Shape{ // (of the comparison of values of two types: its kind and the types of the components)
+		enum Kind{ leaf,tuple,loop,unrolled } // (`unrolled`: a tuple and a vector or array)
+		Kind kind;
+		Expression ty0,ty1; // (the structure of the values of type variables, e.g., `!V` after `V:=𝔹^2`)
+		ITupleTy tt0,tt1;
+		Expression next0,next1;
+		Expression elem0(size_t i){ return tt0?tt0[i]:next0; }
+		Expression elem1(size_t i){ return tt1?tt1[i]:next1; }
+		bool classicalLeaf(){ return ty0.isClassical()&&ty1.isClassical(); }
+	}
+	static Shape shape(Expression t0,Expression t1){
+		Shape r;
+		r.ty0=unfoldTypeVariables(t0),r.ty1=unfoldTypeVariables(t1);
+		r.tt0=r.ty0.isTupleTy(),r.tt1=r.ty1.isTupleTy();
+		if(r.tt0&&r.tt1&&(cast(TupleTy)r.tt0||cast(TupleTy)r.tt1)){
+			r.kind=Shape.Kind.tuple;
 			return r;
 		}
-		auto ty0=unfoldTypeVariables(p0.type),ty1=unfoldTypeVariables(p1.type); // (the structure of the values of type variables, e.g., `!V` after `V:=𝔹^2`)
-		auto tt0=ty0.isTupleTy(),tt1=ty1.isTupleTy();
-		if(tt0&&tt1&&(cast(TupleTy)tt0||cast(TupleTy)tt1)){
-			if(tt0.length!=tt1.length&&(cast(EqExp)original||cast(NeqExp)original)){
-				ret(body_,makeConst(!!cast(NeqExp)original),true);
-				return;
-			}
-			foreach(i;0..min(tt0.length,tt1.length)){
-				auto i0=LiteralExp.makeInteger(i);
-				i0.loc=loc;
-				auto i1=LiteralExp.makeInteger(i);
-				i1.loc=loc;
-				auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
-				iterate(body_,np0,np1);
-			}
-			if(tt0.length!=tt1.length){
-				if(cast(LeExp)original||cast(LtExp)original){
-					ret(body_,makeConst(tt0.length<tt1.length),true);
-				}else if(cast(GeExp)original||cast(GtExp)original){
-					ret(body_,makeConst(tt0.length>tt1.length),true);
-				}else assert(0);
-			}
-			return;
+		if(auto vt=cast(VectorTy)r.ty0) r.next0=vt.next;
+		else if(auto at=cast(ArrayTy)r.ty0) r.next0=at.next;
+		if(auto vt=cast(VectorTy)r.ty1) r.next1=vt.next;
+		else if(auto at=cast(ArrayTy)r.ty1) r.next1=at.next;
+		if((r.next0||r.tt0)&&(r.next1||r.tt1)){
+			r.kind=r.next0&&r.next1?Shape.Kind.loop:Shape.Kind.unrolled;
+			if(r.kind==Shape.Kind.loop) r.tt0=r.tt1=null;
+			return r;
 		}
-		Expression next0=null,next1=null;
-		if(auto vt0=cast(VectorTy)ty0) next0=vt0.next;
-		else if(auto at0=cast(ArrayTy)ty0) next0=at0.next;
-		if(auto vt1=cast(VectorTy)ty1) next1=vt1.next;
-		else if(auto at1=cast(ArrayTy)ty1) next1=at1.next;
-		void doComparison(ref Expression[] body_,Expression p0,Expression p1){
-			auto cond=new NeqExp(p0.copy(cargs),p1.copy(cargs));
-			cond.loc=loc;
-			Expression[] bdy;
-			ret(bdy,makeMismatch(p0,p1));
-			auto then=new CompoundExp(bdy);
-			then.loc=loc;
-			auto ite=new IteExp(cond,then,null);
-			ite.loc=loc;
-			stm(body_,ite);
-		}
-		if((next0||tt0)&&(next1||tt1)){
-			auto lenName=new Identifier(Id.s!"length");
-			lenName.loc=loc;
-			auto len0=new FieldExp(p0.copy(cargs),lenName);
-			len0.loc=loc;
-			auto len1=new FieldExp(p1.copy(cargs),lenName.copy(cargs));
-			len1.loc=loc;
-			Expression len;
-			if(cast(EqExp)original||cast(NeqExp)original){
-				auto cond=new NeqExp(len0,len1);
-				cond.loc=loc;
-				Expression[] s;
-				ret(s,makeConst(!!cast(NeqExp)original));
-				auto then=new CompoundExp(s);
-				then.loc=loc;
-				auto ite=new IteExp(cond,then,null);
-				ite.loc=loc;
-				stm(body_,ite);
-				len=len0.copy(cargs);
-			}else if(next0&&next1){
-				auto cond=new LeExp(len0.copy(cargs),len1.copy(cargs));
-				cond.loc=loc;
-				auto then=new CompoundExp([len0.copy(cargs)]),othw=new CompoundExp([len1.copy(cargs)]);
-				then.loc=loc,othw.loc=loc;
-				auto minExp=new IteExp(cond,then,othw);
-				minExp.loc=loc;
-				len=minExp;
-			}else{
-				assert(!!tt0^!!tt1);
-				len=tt0?len1.copy(cargs):len0.copy(cargs);
-			}
-			if(next0&&next1){
-				auto i0=new Identifier(freshName());
-				i0.loc=loc;
-				i0.type=ℤt(true);
-				auto i1=new Identifier(i0.id);
-				i1.loc=loc;
-				i1.type=ℤt(true);
-				// TODO: in principle runtime indexing could fail for tuples even if comparable to non-tuple
-				auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
-				Expression[] s;
-				iterate(s,np0,np1);
-				auto forBdy=new CompoundExp(s);
-				forBdy.loc=loc;
-				auto for_=new ForExp(i0.copy(cargs),null,ForAggregate(ForRange(false,makeConst(0),null,true,len)),forBdy);
-				for_.loc=loc;
-				stm(body_,for_);
-			}else{
-				assert(!!tt0^!!tt1);
-				auto clen=tt0?tt0.length:tt1.length;
-				foreach(i;0..clen){
-					auto bound=LiteralExp.makeInteger(i);
-					bound.loc=loc;
-					auto cond=new LtExp(bound,len.copy(cargs));
-					cond.loc=loc;
-					Expression[] s;
-					auto i0=LiteralExp.makeInteger(i);
-					i0.loc=loc;
-					auto i1=LiteralExp.makeInteger(i);
-					i1.loc=loc;
-					auto np0=makeIndex(p0.copy(cargs),ty0,i0),np1=makeIndex(p1.copy(cargs),ty1,i1);
-					iterate(s,np0,np1);
-					auto then=new CompoundExp(s);
-					then.loc=loc;
-					auto ite=new IteExp(cond,then,null);
-					ite.loc=loc;
-					body_~=ite;
-				}
-			}
-			if(!(cast(EqExp)original||cast(NeqExp)original))
-				doComparison(body_,len0.copy(cargs),len1.copy(cargs));
-		}else doComparison(body_,p0,p1);
+		r.kind=Shape.Kind.leaf;
+		return r;
 	}
-	iterate(body_,p0,p1);
-	ret(body_,makeMismatch(null,null),true);
-	auto r=new ReturnExp(resultName.copy(cargs));
-	r.loc=loc;
-	body_~=r;
+	static struct Events{ bool quantum,classical,classicalFirst; } // (whether a comparison compares quantum components, and classical components or lengths, and whether one of the latter precedes one of the former)
+	static Events then(Events a,Events b){ return Events(a.quantum||b.quantum,a.classical||b.classical,a.classicalFirst||b.classicalFirst||a.classical&&b.quantum); }
+	enum lengths=Events(false,true,false);
+	Events events(Expression t0,Expression t1){
+		auto sh=shape(t0,t1);
+		final switch(sh.kind){
+			case Shape.Kind.leaf:{
+				auto classical=sh.classicalLeaf();
+				return Events(!classical,classical,false);
+			}
+			case Shape.Kind.tuple:{
+				if(sh.tt0.length!=sh.tt1.length&&isEq) return lengths;
+				Events r;
+				foreach(i;0..min(sh.tt0.length,sh.tt1.length)) r=then(r,events(sh.tt0[i],sh.tt1[i]));
+				if(sh.tt0.length!=sh.tt1.length) r=then(r,lengths);
+				return r;
+			}
+			case Shape.Kind.loop,Shape.Kind.unrolled:{
+				Events e;
+				if(sh.kind==Shape.Kind.loop){
+					e=events(sh.next0,sh.next1);
+					e.classicalFirst|=e.classical&&e.quantum; // (in the next iteration)
+				}else foreach(i;0..(sh.tt0?sh.tt0:sh.tt1).length) e=then(e,events(sh.elem0(i),sh.elem1(i)));
+				auto r=then(isEq?lengths:Events.init,e);
+				return isEq?r:then(r,lengths);
+			}
+		}
+	}
+	Events elementEvents(Shape sh){
+		if(sh.kind==Shape.Kind.loop) return events(sh.next0,sh.next1);
+		Events e;
+		foreach(i;0..(sh.tt0?sh.tt0:sh.tt1).length) e=then(e,events(sh.elem0(i),sh.elem1(i)));
+		return e;
+	}
+	enum dynamic=size_t.max;
+	size_t quantumCount(Expression t0,Expression t1){ // (the number of quantum components, if it does not depend on lengths)
+		auto sh=shape(t0,t1);
+		final switch(sh.kind){
+			case Shape.Kind.leaf: return !sh.classicalLeaf();
+			case Shape.Kind.tuple:{
+				size_t r=0;
+				foreach(i;0..min(sh.tt0.length,sh.tt1.length)){
+					auto c=quantumCount(sh.tt0[i],sh.tt1[i]);
+					if(c==dynamic) return dynamic;
+					r+=c;
+				}
+				return r;
+			}
+			case Shape.Kind.loop,Shape.Kind.unrolled:
+				return elementEvents(sh).quantum?dynamic:0;
+		}
+	}
+	size_t leadingQuantum(Expression t0,Expression t1,ref bool stop){ // (the number of quantum components before the first classical comparison or length, as far as it does not depend on lengths)
+		auto sh=shape(t0,t1);
+		final switch(sh.kind){
+			case Shape.Kind.leaf:
+				if(!sh.classicalLeaf()) return 1;
+				stop=true;
+				return 0;
+			case Shape.Kind.tuple:{
+				size_t r=0;
+				foreach(i;0..min(sh.tt0.length,sh.tt1.length)){
+					r+=leadingQuantum(sh.tt0[i],sh.tt1[i],stop);
+					if(stop) return r;
+				}
+				if(sh.tt0.length!=sh.tt1.length) stop=true;
+				return r;
+			}
+			case Shape.Kind.loop,Shape.Kind.unrolled:
+				stop=true;
+				return 0;
+		}
+	}
+	size_t unguarded=0; // (pass `quantum` of an ordering: the quantum components before all classical differences)
+	enum Pass{ all,classical,quantum }
+	static struct Count{ Identifier var; size_t offset; bool live; } // (of the quantum components before the current position, `var+offset` (`var` is `0` until it is `live`), in the passes of an ordering)
+	Expression countExp(Count cnt){
+		if(!cnt.var||!cnt.live) return lit(cnt.offset);
+		auto v=cnt.var.copy(cargs);
+		if(!cnt.offset) return v;
+		auto r=new AddExp(v,lit(cnt.offset));
+		r.loc=loc;
+		return r;
+	}
+	void add(ref Expression[] s,Identifier var,Expression n){
+		auto r=new AddAssignExp(var.copy(cargs),n);
+		r.loc=loc;
+		s~=r;
+	}
+	void flush(ref Expression[] s,ref Count cnt){
+		if(!cnt.offset||!cnt.var) return;
+		add(s,cnt.var,lit(cnt.offset));
+		cnt.offset=0;
+		cnt.live=true;
+	}
+	Identifier bound; // (pass `quantum` of an ordering: the number of quantum components before the first classical difference)
+	Expression mismatch(Expression b0,Expression b1,Pass pass,Count cnt){
+		auto r=makeMismatch(b0,b1);
+		return pass==Pass.classical&&!isEq?pair(countExp(cnt),r):r;
+	}
+	bool walk(ref Expression[] s,Expression x0,Expression x1,Pass pass,ref Count cnt){ // (whether `s` ends with a `return`)
+		auto sh=shape(x0.type,x1.type);
+		bool counted=!isEq&&pass!=Pass.all;
+		final switch(sh.kind){
+			case Shape.Kind.leaf:{
+				auto quantum=!sh.classicalLeaf();
+				if(pass==Pass.all||quantum==(pass==Pass.quantum)){
+					Expression[] then;
+					ret(then,mismatch(x0,x1,pass,cnt));
+					if(counted&&pass==Pass.quantum&&(cnt.live||cnt.offset>=unguarded)){
+						Expression[] check;
+						ifThen(check,differ(x0,x1),then);
+						auto cond=new LtExp(countExp(cnt),bound.copy(cargs));
+						ifThen(s,cond,check);
+					}else ifThen(s,differ(x0,x1),then);
+				}
+				if(quantum) cnt.offset++;
+				return false;
+			}
+			case Shape.Kind.tuple:{
+				auto l0=sh.tt0.length,l1=sh.tt1.length;
+				if(l0!=l1&&isEq){
+					if(pass!=Pass.classical) return false;
+					ret(s,makeConst(!!cast(NeqExp)original));
+					return true;
+				}
+				foreach(i;0..min(l0,l1)){
+					auto np0=makeIndex(x0.copy(cargs),sh.ty0,lit(i)),np1=makeIndex(x1.copy(cargs),sh.ty1,lit(i));
+					if(walk(s,np0,np1,pass,cnt)) return true;
+				}
+				if(l0==l1||pass==Pass.quantum) return false;
+				auto r=makeConst(less?l0<l1:l0>l1);
+				ret(s,pass==Pass.classical?pair(countExp(cnt),r):r);
+				return true;
+			}
+			case Shape.Kind.loop,Shape.Kind.unrolled:{
+				auto len0=length(x0),len1=length(x1);
+				Expression len;
+				if(isEq){
+					if(pass==Pass.classical){
+						Expression[] then;
+						ret(then,makeConst(!!cast(NeqExp)original));
+						ifThen(s,differ(len0,len1),then);
+					}
+					len=len0;
+				}else if(sh.kind==Shape.Kind.loop){
+					auto cond=new LeExp(len0.copy(cargs),len1.copy(cargs));
+					cond.loc=loc;
+					auto minExp=new IteExp(cond,compound([len0.copy(cargs)]),compound([len1.copy(cargs)]));
+					minExp.loc=loc;
+					len=minExp;
+				}else len=sh.tt0?len1:len0;
+				auto e=elementEvents(sh);
+				bool visit;
+				final switch(pass){
+					case Pass.all: visit=e.quantum||e.classical; break;
+					case Pass.classical: visit=e.classical||counted&&e.quantum; break;
+					case Pass.quantum: visit=e.quantum; break;
+				}
+				if(visit&&counted&&e.quantum){
+					assert(!!cnt.var);
+					flush(s,cnt);
+					if(pass==Pass.classical&&!e.classical&&sh.kind==Shape.Kind.loop){ // (only counted)
+						auto m=quantumCount(sh.next0,sh.next1);
+						if(m!=dynamic){
+							Expression n=len;
+							if(m!=1){
+								n=new MulExp(lit(m),len);
+								n.loc=loc;
+							}
+							add(s,cnt.var,n);
+							cnt.live=true;
+							visit=false;
+						}
+					}
+				}
+				Expression[] element(Expression i0,Expression i1){
+					Expression[] r;
+					auto inner=counted&&e.quantum?Count(cnt.var,0,true):cnt;
+					if(!walk(r,makeIndex(x0.copy(cargs),sh.ty0,i0),makeIndex(x1.copy(cargs),sh.ty1,i1),pass,inner))
+						flush(r,inner);
+					return r;
+				}
+				if(visit&&counted&&e.quantum) cnt.live=true; // (the elements count)
+				if(visit&&sh.kind==Shape.Kind.loop){
+					auto i=fresh(ℤt(true));
+					Expression index(){ auto r=new Identifier(i.id); r.loc=loc; r.type=ℤt(true); return r; }
+					auto forBdy=compound(element(index(),index()));
+					auto for_=new ForExp(i,null,ForAggregate(ForRange(false,lit(0),null,true,len)),forBdy);
+					for_.loc=loc;
+					s~=for_;
+				}else if(visit){
+					foreach(i;0..(sh.tt0?sh.tt0:sh.tt1).length){
+						auto cond=new LtExp(lit(i),len.copy(cargs));
+						ifThen(s,cond,element(lit(i),lit(i)));
+					}
+				}
+				if(!isEq&&pass!=Pass.quantum){
+					Expression[] then;
+					ret(then,mismatch(len0,len1,pass,cnt));
+					ifThen(s,differ(len0,len1),then);
+				}
+				return false;
+			}
+		}
+	}
+	auto ev=events(p0.type,p1.type);
+	Expression[] body_;
+	Count none;
+	if(isEq){
+		if(!ev.classical||!walk(body_,p0,p1,Pass.classical,none)){
+			if(ev.quantum) walk(body_,p0,p1,Pass.quantum,none);
+			ret(body_,makeMismatch(null,null));
+		}
+	}else if(!ev.quantum||!ev.classicalFirst){
+		if(!walk(body_,p0,p1,Pass.all,none)) ret(body_,makeMismatch(null,null));
+	}else{ // (the first classical difference, then the quantum components before it)
+		bool dyn=quantumCount(p0.type,p1.type)==dynamic;
+		Count counter(ref Expression[] s){
+			Count r;
+			if(!dyn) return r;
+			r.var=fresh();
+			auto def=new DefineExp(r.var.copy(cargs),lit(0));
+			def.loc=loc;
+			s~=def;
+			return r;
+		}
+		Parameter[] cparams;
+		Expression[] cargs_;
+		foreach(i,p;params){
+			auto pname=fresh();
+			auto cp=new Parameter(true,pname,p.dtype.copy(cargs));
+			cp.loc=p.loc;
+			cparams~=cp;
+			auto a=pname.copy(cargs);
+			a.type=i?e1.type:e0.type;
+			cargs_~=a;
+		}
+		Expression[] cbody;
+		auto c1=counter(cbody);
+		if(!walk(cbody,cargs_[0],cargs_[1],Pass.classical,c1)) ret(cbody,pair(countExp(c1),makeMismatch(null,null)));
+		auto cfd=new FunctionDef(null,cparams,true,tupleTy([ℕt(true),Bool(true)]),compound(cbody));
+		cfd.annotation=Annotation.qfree;
+		cfd.loc=loc;
+		auto first=new LambdaExp(cfd);
+		first.loc=loc;
+		auto call=new CallExp(first,pair(p0.copy(cargs),p1.copy(cargs)),false,false);
+		call.loc=loc;
+		bound=fresh();
+		bool stop=false;
+		unguarded=leadingQuantum(p0.type,p1.type,stop);
+		auto result=fresh();
+		auto def=new DefineExp(pair(bound.copy(cargs),result.copy(cargs)),call);
+		def.loc=loc;
+		body_~=def;
+		auto c2=counter(body_);
+		walk(body_,p0,p1,Pass.quantum,c2);
+		ret(body_,result.copy(cargs));
+	}
 	auto fbdy=new CompoundExp(body_);
 	fbdy.loc=loc;
-	auto fd=new FunctionDef(null,params,true,null,fbdy);
+	Expression rret=original.type&&isNumericTy(original.type)==NumericType.Bool?Bool(original.type.isClassical()):null; // (avoids analyzing the function again for the types of its `return`s)
+	auto fd=new FunctionDef(null,params,true,rret,fbdy);
 	fd.annotation=Annotation.qfree;
 	fd.loc=loc;
 	if(closed){
