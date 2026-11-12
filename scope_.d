@@ -1967,7 +1967,7 @@ abstract class Scope{
 		return true;
 	}
 	Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
-		return lookupHereImpl(ident,rnsym,failures);
+		return lookupHereFrom(ident,rnsym,origin,failures);
 	}
 	Identifier getRenamed(Identifier cname){
 		auto name=cname.id;
@@ -2002,6 +2002,27 @@ abstract class Scope{
 			if(auto asc=isInDataScope(fd.scope_))
 				if(fd.name.id==asc.decl.name.id)
 					r=asc.decl;
+		}
+		return r;
+	}
+	protected final Declaration lookupHereFrom(Identifier ident,bool rnsym,Scope origin,DeadDecl[]* failures){
+		auto r=lookupHereImpl(ident,rnsym,failures);
+		if(r&&!rnsym&&origin&&r.scope_){
+			for(Scope sc=origin;sc;sc=sc.parentScope()){ // (the consumption can be in a scope nested in the declaring one: it records them, see `noteDeadOnPath`)
+				foreach(e;sc.deadOnPaths){
+					if(e[0] !is r) continue;
+					auto csc=e[3].scope_;
+					if(!origin.isNestedIn(csc)&&!csc.isNestedIn(origin)||origin is sc&&csc !is sc&&!e[4]) continue; // (after the consumption on its path; the merge decides about the variables of this scope)
+					if(failures){
+						auto dd=new OutOfScopeDecl(r,e[1],e[3],e[2]);
+						dd.scope_=r.scope_;
+						dd.setSemCompleted();
+						*failures~=dd;
+					}
+					return null;
+				}
+				if(sc is r.scope_) break;
+			}
 		}
 		return r;
 	}
@@ -2452,21 +2473,17 @@ abstract class Scope{
 					//imported!"util.io".writeln("CHECKING: ",decl," ",ndecl," ",v.dependencies," ",decl in v.dependencies);
 					if(decl in v.dependencies){
 						if(auto lu=lastUses.get(ndecl,true)){
-							while(lu.forwardTo) lu=lu.forwardTo;
-							//imported!"util.io".writeln("CHECKING PUSH: ",lu," ",lu.use?lu.use.implicitDup:false);
-							if(lu.canCancelImplicitDup()){
-								if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
-									vd.outOfScopeCause=consumingUse;
-									if(!isConstLocal(vd)&&lu.kind==LastUse.Kind.constUse&&lu.prevImplicitDup)
-										vd.outOfScopeDup=lu.prevImplicitDup.use;
-								}
-								if(lu.cancelImplicitDup()){
-									assert(lu.isConsumption(),text(lu));
-									done=false;
-								}else{
-									// TODO
-								}
+							auto last=lu;
+							while(last.forwardTo) last=last.forwardTo;
+							auto keptBy=last.use&&last.use.implicitDup?last:last.kind==LastUse.Kind.lazyMerge&&last.prevImplicitDup&&last.canCancelImplicitDup()?last.prevImplicitDup:null; // (also through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
+							if(lu.forwardTo&&(lu.kind==LastUse.Kind.lazySplitSink||lu.kind==LastUse.Kind.constPinned)&&keptBy&&deferDupCancels()){ // (the value continues into the branches (lazy splitting), which may use it before they consume `decl`, e.g., `y0` for `y1:=y0; if c { z:=H(x); } else { w:=!y0; forget(w); z:=H(x); }`: decided at the merge, see `cancelDeferredDups`; not after a `const` use, e.g., `t:=dup(y0)`, where it is forgotten, as before)
+								deferredDupCancels~=q(ndecl,consumingUse);
+								noteDeadOnPath(ndecl,keptBy,consumingUse);
+								continue;
 							}
+							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit) noteDeadOnPath(ndecl,splitBasis(last),consumingUse); // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
+							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
+							if(cancelDup(ndecl,last,consumingUse)) done=false;
 						}
 					}
 				}
@@ -2476,6 +2493,86 @@ abstract class Scope{
 		if(keep) toRemove~=decl;
 		this.pushUp(controlDependency,decl);
 		pushTrackedTemporaryDependencies(decl);
+	}
+
+	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse){
+		if(!lu.canCancelImplicitDup()) return false;
+		if(!consumingUse&&lu.kind==LastUse.Kind.lazyMerge&&!LastUse.canCancelImplicitDupMerge(lu.decl,lu.nestedScopes,false)) return false; // (not when a merge consumes the versions of the branches, e.g., of a variable that a nested conditional merged after a branch returned)
+		if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
+			vd.outOfScopeCause=consumingUse;
+			if(!isConstLocal(vd)&&lu.kind==LastUse.Kind.constUse&&lu.prevImplicitDup)
+				vd.outOfScopeDup=lu.prevImplicitDup.use;
+		}
+		if(consumingUse&&lu.kind==LastUse.Kind.lazyMerge&&lu.prevImplicitDup) if(auto vd=cast(VarDecl)lu.prevImplicitDup.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=consumingUse; // (cancelled if all branches forget their versions at the split)
+		if(!lu.cancelImplicitDup()) return false; // TODO
+		assert(lu.isConsumption(),text(lu));
+		return true;
+	}
+	private Q!(Declaration,Identifier)[] deferredDupCancels; // (the variables live at a conditional whose implicit `dup`s a consumption in one of its branches would cancel)
+	private Q!(Declaration,Identifier,Identifier,Identifier,bool)[] deadOnPaths; // (the variables that a consumption in a nested scope makes unavailable on its path, also through the variables that depend on them, with the uses whose implicit `dup`s it would cancel, as in straight-line code, e.g., `y0` after `x:=H(x)` in `y1:=y0; if c { x:=H(x); w:=!y0; }`)
+	private void forgetDeadSplits(){ // (the versions that this branch does not use and that its consumptions make unavailable on its path: forgotten at the split, also when the other branches return, e.g., `v` for `e:=v; if c { a:=X(a); } else { return (a,e); }`)
+		bool returned(Scope sc){ // (the consumption is on a path that returns before the end of this branch)
+			for(;sc&&sc !is this;sc=sc.parentScope()) if(sc.diverges) return true;
+			return false;
+		}
+		foreach(e;deadOnPaths){
+			if(returned(e[3].scope_)) continue;
+			auto cur=rnsymtab.get(e[0].getId,null);
+			if(!cur||cast(DeadDecl)cur||cur !is e[0]&&!cur.isSplitFrom(e[0])) continue;
+			auto lu=lastUses.here(cur);
+			while(lu&&lu.forwardTo&&lu.kind==LastUse.Kind.lazySplitSink) lu=lu.forwardTo; // (also after nested conditionals that do not use it)
+			if(!lu||lu.forwardTo||lu.kind!=LastUse.Kind.lazySplit&&lu.kind!=LastUse.Kind.lazyMerge||lu.use||!lastUses.canForget(cur,false,false)) continue;
+			foreach(d;only(e[0],cur)) if(auto vd=cast(VarDecl)d) if(!vd.outOfScopeCause) vd.outOfScopeCause=e[3];
+			lastUses.forget(cur,false);
+			if(!rnsymtab.get(cur.getId,null)) recordConsumption(cur,e[1]); // (explained by the implicit `dup` and the consumption on this path)
+		}
+	}
+	private void dropDeadOnPaths(){ // (those of the nested scopes, at their merge: the merge decides about the variables, see `cancelDeferredDups`)
+		if(deadOnPaths.length) deadOnPaths=deadOnPaths.filter!(e=>e[3].scope_ is this||e[4]).array; // (a version whose implicit `dup` is in an enclosing scope stays unavailable)
+	}
+	private static LastUse splitBasis(LastUse lu){ // (the last use before the split, for a version that the nested scope has not used yet)
+		for(;;){
+			while(lu.forwardTo) lu=lu.forwardTo;
+			if(lu.kind==LastUse.Kind.lazyMerge&&lu.prevImplicitDup&&lu.canCancelImplicitDup()) return lu.prevImplicitDup; // (the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
+			if(lu.kind!=LastUse.Kind.lazySplit||!lu.splitFrom) return lu;
+			lu=lu.splitFrom;
+		}
+	}
+	private void noteDeadOnPath(Declaration decl,LastUse last,Identifier consumingUse){
+		if(!consumingUse||!consumingUse.scope_||!consumingUse.scope_.isNestedIn(this)||!last.use) return;
+		if(deadOnPaths.any!(e=>e[0] is decl&&e[3] is consumingUse)) return;
+		Identifier dupUse=null;
+		if(!last.use.implicitDup){
+			if(!last.prevImplicitDup||last.kind!=LastUse.Kind.constUse&&last.kind!=LastUse.Kind.constPinned) return; // (a `const` use after an implicit `dup`)
+			if(auto vd=cast(VarDecl)decl) if(!isConstLocal(vd)) dupUse=last.prevImplicitDup.use;
+		}
+		deadOnPaths~=q(decl,last.use,dupUse,consumingUse,last.scope_ !is this);
+		foreach(d;dependencies.mentioning(decl)){
+			if(decl !in getDependency(d).dependencies) continue;
+			auto lu=lastUses.get(d,true);
+			if(!lu) continue;
+			noteDeadOnPath(d,splitBasis(lu),consumingUse);
+		}
+	}
+	private bool cancellingDeferredDups;
+	private bool deferDupCancels(){
+		return !cancellingDeferredDups&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch);
+	}
+	private void cancelDeferredDups(){ // (those of the variables that no branch used, and of the variables that depend on them)
+		auto todo=deferredDupCancels;
+		deferredDupCancels=[];
+		dropDeadOnPaths();
+		cancellingDeferredDups=true;
+		scope(exit) cancellingDeferredDups=false;
+		for(size_t i=0;i<todo.length;i++){
+			auto ndecl=todo[i][0];
+			auto lu=lastUses.get(ndecl,true);
+			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo) continue; // (a branch uses it: the branches forget their versions before their consumptions)
+			auto dependents=dependencies.mentioning(ndecl).dup;
+			while(lu.forwardTo) lu=lu.forwardTo;
+			if(cancelDup(ndecl,lu,todo[i][1]))
+				foreach(d;dependents) todo~=q(d,todo[i][1]);
+		}
 	}
 
 	bool canForget(Declaration decl,bool forceHere=false){
@@ -2634,6 +2731,8 @@ abstract class Scope{
 		r.typeMentioning_=typeMentioning_.dup;
 		r.numTypeMentioningAtPrune=numTypeMentioningAtPrune;
 		if(!allowMerge){
+			if(deferredDupCancels.length) cancelDeferredDups(); // (of nested scopes that were not merged)
+			dropDeadOnPaths();
 			lastUses.prepareNesting(this);
 			nestLogMark=rnsymtab.changeLog.length;
 		}
@@ -2720,6 +2819,9 @@ abstract class Scope{
 			assert(activeNestedScopes.empty);
 			return false; // (no nesting, so no merge)
 		}
+		if(deferredDupCancels.length) cancelDeferredDups();
+		dropDeadOnPaths();
+		static if(language==silq) if(!isLoop&&activeNestedScopes.all!(LastUse.isBranch)) foreach(sc;scopes) if(!sc.diverges) sc.forgetDeadSplits();
 		bool allUsed;
 		auto used=LastUses.prepareMerge(scopes,allUsed);
 		clearConsumed(); // TODO: why needed?
@@ -4057,7 +4159,7 @@ class NestedScope: Scope{
 	}
 
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
-		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return hiddenAfterReturn(decl)?null:decl;
+		if(auto decl=lookupHereFrom(ident,rnsym,origin,failures)) return hiddenAfterReturn(decl)?null:decl;
 		auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures);
 		return decl&&hiddenAfterReturn(decl)?null:decl;
 	}
@@ -4121,7 +4223,7 @@ class RawProductScope: NestedScope{
 	}
 	void forceClose(){}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
-		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		if(auto decl=lookupHereFrom(ident,rnsym,origin,failures)) return decl;
 		auto decl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures);
 		if(decl&&kind==Lookup.consuming&&!decl.isToplevelDeclaration()&&!ident.typeofSuppressedCapture){
 			error(format("cannot consume `%s` in a type",ident),ident.loc);
@@ -4374,7 +4476,7 @@ class CapturingScope(T): NestedScope{
 		return meaning;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
-		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		if(auto decl=lookupHereFrom(ident,rnsym,origin,failures)) return decl;
 		if(auto pdecl=parent.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures)){
 			if(typeofOperand){
 				if(kind==Lookup.probing) return pdecl; // tentative lookup: no side effects
@@ -4506,7 +4608,7 @@ class TypeScope: BlockScope{
 		return RestrictionCause.init;
 	}
 	override Declaration lookupImpl(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,Scope origin,DeadDecl[]* failures){
-		if(auto decl=lookupHereImpl(ident,rnsym,failures)) return decl;
+		if(auto decl=lookupHereFrom(ident,rnsym,origin,failures)) return decl;
 		if(auto decl=freeDecls.get(ident.id,null)) return decl;
 		if(this.origin) if(auto top=this.origin.getTopScope()) return top.lookupImpl(ident,rnsym,lookupImports,kind,origin,failures); // (e.g., a prelude function used by a reversed `with` transformation)
 		return null; // note: free identifiers carry their own scopes

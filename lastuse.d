@@ -295,12 +295,12 @@ final class LastUse{
 	static bool mergesSameValue(Declaration decl,NestedScope nsc){ // (as `decl.isDerivedFrom(versionIn(decl,nsc).canonicalSource)`, but without going through the merges of the same value of all earlier conditionals)
 		return decl.canonicalSource is versionIn(decl,nsc).canonicalSource;
 	}
-	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes){
+	static bool canCancelImplicitDupMerge(Declaration decl,scope NestedScope[] nestedScopes,bool unusedSplits=true){
 		return iota(nestedScopes.length).map!((i){
 			auto nsc=nestedScopes[i];
 			if(!mergesSameValue(decl,nsc)) return false;
 			auto cdecl=versionIn(decl,nestedScopes[i]);
-			return nsc.lastUses.canCancelImplicitDup(cdecl);
+			return nsc.lastUses.canCancelImplicitDup(cdecl)||unusedSplits&&nsc.lastUses.unusedSplitOfImplicitDup(cdecl); // (forgotten at the split)
 		}).any;
 	}
 
@@ -1164,6 +1164,7 @@ final class LastUse{
 				}
 			}
 		}
+		if(prevImplicitDup) explanationUse=prevImplicitDup.use; // (the branches do not use it)
 	}
 	private LastUse mergedLazily(){ // (the lazy merge in the enclosing scope of the version of `decl` in the branch of this last use, if this is its last use there)
 		auto nsc=cast(NestedScope)scope_;
@@ -2020,6 +2021,10 @@ struct LastUses{
 		if(auto lastUse=here(decl))
 			return lastUse.cancelImplicitDup();
 		return false;
+	}
+	bool unusedSplitOfImplicitDup(Declaration decl){ // (a version that the branch does not use, whose value an implicit `dup` before the split keeps, e.g., `b` for `t:=measure(b); if c { } else { return a; }`)
+		auto lastUse=here(decl);
+		return lastUse&&!lastUse.forwardTo&&lastUse.kind==LastUse.Kind.lazySplit&&lastUse.prevImplicitDup&&canForget(decl,false,false);
 	}
 
 	void replaceDecl(Declaration splitFrom,Declaration splitInto)in{
