@@ -175,6 +175,7 @@ class VarDecl: Declaration{
 	bool isTemporary=false; // introduced by the compiler for an intermediate value
 	bool explicitType; // (for diagnostics) whether the type of the variable is annotated in its definition, e.g., `q:=1/2:!ℚ`
 	bool replaceType; // (with the flags together, a `VarDecl` fits into the 368-byte size class of the GC)
+	bool outOfScopeMerged; // (`outOfScopeCause` stands for the conditional whose merge made the dependency unknown, see `Scope.cancelDup`)
 	void setTemporary(bool isTemporary){
 		this.isTemporary=isTemporary;
 		if(isTemporary) name.meaning=this;
@@ -207,6 +208,7 @@ class VarDecl: Declaration{
 	VarDecl loweredFrom; // (for diagnostics) the variable after the loop in the analysis before the loop was lowered
 	Identifier outOfScopeCause;
 	Identifier outOfScopeDup;
+	Identifier outOfScopeUse; // (where it went out of scope, for the versions split from it that are consumed there, see `Scope.recordConsumption`)
 }
 
 Expression knownValueOf(Declaration d){ // (the value that the definition of a classical variable determines, e.g., `3` for `n:=3` or for `m:=n` after it, see `knownValuesEqual`)
@@ -772,16 +774,18 @@ class ConsumedDecl: DeadDecl{
 class OutOfScopeDecl: ConsumedDecl{
 	Identifier cause;
 	Identifier dupUse;
+	bool merged; // (`cause` stands for the conditional whose merge made the dependency unknown)
 	override bool sameExplanation(DeadDecl other){
 		auto o=cast(OutOfScopeDecl)other;
-		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse;
+		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse&&o.merged==merged;
 	}
-	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null)in{
+	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null,bool merged=false)in{
 		assert(!!cause);
 	}do{
 		super(decl,use);
 		this.cause=cause;
 		this.dupUse=dupUse;
+		this.merged=merged;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
@@ -790,7 +794,8 @@ class OutOfScopeDecl: ConsumedDecl{
 		}else sc.note(format("%s `%s` went out of scope here",kind,use.meaning),use.loc);
 		if(dupUse&&dupUse !is use)
 			sc.note(format("`%s` was used in a consuming position here",dupUse.name),dupUse.loc);
-		sc.note(format("`%s` not recomputable after dependency `%s` was consumed here",use.name,cause.name),cause.loc);
+		if(merged) sc.note(format("`%s` not recomputable after this conditional, which redefines its dependency `%s` on some path",use.name,cause.name),cause.loc);
+		else sc.note(format("`%s` not recomputable after dependency `%s` was consumed here",use.name,cause.name),cause.loc);
 	}
 	override string toString(){
 		return text("outOfScope(",super.toString(),",",cause.loc,")");

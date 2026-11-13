@@ -1264,6 +1264,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
+	ite.then.blscope_.conditional=ite.othw.blscope_.conditional=ite;
 	auto continued=insideLoopBody(sc)?null:continuedBranch(ite); // (not in a loop body: `--remove-loops` rewrites the returns there, and the code after the conditional is then guarded by another conditional, see `erpLoopExplicit`)
 	auto bothReturn=only(ite.then,ite.othw).all!(b=>definitelyReturns(b)&&returnsOnEveryPath(b)); // (the code generator interleaves their statements as for branches that do not return, and merges their results; in a loop body, `--remove-loops` rewrites the returns, see `erpLoopExplicit`, and the branches do not return)
 	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=insideLoopBody(sc)&&!bothReturn&&(containsReturn(ite.then)||containsReturn(ite.othw)); // (as for `continued`: elsewhere, the code generator interleaves the branches also where a branch returns on some paths)
@@ -3191,7 +3192,11 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	ite.then.blscope_.isBranch=true;
-	if(ite.othw) ite.othw.blscope_.isBranch=true;
+	ite.then.blscope_.conditional=ite;
+	if(ite.othw){
+		ite.othw.blscope_.isBranch=true;
+		ite.othw.blscope_.conditional=ite;
+	}
 	ite.then=branchBlockSemanticLhs(ite.then, context, quantumControl);
 	if(!ite.othw){
 		sc.error("missing else for if expression",ite.loc);
@@ -8130,7 +8135,11 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 	if(!ite.then.blscope_) ite.then.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	if(ite.othw && !ite.othw.blscope_) ite.othw.blscope_ = new BlockScope(sc, restriction_, RestrictionCause(quantumControl?ite:null));
 	ite.then.blscope_.isBranch=true;
-	if(ite.othw) ite.othw.blscope_.isBranch=true;
+	ite.then.blscope_.conditional=ite;
+	if(ite.othw){
+		ite.othw.blscope_.isBranch=true;
+		ite.othw.blscope_.conditional=ite;
+	}
 	static if(language==silq){
 		auto crepls=sc.allComponentReplacements(); // (each branch may consume a replaced component)
 		auto entryReads=crepls.map!(crepl=>q(crepl.read,crepl.constRead)).array;
