@@ -703,6 +703,33 @@ final class LastUse{
 					if(x.parent is y.parent) return x !is y&&x.getSiblingScopes().canFind(y);
 			return false;
 		}
+		void cancelAtMerge(LastUse lu,Dependency prior){ // (the merge of a conditional makes the dependency unknown, while it is known at the end of the branch with the implicit `dup` that keeps the variable: the merge cancels the implicit `dup`, as for a dependency known before, see `Scope.cancelDup`, e.g., `p` for `if k { w:=X(w); } else { t:=measure(p); } ms+=measure(p);` with `p:=dup(cp)`)
+			auto dup=lu.prevImplicitDup;
+			if(!dup.use||lu.use.isSemError()||lu.decl.isSemError()||lu.decl.getId in outOfScope||lu.nestedScopes.length) return; // (not a merge, whose uses are in its branches)
+			for(auto nsc=cast(NestedScope)dup.scope_;nsc&&!lu.scope_.isNestedIn(nsc);nsc=cast(NestedScope)nsc.parent){
+				if(!isBranch(nsc)) continue;
+				if(lu.use.scope_&&nsc.getSiblingScopes().any!(b=>lu.use.scope_.isNestedIn(b))) return;
+				Q!(NestedScope,Dependency,Dependency)* end=null;
+				foreach_reverse(ref e;root.branchEnds[endsBase..$]) if(e[0] is nsc){ end=&e; break; }
+				if(!end) return;
+				auto atEnd=prior.dup,afterMerge=prior.dup;
+				replaceVersions(atEnd,decl,(*end)[1]);
+				if(atEnd.isTop) return; // (on the path of the branch: see its consumptions)
+				replaceVersions(afterMerge,decl,(*end)[2]);
+				if(!afterMerge.isTop) continue; // (e.g., through the merge of an enclosing conditional)
+				auto last=dup.scope_.lastUses.peek(dup.decl);
+				while(last&&last.forwardTo) last=last.forwardTo;
+				auto at=last?cancelUse(last):null;
+				if(!at) at=dup.use;
+				auto cause=new Identifier((afterMerge.lostVar?afterMerge.lostVar:decl).getId);
+				cause.loc=(cast(BlockScope)nsc).conditional.loc;
+				import ast.semantic_:undefinedIdentifierError;
+				lu.use.setSemForceError();
+				lu.decl.setSemForceError();
+				undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,at,cause,at is dup.use?null:dup.use,true)],lu.scope_);
+				return;
+			}
+		}
 		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level){ // (`atSplit`: the dependency at the split into `level`, for the forgets there)
 		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
 		LastUse[] consumedInNested; // (splits that the nested scopes after them consume: on one of their paths, so after their walks)
@@ -719,6 +746,7 @@ final class LastUse{
 			scope(success){
 				if(!lu.forwardTo&&lu.kind!=Kind.marker) beforeSplits=cdep.dup; // (not one of the splits, which precede the nested scopes)
 				if(consumedInNested.length&&!lu.nestedAfter.all!isBranch) consumeAfterNested(); // (e.g., a loop body, whose next iterations come after the consumption)
+				auto endsAt=root.branchEnds.length;
 				if(descend) foreach(nsc;lu.nestedAfter){
 					if(nsc.lastUses.discarded) continue;
 					if(fromConditional&&nsc.getSiblingScopes().any!(s=>fromConditional.isNestedIn(s))) continue;
@@ -727,7 +755,10 @@ final class LastUse{
 					while(head.prev) head=head.prev;
 					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
 				}
-				if(lu.nestedAfter.length) consumeAfterNested();
+				if(lu.nestedAfter.length){
+					consumeAfterNested();
+					if(lu.nestedAfter.count!(b=>!b.diverges)>=2) foreach(ref e;root.branchEnds[endsAt..$]) if(lu.nestedAfter.canFind(e[0])) e[2]=cdep.dup; // (the merge of the branches; not where the other branches return, see `Scope.mergedConditional`)
+				}
 			}
 			if(lu is this||lu.discarded||before(lu)||goneBefore(lu)) continue;
 			if(splitFrom&&!fromBranch&&lu.kind==Kind.synthesizedForget&&lu.time<consumption.consumedAt) continue; // (forgotten before the consumption, e.g., in a block whose lazy splits come before it: the walk starts at them)
@@ -761,9 +792,11 @@ final class LastUse{
 			}
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
+				auto prior=lu.prevImplicitDup&&lu.use?lu.dep.dup:Dependency.init;
 				if(nested) replaceVersions(lu.dep,decl,lu.atSplit?byAtSplit:cdep);
 				else lu.dep.replace(decl,cdep);
 				lu.scope_.lastUses.noteMentions(lu,lu.dep);
+				if(lu.dep.isTop&&lu.prevImplicitDup&&lu.use) cancelAtMerge(lu,prior);
 			}
 			//imported!"util.io".writeln("REPLACED: ",lu," ",decl," ",cdep);
 			if(lu.kind.among(Kind.consumption,Kind.synthesizedForget)||lu.use&&lu.use.implicitDup){
@@ -785,19 +818,10 @@ final class LastUse{
 						if(lu.time<end) continue;
 						splitOutOfScope.insert(id);
 					}
-					bool onPath=false;
-					if(!prev.splitFrom&&prev.nestedScopes.length&&prev.prevImplicitDup) // (a merge whose implicit `dup` is in one of its branches: the dependency of `decl` on the path of that branch, which the consumptions in the other branches do not change)
-						foreach(b;prev.nestedScopes) if(prev.prevImplicitDup.scope_.isNestedIn(b)) foreach_reverse(e;root.branchEnds[endsBase..$]) if(e[0] is b){ by=e[1]; onPath=true; break; }
 					auto ndep=c[1].dup;
 					replaceVersions(ndep,decl,by);
-					if(onPath&&lu.decl.mergedFrom.length&&!ndep.isTop){ // (the version that the consumed merge has on that path)
-						Declaration[] xs;
-						foreach(x;ndep.dependencies) if(mergedVersion(lu.decl,x)) xs~=x;
-						foreach(x;xs) ndep.replace(x,lu.dep,lu.use);
-					}else{
-						if(!hasVersion(ndep,lu.decl)) continue;
-						replaceVersions(ndep,lu.decl,lu.dep,lu.use);
-					}
+					if(!hasVersion(ndep,lu.decl)) continue;
+					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
 					if(!ndep.isTop) continue;
 					auto at=cancelUse(prev);
 					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
@@ -822,7 +846,7 @@ final class LastUse{
 				}
 			}
 		}
-		if(level&&isBranch(level)) root.branchEnds~=q(level,cdep);
+		if(level&&isBranch(level)) root.branchEnds~=q(level,cdep,cdep);
 		}
 		if(!scope_.lastUses.mayReceive(splitFrom?start:this,this,descend)) return; // (the walk would not change anything)
 		walk(splitFrom?start:this,cdep,false,cdep,null);
@@ -1807,7 +1831,7 @@ struct LastUses{
 	size_t clock=0;
 	private size_t numWalks; // (see `LastUse.updateDependenciesOnConsumptionLocal`)
 	private Q!(LastUse,size_t)[] walkUndo;
-	private Q!(NestedScope,Dependency)[] branchEnds; // (the dependencies of the variables of the walks at the ends of the branches that they visited, see `LastUse.updateDependenciesOnConsumptionLocal`)
+	private Q!(NestedScope,Dependency,Dependency)[] branchEnds; // (the dependencies of the variables of the walks at the ends of the branches that they visited and after the merges of their conditionals, see `LastUse.updateDependenciesOnConsumptionLocal`)
 	size_t tick(){ // (the analysis of a function adds the last uses of its scopes in program order)
 		auto root=&this;
 		while(root.parent) root=root.parent;
