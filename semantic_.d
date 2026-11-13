@@ -6238,7 +6238,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	auto context=expSemContext(sc,ConstResult.yes,InType.no);
 	static if(language==silq){
 		auto undefinedLhs=isUndefinedAssignment(ae,sc); // e.g., `x = 3` instead of `x := 3`
-		if(undefinedLhs) if(auto r=defineUndefinedAssignment(ae,sc,flags)) return r; // (error recovery)
+		auto undefinedNote=UndefinedAssignmentNote(ae,sc); // (also, e.g., for `x = H(x)`, where `H(x)` consumes `x`)
+		if(undefinedLhs) if(auto r=defineUndefinedAssignment(ae,sc,flags,undefinedNote)) return r; // (error recovery)
 	}
 	static if(language==psi){ // e.g., `(a,(b,c))[1] = e` assigns `e` to `(b,c)`
 		Expression selectTupleComponents(Expression lhs){
@@ -6373,6 +6374,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			Expression[] stms;
 			foreach(de;componentDefs) stms~=statementSemantic(de,sc,flags);
 			stms~=statementSemantic(nae,sc,flags);
+			undefinedNote.explain((cast(DefineExp)componentDefs[0]).e2.type,sc,ae.e1);
 			auto ce=new CompoundExp(stms);
 			ce.loc=ae.loc;
 			ce.type=unit;
@@ -6418,8 +6420,19 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	prepareLhs(ae.e1);
 	ae.e1=expressionSemantic(ae.e1,context.nestLhs);
 	propErr(ae.e1,ae);
-	if(ae.e1.isSemError()){
-		static if(language==silq) if(undefinedLhs) explainUndefinedAssignment(ae,sc);
+	static bool assignsDefinedVariables(Expression lhs){ // (a tuple of variables some of which are undefined, e.g., `(x,y) = e` with `x` undefined: the assignment still replaces the others, so that their later uses are not reported)
+		auto tpl=cast(TupleExp)lhs;
+		if(!tpl) return false;
+		bool defined=false;
+		foreach(e;tpl.e){
+			auto id=cast(Identifier)e;
+			if(!id||id.meaning&&id.isSemError()) return false;
+			if(id.meaning) defined=true;
+		}
+		return defined;
+	}
+	if(ae.e1.isSemError()&&!(language==silq&&assignsDefinedVariables(ae.e1))){
+		static if(language==silq) undefinedNote.explain(ae.e2.type,sc,ae.e1);
 		sc.resetLocalComponentReplacements();
 		return ae;
 	}

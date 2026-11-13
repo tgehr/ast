@@ -209,33 +209,87 @@ void explainUndefinedIdentifier(Identifier id,Scope sc,bool called=false,bool in
 
 /// whether `ae` assigns only to undefined variables, e.g., `x = 3`, which is likely meant to be a definition `x := 3`
 bool isUndefinedAssignment(AssignExp ae,Scope sc){
+	if(isComponentAssignment(ae)) return false;
 	auto ids=undefinedAssignees(ae.e1,sc);
 	return ids.length&&!ids.any!(id=>ae.e2.hasFreeIdentifier(id.id));
+}
+
+/// whether `ae` assigns the components of an annotated tuple, which the analysis defines as temporaries first (see
+/// `assignExpSemantic`): the enclosing assignment explains it
+private bool isComponentAssignment(AssignExp ae){
+	auto tpl=cast(TupleExp)ae.e2;
+	return tpl&&tpl.e.length&&tpl.e.all!((e){ auto id=cast(Identifier)unwrapAnnotations(e); return id&&id.isTemporary; });
+}
+
+private Expression unwrapAnnotations(Expression e){
+	while(auto tae=cast(TypeAnnotationExp)e) e=tae.e;
+	return e;
 }
 
 /// error recovery for an assignment `ae` to undefined variables (see `isUndefinedAssignment`): reports it and analyzes
 /// the definition `x := e` instead, which avoids errors for later uses of the variables
 /// (returns `null` in a branch, where a definition would cause errors for variables defined on only one path)
-Expression defineUndefinedAssignment(AssignExp ae,Scope sc,ref StmFlags flags){
+Expression defineUndefinedAssignment(AssignExp ae,Scope sc,ref StmFlags flags,UndefinedAssignmentNote note){
 	for(auto nsc=cast(NestedScope)sc;nsc&&!cast(FunctionScope)nsc;nsc=cast(NestedScope)nsc.parent){
 		if(auto bsc=cast(BlockScope)nsc) if(bsc.isLoopBody) break;
 		if(nsc.getSiblingScopes().length>1) return null;
 	}
 	foreach(id;undefinedAssignees(ae.e1,sc)) sc.error(format("undefined identifier `%s`",id.name),id.loc);
-	explainUndefinedAssignment(ae,sc);
 	auto de=new DefineExp(ae.e1,ae.e2);
 	de.loc=ae.loc;
 	auto r=statementSemantic(de,sc,flags);
+	note.explain(de.e2.type,sc);
 	r.setSemForceError();
 	return r;
 }
 
-/// explains an assignment `x = e` to an undefined variable `x`, which is likely meant to be a definition `x := e`
-void explainUndefinedAssignment(AssignExp ae,Scope sc){
-	auto lhs=componentsText(ae.e1), rhs=componentsText(ae.e2);
-	auto what=cast(TupleExp)ae.e1?"new variables":"a new variable";
-	if(lhs.length+rhs.length<=60&&!rhs.canFind('\n')) sc.note(format("use `:=` to define %s: `%s := %s`",what,lhs,rhs),ae.loc);
-	else sc.note(format("use `:=` to define %s",what),ae.loc);
+/// the note for an assignment `x = e` to variables `x` that are undefined or consumed (e.g., by `e`), which suggests the
+/// definition `x := e` if it would succeed: if the assignment reports no other errors than one for each variable and its
+/// value unpacks into them (`explain`; taken before the analysis, which moves the annotations of the left-hand side to
+/// the right-hand side)
+struct UndefinedAssignmentNote{
+	private Expression lhs,rhs;
+	private Expression[] components;
+	private Location loc;
+	private int nerrors;
+	this(AssignExp ae,Scope sc){
+		auto tpl=cast(TupleExp)ae.e1;
+		if(tpl?!tpl.e.all!(e=>!!cast(Identifier)assignee(e)):!cast(Identifier)assignee(ae.e1)) return;
+		if(isComponentAssignment(ae)) return;
+		lhs=ae.e1;
+		rhs=ae.e2;
+		if(tpl) components=tpl.e.dup;
+		loc=ae.loc;
+		nerrors=sc.handler.nerrors+cast(int)(tpl?tpl.e.length:1);
+	}
+	void explain(Expression type,Scope sc,Expression analyzedLhs=null){ // (`type`: of the assigned value; `analyzedLhs`: the left-hand side after its analysis, whose variables must be undefined)
+		if(!lhs||analyzedLhs&&!undefinedVariables(analyzedLhs,sc)||sc.handler.nerrors!=nerrors||!unpacks(type)) return;
+		auto l=components?"("~components.map!(e=>sourceText(e)).join(", ")~")":sourceText(lhs), r=componentsText(rhs);
+		auto what=components?"new variables":"a new variable";
+		if(l.length+r.length<=60&&!r.canFind('\n')) sc.note(format("use `:=` to define %s: `%s := %s`",what,l,r),loc);
+		else sc.note(format("use `:=` to define %s",what),loc);
+	}
+	private static bool undefinedVariables(Expression lhs,Scope sc){ // (that a definition can declare: undefined or consumed, e.g., by the right-hand side, but not, e.g., with incompatible types on the paths into a loop, which an earlier iteration of the analysis of the loop redefines, and not `const`, whose definition has more requirements, e.g., `const x := H(y)` fails under a classical `if`)
+		bool undefined(Expression e){
+			auto id=cast(Identifier)e;
+			if(!id||id.meaning) return false;
+			DeadDecl[] failures;
+			return !sc.lookup(id,false,true,Lookup.probing,&failures)&&failures.all!(f=>!!cast(ConsumedDecl)f);
+		}
+		if(auto tpl=cast(TupleExp)lhs) return tpl.e.all!undefined;
+		return undefined(lhs);
+	}
+	private bool unpacks(Expression type){ // (as the definition, see `defineLhsSemanticImpl(TupleExp)`)
+		if(!components||!type||isEmpty(type)) return true;
+		auto ctype=unfoldTypeVariable(type);
+		if(cast(ArrayTy)ctype) return true;
+		if(auto vt=cast(VectorTy)ctype){
+			auto n=vt.num.asIntegerConstant(true);
+			return !n||n.get()==components.length;
+		}
+		auto tt=ctype.isTupleTy;
+		return tt&&tt.length==components.length;
+	}
 }
 
 /// error recovery for a multiple assignment without parentheses, e.g., `a, b = b, a` (as in Python): reports it and
@@ -423,9 +477,7 @@ bool explainDoubleStar(Expression e,Scope sc){
 /// the variables assigned by `lhs` if none of them are defined, e.g., `x` for `x = 3` (likely meant to be a definition `x := 3`)
 Identifier[] undefinedAssignees(Expression lhs,Scope sc){
 	Identifier undefined(Expression e){
-		if(auto tae=cast(TypeAnnotationExp)e) if(tae.annotationType==TypeAnnotationType.annotation) e=tae.e;
-		if(auto ce=cast(UnaryExp!(Tok!"const"))e) e=ce.e; // (e.g., `const x = 3`)
-		auto id=cast(Identifier)e;
+		auto id=cast(Identifier)assignee(e);
 		if(!id||id.meaning||!id.name.length||isBuiltIn(id)) return null;
 		DeadDecl[] failures;
 		if(sc.lookup(id,false,true,Lookup.probing,&failures)||failures.length) return null;
@@ -440,6 +492,14 @@ Identifier[] undefinedAssignees(Expression lhs,Scope sc){
 		result~=id;
 	}
 	return result;
+}
+
+/// the variable of a component of the left-hand side of an assignment, e.g., `x` of `x:T` or of `const x` (as in
+/// `const x = 3`)
+private Expression assignee(Expression e){
+	if(auto tae=cast(TypeAnnotationExp)e) if(tae.annotationType==TypeAnnotationType.annotation) e=tae.e;
+	if(auto ce=cast(UnaryExp!(Tok!"const"))e) e=ce.e;
+	return e;
 }
 
 /// for `ce` of the form `a, b = b, a` (as in Python) or `a, b := b, a` (as in Go), the definition `(a, b) := (b, a)` if
