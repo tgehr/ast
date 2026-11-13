@@ -28,6 +28,7 @@ Identifier temporaryIdentifier(Location loc){ return temporaryIdentifier(freshNa
 // (the language server): resetting the counter between checks numbers each
 // check's temporaries as a fresh compile would. They appear in diagnostics.
 void resetFreshNameCount(int count){ freshNameCounter=count; }
+int freshNameCount(){ return freshNameCounter; }
 
 Expression getFixedIntTy(Expression bits,bool isSigned,bool isClassical,Location loc,Scope isc){ // TODO: do not require a scope
 	assert(bits.isSemEvaluated());
@@ -5827,7 +5828,7 @@ bool typeConstBlocked(Declaration decl,Scope sc){
 	return decl.typeConstBlocker!is null||!!liveTypeDependent(decl,sc);
 }
 bool typeConstBlockedInState(Declaration decl,SymbolTable rnsymtab){ // (`rnsymtab` is a state of the scope of `decl`, which may differ from its current state, e.g., before a loop)
-	return decl.typeConstBlocker!is null||rnsymtab.byValue.any!(d=>isLiveTypeDependent(d,decl));
+	return decl.typeConstBlocker!is null||rnsymtab.anyValue(d=>isLiveTypeDependent(d,decl));
 }
 Declaration[] liveTypeDependentsInState(Declaration decl,SymbolTable rnsymtab){
 	return rnsymtab.byValue.filter!(d=>isLiveTypeDependent(d,decl)).array;

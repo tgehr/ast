@@ -3622,8 +3622,9 @@ abstract class Scope{
 				// variables whose names do not occur in the loop cannot change in it (they may still be split into the
 				// loop scope, e.g. by an early `return` that has to forget them); they are not loop parameters
 				if(namesInLoop&&id !in *namesInLoop&&(!decl.name||decl.name.id !in *namesInLoop)) continue;
-				bool mayChange=isNonConstDecl(decl)||decl.isLinear();
-				if(!mayChange&&forgetBefore&&namesInLoop&&type.isClassical()&&!decl.isConst&&!isConst(decl)&&decl.typeConstBlocker is null&&rnsymtab.get(decl.getId,null) is decl&&decl.splitInto.any!(d=>d.scope_ is loopScope)&&!unchangedOnContinuingPaths(decl,loopScope,exitScope)){
+				bool splitIntoLoop=decl.splitInto.any!(d=>d.scope_ is loopScope); // (otherwise, it does not change in the loop)
+				bool mayChange=splitIntoLoop&&(isNonConstDecl(decl)||decl.isLinear());
+				if(!mayChange&&forgetBefore&&namesInLoop&&type.isClassical()&&!decl.isConst&&!isConst(decl)&&decl.typeConstBlocker is null&&rnsymtab.get(decl.getId,null) is decl&&splitIntoLoop&&!unchangedOnContinuingPaths(decl,loopScope,exitScope)){
 					// (changed on paths that continue the loop, blocked by live variables that the loop and its continuation do not
 					// mention, e.g., `x` in `x:=vector(n,…); for i in 0..2 { forget(n); n:=i; }`: they are forgotten before the loop,
 					// as by the first change, which makes them unavailable after it)
@@ -3637,7 +3638,7 @@ abstract class Scope{
 						mayChange=true;
 					}
 				}
-				if(mayChange) mayChange=decl.splitInto.any!(d=>d.scope_ is loopScope);
+				if(mayChange) mayChange=splitIntoLoop;
 				if(!mayChange){
 					if(consumedAfter&&decl.name&&decl.name.id in *consumedAfter&&type.isClassical()&&!decl.isConst&&(cast(VarDecl)decl||cast(Parameter)decl)&&!decl.isToplevelDeclaration()&&!isTypeTy(type)&&!cast(FunTy)type){
 						// (consumed by the code after the loop, which becomes part of the function, e.g., `n` in `forget(x); forget(n);` with

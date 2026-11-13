@@ -4416,7 +4416,9 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		if(auto stms=isEmpty(loop)?sc.loopContinuation.take(loop):null)
 			state.unreachable=new UnreachableCode(stms,constForgets.dup,restriction,resetConst,flags);
 	}
+	auto firstFresh=freshNameCount();
 	auto r=lowerLoopImpl(loop,state,sc,flags);
+	if(!isEmpty(loop)) dropLoweringTemporaries(r,sc,flags,firstFresh,freshNameCount());
 	static if(language==silq){
 		if(auto ce=cast(CompoundExp)r){
 			ce.lowersLoop=true;
@@ -4431,6 +4433,32 @@ Expression lowerLoop(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags f
 		if(r.isSemError()&&isEmpty(loop)) r.type=bottom; // (the lowered loop does not exit normally either, also if its analysis fails, e.g., for a variable that the code after the loop marks as erroneous)
 	}
 	return r;
+}
+// (the classical temporaries that the lowered code of a loop defines in the scope of the loop, e.g., the bounds of a `for`
+// loop: the code after the loop does not mention them, and in a long scope with many loops, they would accumulate in its
+// table, which the analysis of each loop visits)
+private void dropLoweringTemporaries(Expression r,Scope sc,ref StmFlags flags,int firstFresh,int endFresh){
+	auto ce=cast(CompoundExp)r;
+	if(!ce||ce.isSemError()) return;
+	foreach(k;firstFresh..endFresh){
+		auto id=Id.intern(text("__tmp",k));
+		auto d=sc.rnsymtab.get(id,null);
+		if(!d||d.scope_ !is sc) continue;
+		if(auto vd=cast(VarDecl)d){
+			if(!vd.vtype||!vd.vtype.isClassical()||vd.isSemError()||typeConstBlocked(vd,sc)) continue;
+			if(sc.lastUses.canForget(vd,true,false)) sc.lastUses.forget(vd,false); // (at its last use, as at the end of the scope, see `Scope.canForgetAppend`)
+			else{ // (after the lowered loop, as `forgetTransLocals` does at the end of an inverse)
+				auto v=new Identifier(id);
+				v.loc=ce.loc;
+				auto fe=new ForgetExp(v,null);
+				fe.loc=ce.loc;
+				ce.s~=statementSemantic(fe,sc,flags);
+				propErr(ce.s[$-1],ce);
+			}
+			d=sc.rnsymtab.get(id,null); // (the marker of the consumption)
+		}
+		if(cast(DeadDecl)d&&d.scope_ is sc) sc.symtabRemove(d);
+	}
 }
 static if(language==silq)
 final class UnreachableCode{
@@ -5604,7 +5632,7 @@ struct LoopContinuation{
 		auto e=block[i];
 		if(!astopt.removeLoops||!isLoopStatement(e)) return false;
 		if(i+1>=block.length) return false;
-		bool returns=block[i+1..$].any!endsWithReturn&&containsReturn(e);
+		bool returns=containsReturn(e)&&block[i+1..$].any!endsWithReturn; // (the scan of the rest of the block only for a loop that returns)
 		// the code after an infinite loop is unreachable; it is dropped by the lowering (only the type of a `for` loop is never empty)
 		if(!returns&&cast(ForExp)e) return false;
 		stms=block[i+1..$];
