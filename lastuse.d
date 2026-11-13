@@ -668,8 +668,10 @@ final class LastUse{
 		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
 		auto fromConditional=from&&splitBranch(consumption)?from:null; // (not in loop bodies, whose next iterations come after the consumption)
 		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
-		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch)
+		auto inNestedBranch=from&&scope_.activeNestedScopes.any!(n=>isBranch(n)&&from.isNestedIn(n)); // (the consumption is in a branch of a nested conditional that is being analyzed, after the last uses of this scope and of its earlier nested scopes)
+		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch; or it continues into the conditional of the consumption, where the scope decides at the split into the branch, see `Scope.pushDependencies`, e.g., `p` for `t:=measure(p); if c { s:=measure(p); } else { x:=H(x); }` with `p:=dup(x)` in a branch)
 			if(!(lu.use&&lu.use.implicitDup)) return false;
+			if(inNestedBranch&&lu.time<consumption.consumedAt) return true;
 			auto last=lu.scope_.lastUses.here(lu.decl);
 			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
 		}
@@ -1313,7 +1315,7 @@ final class LastUse{
 		}
 		return null;
 	}
-	bool cancelImplicitDup(){
+	bool cancelImplicitDup(bool explained=false){ // (`explained`: the reason recorded for the variable also explains the cancellations in the branches of a merge, see `Scope.cancelDup`)
 		//imported!"util.io".writeln("CANCELING: ",use.loc," ",dep);
 		if(forwardTo) return forwardTo.cancelImplicitDup();
 		if(splitFrom) return false;
@@ -1323,6 +1325,7 @@ final class LastUse{
 				return assert(0);
 			case lazyMerge:
 				bool ok=true;
+				auto mvd=explained?cast(VarDecl)decl:null; // (before the consumption, which replaces the versions)
 				useFromMergedScopes();
 				ok&=consume(false);
 				foreach(i,nsc;nestedScopes){
@@ -1336,6 +1339,11 @@ final class LastUse{
 						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // (before the cancellation in the branch, see `mergedLazily`) TODO: make more efficient
 					if(auto clu=nsc.lastUses.peek(cdecl)) if(clu.isConsumption()) continue; // (consumed already: the walk of the consumption of the merge can reach the implicit `dup` in the branch, which cancels the merge first, e.g., `p` for `if k { if j { u:=!p; forget(u); t:=measure(p); } if l { w:=H(w); } }` with `p:=dup(w)`)
 					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
+						if(mvd&&mvd.outOfScopeCause) for(auto clu=nsc.lastUses.here(cdecl);clu;clu=clu.forwardTo) if(auto cvd=cast(VarDecl)clu.decl) if(!cvd.outOfScopeCause){
+							cvd.outOfScopeCause=mvd.outOfScopeCause;
+							cvd.outOfScopeMerged=mvd.outOfScopeMerged;
+							cvd.outOfScopeDiverged=mvd.outOfScopeDiverged;
+						}
 						nsc.lastUses.cancelImplicitDup(cdecl);
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
 						nsc.lastUses.forget(cdecl,false);
@@ -2164,6 +2172,7 @@ struct LastUses{
 	}
 	bool unusedSplitOfImplicitDup(Declaration decl){ // (a version that the branch does not use, whose value an implicit `dup` before the split keeps, e.g., `b` for `t:=measure(b); if c { } else { return a; }`)
 		auto lastUse=here(decl);
+		while(lastUse&&lastUse.forwardTo&&lastUse.kind==LastUse.Kind.lazySplitSink) lastUse=lastUse.forwardTo; // (also after nested conditionals that do not use it, e.g., `if d { }` in that branch)
 		return lastUse&&!lastUse.forwardTo&&lastUse.kind==LastUse.Kind.lazySplit&&lastUse.prevImplicitDup&&canForget(decl,false,false);
 	}
 

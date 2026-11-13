@@ -2556,7 +2556,7 @@ abstract class Scope{
 				vd.outOfScopeDup=lu.prevImplicitDup.use;
 		}
 		if(consumingUse&&lu.kind==LastUse.Kind.lazyMerge&&lu.prevImplicitDup) if(auto vd=cast(VarDecl)lu.prevImplicitDup.decl) if(!vd.outOfScopeCause) record(vd); // (cancelled if all branches forget their versions at the split)
-		if(!lu.cancelImplicitDup()) return false; // TODO
+		if(!lu.cancelImplicitDup(!!consumingUse)) return false; // TODO
 		assert(lu.isConsumption(),text(lu));
 		return true;
 	}
@@ -3364,6 +3364,7 @@ abstract class Scope{
 			}else symtabInsert(dm);
 		}
 		foreach(dd;consumedBeforeSplit){ // (for diagnostics, e.g., when the merge of a dependency cancels an implicit `dup` before the conditional)
+			if(dd.scope_&&!this.isNestedIn(dd.scope_)) continue; // (promoted from a nested scope, e.g., by the merge of a conditional whose other branches return)
 			auto cur=rnsymtab.get(dd.getId,null);
 			auto dm=cast(DeadMerge)cur;
 			if(dm&&dm.mergedFrom.length==1&&!cast(DeadDecl)dm.mergedFrom[0]) symtabRemove(dm); // (not declared on only one path)
