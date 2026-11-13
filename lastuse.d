@@ -134,6 +134,7 @@ final class ContinuedLog{ // (of the conditionals of a scope whose other branch 
 		horizonsAt=events.length;
 	}
 }
+private alias OutOfScope=Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration,bool); // (where a variable goes out of scope, the implicit `dup` before that, the consumption that causes it, the scope of the consumption (its path), that of the last use that goes out of scope, the version that goes out of scope, and whether the walk has yet to reach the consumption in its branch, see `LastUse.updateDependenciesOnConsumptionLocal`)
 final class LastUse{
 	private this(LastUse.Kind kind,Scope scope_,Declaration decl,Identifier use,Expression parent){
 		this.kind=kind;
@@ -473,18 +474,21 @@ final class LastUse{
 				changed=true;
 			}
 		}
-		foreach(lu;indirect) if(lu.canCancelImplicitDup()&&!lu.afterMergeOfImplicitDup()||lu.kind==Kind.lazySplit&&lu.prevImplicitDup&&isBranch(lu.scope_)&&lu.scope_.isNestedIn(lu.prevImplicitDup.scope_)){ // (also a version that the branch does not use yet, whose value an implicit `dup` before the split keeps: cancelled on the path of the branch; not after a merge that keeps the variable on the other paths, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
+		foreach(lu;indirect) if(lu.canCancelImplicitDup()||lu.keepsMergeOfImplicitDup()||lu.kind==Kind.lazySplit&&lu.prevImplicitDup&&isBranch(lu.scope_)){ // (also the merge of a conditional with the implicit `dup` in a branch that a later use pins, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`: cancelled on the path of that branch; and a version that the branch does not use yet, whose value an implicit `dup` before the split keeps, also one in a branch of an earlier conditional whose merge keeps it, e.g., `p` for `if c { m:=measure(p); } u:=!p; forget(u); if p { w:=X(w); }`: cancelled on the path of the branch)
 			cancelable~=q(lu,lu.dep.dup);
 			scope_.lastUses.noteMentions(this,lu.dep);
 		}
 	}
-	private bool afterMergeOfImplicitDup(){ // (a `const` use after the merge of a conditional with the implicit `dup` in a branch, which keeps the variable, see `keepsMergeOfImplicitDup`)
-		return (kind==Kind.constUse||kind==Kind.constPinned)&&use&&!use.implicitDup&&prevImplicitDup&&!scope_.isNestedIn(prevImplicitDup.scope_);
-	}
 	static bool mergedVersion(Declaration d,Declaration x){ // (`x` is the version of `d` on one of the paths of the merge that defines `d`)
 		return d.mergedFrom.any!(m=>m is x||m.isSplitFrom(x)||x.isSplitFrom(m));
 	}
-	private void continueAfterBranches(ref MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope){ // (the code after a conditional continues the paths of its branches: the uses there of versions that went out of scope in the branch, e.g., `v1` for `if c { if d { } else { a:=X(a); } t:=measure(v1); }` when the inner `else` branch forgets `v0` at the split)
+	private static bool onOtherPath(Scope a,Scope b){ // (in different branches of the same conditional)
+		for(auto x=cast(NestedScope)a;x;x=cast(NestedScope)x.parent)
+			for(auto y=cast(NestedScope)b;y;y=cast(NestedScope)y.parent)
+				if(x.parent is y.parent) return x !is y&&x.getSiblingScopes().canFind(y);
+		return false;
+	}
+	private void continueAfterBranches(ref MapX!(Id,OutOfScope[]) outOfScope){ // (the code after a conditional continues the paths of its branches: the uses there of versions that went out of scope in the branch, e.g., `v1` for `if c { if d { } else { a:=X(a); } t:=measure(v1); }` when the inner `else` branch forgets `v0` at the split)
 		for(auto nsc=cast(NestedScope)scope_;nsc&&outOfScope.length;nsc=cast(NestedScope)nsc.parent){
 			if(!isBranch(nsc)||nsc.diverges||!nsc.lastUses.nestedAt) return;
 			auto par=nsc.parent;
@@ -493,8 +497,8 @@ final class LastUse{
 				for(auto lu=start;lu&&outOfScope.length;lu=lu.next){
 					if(lu.time>after&&lu.decl&&lu.use&&!lu.use.isSemError()&&!(lu.use.scope_&&nsc.getSiblingScopes().any!(s=>lu.use.scope_.isNestedIn(s)))){ // (not the consumptions in the branches, which the enclosing scope records at the merge)
 						auto id=lu.decl.getId;
-						auto oos=outOfScope.get(id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
-						if(oos[2]){
+						foreach(oos;outOfScope.get(id,null)){
+							if(onOtherPath(lu.scope_,oos[3])) continue; // (not in another branch of the conditional of the consumption)
 							auto origin=oos[5];
 							while(origin.splitFrom&&!(origin.scope_&&par.isNestedIn(origin.scope_))) origin=origin.splitFrom;
 							if(lu.decl is origin||lu.decl.isDerivedFrom(origin)){
@@ -503,6 +507,7 @@ final class LastUse{
 								lu.decl.setSemForceError();
 								undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,oos[0],oos[2],oos[1])],lu.scope_);
 								outOfScope.remove(id);
+								break;
 							}
 						}
 					}
@@ -688,20 +693,22 @@ final class LastUse{
 			foreach(x;dep.dependencies) if(x is d||x.isSplitFrom(d)||d.isSplitFrom(x)) return true;
 			return false;
 		}
-		MapX!(Id,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration)) outOfScope; // (where a variable goes out of scope, the implicit `dup` before that, the consumption that causes it, the scopes of later uses and of going out of scope, and the version that goes out of scope)
+		MapX!(Id,OutOfScope[]) outOfScope; // (on each path where a variable goes out of scope)
 		SetX!Id splitOutOfScope; // (those of versions in branches, see `recordCancelable`: also after the conditional of the consumption, which continues its path)
+		size_t numPending; // (of the entries recorded at a last use that stands for a consumption in a branch of a nested conditional: not for the uses in that branch before the consumption, which the walk visits later)
+		bool outOfScopeOnPath(Id id,Scope sc){ // (a consumption on the path of `sc` already made it unavailable)
+			foreach(oos;outOfScope.get(id,null)) if(sc.isNestedIn(oos[3])) return true;
+			return false;
+		}
 		bool continues(Scope inner,Scope outer){ // (the path of `inner` continues in `outer`)
 			for(auto sc=inner;sc&&sc !is outer;sc=sc.parentScope()) if(sc.diverges) return false;
 			return true;
 		}
+		static Scope pathScope(LastUse lu){ // (for a last use that stands for a use in a branch of a nested conditional, that branch)
+			return lu.forwardTo&&lu.use&&lu.use.scope_?lu.use.scope_:lu.scope_;
+		}
 		static bool onPathOf(Declaration d,Declaration x){ // (`d` is `x` on one of the paths of its merges)
 			return d is x||d.derivedSequence.canFind(x);
-		}
-		static bool onOtherPath(Scope a,Scope b){ // (in different branches of the same conditional)
-			for(auto x=cast(NestedScope)a;x;x=cast(NestedScope)x.parent)
-				for(auto y=cast(NestedScope)b;y;y=cast(NestedScope)y.parent)
-					if(x.parent is y.parent) return x !is y&&x.getSiblingScopes().canFind(y);
-			return false;
 		}
 		void cancelAtMerge(LastUse lu,Dependency prior){ // (the merge of a conditional makes the dependency unknown, while it is known at the end of the branch with the implicit `dup` that keeps the variable: the merge cancels the implicit `dup`, as for a dependency known before, see `Scope.cancelDup`, e.g., `p` for `if k { w:=X(w); } else { t:=measure(p); } ms+=measure(p);` with `p:=dup(cp)`)
 			auto dup=lu.prevImplicitDup;
@@ -766,15 +773,20 @@ final class LastUse{
 				root.walkUndo~=q(lu,lu.walkMark);
 				lu.walkMark=mark;
 			}
-			if(lu.decl&&lu.use&&!lu.use.isSemError()){
-				auto oos=outOfScope.get(lu.decl.getId,Q!(Identifier,Identifier,Identifier,Scope,Scope,Declaration).init);
-				bool after=oos[2]&&!lu.scope_.isNestedIn(oos[3])&&oos[3].isNestedIn(lu.scope_)&&continues(oos[3],lu.scope_); // (after the conditional of the consumption, which continues its path)
-				if(oos[2]&&(lu.scope_.isNestedIn(oos[3])||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(lu.scope_,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
+			if(numPending&&lu.use&&!lu.forwardTo) foreach(ref oes;outOfScope) foreach(ref oos;oes) if(oos[6]&&oos[2] is lu.use){ // (the consumption itself, not a last use that stands for it)
+				oos[6]=false;
+				numPending--;
+			}
+			if(lu.decl&&lu.use&&!lu.use.isSemError()&&!lu.nestedScopes.length) foreach(oos;outOfScope.get(lu.decl.getId,null)){ // (not a merge, whose uses are in its branches)
+				auto usc=pathScope(lu);
+				bool after=!usc.isNestedIn(oos[3])&&oos[3].isNestedIn(usc)&&continues(oos[3],usc); // (after the conditional of the consumption, which continues its path)
+				if((usc.isNestedIn(oos[3])&&!oos[6]||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(usc,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
 					lu.decl.setSemForceError();
 					undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,oos[0],oos[2],oos[1])],lu.scope_);
 					outOfScope.remove(lu.decl.getId);
+					break;
 				}
 			}
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo.walkMark!=mark) continue;
@@ -803,7 +815,7 @@ final class LastUse{
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
 				if(lu.use) foreach(c;lu.cancelable){ // (a last use that would have been cancelled here if the dependency through `decl` had been known)
 					auto prev=c[0],id=prev.decl.getId;
-					if(id==lu.decl.getId||id in outOfScope||!hasVersion(c[1],decl)) continue;
+					if(id==lu.decl.getId||outOfScopeOnPath(id,pathScope(lu))||!hasVersion(c[1],decl)) continue;
 					auto by=cdep; // (the dependency of `decl` where its version on this path ends)
 					if(prev.splitFrom){ // (a version in a branch, see `recordCancelable`: it keeps the value while the version of `decl` on this path is available)
 						auto end=consumption.consumedAt;
@@ -825,7 +837,10 @@ final class LastUse{
 					if(!ndep.isTop) continue;
 					auto at=cancelUse(prev);
 					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
-					outOfScope[id]=q(at?at:lu.use,dupUse,lu.use,lu.scope_,prev.scope_,prev.decl);
+					if(Scope.reportUncomputableCondition(prev.decl,dupUse?dupUse:at,lu.use)) continue;
+					auto pending=pathScope(lu) !is lu.scope_;
+					outOfScope[id]=outOfScope.get(id,null)~q(at?at:lu.use,dupUse,lu.use,pathScope(lu),prev.scope_,prev.decl,pending);
+					if(pending) numPending++;
 				}
 				if(lu.forwardTo&&lu.consumedAt>lu.time) consumedInNested~=lu;
 				else if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
@@ -840,7 +855,7 @@ final class LastUse{
 					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup&&lu.kind!=Kind.consumption){ // (not one that is already consumed, e.g., cancelled through a walk of this one)
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
 						if(auto vd=cast(VarDecl)lu.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=lu.dep.lostAt;
-						if(lu.dep.lostAt&&lu.decl.getId !in outOfScope) outOfScope[lu.decl.getId]=q(lu.use,Identifier.init,lu.dep.lostAt,scope_,lu.scope_,lu.decl); // (the `dup` would not have been implicit if the dependency through `decl` had been known)
+						if(lu.dep.lostAt&&lu.decl.getId !in outOfScope) outOfScope[lu.decl.getId]=[q(lu.use,Identifier.init,lu.dep.lostAt,scope_,lu.scope_,lu.decl,false)]; // (the `dup` would not have been implicit if the dependency through `decl` had been known)
 						lu.cancelImplicitDup();
 					}
 				}
@@ -1243,9 +1258,9 @@ final class LastUse{
 		}
 		consume(isForget);
 	}
-	bool keepsMergeOfImplicitDup(){ // (the merge of a conditional after an implicit `dup` that the branches allow to cancel; also when a later use pins it, if the implicit `dup` is on all paths into the conditional: otherwise the merge keeps the variable, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
+	bool keepsMergeOfImplicitDup(){ // (the merge of a conditional after an implicit `dup` that the branches allow to cancel, also when a later use pins it, e.g., `p` for `if c { m:=measure(p); } if p { w:=X(w); }`)
 		if(!prevImplicitDup||!nestedScopes.length) return false;
-		if(kind!=Kind.lazyMerge&&(kind!=Kind.constPinned||!scope_.isNestedIn(prevImplicitDup.scope_))) return false;
+		if(kind!=Kind.lazyMerge&&kind!=Kind.constPinned) return false;
 		return canCancelImplicitDupMerge(decl,nestedScopes);
 	}
 	bool canCancelImplicitDup(){
@@ -1318,6 +1333,7 @@ final class LastUse{
 					}
 					if(nsc.mergedVars.any!(d=>d.mergedInto is decl))
 						nsc.mergedVars=nsc.mergedVars.filter!(d=>d.mergedInto !is decl).array; // (before the cancellation in the branch, see `mergedLazily`) TODO: make more efficient
+					if(auto clu=nsc.lastUses.peek(cdecl)) if(clu.isConsumption()) continue; // (consumed already: the walk of the consumption of the merge can reach the implicit `dup` in the branch, which cancels the merge first, e.g., `p` for `if k { if j { u:=!p; forget(u); t:=measure(p); } if l { w:=H(w); } }` with `p:=dup(w)`)
 					if(nsc.lastUses.canCancelImplicitDup(cdecl)){
 						nsc.lastUses.cancelImplicitDup(cdecl);
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){

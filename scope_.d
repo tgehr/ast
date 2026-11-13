@@ -2012,7 +2012,7 @@ abstract class Scope{
 	}
 	protected final Declaration lookupHereFrom(Identifier ident,bool rnsym,Scope origin,DeadDecl[]* failures){
 		auto r=lookupHereImpl(ident,rnsym,failures);
-		if(r&&!rnsym&&origin&&r.scope_){
+		if(r&&!rnsym&&origin&&r.scope_&&!r.isSemError()){
 			for(Scope sc=origin;sc;sc=sc.parentScope()){ // (the consumption can be in a scope nested in the declaring one: it records them, see `noteDeadOnPath`)
 				foreach(e;sc.deadOnPaths){
 					if(e[0] !is r) continue;
@@ -2508,6 +2508,26 @@ abstract class Scope{
 		pushTrackedTemporaryDependencies(decl);
 	}
 
+	static bool reportUncomputableCondition(Declaration decl,Identifier dupUse,Identifier cause){ // (the merge of a quantum conditional uncomputes its condition, which needs the variables it reads: if a branch consumes a dependency of one of them that an implicit `dup` keeps, it cannot go out of scope there, e.g., `p` for `m:=measure(p); if p { w:=X(w); }` with `p:=dup(w)`: the error is at the condition, not at the uses after the conditional)
+		if(!cause||!cause.scope_) return false;
+		for(auto nsc=cast(NestedScope)cause.scope_;nsc;nsc=cast(NestedScope)nsc.parent){
+			if(nsc.diverges) return false; // (the path of the consumption does not reach the merge)
+			auto bsc=cast(BlockScope)nsc;
+			auto ite=bsc&&bsc.isBranch?cast(IteExp)bsc.conditional:null;
+			if(!ite||!ite.cond||!ite.cond.type||ite.cond.type.isClassical()) continue;
+			foreach(id;ite.cond.freeVars){
+				if(!id.meaning||id.meaning !is decl&&!id.meaning.isDerivedFrom(decl)&&!decl.isDerivedFrom(id.meaning)) continue;
+				if(decl.isSemError()) return true; // (reported)
+				if(ite.cond.isSemError()||!id.constLookup||dupUse&&dupUse.scope_&&only(ite.then,ite.othw).any!(b=>b&&b.blscope_&&dupUse.scope_.isNestedIn(b.blscope_))) return false; // (other errors, e.g., a condition that consumes it, or its consumption in a branch, where it is `const`)
+				bsc.parent.error(format("`%s` is needed to uncompute the condition, but it goes out of scope in a branch",id.name),id.loc);
+				if(dupUse) bsc.parent.note(format("`%s` was used in a consuming position here",id.name),dupUse.loc);
+				bsc.parent.note(format("`%s` not recomputable after dependency `%s` was consumed here",id.name,cause.name),cause.loc);
+				decl.setSemForceError();
+				return true;
+			}
+		}
+		return false;
+	}
 	private Expression mergedConditional(){ // (the conditional whose merge is in progress, of the branches or of this scope)
 		Scope sc=this;
 		if(mergingScopes.length) sc=mergingScopes[0];
@@ -2568,7 +2588,7 @@ abstract class Scope{
 		}
 	}
 	private void dropDeadOnPaths(){ // (those of the nested scopes, at their merge: the merge decides about the variables, see `cancelDeferredDups`)
-		if(deadOnPaths.length) deadOnPaths=deadOnPaths.filter!(e=>e[3].scope_ is this||e[4]).array; // (a version whose implicit `dup` is in an enclosing scope stays unavailable)
+		if(deadOnPaths.length) deadOnPaths=deadOnPaths.filter!(e=>(e[3].scope_ is this||e[4])&&!e[0].isSemError()).array; // (a version whose implicit `dup` is in an enclosing scope stays unavailable)
 	}
 	private static LastUse splitBasis(LastUse lu){ // (the last use before the split, for a version that the nested scope has not used yet)
 		for(;;){
@@ -2584,7 +2604,6 @@ abstract class Scope{
 		Identifier dupUse=null;
 		if(!last.use.implicitDup){
 			if(!last.prevImplicitDup||last.kind!=LastUse.Kind.constUse&&last.kind!=LastUse.Kind.constPinned) return; // (a `const` use after an implicit `dup`)
-			if(!last.scope_.isNestedIn(last.prevImplicitDup.scope_)) return; // (on all paths: not after the merge of a conditional with an implicit `dup` in a branch, which keeps the variable, see `LastUse.keepsMergeOfImplicitDup`)
 			if(auto vd=cast(VarDecl)decl) if(!isConstLocal(vd)) dupUse=last.prevImplicitDup.use;
 		}
 		deadOnPaths~=q(decl,last.use,dupUse,consumingUse,last.scope_ !is this);
@@ -2608,7 +2627,7 @@ abstract class Scope{
 		for(size_t i=0;i<todo.length;i++){
 			auto ndecl=todo[i][0];
 			auto lu=lastUses.get(ndecl,true);
-			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo) continue; // (a branch uses it: the branches forget their versions before their consumptions)
+			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo||ndecl.isSemError()) continue; // (a branch uses it: the branches forget their versions before their consumptions)
 			auto dependents=dependencies.mentioning(ndecl).dup;
 			while(lu.forwardTo) lu=lu.forwardTo;
 			if(cancelDup(ndecl,lu,todo[i][1]))
@@ -2862,6 +2881,7 @@ abstract class Scope{
 			return false; // (no nesting, so no merge)
 		}
 		auto entries=deadOnPaths;
+		static if(language==silq) foreach(e;entries) if(e[3].scope_&&scopes.any!(sc=>e[3].scope_.isNestedIn(sc))) reportUncomputableCondition(e[0],e[2]?e[2]:e[1].implicitDup?e[1]:null,e[3]);
 		if(deferredDupCancels.length) cancelDeferredDups();
 		dropDeadOnPaths();
 		keepDeadOnPaths(entries);
