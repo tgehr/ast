@@ -793,7 +793,8 @@ final class LastUse{
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
-			if(!nested&&lu.atSplit){ // (its dependency is the one at the split, which comes before the consumption)
+			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`)
+			if(!nested&&hoisted){ // (its dependency is the one at the split, which comes before the consumption)
 				cdep.replace(lu.decl,lu.dep,lu.use);
 				continue;
 			}
@@ -805,7 +806,7 @@ final class LastUse{
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
 				auto prior=lu.prevImplicitDup&&lu.use?lu.dep.dup:Dependency.init;
-				if(nested) replaceVersions(lu.dep,decl,lu.atSplit?byAtSplit:cdep);
+				if(nested) replaceVersions(lu.dep,decl,hoisted?byAtSplit:cdep);
 				else lu.dep.replace(decl,cdep);
 				lu.scope_.lastUses.noteMentions(lu,lu.dep);
 				if(lu.dep.isTop&&lu.prevImplicitDup&&lu.use) cancelAtMerge(lu,prior);

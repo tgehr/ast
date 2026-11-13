@@ -1542,7 +1542,7 @@ abstract class Scope{
 				auto cvd=vd;
 				for(auto svd=cast(VarDecl)vd.splitFrom;!cvd.outOfScopeCause&&svd;svd=cast(VarDecl)svd.splitFrom) if(svd.outOfScopeCause&&svd.outOfScopeUse is use) cvd=svd; // (consumed with the version that it was split from)
 				if(cvd.outOfScopeCause){
-					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged);
+					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged,cvd.outOfScopeDiverged);
 					vd.outOfScopeUse=use;
 				}
 			}
@@ -2464,7 +2464,7 @@ abstract class Scope{
 		controlDependency.replace(decl,ndecl);
 		foreach(ref tt;trackedTemporaries) tt.dep.replace(decl,ndecl);
 	}
-	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null,bool mergesBranches=false){ // (`mergesBranches`: the merge of several branches pushes their versions, see `merge`)
+	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null,bool mergesBranches=false){ // (`mergesBranches`: the merge of several branches pushes their versions, also of one branch whose merged versions do not depend on each other, see `unknownAfterMerge` in `merge`)
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
 		if(sinceMergeLogged) consumedLogged~=decl;
@@ -2496,7 +2496,7 @@ abstract class Scope{
 							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit) noteDeadOnPath(ndecl,splitBasis(last),consumingUse); // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
 							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
-							if(cancelDup(ndecl,last,consumingUse,decl)) done=false;
+							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches)) done=false;
 						}
 					}
 				}
@@ -2528,18 +2528,19 @@ abstract class Scope{
 		}
 		return false;
 	}
-	private Expression mergedConditional(){ // (the conditional whose merge is in progress, of the branches or of this scope)
+	private Expression mergedConditional(bool mergesBranches,out bool diverged){ // (the conditional whose merge is in progress, of the branches or of this scope)
 		Scope sc=this;
 		if(mergingScopes.length) sc=mergingScopes[0];
 		auto bsc=cast(BlockScope)sc;
 		if(!bsc||!bsc.isBranch||!bsc.parent.mergingScopes.canFind(bsc)) return null;
-		if(bsc.parent.mergingScopes.count!(b=>!b.diverges)<2) return null; // (where the other branches return, the merge does not join the paths)
+		diverged=bsc.parent.mergingScopes.count!(b=>!b.diverges)<2;
+		if(diverged&&!mergesBranches) return null; // (where the other branches return and the code after the conditional continues the branch, the merge does not join the paths)
 		return bsc.conditional;
 	}
-	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null){
+	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false){
 		if(!lu.canCancelImplicitDup()) return false;
-		bool merged=false;
-		if(!consumingUse&&dependency) if(auto conditional=mergedConditional()){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
+		bool merged=false,diverged=false;
+		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
 			consumingUse=new Identifier(dependency.getId);
 			consumingUse.loc=conditional.loc;
 			merged=true;
@@ -2547,6 +2548,7 @@ abstract class Scope{
 		void record(VarDecl vd){
 			vd.outOfScopeCause=consumingUse;
 			vd.outOfScopeMerged=merged;
+			vd.outOfScopeDiverged=merged&&diverged;
 		}
 		if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
 			record(vd);
@@ -2915,6 +2917,8 @@ abstract class Scope{
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
+		static if(language==silq) bool unknownAfterMerge=scopes.length>1||!continued; // (the merged versions do not depend on each other: the merge of several branches, and of one branch after branches that diverge, unless the code after the conditional continues it, see below)
+		else bool unknownAfterMerge=scopes.length>1;
 		auto keys=new MergeKeys(this,scopes);
 		auto numErrors=handler.nerrors;
 		SetX!Declaration goneConstLocals; // (the types of the merged variables do not mention them)
@@ -3043,7 +3047,7 @@ abstract class Scope{
 				if(sc.rnsymtab.get(osym.getId,null) is osym)
 					sc.symtabRemove(osym);
 				if(sc.dependencyTracked(osym))
-					sc.pushDependencies(osym,false,null,scopes.length>1);
+					sc.pushDependencies(osym,false,null,unknownAfterMerge);
 			}
 			void splitSym(){
 				auto nsym=scopes[0].split(sym,null);
@@ -3186,7 +3190,7 @@ abstract class Scope{
 						if(sym.getId in eagerIds){
 							if(auto bs=cast(BlockScope)sc) bs.eagerMerges~=sym;
 							sc.continueDependencies(osym,sym);
-						}else sc.pushDependencies(osym,false,null,scopes.length>1);
+						}else sc.pushDependencies(osym,false,null,unknownAfterMerge);
 					}
 					if(!cast(DeadDecl)sym){
 						if(auto mtype=typeForDecl(sym)){
