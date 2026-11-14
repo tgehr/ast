@@ -1685,15 +1685,25 @@ abstract class Scope{
 		deriveVersion(splitFrom,splitInto);
 		splitVars~=splitInto;
 	}
-	final void resetSplits(Declaration decl){
+	final void resetSplits(Declaration decl,size_t since=0){ // (`since`: the number of nested scopes merged when the state that is restored was taken, see `restoreStateSnapshot`)
 		void rec(Declaration cdecl){
 			foreach(split;cdecl.splitInto){
-				replaceDecl(split,decl);
+				if(split.isSemError())
+					decl.setSemForceError();
+				foreach(scopes;mergedNestedScopes[since&&splitAfter(split,since)?since:0..$]) // (a scope mentions only its own versions and those of the scopes that enclose it, see `replaceDecl`: not this one, nor, for a split in a nested scope merged after the snapshot, the ones merged before it)
+					foreach(sc;scopes) sc.replaceDecl(split,decl);
 				rec(split);
 			}
 			cdecl.splitInto=[];
 		}
 		rec(decl);
+	}
+	private bool splitAfter(Declaration split,size_t since){ // (whether `split` is in a nested scope merged after the first `since` ones, or in an active one)
+		Scope sc=split.scope_;
+		while(sc&&sc.parentScope() !is this) sc=sc.parentScope();
+		if(!sc) return false;
+		foreach(scopes;mergedNestedScopes[since..$]) if(scopes.canFind(sc)) return true;
+		return activeNestedScopes.canFind(sc);
 	}
 	final void replaceDecl(Declaration splitFrom,Declaration splitInto,bool nested=true)in{
 		assert(splitFrom !is splitInto);
@@ -3794,17 +3804,17 @@ abstract class Scope{
 		r.numMovedCaptures=numMovedCaptures;
 		return r;
 	}
-	Declaration getSplit(Declaration decl,bool clearSplitInto=false){
+	Declaration getSplit(Declaration decl,bool clearSplitInto=false,size_t since=0){
 		if(decl.scope_ is this){
 			if(clearSplitInto)
-				resetSplits(decl);
+				resetSplits(decl,since);
 			return decl;
 		}
 		if(decl.splitInto.length==0)
 			return decl;
 		foreach(ndecl;decl.splitInto){
 			if(this.isNestedIn(ndecl.scope_))
-				return getSplit(ndecl,clearSplitInto);
+				return getSplit(ndecl,clearSplitInto,since);
 		}
 		return decl;
 	}
@@ -3853,8 +3863,8 @@ abstract class Scope{
 		splitSymtab(state.symtab,false);
 	}
 
-	Declaration updateDecl(Declaration decl){
-		auto split=getSplit(decl,true);
+	Declaration updateDecl(Declaration decl,size_t since=0){
+		auto split=getSplit(decl,true,since);
 		if(decl !is split)
 			replaceDecl(decl,split);
 		return split;
@@ -3886,7 +3896,7 @@ abstract class Scope{
 				if(lu.isConsumption()&&!forWithTransTrial&&decl !in state.consumedBefore) // (consumed after the snapshot was taken)
 					continue;
 			static if(language==silq) if(!forWithTransTrial&&consumedOutside(decl)) continue;
-			symtab[decl.name.id]=updateDecl(decl);
+			symtab[decl.name.id]=updateDecl(decl,state.numMergedNestedScopes);
 		}
 		rnsymtab.clear();
 		foreach(_,decl;state.rnsymtab){
@@ -3912,7 +3922,7 @@ abstract class Scope{
 					}
 				}
 			}
-			rnsymtab[decl.getId]=updateDecl(decl);
+			rnsymtab[decl.getId]=updateDecl(decl,state.numMergedNestedScopes);
 		}
 		foreach(_,decl;rnsymtab) consumedDepLog.remove(decl); // (logged after the snapshot, e.g., the version before a loop that the merge of the loop replaced)
 		resetTypeMentioning();
