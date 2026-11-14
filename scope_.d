@@ -2469,7 +2469,7 @@ abstract class Scope{
 		consumedDepLog[decl]=getDependency(decl).dup;
 		if(sinceMergeLogged) consumedLogged~=decl;
 		noteDependencyConsumed(decl,getDependency(decl));
-		if(getDependency(decl).isTop){
+		if(getDependency(decl).isTop&&decl !is forgettingBeforeSplit){
 			bool done=false;
 			do{ // TODO: improve
 				done=true;
@@ -2487,7 +2487,7 @@ abstract class Scope{
 						if(lu){
 							auto last=lu;
 							while(last.forwardTo) last=last.forwardTo;
-							auto keptBy=last.use&&last.use.implicitDup?last:last.keepsMergeOfImplicitDup()?last.prevImplicitDup:null; // (also through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
+							auto keptBy=last.use&&(last.use.implicitDup||last.prevImplicitDup&&(last.kind==LastUse.Kind.constUse||last.kind==LastUse.Kind.constPinned))?last:last.keepsMergeOfImplicitDup()?last.prevImplicitDup:null; // (also after a `const` use that follows the implicit `dup`, and through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
 							if(lu.forwardTo&&(lu.kind==LastUse.Kind.lazySplitSink||lu.kind==LastUse.Kind.constPinned)&&keptBy&&deferDupCancels()){ // (the value continues into the branches (lazy splitting), which may use it before they consume `decl`, e.g., `y0` for `y1:=y0; if c { z:=H(x); } else { w:=!y0; forget(w); z:=H(x); }`: decided at the merge, see `cancelDeferredDups`; not after a `const` use, e.g., `t:=dup(y0)`, where it is forgotten, as before)
 								deferredDupCancels~=q(ndecl,consumingUse);
 								noteDeadOnPath(ndecl,keptBy,consumingUse);
@@ -2617,6 +2617,7 @@ abstract class Scope{
 		}
 	}
 	private bool cancellingDeferredDups;
+	Declaration forgettingBeforeSplit; // (a variable forgotten at a last use before the split into the nested scopes that are being analyzed or merged: its dependency there does not include their consumptions, which the table already does, so they do not cancel the implicit `dup`s of the variables that depend on it; the nested scopes and the code after them check those, e.g., `e:=v1` for `v0:=X(dup(a)); t:=measure(v0); v1:=!v0; e:=v1; if k { a:=X(a); } else { u:=!v1; forget(u); }`)
 	private bool deferDupCancels(){
 		return !cancellingDeferredDups&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch);
 	}
@@ -2632,7 +2633,8 @@ abstract class Scope{
 			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo||ndecl.isSemError()) continue; // (a branch uses it: the branches forget their versions before their consumptions)
 			auto dependents=dependencies.mentioning(ndecl).dup;
 			while(lu.forwardTo) lu=lu.forwardTo;
-			if(cancelDup(ndecl,lu,todo[i][1]))
+			auto forgets=lu.kind==LastUse.Kind.constUse&&!(lu.constConsume&&lu.constConsume.canCancelImplicitDup()); // (a `const` use after the implicit `dup`: forgotten there, before the conditional, see `forgettingBeforeSplit`)
+			if(cancelDup(ndecl,lu,todo[i][1])&&!forgets)
 				foreach(d;dependents) todo~=q(d,todo[i][1]);
 		}
 	}

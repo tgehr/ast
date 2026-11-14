@@ -706,6 +706,9 @@ final class LastUse{
 			for(auto sc=inner;sc&&sc !is outer;sc=sc.parentScope()) if(sc.diverges) return false;
 			return true;
 		}
+		static bool mirrorsConsumption(LastUse lu){ // (a last use that only stands for the consumption of the one it forwards to or is split from, which the walk checks at its own position, e.g., the versions in a nested conditional of a variable forgotten at its last use before it)
+			return lu.forwardTo?lu.forwardTo.isConsumption():lu.kind==Kind.consumption&&lu.splitFrom&&lu.splitFrom.isConsumption();
+		}
 		static Scope pathScope(LastUse lu){ // (for a last use that stands for a use in a branch of a nested conditional, that branch)
 			return lu.forwardTo&&lu.use&&lu.use.scope_?lu.use.scope_:lu.scope_;
 		}
@@ -779,10 +782,10 @@ final class LastUse{
 				oos[6]=false;
 				numPending--;
 			}
-			if(lu.decl&&lu.use&&!lu.use.isSemError()&&!lu.nestedScopes.length) foreach(oos;outOfScope.get(lu.decl.getId,null)){ // (not a merge, whose uses are in its branches)
+			if(lu.decl&&lu.use&&!lu.use.isSemError()&&!lu.nestedScopes.length&&!mirrorsConsumption(lu)) foreach(oos;outOfScope.get(lu.decl.getId,null)){ // (not a merge, whose uses are in its branches)
 				auto usc=pathScope(lu);
 				bool after=!usc.isNestedIn(oos[3])&&oos[3].isNestedIn(usc)&&continues(oos[3],usc); // (after the conditional of the consumption, which continues its path)
-				if((usc.isNestedIn(oos[3])&&!oos[6]||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(usc,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
+				if(!oos[6]&&(usc.isNestedIn(oos[3])||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(usc,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
 					lu.decl.setSemForceError();
@@ -958,7 +961,10 @@ final class LastUse{
 				scope_.declProps.noteBlocked(decl);
 			}
 		}
+		auto beforeSplit=isForget&&scope_.activeNestedScopes.length; // (at a last use before nested scopes that are being analyzed or merged, see `Scope.forgettingBeforeSplit`)
+		if(beforeSplit) scope_.forgettingBeforeSplit=result;
 		result=scope_.consume(result,use);
+		if(beforeSplit) scope_.forgettingBeforeSplit=null;
 		if(!use&&explanationUse) scope_.recordConsumption(result,explanationUse);
 		if(constBlock.length){
 			scope_.updateDeclProps(decl).constBlock=oldConstBlock;
