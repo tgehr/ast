@@ -702,6 +702,10 @@ final class LastUse{
 			foreach(oos;outOfScope.get(id,null)) if(sc.isNestedIn(oos[3])) return true;
 			return false;
 		}
+		static Scope enclosing(Scope a,Scope b){ // (the innermost scope that encloses both)
+			for(auto sc=a;sc;sc=sc.parentScope()) if(b.isNestedIn(sc)) return sc;
+			return null;
+		}
 		bool continues(Scope inner,Scope outer){ // (the path of `inner` continues in `outer`)
 			for(auto sc=inner;sc&&sc !is outer;sc=sc.parentScope()) if(sc.diverges) return false;
 			return true;
@@ -784,7 +788,7 @@ final class LastUse{
 			}
 			if(lu.decl&&lu.use&&!lu.use.isSemError()&&!lu.nestedScopes.length&&!mirrorsConsumption(lu)) foreach(oos;outOfScope.get(lu.decl.getId,null)){ // (not a merge, whose uses are in its branches)
 				auto usc=pathScope(lu);
-				bool after=!usc.isNestedIn(oos[3])&&oos[3].isNestedIn(usc)&&continues(oos[3],usc); // (after the conditional of the consumption, which continues its path)
+				bool after=!usc.isNestedIn(oos[3])&&!onOtherPath(usc,oos[3])&&continues(oos[3],enclosing(usc,oos[3])); // (after the conditional of the consumption, which continues its path, also in a later conditional, e.g., `t3:=measure(v1)` for `v0:=dup(a); v1:=dup(v0); if k { t2:=measure(v1); a:=X(a); } if j { t3:=measure(v1); }`)
 				if(!oos[6]&&(usc.isNestedIn(oos[3])||after&&(lu.decl.getId in splitOutOfScope||onPathOf(lu.decl,oos[5])))&&!onOtherPath(usc,oos[4])&&lu.use !is oos[0]&&lu.use !is oos[1]&&(lu.decl is oos[5]||lu.decl.isDerivedFrom(oos[5])||after&&onPathOf(lu.decl,oos[5]))){ // (used after it went out of scope; after the conditional also through the merges of the versions of its branches)
 					import ast.semantic_:undefinedIdentifierError;
 					lu.use.setSemForceError();
@@ -961,10 +965,10 @@ final class LastUse{
 				scope_.declProps.noteBlocked(decl);
 			}
 		}
-		auto beforeSplit=isForget&&scope_.activeNestedScopes.length; // (at a last use before nested scopes that are being analyzed or merged, see `Scope.forgettingBeforeSplit`)
-		if(beforeSplit) scope_.forgettingBeforeSplit=result;
+		auto prevForgetting=scope_.forgetting;
+		scope_.forgetting=isForget?result:null; // (see `Scope.forgetting`)
 		result=scope_.consume(result,use);
-		if(beforeSplit) scope_.forgettingBeforeSplit=null;
+		scope_.forgetting=prevForgetting;
 		if(!use&&explanationUse) scope_.recordConsumption(result,explanationUse);
 		if(constBlock.length){
 			scope_.updateDeclProps(decl).constBlock=oldConstBlock;

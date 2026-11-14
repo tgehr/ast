@@ -33,7 +33,13 @@ struct Dependency{
 	Declaration lostVar; // (if `isTop`: a consumed value it depended on, if known)
 	Identifier lostAt; // (where `lostVar` was consumed)
 	void joinWith(Dependency rhs){
-		if(isTop) return;
+		if(isTop){
+			if(!lostVar&&rhs.isTop&&rhs.lostVar){ // (the consumption that explains it, e.g., in another branch of a merge)
+				lostVar=rhs.lostVar;
+				lostAt=rhs.lostAt;
+			}
+			return;
+		}
 		if(rhs.isTop){
 			this=rhs;
 			return;
@@ -2060,6 +2066,10 @@ abstract class Scope{
 			foreach(d;pending){
 				if(cast(DeadDecl)d) continue;
 				if(d.isSemError()) continue;
+				if(auto cur=rnsymtab.get(d.getId,null)) if(cur !is d&&!cast(DeadDecl)cur&&!cur.isSemError()&&cur.isSplitFrom(d)){ // (split into this scope while the others were forgotten, e.g., `v1` at the `return` for `v0:=dup(a); v1:=dup(v0); a:=X(a); if c { t:=measure(v1); } else { return a; }`: the forget of `v0` before the conditional cancels the implicit `dup` in the other branch, whose consumption splits `v1` into the branches)
+					if(d.splitInto.any!(s=>s.isSemError())) continue; // (after an error with the version of another branch)
+					d=cur;
+				}
 				if(rnsymtab.get(d.getId,null) !is d) continue;
 				//if(d.scope_ !is this && !d.isLinear()) continue;
 				//imported!"util.io".writeln("REMOVING: ",d," ",getDependency(d)," ",canSplit(d)," ",canForget(d)," ",lastUses.canForget(d,true,false)," ",rnsymtab," ",isConst(d)," ",lastUses.lastUses);
@@ -2469,7 +2479,9 @@ abstract class Scope{
 		consumedDepLog[decl]=getDependency(decl).dup;
 		if(sinceMergeLogged) consumedLogged~=decl;
 		noteDependencyConsumed(decl,getDependency(decl));
-		if(getDependency(decl).isTop&&decl !is forgettingBeforeSplit){
+		bool forgotten=decl is forgetting;
+		if(getDependency(decl).isTop&&!(forgotten&&activeNestedScopes.length)){ // (not for a forget before the split into nested scopes that are being analyzed or merged, see `forgetting`)
+			auto explanation=forgotten?getDependency(decl).lostAt:null; // (see `forgetting`)
 			bool done=false;
 			do{ // TODO: improve
 				done=true;
@@ -2496,7 +2508,7 @@ abstract class Scope{
 							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit) noteDeadOnPath(ndecl,splitBasis(last),consumingUse); // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
 							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
-							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches)) done=false;
+							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches,explanation)) done=false;
 						}
 					}
 				}
@@ -2537,7 +2549,7 @@ abstract class Scope{
 		if(diverged&&!mergesBranches) return null; // (where the other branches return and the code after the conditional continues the branch, the merge does not join the paths)
 		return bsc.conditional;
 	}
-	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false){
+	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false,Identifier explanation=null){ // (`explanation`: the consumption that made `dependency` not recomputable, if it is only forgotten at `consumingUse`)
 		if(!lu.canCancelImplicitDup()) return false;
 		bool merged=false,diverged=false;
 		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
@@ -2546,7 +2558,7 @@ abstract class Scope{
 			merged=true;
 		}
 		void record(VarDecl vd){
-			vd.outOfScopeCause=consumingUse;
+			vd.outOfScopeCause=explanation?explanation:consumingUse;
 			vd.outOfScopeMerged=merged;
 			vd.outOfScopeDiverged=merged&&diverged;
 		}
@@ -2617,7 +2629,7 @@ abstract class Scope{
 		}
 	}
 	private bool cancellingDeferredDups;
-	Declaration forgettingBeforeSplit; // (a variable forgotten at a last use before the split into the nested scopes that are being analyzed or merged: its dependency there does not include their consumptions, which the table already does, so they do not cancel the implicit `dup`s of the variables that depend on it; the nested scopes and the code after them check those, e.g., `e:=v1` for `v0:=X(dup(a)); t:=measure(v0); v1:=!v0; e:=v1; if k { a:=X(a); } else { u:=!v1; forget(u); }`)
+	Declaration forgetting; // (a variable that is forgotten at a last use, see `LastUse.consume`: before the split into nested scopes that are being analyzed or merged, its dependency there does not include their consumptions, which the table already does, so they do not cancel the implicit `dup`s of the variables that depend on it; the nested scopes and the code after them check those, e.g., `e:=v1` for `v0:=X(dup(a)); t:=measure(v0); v1:=!v0; e:=v1; if k { a:=X(a); } else { u:=!v1; forget(u); }`; otherwise, if it is not recomputable, the variables that depend on it are not recomputable after the consumption that made it so, not after the forget, e.g., `v2` for `v1:=X(dup(v0)); v2:=dup(v1); x:=X(x); m1:=measure(v2); m2:=measure(v2);` with `v0:=X(dup(x))`)
 	private bool deferDupCancels(){
 		return !cancellingDeferredDups&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch);
 	}
@@ -2633,7 +2645,7 @@ abstract class Scope{
 			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo||ndecl.isSemError()) continue; // (a branch uses it: the branches forget their versions before their consumptions)
 			auto dependents=dependencies.mentioning(ndecl).dup;
 			while(lu.forwardTo) lu=lu.forwardTo;
-			auto forgets=lu.kind==LastUse.Kind.constUse&&!(lu.constConsume&&lu.constConsume.canCancelImplicitDup()); // (a `const` use after the implicit `dup`: forgotten there, before the conditional, see `forgettingBeforeSplit`)
+			auto forgets=lu.kind==LastUse.Kind.constUse&&!(lu.constConsume&&lu.constConsume.canCancelImplicitDup()); // (a `const` use after the implicit `dup`: forgotten there, before the conditional, see `forgetting`)
 			if(cancelDup(ndecl,lu,todo[i][1])&&!forgets)
 				foreach(d;dependents) todo~=q(d,todo[i][1]);
 		}
