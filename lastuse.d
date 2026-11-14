@@ -879,7 +879,7 @@ final class LastUse{
 				if(!lu.decl.isSemError()&&lu.dep.isTop){
 					if(lu.kind==Kind.synthesizedForget){
 						lu.reportUnforgettable();
-					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup&&lu.kind!=Kind.consumption){ // (not one that is already consumed, e.g., cancelled through a walk of this one)
+					}else if(!lu.decl.isSemError()&&lu.use&&lu.use.implicitDup&&lu.kind!=Kind.consumption&&!lu.dropped()){ // (not one that is already consumed, e.g., cancelled through a walk of this one)
 						//imported!"util.io".writeln("FOUND CANCELABLE DUP AT: ",lu.use.loc);
 						if(auto vd=cast(VarDecl)lu.decl) if(!vd.outOfScopeCause) vd.outOfScopeCause=lu.dep.lostAt;
 						if(lu.dep.lostAt&&lu.decl.getId !in outOfScope) outOfScope[lu.decl.getId]=[q(lu.use,Identifier.init,lu.dep.lostAt,scope_,lu.scope_,lu.decl,false)]; // (the `dup` would not have been implicit if the dependency through `decl` had been known)
@@ -1296,6 +1296,7 @@ final class LastUse{
 	bool canCancelImplicitDup(){
 		if(forwardTo) return forwardTo.canCancelImplicitDup();
 		if(splitFrom) return false;
+		if(dropped()) return false;
 		final switch(kind)with(Kind){
 			case definition,lazySplitSink,lazySplit,marker:
 				return false;
@@ -1317,6 +1318,12 @@ final class LastUse{
 				return false; // TODO
 		}
 		return true;
+	}
+	bool dropped(){ // (the last use of a version that a scope that diverges drops at its end, e.g., at an abort, so that no forget follows it on its path: the dependency is not needed there, e.g., `e` in `x:=(a,e)` for `v0:=dup(a); e:=v0; if k { if l { x:=(a,e); assert(false); } } return (a,e);`, see `Scope.closeUnreachable`)
+		if(forwardTo||!decl||!decl.scope_) return false;
+		for(auto nsc=cast(NestedScope)scope_;nsc&&nsc !is decl.scope_&&nsc.isNestedIn(decl.scope_);nsc=cast(NestedScope)nsc.parent)
+			if(nsc.diverges) return !nsc.rnsymtab.get(decl.getId,null);
+		return false;
 	}
 	Identifier explanationUse;
 	private void useFromMergedScopes(){

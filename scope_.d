@@ -4232,7 +4232,7 @@ class NestedScope: Scope{
 						if(type) if(auto added=sc.addVariable(ndecl,type,true)){
 							sc.splitVar(ndecl,added);
 							sc.symtabRemove(added);
-							sc.replaceDecl(odecl,added);
+							sc.replaceDecl(oldVersion(sc),added);
 						}
 						continue;
 					}
