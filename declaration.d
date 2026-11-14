@@ -177,6 +177,7 @@ class VarDecl: Declaration{
 	bool replaceType; // (with the flags together, a `VarDecl` fits into the 368-byte size class of the GC)
 	bool outOfScopeMerged; // (`outOfScopeCause` stands for the conditional whose merge made the dependency unknown, see `Scope.cancelDup`)
 	bool outOfScopeDiverged; // (the merge after branches that diverge, see `OutOfScopeDecl.diverged`)
+	bool outOfScopeKeptValue; // (the merge of versions that keep the value, see `OutOfScopeDecl.keptValue`)
 	void setTemporary(bool isTemporary){
 		this.isTemporary=isTemporary;
 		if(isTemporary) name.meaning=this;
@@ -777,11 +778,12 @@ class OutOfScopeDecl: ConsumedDecl{
 	Identifier dupUse;
 	bool merged; // (`cause` stands for the conditional whose merge made the dependency unknown)
 	bool diverged; // (the merge of one branch after branches that diverge, whose merged versions do not depend on each other, see `Scope.merge`)
+	bool keptValue; // (the merge of versions of the dependency that all keep its value from before the conditional, see `BlockScope.keptValues`)
 	override bool sameExplanation(DeadDecl other){
 		auto o=cast(OutOfScopeDecl)other;
-		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse&&o.merged==merged&&o.diverged==diverged;
+		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse&&o.merged==merged&&o.diverged==diverged&&o.keptValue==keptValue;
 	}
-	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null,bool merged=false,bool diverged=false)in{
+	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null,bool merged=false,bool diverged=false,bool keptValue=false)in{
 		assert(!!cause);
 	}do{
 		super(decl,use);
@@ -789,6 +791,7 @@ class OutOfScopeDecl: ConsumedDecl{
 		this.dupUse=dupUse;
 		this.merged=merged;
 		this.diverged=diverged;
+		this.keptValue=keptValue;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
@@ -798,6 +801,7 @@ class OutOfScopeDecl: ConsumedDecl{
 		if(dupUse&&dupUse !is use)
 			sc.note(format("`%s` was used in a consuming position here",dupUse.name),dupUse.loc);
 		if(merged&&diverged) sc.note(format("`%s` not recomputable after this conditional, which merges its dependency `%s` after a branch that diverges",use.name,cause.name),cause.loc);
+		else if(merged&&keptValue) sc.note(format("`%s` not recomputable after this conditional, which merges its dependency `%s` after a `return` on some path",use.name,cause.name),cause.loc);
 		else if(merged) sc.note(format("`%s` not recomputable after this conditional, which redefines its dependency `%s` on some path",use.name,cause.name),cause.loc);
 		else sc.note(format("`%s` not recomputable after dependency `%s` was consumed here",use.name,cause.name),cause.loc);
 	}

@@ -1548,7 +1548,7 @@ abstract class Scope{
 				auto cvd=vd;
 				for(auto svd=cast(VarDecl)vd.splitFrom;!cvd.outOfScopeCause&&svd;svd=cast(VarDecl)svd.splitFrom) if(svd.outOfScopeCause&&svd.outOfScopeUse is use) cvd=svd; // (consumed with the version that it was split from)
 				if(cvd.outOfScopeCause){
-					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged,cvd.outOfScopeDiverged);
+					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged,cvd.outOfScopeDiverged,cvd.outOfScopeKeptValue);
 					vd.outOfScopeUse=use;
 				}
 			}
@@ -2540,19 +2540,20 @@ abstract class Scope{
 		}
 		return false;
 	}
-	private Expression mergedConditional(bool mergesBranches,out bool diverged){ // (the conditional whose merge is in progress, of the branches or of this scope)
+	private Expression mergedConditional(bool mergesBranches,out bool diverged,Declaration dependency,out bool keptValue){ // (the conditional whose merge is in progress, of the branches or of this scope)
 		Scope sc=this;
 		if(mergingScopes.length) sc=mergingScopes[0];
 		auto bsc=cast(BlockScope)sc;
 		if(!bsc||!bsc.isBranch||!bsc.parent.mergingScopes.canFind(bsc)) return null;
 		diverged=bsc.parent.mergingScopes.count!(b=>!b.diverges)<2;
 		if(diverged&&!mergesBranches) return null; // (where the other branches return and the code after the conditional continues the branch, the merge does not join the paths)
+		keptValue=dependency&&dependency.getId in bsc.keptValues;
 		return bsc.conditional;
 	}
 	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false,Identifier explanation=null){ // (`explanation`: the consumption that made `dependency` not recomputable, if it is only forgotten at `consumingUse`)
 		if(!lu.canCancelImplicitDup()) return false;
-		bool merged=false,diverged=false;
-		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
+		bool merged=false,diverged=false,keptValue=false;
+		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged,dependency,keptValue)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
 			consumingUse=new Identifier(dependency.getId);
 			consumingUse.loc=conditional.loc;
 			merged=true;
@@ -2561,6 +2562,7 @@ abstract class Scope{
 			vd.outOfScopeCause=explanation?explanation:consumingUse;
 			vd.outOfScopeMerged=merged;
 			vd.outOfScopeDiverged=merged&&diverged;
+			vd.outOfScopeKeptValue=merged&&keptValue;
 		}
 		if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
 			record(vd);
@@ -3018,7 +3020,22 @@ abstract class Scope{
 			static if(language==silq) if(type) return unfoldTypeVariables(type,(Declaration d)=>d.scope_&&scopes.any!(sc=>d.scope_.isNestedIn(sc)));
 			return type;
 		}
-		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc) bs.eagerMerges=null; // (of an earlier analysis)
+		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; } // (of an earlier analysis)
+		static if(language==silq) if(!isLoop&&scopes.all!(s=>LastUse.isBranch(s))){ // (see `BlockScope.keptValues`)
+			SetX!Id keptValues;
+			keys.forEach(scopes[0].rnsymtab,(Declaration d0){
+				Declaration source=null;
+				foreach(s;scopes){
+					auto d=s.rnsymtab.get(d0.getId,null);
+					if(!d||cast(DeadDecl)d) return;
+					auto c=d.canonicalSource;
+					if(!c||c.scope_&&scopes.any!(t=>c.scope_.isNestedIn(t))||source&&c !is source) return;
+					source=c;
+				}
+				if(source&&scopes.any!(s=>s.rnsymtab.get(d0.getId,null) !is source)) keptValues.insert(d0.getId);
+			});
+			foreach(sc;scopes) if(auto bs=cast(BlockScope)sc) bs.keptValues=keptValues;
+		}
 		SetX!Id eagerIds; // (variables whose versions in the branches have no known dependency in some branch, but values that are merged as well depend on them: those depend on the merged versions instead, which the code generator merges first, see `genEagerMerges` in hqir.d)
 		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s)&&!(cast(BlockScope)s).returnsOnSomePath)){
 			import ast.semantic_:typeForDecl;
@@ -4644,6 +4661,7 @@ class BlockScope: NestedScope{
 	Expression conditional; // (of a branch, for diagnostics, see `cancelDup`)
 	Q!(LastUse,size_t)[] uncomputations; // (in the branch and its nested scopes, with the numbers of the events of the code after the conditional at them, see `checkBranchOrder` and `LastUse.noteBranchEvent`)
 	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
+	SetX!Id keptValues; // (the variables whose versions the merge of this branch merges although they all keep the value from before the conditional: a `return` on another path consumed it, which gives the branches new versions, e.g., `a` for `if k { } else { if l { return a; } }`; the merged versions do not depend on each other all the same, see `unknownAfterMerge` in `Scope.merge`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
 	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path: the code generator does not interleave the branches)

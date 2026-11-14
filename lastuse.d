@@ -742,7 +742,7 @@ final class LastUse{
 				import ast.semantic_:undefinedIdentifierError;
 				lu.use.setSemForceError();
 				lu.decl.setSemForceError();
-				undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,at,cause,at is dup.use?null:dup.use,true)],lu.scope_);
+				undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,at,cause,at is dup.use?null:dup.use,true,false,cause.id in (cast(BlockScope)nsc).keptValues)],lu.scope_);
 				return;
 			}
 		}
@@ -1353,6 +1353,7 @@ final class LastUse{
 							cvd.outOfScopeCause=mvd.outOfScopeCause;
 							cvd.outOfScopeMerged=mvd.outOfScopeMerged;
 							cvd.outOfScopeDiverged=mvd.outOfScopeDiverged;
+							cvd.outOfScopeKeptValue=mvd.outOfScopeKeptValue;
 						}
 						nsc.lastUses.cancelImplicitDup(cdecl);
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
