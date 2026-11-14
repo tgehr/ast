@@ -1716,6 +1716,8 @@ abstract class Scope{
 			if(oldDecl is splitFrom)
 				oldDecl=splitInto;
 		}
+		foreach(ref e;deadOnPaths) if(e[0] is splitFrom) e[0]=splitInto; // (the version that replaces it on the path is unavailable after the consumption too, e.g., `v1` in the branch of `l` for `t1:=measure(v1); if k { a:=X(a); u:=!v0; t3:=measure(v1); } else { if l { a:=X(a); t5:=measure(v0); t6:=measure(v1); } return (a,ms); }` with `v0:=X(dup(a)); v1:=!v0;`, when the consumption of `v1` in the `then` branch splits it into the branch again)
+		foreach(ref e;deferredDupCancels) if(e[0] is splitFrom) e[0]=splitInto;
 		lastUses.replaceDecl(splitFrom,splitInto);
 		void retype(Declaration d){
 			if(d.scope_ !is this) return;

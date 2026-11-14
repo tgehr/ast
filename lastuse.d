@@ -765,11 +765,12 @@ final class LastUse{
 			}
 		}
 		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level){ // (`atSplit`: the dependency at the split into `level`, for the forgets there)
+		auto byVersion=nested||cast(NestedScope)start.scope_; // (the dependencies in a nested scope mention its versions and the ones before the split, e.g., `v1` in the dependency of `v2` at `t:=measure(v2)` for the forget of the version of `v1` at `u:=!v1` in `if k { u:=!v1; a:=X(a); t:=measure(v2); }` with `v2:=!v1`)
 		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
 		LastUse[] consumedInNested; // (splits that the nested scopes after them consume: on one of their paths, so after their walks)
 		void consumeAfterNested(){
 			foreach(c;consumedInNested){
-				if(nested) replaceVersions(cdep,c.decl,c.dep,c.use);
+				if(byVersion) replaceVersions(cdep,c.decl,c.dep,c.use);
 				else cdep.replace(c.decl,c.dep,c.use);
 			}
 			if(consumedInNested.length) beforeSplits=cdep.dup; // (also at the splits into the scopes nested after them, e.g., of a later conditional)
@@ -818,7 +819,7 @@ final class LastUse{
 			}
 			if(lu.forwardTo&&lu.forwardTo.isConsumption()&&lu.forwardTo !is this&&lu.forwardTo.walkMark!=mark) continue;
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
-			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget) continue; // (a forget in the branch itself is checked here)
+			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget&&(fromBranch||lu.scope_ !is scope_)) continue; // (a forget in the branch itself is checked here; not a consumption in the scope where the walk starts, which comes after its start, e.g., `a:=X(a)` for the forget of `v1` at `u:=!v1` in `if k { u:=!v1; a:=X(a); t:=measure(v2); }` with `v2:=!v1`: the walk does not visit the version in the enclosing scope)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
 			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`)
 			if(!nested&&hoisted){ // (its dependency is the one at the split, which comes before the consumption)
@@ -826,14 +827,14 @@ final class LastUse{
 				continue;
 			}
 			auto byAtSplit=nested&&lu.scope_ is level&&isBranch(level)?atSplit:cdep; // (for the forgets at the split: `decl` is consumed before the split)
-			if(nested&&lu.kind==Kind.lazySplit&&hasVersion(lu.depAtSplit,decl)){
+			if((nested||this.atSplit&&byVersion)&&lu.kind==Kind.lazySplit&&hasVersion(lu.depAtSplit,decl)){ // (also the versions that a branch forgets at the split, when the walk of a forget there starts in the branch, e.g., `v1` in the `else` branch of `ms+=measure(v2); if k { t:=measure(v0); } else { a:=X(a); s:=measure(v2); }` with `v1:=!v0; v2:=!v1;`, for the forget of `v0` at the split)
 				replaceVersions(lu.depAtSplit,decl,byAtSplit);
 				lu.scope_.lastUses.noteMentions(lu,lu.depAtSplit);
 			}
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			if(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
+			if(byVersion?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
 				auto prior=lu.prevImplicitDup&&lu.use?lu.dep.dup:Dependency.init;
-				if(nested) replaceVersions(lu.dep,decl,hoisted?byAtSplit:cdep);
+				if(byVersion) replaceVersions(lu.dep,decl,hoisted?byAtSplit:cdep);
 				else lu.dep.replace(decl,cdep);
 				lu.scope_.lastUses.noteMentions(lu,lu.dep);
 				if(lu.dep.isTop&&lu.prevImplicitDup&&lu.use) cancelAtMerge(lu,prior);
@@ -871,7 +872,7 @@ final class LastUse{
 					if(pending) numPending++;
 				}
 				if(lu.forwardTo&&lu.consumedAt>lu.time) consumedInNested~=lu;
-				else if(nested) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
+				else if(byVersion) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
 				else cdep.replace(lu.decl,lu.dep,lu.use);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
