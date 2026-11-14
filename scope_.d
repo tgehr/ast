@@ -2505,7 +2505,13 @@ abstract class Scope{
 								noteDeadOnPath(ndecl,keptBy,consumingUse);
 								continue;
 							}
-							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit) noteDeadOnPath(ndecl,splitBasis(last),consumingUse); // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
+							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit){ // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
+								if(noteDeadOnPath(ndecl,splitBasis(last),consumingUse)&&last.kind==LastUse.Kind.lazySplit&&!last.use&&last.scope_ is this&&LastUse.isBranch(this)&&dependencies.mentioning(ndecl).length){ // (the branch forgets its version at the split, see `forgetDeadSplits`: the variables that depend on it depend on what it depends on, e.g., `v1` in the `else` branch of `v0:=dup(a); v1:=dup(v0); t:=measure(v0); if k { s:=measure(v0); } else { a:=X(a); m:=measure(v1); }`, whose dependency is unknown after `a:=X(a)`)
+									dependencies.pushUp(ndecl,true,consumingUse);
+									done=false; // (they depend on `decl` now)
+								}
+							}
+							if(lu.forwardTo&&lu.kind==LastUse.Kind.consumption&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch)) continue; // (a branch consumed the version, which continued into the branches, e.g., `p` for `m:=measure(p); if c { p:=X(p); } else { w:=X(w); }` with `p:=dup(w)`: they decide about their versions, as for those that only use it, see `cancelDeferredDups`)
 							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
 							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches,explanation)) done=false;
@@ -2614,12 +2620,12 @@ abstract class Scope{
 			lu=lu.splitFrom;
 		}
 	}
-	private void noteDeadOnPath(Declaration decl,LastUse last,Identifier consumingUse){
-		if(!consumingUse||!consumingUse.scope_||!consumingUse.scope_.isNestedIn(this)||!last.use) return;
-		if(deadOnPaths.any!(e=>e[0] is decl&&e[3] is consumingUse)) return;
+	private bool noteDeadOnPath(Declaration decl,LastUse last,Identifier consumingUse){ // (whether it is unavailable on the path of the consumption)
+		if(!consumingUse||!consumingUse.scope_||!consumingUse.scope_.isNestedIn(this)||!last.use) return false;
+		if(deadOnPaths.any!(e=>e[0] is decl&&e[3] is consumingUse)) return true;
 		Identifier dupUse=null;
 		if(!last.use.implicitDup){
-			if(!last.prevImplicitDup||last.kind!=LastUse.Kind.constUse&&last.kind!=LastUse.Kind.constPinned) return; // (a `const` use after an implicit `dup`)
+			if(!last.prevImplicitDup||last.kind!=LastUse.Kind.constUse&&last.kind!=LastUse.Kind.constPinned) return false; // (a `const` use after an implicit `dup`)
 			if(auto vd=cast(VarDecl)decl) if(!isConstLocal(vd)) dupUse=last.prevImplicitDup.use;
 		}
 		deadOnPaths~=q(decl,last.use,dupUse,consumingUse,last.scope_ !is this);
@@ -2629,6 +2635,7 @@ abstract class Scope{
 			if(!lu) continue;
 			noteDeadOnPath(d,splitBasis(lu),consumingUse);
 		}
+		return true;
 	}
 	private bool cancellingDeferredDups;
 	Declaration forgetting; // (a variable that is forgotten at a last use, see `LastUse.consume`: before the split into nested scopes that are being analyzed or merged, its dependency there does not include their consumptions, which the table already does, so they do not cancel the implicit `dup`s of the variables that depend on it; the nested scopes and the code after them check those, e.g., `e:=v1` for `v0:=X(dup(a)); t:=measure(v0); v1:=!v0; e:=v1; if k { a:=X(a); } else { u:=!v1; forget(u); }`; otherwise, if it is not recomputable, the variables that depend on it are not recomputable after the consumption that made it so, not after the forget, e.g., `v2` for `v1:=X(dup(v0)); v2:=dup(v1); x:=X(x); m1:=measure(v2); m2:=measure(v2);` with `v0:=X(dup(x))`)

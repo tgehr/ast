@@ -202,6 +202,7 @@ final class LastUse{
 	bool cancelableRecorded=false; // (see `recordCancelable`; with the flags together, a `LastUse` fits into the 368-byte size class of the GC)
 	bool chainPinned=false; // (`pin` pinned the last uses that it forwards to and is split from, which stay pinned: they need not be visited again)
 	bool splitsPinned=false; // (`LastUses.pin` pinned the last uses of this version and of the versions that its declaration was split into before it, see there)
+	bool consuming=false; // (while `consume` consumes it, see `cancelImplicitDup`)
 	size_t time,consumedAt; // (in the order of the analysis, see `LastUses.tick`)
 	size_t walkMark; // (the walk of `updateDependenciesOnConsumptionLocal` that visited it last, see there)
 	static bool isBranch(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; }
@@ -951,6 +952,8 @@ final class LastUse{
 		assert(!forwardTo);
 		if(kind==Kind.synthesizedForget) return false;
 		if(kind==Kind.consumption) return false;
+		consuming=true;
+		scope(exit) consuming=false;
 		bool ok=checkConsumable();
 		if(kind==Kind.lazySplit){
 			auto lu=getSplitFrom();
@@ -1352,6 +1355,7 @@ final class LastUse{
 	bool cancelImplicitDup(bool explained=false){ // (`explained`: the reason recorded for the variable also explains the cancellations in the branches of a merge, see `Scope.cancelDup`)
 		//imported!"util.io".writeln("CANCELING: ",use.loc," ",dep);
 		if(forwardTo) return forwardTo.cancelImplicitDup();
+		if(consuming) return false; // (the walks of its consumption reach it again, e.g., through the implicit `dup` of a variable that depends on it: it is consumed already)
 		if(splitFrom) return false;
 		if(auto merge=mergedLazily()) return merge.cancelImplicitDup(); // (consumed after the merge, e.g., when the walk of a later consumption loses its dependency: the merge is cancelled, so that the other branches forget their versions; also the merges of enclosing conditionals)
 		final switch(kind)with(Kind){
