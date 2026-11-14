@@ -727,6 +727,23 @@ final class LastUse{
 				if(lu.use.scope_&&nsc.getSiblingScopes().any!(b=>lu.use.scope_.isNestedIn(b))) return;
 				Q!(NestedScope,Dependency,Dependency)* end=null;
 				foreach_reverse(ref e;root.branchEnds[endsBase..$]) if(e[0] is nsc){ end=&e; break; }
+				Q!(NestedScope,Dependency,Dependency) atMerge;
+				if(!end&&nestedScopes.length){ // (this walk starts at the merge, which the forget of `decl` cancels, so it does not visit the branches: the dependency at the end of the branch is the one at its last use there, unless the branch consumes what it depends on, and the one after the merge is the merged one, e.g., `v0` for `v0:=dup(a); v1:=dup(v0); if k { t:=measure(v1); } else { u:=!v0; forget(u); a:=X(a); } m:=measure(v1);`)
+					if(!nestedScopes.canFind(nsc)){
+						if(nestedScopes.any!(b=>nsc.isNestedIn(b))) continue; // (a branch of a conditional in a branch of the merge: decided by the enclosing branch)
+						return;
+					}
+					auto blu=nsc.lastUses.here(versionIn(decl,nsc));
+					while(blu&&blu.forwardTo) blu=blu.forwardTo;
+					if(!blu||blu.dep.isTop) return;
+					foreach(x;blu.dep.dependencies){ // (not consumed in the branch after the last use of `decl` there)
+						auto cur=nsc.rnsymtab.get(x.getId,null);
+						if(!cur) continue; // (not split into the branch)
+						if(cast(DeadDecl)cur||cur !is x&&!cur.isSplitFrom(x)) return;
+					}
+					atMerge=q(nsc,blu.dep.dup,dep.dup);
+					end=&atMerge;
+				}
 				if(!end) return;
 				auto atEnd=prior.dup,afterMerge=prior.dup;
 				replaceVersions(atEnd,decl,(*end)[1]);
