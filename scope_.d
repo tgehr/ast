@@ -3204,7 +3204,8 @@ abstract class Scope{
 						if(sym.getId in eagerIds){
 							if(auto bs=cast(BlockScope)sc) bs.eagerMerges~=sym;
 							sc.continueDependencies(osym,sym);
-						}else sc.pushDependencies(osym,false,null,unknownAfterMerge);
+						}else if(!unknownAfterMerge) sc.continueDependencies(osym,sym); // (the code after the conditional continues the branch: the merged version has the value of the version of the branch, e.g., `a` for `v:=dup(a); if k { return a; } else { t:=measure(v); } forget(v);`)
+						else sc.pushDependencies(osym,false,null,unknownAfterMerge);
 					}
 					if(!cast(DeadDecl)sym){
 						if(auto mtype=typeForDecl(sym)){
