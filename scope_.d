@@ -2511,7 +2511,7 @@ abstract class Scope{
 									done=false; // (they depend on `decl` now)
 								}
 							}
-							if(lu.forwardTo&&lu.kind==LastUse.Kind.consumption&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch)) continue; // (a branch consumed the version, which continued into the branches, e.g., `p` for `m:=measure(p); if c { p:=X(p); } else { w:=X(w); }` with `p:=dup(w)`: they decide about their versions, as for those that only use it, see `cancelDeferredDups`)
+							if(lu.forwardTo&&(lu.kind==LastUse.Kind.consumption||lu.kind==LastUse.Kind.constPinned)&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch)) continue; // (a branch consumed or uses the version, which continued into the branches, e.g., `p` for `m:=measure(p); if c { p:=X(p); } else { w:=X(w); }` with `p:=dup(w)`, or `v1` for `m1:=measure(v1); m0:=measure(v0); if k { a:=X(a); } else { u:=!v1; forget(u); }` with `v0:=!a; v1:=X(dup(v0));` when the merge cancels the implicit `dup` of `v0` at `measure(v0)`: they decide about their versions, see `cancelDeferredDups`)
 							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
 							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches,explanation)) done=false;
