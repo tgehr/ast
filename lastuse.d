@@ -266,6 +266,12 @@ final class LastUse{
 		return decl;
 	}
 	static bool isNontrivialMerge(Declaration decl,scope NestedScope[] nestedScopes){
+		if(decl.isLinear()&&nestedScopes.length&&nestedScopes[0].siblingScopes.any!((s){ // (a branch that diverges used it, which pinned the version before the split, e.g., `v0` for `if k { if l { u:=!v0; forget(u); assert(false); } }`: the merge of the remaining branches decides where to forget it)
+			if(!s.diverges||!isBranch(s)) return false;
+			auto slu=s.lastUses.peek(versionIn(decl,s));
+			while(slu&&slu.forwardTo) slu=slu.forwardTo;
+			return slu&&slu.kind!=Kind.lazySplit;
+		})) return true;
 		return iota(nestedScopes.length).any!((i){
 			auto nsc=nestedScopes[i];
 			auto cdecl=decl;
@@ -1449,6 +1455,7 @@ final class LastUse{
 				auto mvd=explained?cast(VarDecl)decl:null; // (before the consumption, which replaces the versions)
 				useFromMergedScopes();
 				ok&=consume(false);
+				auto consumedAt=use?use:explanationUse;
 				foreach(i,nsc;nestedScopes){
 					auto cdecl=versionIn(decl,nestedScopes[i]);
 					//imported!"util.io".writeln("MERGED FROM: ",nsc.lastUses.here(cdecl)," ",decl.mergedFrom," ",nsc.lastUses.lastUses," ",nsc.lastUses.here(decl));
@@ -1478,6 +1485,7 @@ final class LastUse{
 						}
 					}
 				}
+				if(consumedAt&&!scope_.rnsymtab.get(decl.getId,null)) scope_.recordConsumption(decl,consumedAt); // (the cancellations in the branches replace the marker of the consumption here, e.g., of `v0` at the merge of `if k { if l { u:=!v0; forget(u); } }` after `t:=measure(v0)`)
 				return ok;
 			case synthesizedForget:
 				assert(0);
