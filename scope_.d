@@ -2069,7 +2069,7 @@ abstract class Scope{
 		bool errors=false;
 		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
 		static if(is(T==ReturnExp)){
-			auto dropsClassical=dropsClassicalAtReturn();
+			auto dropsClassical=!codeAfterStatement&&dropsClassicalAtReturn(); // (the unreachable code after the `return` sees the variables that it does not consume, see `hiddenAfterReturn`)
 			bool dropped(Declaration d){ return dropsClassical&&d.scope_ !is this&&isClassicalValue(d); } // (forgetting it has no effect, while consuming it would split it into the other branches; dropping it does not change what blocks the others)
 			if(dropsClassical) returnDropped=true;
 			if(dropsClassical&&logSinceNesting&&rnsymtab.isLogging) pending=rnsymtab.liveValues(SymbolProperty.notFixedClassical,rnsymtab.changeLog,SymbolProperty.live); // (the others are classical variables from outside, which are dropped: those of this scope are among its changes)
@@ -2156,6 +2156,7 @@ abstract class Scope{
 		return Scope.close(this);
 	}
 	bool returnDropped=false; // (a `return` dropped the classical variables from outside, which the unreachable code after it cannot use, see `hiddenAfterReturn`)
+	bool codeAfterStatement=false; // (other statements follow the statement that is being analyzed in this scope, see `compoundExpSemantic`)
 	final bool hiddenAfterReturn(Declaration d){
 		return returnDropped&&d.scope_&&d.scope_ !is this&&d.scope_.getFunction() is getFunction()&&isClassicalValue(d);
 	}

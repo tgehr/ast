@@ -2760,8 +2760,11 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		static if(language==silq){
 			auto original=e;
 			bool offered=bsc.loopContinuation.offer(ce.s,i,restriction_,resetConst);
+			auto codeAfter=bsc.codeAfterStatement;
+			bsc.codeAfterStatement=codeAfter||i+1<ce.s.length; // (also after a block of statements in the same scope)
 		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
+		static if(language==silq) bsc.codeAfterStatement=codeAfter;
 		propErr(e,ce);
 		if(blscope&&resetConst) bsc.afterStatement();
 		static if(language==silq){
@@ -2791,6 +2794,9 @@ static if(language==silq)
 CompoundExp unreachableSemantic(Expression[] stms,Expression prev,Scope sc,ref StmFlags flags,Annotation restriction_,bool resetConst){ // (copies of the statements after `prev` in a block of `sc`, as `compoundExpSemantic` analyzes them, e.g., after a loop whose lowering drops them)
 	sc.droppedCodeAnalysis++; // (their loops are analyzed as without the lowering, see `shouldLowerLoop`)
 	scope(exit) sc.droppedCodeAnalysis--;
+	auto codeAfter=sc.codeAfterStatement;
+	sc.codeAfterStatement=false; // (they are the rest of the block)
+	scope(exit) sc.codeAfterStatement=codeAfter;
 	auto ce=new CompoundExp(stms.map!(s=>s.copy()).array);
 	ce.loc=stms[0].loc.to(stms[$-1].loc);
 	if(restriction_<Annotation.mfree&&flags&StmFlags.quantumReturn){

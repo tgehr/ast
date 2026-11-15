@@ -197,6 +197,12 @@ final class LastUse{
 	}
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
+	bool fromDiscardedAnalysis(){ // (also in a nested scope of an analysis that was discarded, e.g., of the body of a loop in an iteration of its analysis, see `Scope.restoreStateSnapshot`)
+		if(discarded) return true;
+		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null)
+			if(nsc.lastUses.discarded) return true;
+		return false;
+	}
 	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
 	bool loopGuard=false; // (a use in a `while` condition, which is also evaluated on the path that exits the loop)
 	bool cancelableRecorded=false; // (see `recordCancelable`; with the flags together, a `LastUse` fits into the 368-byte size class of the GC)
@@ -2521,7 +2527,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 	SetX!Declaration consumedKnown; // (with a known dependency: an uncomputation that needs its version from before the split recomputes it from that dependency, or keeps it until then where its dependency is consumed as well, see `interleaveBranches` in hqir.d)
 	Event[] events; // (first the splits of the variables)
 	foreach(b;branches) foreach(c;outerConsumptions(b)){
-		if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||c[0].scope_ !is sc) continue;
+		if(c[1].fromDiscardedAnalysis()||c[1].kind!=LastUse.Kind.consumption||c[0].scope_ !is sc) continue;
 		if(!c[1].dep.isTop){ consumedKnown.insert(c[0]); continue; }
 		if(c[0] in varIndex) continue;
 		varIndex[c[0]]=events.length;
@@ -2543,7 +2549,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		auto b=branches[i];
 		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
-			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			if(lu.fromDiscardedAnalysis()||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies) if(auto outer=LastUse.outerVersion(d,b,true)) if(outer in consumedKnown) return true;
 		}
 		return false;
@@ -2583,13 +2589,13 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 	}
 	foreach(i,b;branches){
 		foreach(c;outerConsumptions(b)){
-			if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption) continue;
+			if(c[1].fromDiscardedAnalysis()||c[1].kind!=LastUse.Kind.consumption) continue;
 			auto p=varIndex.get(c[0],size_t.max);
 			if(p!=size_t.max) events~=Event(i,c[1].consumedAt,p,c[1]);
 		}
 		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
-			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			if(lu.fromDiscardedAnalysis()||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies){
 				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
@@ -2714,7 +2720,7 @@ SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] c
 		auto bs=cast(BlockScope)b;
 		if(!bs) continue;
 		foreach(c;bs.outerConsumptions){
-			if(c[1].discarded||c[1].kind!=LastUse.Kind.consumption||!c[1].dep.isTop||c[0].scope_ !is sc) continue;
+			if(c[1].fromDiscardedAnalysis()||c[1].kind!=LastUse.Kind.consumption||!c[1].dep.isTop||c[0].scope_ !is sc) continue;
 			auto p=varNode.get(c[0],none);
 			if(p==none) varNode[c[0]]=p=newNode();
 			auto k=newNode();
@@ -2727,7 +2733,7 @@ SetX!Id eagerMergeOrder(Scope sc,NestedScope[] branches,Q!(Id,Declaration[])[] c
 		if(!bs) continue;
 		foreach(u;bs.uncomputations){
 			auto lu=u[0];
-			if(lu.discarded||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+			if(lu.fromDiscardedAnalysis()||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
 			foreach(d;lu.dep.dependencies){
 				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varNode.get(outer,none):none;
