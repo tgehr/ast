@@ -2577,13 +2577,15 @@ abstract class Scope{
 		return bsc.conditional;
 	}
 	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false,Identifier explanation=null){ // (`explanation`: the consumption that made `dependency` not recomputable, if it is only forgotten at `consumingUse`)
-		if(!lu.canCancelImplicitDup()) return false;
+		auto unusedSplit=lu.kind==LastUse.Kind.lazySplit&&!lu.use&&lu.prevImplicitDup&&lu.prevImplicitDup.kind==LastUse.Kind.constPinned&&lu.scope_ is this; // (a version that this branch has not used, whose value an implicit `dup` before the split keeps, which a use in another branch pins, so that `pushDependencies` leaves the cancellation to the branches)
+		if(!unusedSplit&&!lu.canCancelImplicitDup()) return false;
 		bool merged=false,diverged=false,keptValue=false;
 		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged,dependency,keptValue)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
 			consumingUse=new Identifier(dependency.getId);
 			consumingUse.loc=conditional.loc;
 			merged=true;
 		}
+		if(unusedSplit&&!(merged&&diverged&&lastUses.canForget(ndecl,false,false))) return false; // (forgotten at the split if the merge after branches that diverge makes its dependency unknown, as after a `const` use, e.g., `v0` in the `else` branch of `t2:=measure(v0); if k { u3:=!v0; forget(u3); x5:=(a,ms); assert(false); }`)
 		void record(VarDecl vd){
 			vd.outOfScopeCause=explanation?explanation:consumingUse;
 			vd.outOfScopeMerged=merged;
@@ -2596,6 +2598,11 @@ abstract class Scope{
 				vd.outOfScopeDup=lu.prevImplicitDup.use;
 		}
 		if(consumingUse&&lu.kind==LastUse.Kind.lazyMerge&&lu.prevImplicitDup) if(auto vd=cast(VarDecl)lu.prevImplicitDup.decl) if(!vd.outOfScopeCause) record(vd); // (cancelled if all branches forget their versions at the split)
+		if(unusedSplit){
+			lastUses.forget(ndecl,false);
+			if(!rnsymtab.get(ndecl.getId,null)) recordConsumption(ndecl,lu.prevImplicitDup.use); // (explained by the implicit `dup` and the merge)
+			return true;
+		}
 		if(!lu.cancelImplicitDup(!!consumingUse)) return false; // TODO
 		assert(lu.isConsumption(),text(lu));
 		return true;
@@ -3293,6 +3300,7 @@ abstract class Scope{
 		for(bool changed=true;changed;){ // (consumed in a branch when merging the dependencies of another variable, after it was merged, or when forgetting another variable)
 			changed=false;
 			keys.forEach(rnsymtab.dup,(Declaration sym){
+				if(rnsymtab.get(sym.getId,null) !is sym) return; // (replaced when pushing the dependencies of another variable, e.g., the marker of `v2` for its forget after `u4:=!v2` by the one for its consumption at `t1:=measure(v2)` when the merge cancels the implicit `dup` there, for `v0:=dup(a); v1:=!v0; v2:=X(dup(v1)); t1:=measure(v2); if k { t3:=measure(v1); u4:=!v2; forget(u4); } else { a:=X(a); u5:=!v0; forget(u5); u6:=!v1; forget(u6); assert(false); }`)
 				if(auto dd=cast(DeadDecl)sym){ // (before it was split into the branches: its versions in the other branches are forgotten below)
 					symtabRemove(sym);
 					consumedBeforeSplit~=dd;

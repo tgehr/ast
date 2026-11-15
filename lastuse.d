@@ -815,14 +815,39 @@ final class LastUse{
 				return;
 			}
 		}
-		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level){ // (`atSplit`: the dependency at the split into `level`, for the forgets there)
+		static Declaration continuedByMerge(LastUse c,NestedScope[] branches){ // (the merged version that has the value of the version of `c` on all paths that reach the merge of `branches`, which consume it only on paths that diverge, e.g., `a` for `if k { x:=(a,ms); assert(false); }`)
+			foreach(s;c.decl.splitInto){
+				auto nsc=cast(NestedScope)s.scope_;
+				if(!nsc||nsc.diverges||!branches.canFind(nsc)) continue;
+				if(auto m=s.mergedInto) if(m.isDerivedFrom(c.decl)) return m;
+			}
+			return null;
+		}
+		void walk(LastUse start,Dependency cdep,bool nested,Dependency atSplit,NestedScope level,Dependency ccont){ // (`atSplit`: the dependency at the split into `level`, for the forgets there; `ccont`: as `cdep`, but through the merges after branches that diverge, which make the dependency unknown, see `continuedByMerge`: for the implicit `dup`s that a consumption on the path would cancel)
 		auto byVersion=nested||cast(NestedScope)start.scope_; // (the dependencies in a nested scope mention its versions and the ones before the split, e.g., `v1` in the dependency of `v2` at `t:=measure(v2)` for the forget of the version of `v1` at `u:=!v1` in `if k { u:=!v1; a:=X(a); t:=measure(v2); }` with `v2:=!v1`)
 		auto beforeSplits=cdep.dup; // (before the splits into the next nested scopes)
 		LastUse[] consumedInNested; // (splits that the nested scopes after them consume: on one of their paths, so after their walks)
-		void consumeAfterNested(){
+		void consumeDep(LastUse c){
+			if(byVersion){
+				replaceVersions(cdep,c.decl,c.dep,c.use);
+				replaceVersions(ccont,c.decl,c.dep,c.use);
+			}else{
+				cdep.replace(c.decl,c.dep,c.use);
+				ccont.replace(c.decl,c.dep,c.use);
+			}
+		}
+		void consumeAfterNested(NestedScope[] branches=null){
 			foreach(c;consumedInNested){
-				if(byVersion) replaceVersions(cdep,c.decl,c.dep,c.use);
-				else cdep.replace(c.decl,c.dep,c.use);
+				if(auto m=branches.length?continuedByMerge(c,branches):null){
+					if(byVersion) replaceVersions(cdep,c.decl,c.dep,c.use);
+					else cdep.replace(c.decl,c.dep,c.use);
+					auto by=Dependency(false);
+					by.dependencies.insert(m);
+					if(byVersion) replaceVersions(ccont,c.decl,by);
+					else ccont.replace(c.decl,by);
+					continue;
+				}
+				consumeDep(c);
 			}
 			if(consumedInNested.length) beforeSplits=cdep.dup; // (also at the splits into the scopes nested after them, e.g., of a later conditional)
 			consumedInNested=[];
@@ -839,10 +864,10 @@ final class LastUse{
 					auto head=nsc.lastUses.lastLastUse;
 					if(!head) continue;
 					while(head.prev) head=head.prev;
-					walk(head,cdep.dup,true,beforeSplits.dup,nsc);
+					walk(head,cdep.dup,true,beforeSplits.dup,nsc,ccont.dup);
 				}
 				if(lu.nestedAfter.length){
-					consumeAfterNested();
+					consumeAfterNested(lu.nestedAfter.all!isBranch?lu.nestedAfter:null);
 					if(lu.nestedAfter.count!(b=>!b.diverges)>=2) foreach(ref e;root.branchEnds[endsAt..$]) if(lu.nestedAfter.canFind(e[0])) e[2]=cdep.dup; // (the merge of the branches; not where the other branches return, see `Scope.mergedConditional`)
 				}
 			}
@@ -875,6 +900,7 @@ final class LastUse{
 			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`)
 			if(!nested&&hoisted){ // (its dependency is the one at the split, which comes before the consumption)
 				cdep.replace(lu.decl,lu.dep,lu.use);
+				ccont.replace(lu.decl,lu.dep,lu.use);
 				continue;
 			}
 			auto byAtSplit=nested&&lu.scope_ is level&&isBranch(level)?atSplit:cdep; // (for the forgets at the split: `decl` is consumed before the split)
@@ -897,7 +923,7 @@ final class LastUse{
 					auto prev=c[0],id=prev.decl.getId;
 					auto atConsumption=hasVersion(c[1],decl)?c[1]:throughEnds(c[1],lu);
 					if(id==lu.decl.getId||outOfScopeOnPath(id,pathScope(lu))||!hasVersion(atConsumption,decl)&&!hasVersion(atConsumption,lu.decl)) continue;
-					auto by=cdep; // (the dependency of `decl` where its version on this path ends)
+					auto by=ccont; // (the dependency of `decl` where its version on this path ends)
 					if(prev.splitFrom){ // (a version in a branch, see `recordCancelable`: it keeps the value while the version of `decl` on this path is available)
 						auto end=consumption.consumedAt;
 						if(lu.scope_ !is consumption.scope_){ // (e.g., a branch of a nested conditional that does not use it, which forgets it at the split)
@@ -905,7 +931,7 @@ final class LastUse{
 							while(dv&&dv.forwardTo&&dv.kind==Kind.lazySplitSink) dv=dv.forwardTo;
 							if(!dv||dv.kind==Kind.lazySplit){
 								end=0;
-								by=nested&&lu.scope_ is level?cdep:dv?dv.depAtSplit:atSplit; // (where the walk enters the branch at its split: through the consumptions after the split)
+								by=nested&&lu.scope_ is level?ccont:dv?dv.depAtSplit:atSplit; // (where the walk enters the branch at its split: through the consumptions after the split)
 							}else end=dv.isConsumption()?dv.consumedAt:dv.time;
 						}
 						if(lu.time<end) continue;
@@ -924,8 +950,7 @@ final class LastUse{
 					if(pending) numPending++;
 				}
 				if(lu.forwardTo&&lu.consumedAt>lu.time) consumedInNested~=lu;
-				else if(byVersion) replaceVersions(cdep,lu.decl,lu.dep,lu.use);
-				else cdep.replace(lu.decl,lu.dep,lu.use);
+				else consumeDep(lu);
 				if(!lu.decl.isSemError()&&lu.isConsumption()){
 					//imported!"util.io".writeln("CHECKING: ",lu," ",lu.use?text(lu.use.loc):"<?>"," ",lu.constBlock);
 					lu.checkConsumable();
@@ -945,7 +970,7 @@ final class LastUse{
 		if(level&&isBranch(level)) root.branchEnds~=q(level,cdep,cdep);
 		}
 		if(!scope_.lastUses.mayReceive(splitFrom?start:this,this,descend)) return; // (the walk would not change anything)
-		walk(splitFrom?start:this,cdep,false,cdep,null);
+		walk(splitFrom?start:this,cdep,false,cdep,null,cdep.dup);
 		static if(language==silq) if(outOfScope.length&&isBranch(scope_)) continueAfterBranches(outOfScope);
 	}
 
