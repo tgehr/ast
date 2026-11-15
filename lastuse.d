@@ -670,10 +670,27 @@ final class LastUse{
 		auto fromConditional=from&&splitBranch(consumption)?from:null; // (not in loop bodies, whose next iterations come after the consumption)
 		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&!(lu.kind==Kind.consumption&&(lu.consumedAt>=consumption.consumedAt||lu.consumesConst()))&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later, and not consumptions in nested scopes after the consumption)
 		auto inNestedBranch=from&&scope_.activeNestedScopes.any!(n=>isBranch(n)&&from.isNestedIn(n)); // (the consumption is in a branch of a nested conditional that is being analyzed, after the last uses of this scope and of its earlier nested scopes)
+		LastUse endAfterMerges(Declaration d,Scope sc){ // (the forget or consumption of the version `d` of `sc` after the merges of the branches around it, in the scope of the walk)
+			for(auto nsc=cast(NestedScope)sc;nsc&&nsc !is scope_&&nsc.isNestedIn(scope_)&&isBranch(nsc)&&!nsc.diverges;nsc=cast(NestedScope)nsc.parent){
+				auto merges=nsc.mergeLastUses.find!(m=>versionIn(m.decl,nsc) is d);
+				if(merges.empty) return null;
+				auto merge=merges.front;
+				auto last=nsc.parent.lastUses.peek(merge.decl);
+				if(!last) return null;
+				if(last.isConsumption()) return !last.forwardTo&&last.time>=merge.time?last:null; // (not one that stands for one in a nested scope after it)
+				if(last !is merge) return null; // (used after the merge)
+				d=merge.decl;
+			}
+			return null;
+		}
 		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch; or it continues into the conditional of the consumption, where the scope decides at the split into the branch, see `Scope.pushDependencies`, e.g., `p` for `t:=measure(p); if c { s:=measure(p); } else { x:=H(x); }` with `p:=dup(x)` in a branch)
 			if(!(lu.use&&lu.use.implicitDup)) return false;
 			if(inNestedBranch&&lu.time<consumption.consumedAt) return true;
 			auto last=lu.scope_.lastUses.here(lu.decl);
+			if(last&&!last.isConsumption()){ // (the version continues after the branch: through its merges, e.g., `v0` for `if l { u1:=!v0; forget(u1); } else { t2:=measure(v0); } u3:=!v0; forget(u3); a:=X(a);`)
+				auto end=endAfterMerges(lu.decl,lu.scope_);
+				return end&&end.consumedAt<consumption.time;
+			}
 			return last&&last !is lu&&last.isConsumption()&&last.time<consumption.consumedAt;
 		}
 		auto root=scope_.lastUses.root();
@@ -717,7 +734,17 @@ final class LastUse{
 		static Scope pathScope(LastUse lu){ // (for a last use that stands for a use in a branch of a nested conditional, that branch)
 			return lu.forwardTo&&lu.use&&lu.use.scope_?lu.use.scope_:lu.scope_;
 		}
-		Dependency throughForgets(Dependency d,LastUse lu){ // (through the forgets on the path of `lu` before it, which are decided after it records the dependencies, e.g., for `v2` in `v1:=X(dup(v0)); v2:=!v1; e:=v2; if k { a:=X(a); t:=measure(v2); } else { m:=measure(v1); }` with `v0:=!a`: its dependency at `a:=X(a)` is `v1`, which the branch forgets at the split)
+		static LastUse endBefore(Declaration x,LastUse lu){ // (the forget or consumption of the version of `x` on the path of `lu`, before it)
+			LastUse f=null;
+			for(Scope sc=lu.scope_;sc&&!f;){ // (also of a version from before the nested scope)
+				f=sc.lastUses.peek(sc.getSplit(x));
+				auto nsc=cast(NestedScope)sc;
+				sc=nsc&&sc.lastUses.parent?nsc.parent:null;
+			}
+			while(f&&f.kind==Kind.lazySplit&&f.splitFrom) for(f=f.splitFrom;f.forwardTo;f=f.forwardTo){} // (a version that continues into the nested scope: its last use before it)
+			return f&&!f.forwardTo&&f.kind.among(Kind.synthesizedForget,Kind.consumption)&&f.time<lu.time?f:null;
+		}
+		Dependency throughEnds(Dependency d,LastUse lu){ // (through the forgets and consumptions on the path of `lu` before it, which can be decided after it records the dependencies, e.g., for `v2` in `v1:=X(dup(v0)); v2:=!v1; e:=v2; if k { a:=X(a); t:=measure(v2); } else { m:=measure(v1); }` with `v0:=!a`: its dependency at `a:=X(a)` is `v1`, which the branch forgets at the split; or with `m:=measure(v1);` instead of the conditional, which consumes `v1` when the forget of `v0` cancels the implicit `dup` there)
 			if(d.isTop) return d;
 			auto r=d.dup;
 			SetX!Declaration seen;
@@ -726,8 +753,8 @@ final class LastUse{
 				foreach(x;r.dependencies){
 					if(x in seen) continue;
 					seen.insert(x);
-					auto f=lu.scope_.lastUses.peek(lu.scope_.getSplit(x));
-					if(!f||f.forwardTo||f.kind!=Kind.synthesizedForget||f.time>=lu.time) continue;
+					auto f=endBefore(x,lu);
+					if(!f) continue;
 					replaceVersions(r,x,f.dep);
 					changed=true;
 					break;
@@ -868,7 +895,7 @@ final class LastUse{
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
 				if(lu.use) foreach(c;lu.cancelable){ // (a last use that would have been cancelled here if the dependency through `decl` had been known)
 					auto prev=c[0],id=prev.decl.getId;
-					auto atConsumption=hasVersion(c[1],decl)?c[1]:throughForgets(c[1],lu);
+					auto atConsumption=hasVersion(c[1],decl)?c[1]:throughEnds(c[1],lu);
 					if(id==lu.decl.getId||outOfScopeOnPath(id,pathScope(lu))||!hasVersion(atConsumption,decl)&&!hasVersion(atConsumption,lu.decl)) continue;
 					auto by=cdep; // (the dependency of `decl` where its version on this path ends)
 					if(prev.splitFrom){ // (a version in a branch, see `recordCancelable`: it keeps the value while the version of `decl` on this path is available)
