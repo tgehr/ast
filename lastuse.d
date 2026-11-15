@@ -394,7 +394,7 @@ final class LastUse{
 			if(kind==Kind.synthesizedForget) bs.uncomputations~=q(this,at);
 			else if(auto outer=outerVersion(decl,bs)) bs.outerConsumptions~=q(outer,this,at);
 		}
-		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=cast(NestedScope)nsc.parent){
+		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null){ // (not the scopes around a nested function, e.g., a lambda, whose analysis has its own order: its captures are their events)
 			note(cast(BlockScope)nsc);
 			if(nsc.continuedLog) noteContinued(nsc);
 		}
@@ -668,7 +668,7 @@ final class LastUse{
 		}
 		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
 		auto fromConditional=from&&splitBranch(consumption)?from:null; // (not in loop bodies, whose next iterations come after the consumption)
-		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&lu.kind!=Kind.consumption&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later)
+		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&!(lu.kind==Kind.consumption&&(lu.consumedAt>=consumption.consumedAt||lu.consumesConst()))&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later, and not consumptions in nested scopes after the consumption)
 		auto inNestedBranch=from&&scope_.activeNestedScopes.any!(n=>isBranch(n)&&from.isNestedIn(n)); // (the consumption is in a branch of a nested conditional that is being analyzed, after the last uses of this scope and of its earlier nested scopes)
 		bool goneBefore(LastUse lu){ // (the variable of an implicit `dup` is consumed or forgotten later, but before the consumption, e.g., `o` in `t:=(measure(o),measure(o)); y:=H(x);` for `o:=dup(x)`, also in another branch; or it continues into the conditional of the consumption, where the scope decides at the split into the branch, see `Scope.pushDependencies`, e.g., `p` for `t:=measure(p); if c { s:=measure(p); } else { x:=H(x); }` with `p:=dup(x)` in a branch)
 			if(!(lu.use&&lu.use.implicitDup)) return false;
@@ -716,6 +716,30 @@ final class LastUse{
 		}
 		static Scope pathScope(LastUse lu){ // (for a last use that stands for a use in a branch of a nested conditional, that branch)
 			return lu.forwardTo&&lu.use&&lu.use.scope_?lu.use.scope_:lu.scope_;
+		}
+		Dependency throughForgets(Dependency d,LastUse lu){ // (through the forgets on the path of `lu` before it, which are decided after it records the dependencies, e.g., for `v2` in `v1:=X(dup(v0)); v2:=!v1; e:=v2; if k { a:=X(a); t:=measure(v2); } else { m:=measure(v1); }` with `v0:=!a`: its dependency at `a:=X(a)` is `v1`, which the branch forgets at the split)
+			if(d.isTop) return d;
+			auto r=d.dup;
+			SetX!Declaration seen;
+			for(bool changed=true;changed&&!r.isTop&&!hasVersion(r,decl)&&!hasVersion(r,lu.decl);){
+				changed=false;
+				foreach(x;r.dependencies){
+					if(x in seen) continue;
+					seen.insert(x);
+					auto f=lu.scope_.lastUses.peek(lu.scope_.getSplit(x));
+					if(!f||f.forwardTo||f.kind!=Kind.synthesizedForget||f.time>=lu.time) continue;
+					replaceVersions(r,x,f.dep);
+					changed=true;
+					break;
+				}
+			}
+			return r;
+		}
+		static LastUse onPath(LastUse lu){ // (for a last use that stands for a consumption in a branch of a nested conditional, that consumption: its dependency is the one on the path of the branch, which the walks of the consumptions in the other branches do not change, e.g., `v0` for `if k { t:=measure(v0); } else { a:=X(a); }` with `v0:=X(dup(a))`)
+			if(pathScope(lu) is lu.scope_) return lu;
+			auto clu=lu.use.scope_.lastUses.peek(lu.use.meaning);
+			while(clu&&clu.use !is lu.use) clu=clu.forwardTo; // (through the splits into the nested scopes after it)
+			return clu&&clu.isConsumption()?clu:lu;
 		}
 		static bool onPathOf(Declaration d,Declaration x){ // (`d` is `x` on one of the paths of its merges)
 			return d is x||d.derivedSequence.canFind(x);
@@ -844,7 +868,8 @@ final class LastUse{
 				if(lu.kind==Kind.synthesizedForget) lu.scope_.noteDependencyResolved(lu.dep);
 				if(lu.use) foreach(c;lu.cancelable){ // (a last use that would have been cancelled here if the dependency through `decl` had been known)
 					auto prev=c[0],id=prev.decl.getId;
-					if(id==lu.decl.getId||outOfScopeOnPath(id,pathScope(lu))||!hasVersion(c[1],decl)) continue;
+					auto atConsumption=hasVersion(c[1],decl)?c[1]:throughForgets(c[1],lu);
+					if(id==lu.decl.getId||outOfScopeOnPath(id,pathScope(lu))||!hasVersion(atConsumption,decl)&&!hasVersion(atConsumption,lu.decl)) continue;
 					auto by=cdep; // (the dependency of `decl` where its version on this path ends)
 					if(prev.splitFrom){ // (a version in a branch, see `recordCancelable`: it keeps the value while the version of `decl` on this path is available)
 						auto end=consumption.consumedAt;
@@ -853,16 +878,16 @@ final class LastUse{
 							while(dv&&dv.forwardTo&&dv.kind==Kind.lazySplitSink) dv=dv.forwardTo;
 							if(!dv||dv.kind==Kind.lazySplit){
 								end=0;
-								by=dv?dv.depAtSplit:atSplit;
+								by=nested&&lu.scope_ is level?cdep:dv?dv.depAtSplit:atSplit; // (where the walk enters the branch at its split: through the consumptions after the split)
 							}else end=dv.isConsumption()?dv.consumedAt:dv.time;
 						}
 						if(lu.time<end) continue;
 						splitOutOfScope.insert(id);
 					}
-					auto ndep=c[1].dup;
+					auto ndep=atConsumption.dup;
 					replaceVersions(ndep,decl,by);
 					if(!hasVersion(ndep,lu.decl)) continue;
-					replaceVersions(ndep,lu.decl,lu.dep,lu.use);
+					replaceVersions(ndep,lu.decl,onPath(lu).dep,lu.use);
 					if(!ndep.isTop) continue;
 					auto at=cancelUse(prev);
 					auto dupUse=prev.prevImplicitDup?prev.prevImplicitDup.use:null;
@@ -919,6 +944,11 @@ final class LastUse{
 		// TODO: the error has to be propagated out further
 	}
 
+	private bool consumesConst(){ // (a consumption of a variable that is `const` there, which is forgotten later, see `checkConsumable`)
+		if(constBlock.length) return true;
+		auto nsc=cast(NestedScope)scope_;
+		return nsc&&nsc.parent.isConst(decl);
+	}
 	bool checkConsumable(){
 		//imported!"util.io".writeln(constBlock.map!(id=>id.loc)," ",use?text(use.loc):"<?>");
 		auto nconstBlock=constBlock.length?constBlock[$-1]:null;
@@ -2377,6 +2407,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		LastUse lu; // (the consumption or the uncomputation)
 		bool need,active; // (the uncomputation needs the version from before the split if it is active, e.g., once its definition reads the version of the branch before the split)
 		size_t def=size_t.max; // (the event of that definition)
+		BlockScope[] around; // (for the event of a definition: the branches around it, as `LastUse.noted` for the others)
 	}
 	static ContinuedLog logOf(BlockScope b){ // (of the scope where the code after the conditional of `b` continues it, if it does)
 		auto p=cast(NestedScope)b.parent;
@@ -2473,19 +2504,22 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return visit(d);
 	}
-	static size_t definitionTime(Declaration d,Scope b){ // (of the first version in `b` that it is derived or updated from)
+	static Event definitionEvent(size_t i,Declaration d,Scope b,size_t p){ // (of the first version in `b` that it is derived or updated from)
 		size_t r=size_t.max;
+		Scope at=null;
 		SetX!Declaration visited;
 		void visit(Declaration x){
 			if(x in visited||!x.scope_||!x.scope_.isNestedIn(b)) return;
 			visited.insert(x);
 			auto lus=x.scope_.lastUses.retired.get(x,null);
-			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.here(x)) r=min(r,lu.time);
+			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.here(x)) if(lu.time<r) r=lu.time, at=x.scope_;
 			foreach(y;x.derivedSequence) visit(y);
 			foreach(c;x.definitionSources.consumes) visit(c[0]);
 		}
 		visit(d);
-		return r==size_t.max?0:r;
+		auto e=Event(i,r==size_t.max?0:r,p);
+		for(auto nsc=cast(NestedScope)at;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null) if(auto bs=cast(BlockScope)nsc) if(LastUse.isBranch(bs)) e.around~=bs; // (see `LastUse.noteBranchEvent`)
+		return e;
 	}
 	foreach(i,b;branches){
 		foreach(c;outerConsumptions(b)){
@@ -2502,7 +2536,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 				if(p==size_t.max) continue;
 				if(lu.decl.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(b))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep,true)){ // (it reads the version of the branch)
 					events~=Event(i,lu.time,p,lu,true,false,events.length+1);
-					events~=Event(i,definitionTime(lu.decl,b),p);
+					events~=definitionEvent(i,lu.decl,b,p);
 				}else events~=Event(i,lu.time,p,lu,true,true);
 			}
 		}
@@ -2514,9 +2548,10 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 	auto edges=new size_t[][](events.length);
 	auto notedSets=new SetX!BlockScope[](events.length);
 	auto hasNotedSet=new bool[](events.length);
+	BlockScope[] noted(size_t k){ return events[k].lu?events[k].lu.noted:events[k].around; }
 	ref SetX!BlockScope notedSet(size_t k){
 		if(!hasNotedSet[k]){
-			foreach(y;events[k].lu.noted) notedSets[k].insert(y);
+			foreach(y;noted(k)) notedSets[k].insert(y);
 			hasNotedSet[k]=true;
 		}
 		return notedSets[k];
@@ -2529,17 +2564,16 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		return false;
 	}
 	bool siblingsNoted(size_t k,size_t l){ // (a branch that has the event `k`, and another branch of its conditional that has the event `l`; the branches that are continued only have the events of the code after their conditionals, and their siblings return)
-		foreach(x;events[k].lu.noted){
+		foreach(x;noted(k)){
 			if(!LastUse.interleavable(x)) continue;
 			foreach(z;x.getSiblingScopes()){
 				auto y=cast(BlockScope)z;
-				if(y&&y !is x&&LastUse.interleavable(y)&&(y in notedSet(l)||notedContinued(events[l].lu,y))) return true;
+				if(y&&y !is x&&LastUse.interleavable(y)&&(y in notedSet(l)||events[l].lu&&notedContinued(events[l].lu,y))) return true;
 			}
 		}
 		return false;
 	}
 	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `NestedScope.continuedLog`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`)
-		if(!events[k].lu||!events[l].lu) return true;
 		return !siblingsNoted(k,l)&&!siblingsNoted(l,k);
 	}
 	foreach(i;0..branches.length){
