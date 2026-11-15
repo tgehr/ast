@@ -4956,6 +4956,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	// (nested blocks used as statements share the enclosing scope, e.g., when the analysis wrapped a nested loop: flatten
 	// them, so that nested loops are in the same block as the statements after them and can take continuations)
 	nbdy.s=flattenStatementBlocks(nbdy.s);
+	nbdy.s=reachableStatements(nbdy.s); // (the analysis of the loop checked the others; in the function, a `return` in a branch drops the classical variables from outside, which the code after it cannot use, see `Scope.hiddenAfterReturn`)
 	static if(is(T==ForExp)){
 		auto lhs=cast(Expression[])ids(loopParams,false);
 		if(loopParams[0][3]&&loopParams[0][2]!is loopVarType){
@@ -4982,6 +4983,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		auto nrst=loop.reset.copy(cargsDefault);
 		if(dropped.length) nrst.s=withoutForgets(nrst.s,dropped,false);
 		nrst.s=flattenStatementBlocks(nrst.s);
+		nrst.s=reachableStatements(nrst.s);
 	}else if(!isCertainReturn){
 		if(continuation){
 			auto thene=new ReturnExp(ce);
@@ -6424,6 +6426,17 @@ private bool literalIs(alias pred)(Expression e){
 	return v&&pred(v.get());
 }
 
+// drops the statements after one that does not complete, also in the branches of conditionals (as `guard` does)
+Expression[] reachableStatements(Expression[] stms){
+	foreach(i,x;stms){
+		if(auto ite=cast(IteExp)x){
+			ite.then.s=reachableStatements(ite.then.s);
+			if(ite.othw) ite.othw.s=reachableStatements(ite.othw.s);
+		}
+		if(endsWithReturn(x)) return stms[0..i+1];
+	}
+	return stms;
+}
 // splices nested blocks used as statements (which are analyzed in the enclosing scope) into the enclosing block
 Expression[] flattenStatementBlocks(Expression[] stms){
 	Expression[] r;
