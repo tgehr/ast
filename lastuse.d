@@ -1942,6 +1942,7 @@ struct LastUses{
 		assert(sc&&nestedScopes.length);
 	}do{
 		auto lu=new LastUse(LastUse.Kind.lazyMerge,sc,decl,null,null,nestedScopes);
+		foreach(nsc;nestedScopes) nsc.mergeLastUses~=lu;
 		add(lu);
 		if(!lu.prevImplicitDup){
 			foreach(nsc;nestedScopes){
@@ -2133,8 +2134,12 @@ struct LastUses{
 			r.splitFrom=remap(lu.splitFrom);
 			r.splitSource=remap(lu.splitSource);
 			r.nestedScopes=null;
-			foreach(nsc;lu.nestedScopes)
-				if(auto nnsc=cast(NestedScope)mapScope(nsc)) r.nestedScopes~=nnsc;
+			foreach(nsc;lu.nestedScopes){
+				if(auto nnsc=cast(NestedScope)mapScope(nsc)){
+					r.nestedScopes~=nnsc;
+					nnsc.mergeLastUses~=r;
+				}
+			}
 			r.prev=remap(lu.prev);
 			r.next=remap(lu.next);
 			return r;

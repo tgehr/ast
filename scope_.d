@@ -278,8 +278,16 @@ struct Dependencies{
 		}
 		return result;
 	}
-	bool matches(Dependencies rhs){ // TODO: make faster?
-		auto ids=getIds,rids=rhs.getIds;
+	bool matches(Dependencies rhs){ // (as `getIds==rhs.getIds`: the entries that the tables share give the same identifiers, and each identifier has at most one entry in a table)
+		Declaration[] keys;
+		table.eachDifference(rhs.table,(Declaration k){ keys~=k; });
+		typeof(getIds()) ids,rids;
+		foreach(k;keys){
+			auto id=k.getId;
+			if(id==Id()) continue;
+			if(auto v=table.peek(k)) ids[id]=(*v).getIds();
+			if(auto v=rhs.table.peek(k)) rids[id]=(*v).getIds();
+		}
 		return ids==rids;
 	}
 	string toString(){
@@ -3588,18 +3596,15 @@ abstract class Scope{
 					return true;
 				return false;
 			}
-			bool compareTables(SymbolTable symtab,SymbolTable rsymtab){
-				foreach(name,decl;rsymtab){
-					if(cast(DeadDecl)decl) continue;
-					if(name !in symtab)
-						return false;
-				}
-				foreach(name,decl;symtab){
-					if(cast(DeadDecl)decl) continue;
-					if(!checkDecl(decl,rsymtab.get(name,null)))
-						return false;
-				}
-				return true;
+			bool compareTables(SymbolTable symtab,SymbolTable rsymtab){ // (the entries that the tables share are equal)
+				bool equal=true;
+				symtab.eachDifference(rsymtab,(Id name){
+					if(!equal) return;
+					auto decl=symtab.get(name,null),rdecl=rsymtab.get(name,null);
+					if(rdecl&&!cast(DeadDecl)rdecl&&name !in symtab) equal=false;
+					else if(decl&&!cast(DeadDecl)decl&&!checkDecl(decl,rdecl)) equal=false;
+				});
+				return equal;
 			}
 			if(!compareTables(symtab,rhs.symtab))
 				return false;
@@ -3792,10 +3797,10 @@ abstract class Scope{
 			trackedTemporaries=trackedTemporaries.map!(x=>x.dup).array;
 			nlastUses=lastUses.getSnapshot(this);
 			foreach(d,lu;nlastUses) if(lu&&lu.isConsumption()) consumedBefore.insert(d);
-			if(auto fd=getFunction()){
-				prevCapturedDecls=fd.capturedDecls;
-				numMovedCaptures=fd.movedCaptures.length;
-			}
+		}
+		if(auto fd=getFunction()){ // (also of a snapshot that is not restored: `updateStateSnapshot` adds the captures since then)
+			prevCapturedDecls=fd.capturedDecls;
+			numMovedCaptures=fd.movedCaptures.length;
 		}
 		auto r=ScopeState(dependencies.dup,declProps,toRemove,trackedTemporaries,nsymtab,nrnsymtab,nlastUses,prevCapturedDecls,restoreable);
 		r.consumedBefore=consumedBefore;
@@ -3841,26 +3846,32 @@ abstract class Scope{
 			state.prevCapturedDecls=fd.capturedDecls;
 			state.numMovedCaptures=fd.movedCaptures.length;
 		}
-		void splitSymtab(ref SymbolTable symtab,bool replace){
-			Q!(Declaration,Declaration)[] splits;
-			foreach(id,ref decl;symtab){
+		void splitSymtab(ref SymbolTable symtab,ref SymbolTable current,bool replace){ // (only the entries that differ from those of the table of this scope can be stale: a split into this scope replaces the entry there)
+			Q!(size_t,Id)[] ids;
+			symtab.eachDifference(current,(Id id){
+				size_t pos;
+				if(symtab.tryGetPosition(id,pos)) ids~=q(pos,id);
+			});
+			sort!"a[0]<b[0]"(ids);
+			foreach(i,e;ids){
+				if(i&&ids[i-1][1]==e[1]) continue;
+				auto decl=symtab[e[1]];
 				auto splt=getSplit(decl);
-				if(splt !is decl){
-					if(replace){
-						if(state.dependencies.tracked(decl))
-							state.dependencies.replace(decl,splt);
-						state.declProps.replaceDecl(decl,splt);
-						if(auto lu=state.lastUses.get(decl,null)){ // (e.g., forgotten on entry)
-							state.lastUses.remove(decl);
-							state.lastUses[splt]=lu;
-						}
+				if(splt is decl) continue;
+				if(replace){
+					if(state.dependencies.tracked(decl))
+						state.dependencies.replace(decl,splt);
+					state.declProps.replaceDecl(decl,splt);
+					if(auto lu=state.lastUses.get(decl,null)){ // (e.g., forgotten on entry)
+						state.lastUses.remove(decl);
+						state.lastUses[splt]=lu;
 					}
-					decl=splt;
 				}
+				symtab[e[1]]=splt;
 			}
 		}
-		splitSymtab(state.rnsymtab,true);
-		splitSymtab(state.symtab,false);
+		splitSymtab(state.rnsymtab,rnsymtab,true);
+		splitSymtab(state.symtab,symtab,false);
 	}
 
 	Declaration updateDecl(Declaration decl,size_t since=0){
@@ -4334,6 +4345,7 @@ class NestedScope: Scope{
 	override DatDecl getDatDecl(){ return parent.getDatDecl(); }
 
 	NestedScope[] siblingScopes;
+	LastUse[] mergeLastUses; // (the last uses of the merges of this scope, see `LastUses.lazyMerge`)
 	bool siblingsFinal;
 	NestedScope[] getSiblingScopes(){
 		if(siblingsFinal) return siblingScopes;

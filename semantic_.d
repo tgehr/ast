@@ -1724,6 +1724,7 @@ struct FixedPointIterState{
 	BlockScope forgetScope=null;
 	CompoundExp prevBdy,nextBdy; // (to explain restrictions due to quantum-controlled `return`)
 	MapX!(Declaration,Declaration) mustBeConstFromDummies;
+	bool restoreable; // (only a loop that is lowered restores its state before the loop, see `restoreBeforeLoop`, and its lowering reads the `const` blocks of the state before the last iteration, see `ScopeState.loopParams`)
 	bool dummyAnalysisRan=false;
 	static if(language==silq) UnreachableCode unreachable=null; // (see `lowerLoop`)
 	void beginIteration(){
@@ -1751,7 +1752,7 @@ struct FixedPointIterState{
 			sc.updateStateSnapshot(origStateSnapshot);
 			prevStateSnapshot=origStateSnapshot;
 		}
-		nextStateSnapshot=sc.getStateSnapshot(true);
+		nextStateSnapshot=sc.getStateSnapshot(restoreable);
 		nextFlags=flags;
 	}
 	bool converged(){ return nextStateSnapshot==prevStateSnapshot&&nextFlags==prevFlags; }
@@ -1761,8 +1762,11 @@ struct FixedPointIterState{
 	}
 }
 FixedPointIterState startFixedPointIteration(Scope sc,ref StmFlags flags){
-	auto origStateSnapshot=sc.getStateSnapshot(true);
-	return FixedPointIterState(origStateSnapshot,flags,origStateSnapshot,flags,origStateSnapshot,flags);
+	auto restoreable=shouldLowerLoop(sc);
+	auto origStateSnapshot=sc.getStateSnapshot(restoreable);
+	auto r=FixedPointIterState(origStateSnapshot,flags,origStateSnapshot,flags,origStateSnapshot,flags);
+	r.restoreable=restoreable;
+	return r;
 }
 struct DummyAnalysisData{
 	MapX!(Declaration,Declaration) dummies; // candidate -> dummy placeholder
@@ -1923,9 +1927,18 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 
 // TODO: supertypes for define and assign?
 
-Declaration[] loopConstForgetCandidates(Scope sc,NestedScope bodyScope){
+Declaration[] loopConstForgetCandidates(Scope sc,NestedScope bodyScope){ // (those whose last uses in the body exist, in the order of the table: the last use of another variable in the body is the one before the loop, which stays its last use after the loop)
+	Q!(size_t,Declaration)[] used;
+	foreach(cdecl,lu;bodyScope.lastUses.entries){
+		size_t pos;
+		if(!sc.rnsymtab.tryGetPosition(cdecl.getId,pos)) continue;
+		auto decl=sc.rnsymtab.get(cdecl.getId,null);
+		if(bodyScope.getSplit(decl) is cdecl) used~=q(pos,decl);
+	}
+	sort!"a[0]<b[0]"(used);
 	Declaration[] result;
-	foreach(_,decl;sc.rnsymtab){
+	foreach(e;used){
+		auto decl=e[1];
 		if(cast(DeadDecl)decl||decl.isSemError()) continue;
 		if(decl.isToplevelDeclaration()) continue;
 		auto type=typeForDecl(decl);
@@ -1942,7 +1955,16 @@ Declaration[] pinnedLoopMergeForgetCandidates(Scope sc,BlockScope loopScope,Bloc
 	alias LastUse=imported!"ast.lastuse".LastUse;
 	Declaration[] result;
 	if(!loopScope||!forgetScope) return result;
-	foreach(_,decl;sc.rnsymtab){
+	Q!(size_t,Declaration)[] merged; // (only the merges of the scopes of the loop have last uses whose nested scopes are those, in the order of the table)
+	foreach(lu;loopScope.mergeLastUses){
+		if(!lu.decl||!lu.nestedScopes.any!(nsc=>nsc is forgetScope)) continue;
+		size_t pos;
+		if(sc.rnsymtab.tryGetPosition(lu.decl.getId,pos)) merged~=q(pos,sc.rnsymtab.get(lu.decl.getId,null));
+	}
+	sort!"a[0]<b[0]"(merged);
+	foreach(i,e;merged){
+		if(i&&merged[i-1][0]==e[0]) continue;
+		auto decl=e[1];
 		if(cast(DeadDecl)decl||decl.isSemError()) continue;
 		if(decl.isToplevelDeclaration()) continue;
 		auto type=typeForDecl(decl);
