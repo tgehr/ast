@@ -679,6 +679,7 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 	if(original&&original.type&&!isEmpty(original.type)&&args.any!(arg=>isEmpty(arg.type))){ // (the call aborts, but the other operands are evaluated as well, e.g., `x+(1,)[2]` for `x:!ℝ`)
 		auto type=original.type;
 		foreach(arg;args) if(!isEmpty(arg.type)){ type=arg.type; break; }
+		if(behavior==OB.pow&&isℤmodTy(type)) type=ℕt(true); // (the exponent, see `powerType`)
 		args=annotateEmpty(args,type,context);
 	}
 	foreach(arg;args){

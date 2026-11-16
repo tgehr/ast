@@ -2069,6 +2069,7 @@ abstract class Scope{
 		bool errors=false;
 		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
 		static if(is(T==ReturnExp)){
+			auto erroneous=loc.isSemError(); // (it consumes the variables that it cannot forget without errors, as its expression may have, see `returnExpSemantic`)
 			auto dropsClassical=!codeAfterStatement&&dropsClassicalAtReturn(); // (the unreachable code after the `return` sees the variables that it does not consume, see `hiddenAfterReturn`)
 			bool dropped(Declaration d){ return dropsClassical&&d.scope_ !is this&&isClassicalValue(d); } // (forgetting it has no effect, while consuming it would split it into the other branches; dropping it does not change what blocks the others)
 			if(dropsClassical) returnDropped=true;
@@ -2110,6 +2111,14 @@ abstract class Scope{
 				// for i in 0..2 { y:=vector(n,0:𝔹); } } return 1;`, which forgets `x`)
 				if(!(d in blockedAtStart?canForgetAppend(loc,d,false)||canForgetAppend(loc,d):canForgetAppend(loc,d))){
 					if(!d.isSemError()){
+						static if(is(T==ReturnExp)) if(erroneous){
+							if(!isConst(d)&&canSplit(d)){
+								forgot=true;
+								consume(d,null);
+								clearConsumed();
+							}
+							continue;
+						}
 						bool done=false;
 						if(!canSplit(d)){
 							if(auto read=isConst(d)){
@@ -2157,6 +2166,7 @@ abstract class Scope{
 	}
 	bool returnDropped=false; // (a `return` dropped the classical variables from outside, which the unreachable code after it cannot use, see `hiddenAfterReturn`)
 	bool codeAfterStatement=false; // (other statements follow the statement that is being analyzed in this scope, see `compoundExpSemantic`)
+	final bool returnEndsBranch(){ return !codeAfterStatement&&dropsClassicalAtReturn(); } // (a `return` here ends a branch outside of loops and other nested scopes)
 	final bool hiddenAfterReturn(Declaration d){
 		return returnDropped&&d.scope_&&d.scope_ !is this&&d.scope_.getFunction() is getFunction()&&isClassicalValue(d);
 	}

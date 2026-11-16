@@ -9890,7 +9890,7 @@ Expression powerType(Expression t1, Expression t2){
 	if(!(num1||isEmpty(t1))||!(num2||isEmpty(t2))){
 		if(auto zmod1=isℤmodTy(t1)){
 			if(zmod1.isStar&&zmod1.isClassical){
-				if(num2==NumericType.Bool||util.among(num2,NumericType.ℕt,NumericType.ℤt)&&t2.isClassical()){
+				if(num2==NumericType.Bool||util.among(num2,NumericType.ℕt,NumericType.ℤt)&&t2.isClassical()||isEmpty(t2)){ // (also `⊥`, e.g., the variable of a loop over an erroneous container, see `replaceErroneousContainer`)
 					return t2.isClassical()?t1:t1.getQuantum();
 				}
 				if(auto fty=isFixedIntTy(t2)) {
@@ -11483,8 +11483,14 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			if(ok) subscribeToTypeUpdates(fd,sc,ret.loc);
 		}
 	}
-	if(ret.isSemError())
+	if(ret.isSemError()){
+		static if(language==silq) if(sc.returnEndsBranch()){ // (error recovery: it still closes the scope, see `Scope.close`, otherwise the merge closes the branch as one that aborts, whose consumptions can make variables unavailable after the conditional, e.g., `v0` for `v0:=dup(a); t:=measure(v0); if c { a:=X(a); return (a,tq); } u:=!v0;`)
+			sc.clearConsumed();
+			sc.releaseTypeConstBlocks(typeConstBlockSave,true);
+			sc.close(ret);
+		}
 		return ret;
+	}
 	static if(language==silq){
 		sc.clearConsumed();
 		sc.releaseTypeConstBlocks(typeConstBlockSave,true); // (the value is converted to the return type, which does not mention local variables, e.g., `measure[𝔹^n](x)`)
