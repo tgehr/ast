@@ -211,19 +211,23 @@ private void linkLoweredVariables(Scope sc,ref SymbolTable before){
 	foreach(id,d;before)
 		if(auto dd=cast(DeadDecl)d) if(id !in sc.rnsymtab) sc.symtabInsert(dd); // (explains uses of a variable that the loop does not produce)
 }
-// whether a `return` can end an iteration of a `while` loop in `e` for all basis states, i.e., it is not in a quantum
-// conditional of the body of the loop that does not definitely return (the code after one is reachable for the other basis states)
-private bool whileStopsAtReturn(Expression e){
+// whether a `return` or a statement that does not complete (e.g., `assert(false)`) can end an iteration of the loop with
+// the body `bdy` for all basis states, i.e., it is not in a quantum conditional of the body that does not definitely return
+// (the code after one is reachable for the other basis states)
+private bool stopsEarly(CompoundExp bdy){
+	bool r=false;
+	visitStmSkip(bdy,(Expression y){
+		if(r) return false;
+		if(auto ite=cast(IteExp)y) if(ite.cond.type&&!ite.cond.type.isClassical()&&!definitelyReturns(ite)) return false;
+		if(cast(ReturnExp)y||definitelyReturns(y)) r=true;
+		return !r;
+	});
+	return r;
+}
+private bool whileStopsEarly(Expression e){ // (a `while` loop in `e`)
 	bool r=false;
 	visitStm(e,(Expression x){
-		auto we=cast(WhileExp)x;
-		if(r||!we) return;
-		visitStmSkip(we.bdy,(Expression y){
-			if(r) return false;
-			if(auto ite=cast(IteExp)y) if(ite.cond.type&&!ite.cond.type.isClassical()&&!definitelyReturns(ite)) return false;
-			if(cast(ReturnExp)y) r=true;
-			return !r;
-		});
+		if(auto we=cast(WhileExp)x) if(!r&&stopsEarly(we.bdy)) r=true;
 	});
 	return r;
 }
@@ -232,7 +236,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		auto range=loop.aggr.isRange;
 		if(!range||!loop.loopVar) return null;
 	}
-	if(loop.noSplit||whileStopsAtReturn(loop)) return null; // (the copies of a `while` loop evaluate its condition: they would run its iterations after the return, e.g., forever for `while true { …; return x; }` under quantum control from outside of the loop)
+	if(loop.noSplit||whileStopsEarly(loop)) return null; // (the copies of a `while` loop evaluate its condition: they would run its iterations after the return, e.g., forever for `while true { …; return x; }` under quantum control from outside of the loop, or after a failing `assert`, e.g., for `while j<3 { if j>=1 { assert(false); } else { j+=1; } b:=X(b); }`)
 	static if(language==silq) if(containsDoWhile(loop.bdy)) return null;
 	enum NONE=-3,LSH=-2,SHARED=-1;
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
@@ -844,7 +848,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				ites~=Ite(e,i,info,ctx,atoms.length,true,heads);
 				auto before=atoms.length;
 				auto list=blockStms(lbdy.s,true);
-				foreach(j,dj;divsOf(list,Div.init)) flatten(list[j],i,ctx~k,inElse~false,dj); // (a nested loop continues with its next iteration)
+				foreach(j,dj;divsOf(list,dv)) flatten(list[j],i,ctx~k,inElse~false,dj); // (a nested loop continues with its next iteration, and then as the path after it, e.g., for `s+=1` in `repeat 2 { s+=1; } assert(false);`)
 				if(atoms.length!=before) return;
 				ites=ites[0..k];
 			}
@@ -1261,7 +1265,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		foreach(x,k;c) if(quantumIte(k)) q=x;
 		foreach(d;classicalUpdates(a)){
 			if(d in isCarried) return true;
-			if(q<0) continue;
+			if(q<0){
+				if(!iota(a+1).any!(b=>d in ainfos[b].fresh)) return true; // (from outside of the loop, which does not change it otherwise, e.g., under quantum control from outside of the loop)
+				continue;
+			}
 			bool local=false; // (defined in the branch of the conditional, also by this atom, e.g., `x:=dup(i)` before an `assert(false)`)
 			foreach(b;0..a+1){
 				auto x=atoms[b].ites.countUntil(c[q]);
@@ -1281,9 +1288,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	auto counted=iota(atoms.length).filter!(a=>atomColor[a]>=0&&!dropped(a,atomColor[a])).map!(a=>atomColor[a]).array;
 	if((counted~(counted.any!(c=>c>P)?[P]:[])).sort.uniq.walkLength<2&&!dceRemoved) return null;
 	foreach(a,c;atomColor) if(c==P) foreach(u;ainfos[a].consumed) if(u in isCarried&&colorOf(u)>P) return null; // (the main loop runs on copies of late lifted state)
-	if(hasQuantumReturn){
-		// The split-off loops also run for basis states that have returned already: their computations must not fail
-		// on such quantum data (e.g., a division by zero that the return guards against).
+	if(hasQuantumReturn||stopsEarly(loop.bdy)){
+		// The split-off loops also run for basis states that have returned already, and the iterations after a statement
+		// that does not complete (e.g., a failing `assert`, which only the main loop runs): their computations must not
+		// fail on such data (e.g., a division by zero that the return guards against, or an index that the `assert` checks).
 		foreach(a,c;atomColor) if(c!=P&&!cannotFail(atoms[a].e)) return null;
 		foreach(ref it;ites) if(!it.heads.all!cannotFail) return null;
 		foreach(a,c;atomColor) if(c!=P&&c!=SHARED&&atoms[a].ites.any!(k=>ites[k].isLoop&&cast(WhileExp)ites[k].e)) return null; // (nor diverge, e.g., in `if k>5 { j:=0; while true { j+=1; } }` after the return)
@@ -2713,10 +2721,11 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	SetX!Id liftedVars; // (the main loop runs on copies of them: all of their versions are recomputed, also those of classical types, e.g., of `x` in `x:=vector(0,…); x:=x~vector(1,…);`)
 	foreach(v;liftedNames) liftedVars.insert(v);
 	static if(isDoWhile) foreach(v;exitLifted) liftedVars.insert(v);
-	bool recomputed(Identifier id){ // (quantum values, functions and types are recomputed, other classical values are logged)
-		if(cast(FunctionDef)id.meaning||!id.type) return true;
-		return !id.type.isClassical()||!!cast(FunTy)id.type||isTypeTy(id.type)||isQNumeric(id.type)||varName(id) in liftedVars;
+	bool recomputedAs(Identifier id,Expression type){ // (quantum values, functions and types are recomputed, other classical values are logged)
+		if(cast(FunctionDef)id.meaning||!type) return true;
+		return !type.isClassical()||!!cast(FunTy)type||isTypeTy(type)||isQNumeric(type)||varName(id) in liftedVars;
 	}
+	bool recomputed(Identifier id){ return recomputedAs(id,id.type); }
 	MapX!(Id,Declaration) invariantDecl; // (quantum variables that the loop reads)
 	bool consumes(Identifier id){ return isVar(id)&&id.type&&!id.type.isClassical()&&!id.constLookup&&!id.implicitDup; }
 	// calls that are not `qfree` with classical results that can be extracted from the statement `s`
@@ -2769,34 +2778,41 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		SetX!Expression extSet;
 		foreach(ce;ext) extSet.insert(ce);
 		SetX!Identifier targets,partial,assigned,indexed;
-		void lhs(Expression e,bool strong,bool fresh){
+		IdMapX!(Identifier,Expression) assignedTypes; // (of the versions that assignments define, e.g., `!𝔹` for `t` in `t:=y[i]; t=true;` for `y[i]=true`, see `lowerIndexReplacement`)
+		void lhs(Expression e,bool strong,bool fresh,AssignExp ae=null){
 			if(auto id=cast(Identifier)e){
 				if(id.constLookup) return;
 				if(!strong) partial.insert(id);
 				else if(fresh) targets.insert(id);
-				else assigned.insert(id);
+				else{
+					assigned.insert(id);
+					if(ae) foreach(r;ae.replacements) if(r.new_&&r.new_.name&&r.new_.name.id==varName(id)) if(auto t=typeForDecl(r.new_)) assignedTypes[id]=t;
+				}
 			}else if(auto ie=cast(IndexExp)e){
 				Expression r=ie;
 				while(auto ie2=cast(IndexExp)r) r=ie2.e;
 				if(auto id=cast(Identifier)r) partial.insert(id);
 				else lhs(r,false,false);
-			}else if(auto tae=cast(TypeAnnotationExp)e) lhs(tae.e,strong,fresh);
-			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) lhs(c,strong,fresh);
-			else if(auto vec=cast(VectorExp)e) foreach(c;vec.e) lhs(c,strong,fresh);
-			else if(auto cat=cast(CatExp)e){ lhs(cat.e1,strong,fresh); lhs(cat.e2,strong,fresh); }
-			else if(auto ce=cast(CallExp)e) lhs(ce.arg,strong,fresh); // (reversed call)
+			}else if(auto tae=cast(TypeAnnotationExp)e) lhs(tae.e,strong,fresh,ae);
+			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) lhs(c,strong,fresh,ae);
+			else if(auto vec=cast(VectorExp)e) foreach(c;vec.e) lhs(c,strong,fresh,ae);
+			else if(auto cat=cast(CatExp)e){ lhs(cat.e1,strong,fresh,ae); lhs(cat.e2,strong,fresh,ae); }
+			else if(auto ce=cast(CallExp)e) lhs(ce.arg,strong,fresh,ae); // (reversed call)
 		}
 		visitStm(s,(Expression x){
 			if(auto de=cast(DefineExp)x) lhs(de.e1,true,true);
-			else if(auto ae=cast(AAssignExp)x) lhs(ae.e1,!!cast(AssignExp)x,false);
+			else if(auto ae=cast(AAssignExp)x) lhs(ae.e1,!!cast(AssignExp)x,false,cast(AssignExp)x);
 			else if(auto ie=cast(IndexExp)x){
 				Expression r=ie;
 				while(auto ie2=cast(IndexExp)r) r=ie2.e;
 				if(auto id=cast(Identifier)r) indexed.insert(id);
 			}
 		});
+		bool definesRecomputed(Identifier id){ return recomputedAs(id,assignedTypes.get(id,id.type)); }
+		bool newlyLogged(Identifier id){ return id in assigned&&recomputed(id)&&!definesRecomputed(id); } // (a classical version of a variable whose previous version is recomputed: defined within the statement, as by a definition)
 		SetX!Id fresh;
 		foreach(id;targets) if(isVar(id)&&!recomputed(id)) fresh.insert(varName(id));
+		foreach(id;assigned) if(isVar(id)&&newlyLogged(id)) fresh.insert(varName(id));
 		visitStmSkip(s,(Expression x){
 			if(x in extSet){
 				n.extracted~=cast(CallExp)x;
@@ -2814,7 +2830,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(!id||!isVar(id)) return true;
 			auto name=varName(id);
 			bool def=id in targets||id in assigned;
-			if(recomputed(id)){
+			if(def?definesRecomputed(id):recomputed(id)){
 				if(def){
 					n.defs.insert(name);
 					n.strong.insert(name);
@@ -2833,7 +2849,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				if(def){
 					n.cdefs.insert(name);
 					n.cstrong.insert(name);
-					if(id in targets) n.cfresh.insert(name);
+					if(id in targets||newlyLogged(id)) n.cfresh.insert(name);
 					return true;
 				}
 				if(id in partial) n.cdefs.insert(name);

@@ -538,6 +538,21 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 				be.setSemError();
 			}
 			success=false;
+		}else if(be.isSemError()){ // (error recovery: the variables of a pattern that the lowering would define, e.g., `[x,y]:=e` or `(x,)~ys:=e`, are erroneous, so that their uses are not reported)
+			void declareErroneous(Expression e){
+				e=unwrap(e);
+				if(auto id=cast(Identifier)e){
+					if(!id.implicitDup&&!checked(id)&&sc.canInsert(id.id)) makeVar(id).setSemForceError(); // (also with a type, e.g., `x` for `[x,y]:=[H(0:𝔹),H(2)]`)
+				}else if(auto tpl=cast(TupleExp)e){
+					foreach(x;tpl.e) declareErroneous(x);
+				}else if(auto vec=cast(VectorExp)e){
+					foreach(x;vec.e) declareErroneous(x);
+				}else if(auto ce=cast(CatExp)e){
+					declareErroneous(ce.e1);
+					declareErroneous(ce.e2);
+				}
+			}
+			declareErroneous(be.e1);
 		}
 		success&=!expr.isSemError();
 		return expr;
@@ -6469,6 +6484,15 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	if(ae.e1.isSemError()&&!(language==silq&&assignsDefinedVariables(ae.e1))){
 		static if(language==silq) undefinedNote.explain(ae.e2.type,sc,ae.e1);
 		sc.resetLocalComponentReplacements();
+		void keepErroneous(Expression lhs){ // (error recovery: the lookup consumed an erroneous variable, whose new version stays erroneous, as for an update, see `opAssignExpSemantic`)
+			if(auto id=cast(Identifier)lhs){
+				if(id.meaning&&id.meaning.isSemError()&&id.meaning.name&&sc.canInsert(id.meaning.name.id))
+					sc.insert(addVar(id.meaning.name.id,null,id.loc,sc,ae));
+			}else if(auto tpl=cast(TupleExp)lhs){
+				foreach(exp;tpl.e) keepErroneous(exp);
+			}else if(auto tae=cast(TypeAnnotationExp)lhs) keepErroneous(tae.e);
+		}
+		keepErroneous(ae.e1);
 		return ae;
 	}
 	checkIndexReplacement(ae,sc);
@@ -6896,7 +6920,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			if(var.scope_ is sc){
 				sc.addDependency(var,dependency);
 				var.definitionSources=sources;
-			}
+			}else if(var.isSemError()&&sc.canInsert(origId)) sc.insert(var); // (error recovery: an erroneous version, whose uses are not reported, as for a definition, see `makeDeclaration`)
 			auto from=typeForDecl(id.meaning),to=typeForDecl(var);
 			if(to&&(isFixedIntTy(to)||isℤmodTy(to))&&!joinTypes(from,to)){ // TODO: generalize?
 				sc.error(format("operator assign from type `%s` to type `%s` is disallowed",from,to),be.loc);
@@ -8466,7 +8490,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 		le.fd.setSemCompleted(); // TODO: ok?
 	le.type=typeForDecl(le.fd);
 	if(!le.type){
-		sc.error("invalid forward reference",le.loc);
+		if(!le.isSemError()) sc.error("invalid forward reference",le.loc); // (not after an error in the function, e.g., in the type of a parameter)
 		le.setSemError();
 	}else if(!subscribeToTypeUpdates(le.fd,sc,le.loc))
 		le.setSemError();
