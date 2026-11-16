@@ -539,18 +539,19 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 			}
 			success=false;
 		}else if(be.isSemError()){ // (error recovery: the variables of a pattern that the lowering would define, e.g., `[x,y]:=e` or `(x,)~ys:=e`, are erroneous, so that their uses are not reported)
-			void declareErroneous(Expression e){
+			void declareErroneous(Expression e,bool argument=false){ // (`argument`: of a reversed call, whose arguments that are defined are not its results, e.g., `N` in `f(x,N):=e` for `f(y:𝔹,const N:!ℕ)`)
 				e=unwrap(e);
 				if(auto id=cast(Identifier)e){
+					if(argument) if(auto d=sc.lookup(id,false,true,Lookup.probing,null)) if(!cast(DeadDecl)d) return;
 					if(!id.implicitDup&&!checked(id)&&sc.canInsert(id.id)) makeVar(id).setSemForceError(); // (also with a type, e.g., `x` for `[x,y]:=[H(0:𝔹),H(2)]`)
 				}else if(auto tpl=cast(TupleExp)e){
-					foreach(x;tpl.e) declareErroneous(x);
+					foreach(x;tpl.e) declareErroneous(x,argument);
 				}else if(auto vec=cast(VectorExp)e){
-					foreach(x;vec.e) declareErroneous(x);
+					foreach(x;vec.e) declareErroneous(x,argument);
 				}else if(auto ce=cast(CatExp)e){
-					declareErroneous(ce.e1);
-					declareErroneous(ce.e2);
-				}
+					declareErroneous(ce.e1,argument);
+					declareErroneous(ce.e2,argument);
+				}else if(auto ce=cast(CallExp)e) declareErroneous(ce.arg,true); // (a reversed call, e.g., `expand(x):=e` for `expand[n:!ℕ](x:uint[n])` and an erroneous `e`, from which `n` is not inferred)
 			}
 			declareErroneous(be.e1);
 		}
@@ -1596,6 +1597,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		}
 		propErr(with_.itrans,with_);
 	}
+	static if(language==silq) if(!with_.itrans||with_.itrans.isSemError()) // (error recovery: there is no inverse, or it has an error, so it does not consume the locals of the transformation, e.g., `h` for `with{ def h(){ … } def g(){ h(); return tqx; } }do{ … }`)
+		foreach(local;transLocals) if(auto d=transLocal(local,sc)) d.setSemForceError();
 	static if(language==silq) foreach(local;transLocals){
 		auto d=transLocal(local,sc);
 		if(!d) continue;
@@ -2429,7 +2432,12 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	state.fixSplitMergeGraph(sc);
 	auto fcond=we.cond.copy(cargs);
 	static if(language==silq) auto numLastUses=sc.lastUses.numAdded;
-	fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
+	{
+		auto handler=sc.handler,suppress=ncond&&ncond.isSemError(); // (its errors are reported already, see `setupWhileIter`)
+		if(suppress) handler.suppress++;
+		scope(exit) if(suppress) handler.suppress--;
+		fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
+	}
 	propErr(fcond,we);
 	static if(language==silq){
 		import ast.type:freeIdentifiers;
@@ -3746,7 +3754,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 				if(neq.eval()==LiteralExp.makeBoolean(1)){
 					specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc,vec);
 				}
-			}else if(!at){
+			}else if(!at&&!isBottom){ // (`⊥`: as for a tuple)
 				sc.error(format("cannot unpack type `%s` as a vector",context.type),vec.loc);
 				vec.setSemError();
 			}
@@ -3995,7 +4003,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 						if(l2) ntype2=vectorTy(elemTy,l2);
 					}
 				}
-			}
+			}else if(isEmpty(rtype)) ntype1=ntype2=bottom; // (as for a tuple)
 		}
 		//imported!"util.io".writeln("!! ",ce," ",ntype1," ",ntype2," ",l1," ",l2," ",context.type);
 	}else auto ntype1=null,ntype2=null;
@@ -6548,7 +6556,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			}else if(auto at=cast(ArrayTy)unfoldTypeVariable(type)){
 				foreach(exp;tpl.e)
 					checkCompat(exp,at.next);
-			}else{
+			}else if(!isEmpty(type)){ // (`⊥`: as for a definition)
 				sc.error(format("cannot unpack type %s as a tuple",type),lhs.loc);
 				ae.setSemError();
 			}
@@ -6654,7 +6662,12 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
 				}else if(auto at=cast(ArrayTy)rhsty){
 					foreach(exp;tpll.e) updateVars2(exp,exp,indexed,at.next,rhsdep,stage);
-				}else assert(ae.isSemError());
+				}else if(rhsty&&isEmpty(rhsty)){ // (as for a definition, e.g., `(x,y)=f()` for `f` that does not return)
+					foreach(exp;tpll.e) updateVars2(exp,exp,indexed,rhsty,rhsdep,stage);
+				}else{
+					assert(ae.isSemError());
+					if(!rhsty) foreach(exp;tpll.e) updateVars2(exp,exp,indexed,null,rhsdep,stage); // (error recovery: as for a single variable, e.g., `(x,y)=tqx(x,y)`)
+				}
 			}else if(auto idx=cast(IndexExp)lhs){
 				auto nrhsdep=rhsdep;
 				if(stage==Stage.collectDeps){
@@ -8339,6 +8352,7 @@ Expression expressionSemanticImpl(LetExp le,ExpSemContext context){
 	assert(!!dId);
 	dId.scope_=context.sc;
 	auto var=addVar(dId.id,de.e2.type,de.e1.loc,context.sc);
+	if(var.isSemError()&&!var.scope_&&context.sc.canInsert(dId.id)) context.sc.insert(var); // (error recovery: its use is not reported, e.g., `s` in `let{ s:=tqx(1); } in s`, as for a definition)
 	dId.meaning=var;
 	dId.id=var.getId; // (renamed, as for other definitions)
 	dId.type=dId.typeFromMeaning;
@@ -8814,11 +8828,14 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			if(vd.definition){
 				toplevelSemantic(vd.definition,vd.scope_);
 				id.type=id.typeFromMeaning;
-				if(!id.type) if(auto td=cast(ToplevelDefinition)vd.definition.toplevel)
-					if(td.sstate==SemState.started&&!td.isSemError()) id.type=bottom;
+				if(!id.type){
+					auto td=cast(ToplevelDefinition)vd.definition.toplevel;
+					if(td&&td.sstate==SemState.started&&!td.isSemError()) id.type=bottom;
+					else if(vd.definition.isSemError()||td&&td.isSemError()) id.setSemError(); // (error recovery: e.g., `g` in `def f(n:!ℕ){ … g(n sub 1) … }` for `g:=tqx(f);`)
+				}
 			}
 		}
-		if(!id.type){
+		if(!id.type&&!id.isSemError()){
 			sc.error("invalid forward reference",id.loc);
 			if(fd&&!fd.rret)
 				sc.note("possibly caused by missing return type annotation for recursive function",fd.loc);
@@ -9685,11 +9702,18 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 		tae.e=expressionSemantic(tae.e,econtext);
 	}else tae.e=expressionSemantic(tae.e,context);
 	propErr(tae.e,tae);
-	if(tae.e.type)
+	if(tae.e.type){
 		if(auto r=resolveWildcards(tae.t,tae.e.type)){
 			if(!tae.unresolvedT) tae.unresolvedT=tae.t; // preserve for adjoints
 			tae.t=r;
 		}
+	}else if(tae.e.isSemError()){ // (error recovery: the wildcards are not determined, e.g., `_` in `(0,tqx) coerce _×!ℤstar[n]`)
+		void markWildcards(Expression e){
+			if(auto we=cast(WildcardExp)e) we.setSemError();
+			else foreach(c;e.components) markWildcards(c);
+		}
+		markWildcards(tae.t);
+	}
 	tae.t = expressionSemantic(tae.t, context.nestType());
 	tae.type = typeSemantic(tae.t, sc);
 	static if(language==silq) if(tae.type&&!tae.t.isSemError()) sc.pinMentions(tae.type); // (the conversion reads the variables that the type mentions, after it evaluates the annotation)
@@ -10376,6 +10400,17 @@ Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 Expression resolveWildcards(Expression wildcards,Expression analyzed){
 	// TODO: improve
 	if(cast(WildcardExp)wildcards) return analyzed;
+	if(isEmpty(analyzed)){ // (no value has the type: any type does, e.g., `⊥^1` for `_^1`, see the lowering of the definition of `(x,)~ys` from a value of type `⊥`)
+		bool resolved=false;
+		Expression.CopyArgs args;
+		args.mapExp=(Expression e,ref Expression.CopyArgs args){
+			if(!cast(WildcardExp)e) return null;
+			resolved=true;
+			return bottom;
+		};
+		auto r=wildcards.copy(args);
+		return resolved?r:null;
+	}
 	if(auto pow=cast(PowExp)wildcards){
 		Expression ne1=pow.e1, ne2=pow.e2;
 		Expression elemTy=null;
