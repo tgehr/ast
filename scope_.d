@@ -4697,6 +4697,7 @@ class BlockScope: NestedScope{
 	bool isLoopEntry=false; // (merged with the loop body for the state at the start of an iteration: its forgets happen before the loop)
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
+	bool supersededIteration=false; // (of an iteration of the analysis of a loop body before the last one, see `LastUse.fromDiscardedAnalysis`)
 	bool isBranch=false; // (of a conditional, see `LastUses.dependencyAtSplit`)
 	Expression conditional; // (of a branch, for diagnostics, see `cancelDup`)
 	Q!(LastUse,size_t)[] uncomputations; // (in the branch and its nested scopes, with the numbers of the events of the code after the conditional at them, see `checkBranchOrder` and `LastUse.noteBranchEvent`)

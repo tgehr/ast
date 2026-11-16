@@ -1733,6 +1733,7 @@ struct FixedPointIterState{
 		prevBdy=nextBdy;
 	}
 	BlockScope makeScopes(Scope sc){
+		foreach(s;only(loopScope,forgetScope)) if(s) s.supersededIteration=true; // (the next iteration replaces the copy of the body)
 		auto restriction_=prevFlags&StmFlags.quantumReturn?Annotation.mfree:Annotation.none;
 		auto restrictionCause=restriction_&&prevBdy?findQuantumReturn(prevBdy,false):RestrictionCause.init;
 		restrictionCause.laterIterations=true;

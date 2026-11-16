@@ -197,10 +197,12 @@ final class LastUse{
 	}
 	Kind kind; // TODO: sum type?
 	bool discarded=false; // (from an analysis that was discarded, see `restoreSnapshot`)
-	bool fromDiscardedAnalysis(){ // (also in a nested scope of an analysis that was discarded, e.g., of the body of a loop in an iteration of its analysis, see `Scope.restoreStateSnapshot`)
+	bool fromDiscardedAnalysis(){ // (also in a nested scope of an analysis that was discarded, e.g., of the body of a loop before its lowering, see `Scope.restoreStateSnapshot`, or of an iteration of the analysis of a loop body before the last one)
 		if(discarded) return true;
-		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null)
+		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null){
 			if(nsc.lastUses.discarded) return true;
+			if(auto bs=cast(BlockScope)nsc) if(bs.supersededIteration) return true;
+		}
 		return false;
 	}
 	bool atSplit=false; // (a forget of a version that is not used after its split, which uncomputes it there)
