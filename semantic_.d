@@ -352,6 +352,11 @@ bool annotationMismatch(FunctionDef fd){ // (once the types that the value of th
 	return true;
 }
 
+bool inWithTransformation(Scope sc){
+	for(Scope s=sc;s&&!cast(FunctionScope)s;s=s.parentScope())
+		if(auto bs=cast(BlockScope)s) if(cast(WithExp)bs.restrictionCause_.cause) return true;
+	return false;
+}
 VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success){
 	VarDecl vd=null;
 	if(id.meaning){
@@ -368,6 +373,7 @@ VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success
 	if(!vd.scope_){
 		if(forceInsert||sc.canInsert(vd.name.id))
 			success&=sc.insert(vd);
+		else if(auto prev=sc.peekSymtab(vd.name.id,false)) if(!inWithTransformation(sc)&&sc.lastUses.canRedefine(prev)) success&=sc.insert(vd); // (error recovery: an erroneous definition replaces a version that a definition without errors would replace, e.g., `x` in `x:=tqx(x as 𝔹^3)`, which the later uses would otherwise refer to, with its type; not in a `with` transformation, whose inverse restores it)
 		id.meaning=vd;
 		id.id=vd.getId;
 		id.scope_=sc;
@@ -470,6 +476,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 						if(!sc.lookup(id,false,true,Lookup.probing,null))
 							makeVar(id).setSemForceError();
 					}else if(auto tpl=cast(TupleExp)e) foreach(x;tpl.e) declareUndefined(x);
+					else if(auto ce2=cast(CallExp)e) declareUndefined(ce2.arg); // (a reversed call in the argument, e.g., `u` in `tqx(X(u)):=e`)
 				}
 				declareUndefined(ce.arg);
 				return be;
@@ -552,6 +559,8 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 					declareErroneous(ce.e1,argument);
 					declareErroneous(ce.e2,argument);
 				}else if(auto ce=cast(CallExp)e) declareErroneous(ce.arg,true); // (a reversed call, e.g., `expand(x):=e` for `expand[n:!ℕ](x:uint[n])` and an erroneous `e`, from which `n` is not inferred)
+				else if(auto le=cast(LetExp)e) foreach(id;le.freeIdentifiers) declareErroneous(id,true); // (the variables that its reversal defines, e.g., `b` for `let{ a:=X(b); c:=X(a); } in c`)
+				else if(auto ite=cast(IteExp)e) foreach(b;only(ite.then,ite.othw)) if(b&&b.s.length==1) declareErroneous(b.s[0],argument); // (e.g., `(if c then (a,b) else (b,a)):=e` for an erroneous `c`)
 			}
 			declareErroneous(be.e1);
 		}
@@ -2018,7 +2027,18 @@ Declaration[] discardedLoopForgetCandidates(Scope sc){
 }
 Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates,BlockScope loopScope=null,BlockScope forgetScope=null,bool lowered=false){
 	CompoundExp wrapper=null;
+	SetX!Id consumedByError,definedByError; // (error recovery: the variables that erroneous expressions in the loop consume and that it does not define again without errors are not anchored, e.g., `x` in `repeat 1 { g(x); }` for an undefined `g`; those that it defines again with errors are erroneous after it, e.g., `x` in `repeat 3 { x:=tqx(x); }`)
+	if(loopExp.isSemError()){
+		import ast.reverse: definedIdentifiers,nameOf;
+		SetX!Id defined;
+		foreach(e;loopExp.subexpressions) if(auto de=cast(DefineExp)e) foreach(id;definedIdentifiers(de)) (de.isSemError()?definedByError:defined).insert(nameOf(id));
+		foreach(e;loopExp.subexpressions) if(auto id=cast(Identifier)e) if(id.erroneousUse&&!id.constLookup&&nameOf(id) !in defined) consumedByError.insert(nameOf(id));
+	}
 	void anchor(Declaration decl){
+		if(decl.name&&decl.name.id in consumedByError){
+			if(decl.name.id in definedByError) if(auto cur=sc.rnsymtab.get(decl.getId,null)) if(!cast(DeadDecl)cur) cur.setSemForceError();
+			return;
+		}
 		auto cur=sc.rnsymtab.get(decl.getId,null);
 		if(!cur||cur !is decl&&!cur.isDerivedFrom(decl)) return;
 		decl=cur; // (e.g., the version merged from the path that skips a loop whose body diverges)
@@ -2205,6 +2225,8 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	assert(!fe.bdy.blscope_);
 	fe.aggr=forAggregateSemantic(fe.aggr,context,fe);
 	auto erroneousContainer=replaceErroneousContainer(fe,context); // (error recovery, e.g., for `for i in range(n)`)
+	if(auto range=fe.aggr.isRange) if(range.left.isSemError()||range.step&&range.step.isSemError()||range.right.isSemError())
+		erroneousContainer=true; // (error recovery: the type of the loop variable is not known either, e.g., for `for i in 0..n` with an erroneous `n`)
 	bool converged=false;
 	CompoundExp bdy;
 	auto state=startFixedPointIteration(sc,flags);
@@ -2346,7 +2368,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	Expression result=fe;
 	if(fe.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(fe,state,sc,flags,constForgets);
-	if(result.isSemCompleted())
+	if(result.isSemCompleted()||result.isSemError()) // (also after an error in the loop, e.g., for `q` in `while k<2 { if tqx { forget(q); assert(false); } k+=1; }`)
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is fe);
 	return result;
 }
@@ -2460,7 +2482,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	Expression result=we;
 	if(we.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(we,state,sc,flags,constForgets);
-	if(result.isSemCompleted())
+	if(result.isSemCompleted()||result.isSemError()) // (also after an error in the loop, e.g., for `q` in `while k<2 { if tqx { forget(q); assert(false); } k+=1; }`)
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is we);
 	return result;
 }
@@ -2508,7 +2530,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	Expression result=re;
 	if(re.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(re,state,sc,flags,constForgets);
-	if(result.isSemCompleted())
+	if(result.isSemCompleted()||result.isSemError()) // (also after an error in the loop, e.g., for `q` in `while k<2 { if tqx { forget(q); assert(false); } k+=1; }`)
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is re);
 	return result;
 }
@@ -2683,7 +2705,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	Expression result=dw;
 	if(dw.isSemCompleted()&&shouldLowerLoop(sc))
 		result=lowerLoop(dw,state,sc,flags,constForgets);
-	if(result.isSemCompleted())
+	if(result.isSemCompleted()||result.isSemError()) // (also after an error in the loop, e.g., for `q` in `while k<2 { if tqx { forget(q); assert(false); } k+=1; }`)
 		result=anchorLoopConstForgets(sc,result,constForgets,state.loopScope,state.forgetScope,result !is dw);
 	return result;
 }
@@ -4004,7 +4026,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 					}
 				}
 			}else if(isEmpty(rtype)) ntype1=ntype2=bottom; // (as for a tuple)
-		}
+		}else if(l1&&l1.isSemError()||l2&&l2.isSemError()) ntype1=ntype2=bottom; // (error recovery: as for `⊥`, e.g., for `_` in `(x:_^n)~y:=z` with an erroneous `n`)
 		//imported!"util.io".writeln("!! ",ce," ",ntype1," ",ntype2," ",l1," ",l2," ",context.type);
 	}else auto ntype1=null,ntype2=null;
 	Expression ninit1=null,ninit2=null;
@@ -6478,14 +6500,14 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	prepareLhs(ae.e1);
 	ae.e1=expressionSemantic(ae.e1,context.nestLhs);
 	propErr(ae.e1,ae);
-	static bool assignsDefinedVariables(Expression lhs){ // (a tuple of variables some of which are undefined, e.g., `(x,y) = e` with `x` undefined: the assignment still replaces the others, so that their later uses are not reported)
+	static bool assignsDefinedVariables(Expression lhs){ // (a tuple of variables some of which are undefined or erroneous, e.g., `(x,y) = e` with `x` undefined: the assignment still replaces the others, so that their later uses are not reported)
 		auto tpl=cast(TupleExp)lhs;
 		if(!tpl) return false;
 		bool defined=false;
 		foreach(e;tpl.e){
 			auto id=cast(Identifier)e;
-			if(!id||id.meaning&&id.isSemError()) return false;
-			if(id.meaning) defined=true;
+			if(!id||id.meaning&&id.isSemError()&&!id.meaning.isSemError()) return false;
+			if(id.meaning&&!id.meaning.isSemError()) defined=true;
 		}
 		return defined;
 	}
@@ -7388,6 +7410,13 @@ FunctionDef calleeFunctionDef(Expression callee,int depth=0){
 	}
 	return null;
 }
+bool returnTypeUnknown(CallExp ce){ // (a call of a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `f(x)` for `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`)
+	if(!ce.e.isSemError()) return false;
+	auto ft=cast(FunTy)ce.e.type;
+	if(!ft||!isEmpty(ft.cod)) return false;
+	auto fd=calleeFunctionDef(ce.e);
+	return fd&&!fd.rret&&fd.fscope_&&fd.fscope_.erroneousReturn;
+}
 string describeCallee(Expression callee){
 	if(cast(LambdaExp)unwrap(callee)) return "lambda";
 	return format("`%s`",callee);
@@ -7436,12 +7465,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			return defineLhsSemantic!isPresemantic(e,context);
 		}else return expressionSemantic(e,context);
 	}
-	void argSemanticWithoutFunction(){ // (assumed to consume the argument, without further diagnostics: the uses are erroneous)
+	void argSemanticWithoutFunction(){ // (assumed to consume the argument, or to borrow it in a condition, which usually reads it, without further diagnostics: the uses are erroneous)
 		static if(!isPresemantic){
 			auto handler=context.sc.handler;
 			handler.suppress++;
 			scope(exit) handler.suppress--;
-			static if(isRhs) ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+			static if(isRhs) ce.arg=expressionSemantic(ce.arg,context.condition?context.nestConst:context.nestConsumed);
 			else ce.arg=defineLhsSemantic!isPresemantic(ce.arg,context.nest(ConstResult.no,bottom,null));
 			foreach(e;ce.arg.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
 		}
@@ -7534,6 +7563,13 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		assert(ce.isSemError());
 		argSemanticWithoutFunction();
 		return ce;
+	}
+	static if(isRhs) scope(success){ // (error recovery: the return type is not known, e.g., for `f(x)` with `def f(x:𝔹){ return tqx(x); }`, whose return type `⊥` is not inferred from a `return`: as for a callee without a type, the call has no type, rather than `⊥`, and the consumption of the argument is not reported again)
+		if(ce&&ce.type&&isEmpty(ce.type)&&returnTypeUnknown(ce)){
+			ce.type=null;
+			ce.setSemError();
+			foreach(e;ce.arg.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
+		}
 	}
 	auto sc=context.sc, constResult=context.constResult, inType=context.inType;
 	scope(success){
@@ -8092,6 +8128,8 @@ struct ExpSemContext{
 	InType inType;
 	InConst inConst;
 	Scope typeRoot=null; // (the scope in which the analysis of the enclosing type started)
+	bool condition=false; // (the expression is a condition, see `conditionSemantic`)
+	bool unliftedIndex=false; // (in the index of an erroneous expression without a type, see `expressionSemanticImpl(IndexExp)`)
 	static ExpSemContext forType(Scope sc) {
 		return ExpSemContext(sc, ConstResult.yes, InType.yes, InConst.yes, sc);
 	}
@@ -8103,6 +8141,7 @@ auto expSemContext(Scope sc,ConstResult constResult,InType inType,InConst inCons
 auto nest(ref ExpSemContext context,ConstResult newConstResult){
 	auto r=expSemContext(context.sc,newConstResult,context.inType,context.inConst);
 	r.typeRoot=context.typeRoot;
+	r.unliftedIndex=context.unliftedIndex;
 	return r;
 }
 auto nestScope(ref ExpSemContext context,Scope sc,ConstResult constResult,InConst inConst=InConst.no){ // (e.g., for a branch of an `if` expression within a type)
@@ -8139,6 +8178,7 @@ auto nestType(ref ExpSemContext context){
 Expression conditionSemantic(bool allowQuantum=false)(Expression parent, Expression e,Scope sc,InType inType,Scope typeRoot=null){
 	auto context=expSemContext(sc,ConstResult.yes,inType);
 	context.typeRoot=typeRoot;
+	context.condition=true;
 	e=expressionSemantic(e,context);
 	static if(language==silq) sc.clearConsumed();
 	if(e.isSemCompleted() && !isSubtype(e.type,Bool(!allowQuantum))){
@@ -8423,10 +8463,13 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 		if(bsc){
 			foreach(_,d;bsc.rnsymtab.dup){
 				if(cast(DeadDecl)d) continue;
-				if(d.isSemError()) continue;
 				if(bsc.rnsymtab.get(d.getId,null) !is d) continue; // TODO: this is a bit hacky
 				if(d.scope_ !is bsc) continue;
 				if(auto od=sc.rnsymtab.get(d.getId,null)) if(!cast(DeadDecl)od) continue; // TODO: this is a bit hacky
+				if(d.isSemError()){ // (error recovery: an erroneous local is not visible after the `let` expression, e.g., `a` for `let{ a:=tqx(n); } in a`, which the merge made a variable of the enclosing scope)
+					bsc.symtabRemove(d);
+					continue;
+				}
 				if(auto vd=cast(VarDecl)d) if(!vd.vtype||unrealizable(vd.vtype)){
 					d.setSemForceError();
 					continue;
@@ -9071,6 +9114,13 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	idx.e=expressionSemantic(idx.e,aggContext);
 	propErr(idx.e,idx);
 	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
+	if(!ne&&!idx.e.type&&idx.e.isSemError()){ // (error recovery: the expression may also be a function, e.g., `g` in `g[H(0:𝔹)]`: the index is borrowed, as an index, but it does not have to be lifted, as an argument)
+		auto ncontext=context.nestConst;
+		ncontext.unliftedIndex=true;
+		idx.a=expressionSemantic(idx.a,ncontext);
+		foreach(e;idx.a.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
+		return idx;
+	}
 	if(!ne){
 		if(auto ft=cast(FunTy)idx.e.type){
 			auto ce=new CallExp(idx.e,idx.a,true,false);
@@ -10808,6 +10858,7 @@ bool hasQuantumFreeIdentifier(Expression e,Id id){
 bool checkLifted(alias error=nonLiftedError)(Expression expr,ExpSemContext context){
 	if(!expr.constLookup||expr.byRef) return true;
 	if(expr.isLifted(context.sc)) return true;
+	if(context.unliftedIndex) return true; // (error recovery: it may be an argument instead)
 	if(context.sc.trackTemporary(expr)) return true;
 	nonLiftedError(expr,context.sc);
 	return false;
@@ -11277,7 +11328,8 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 				rete.loc=fd.loc;
 				fd.body_.s~=returnExpSemantic(rete,fd.body_.blscope_,bdyFlags);
 			}else{
-				sc.error("control flow might reach end of function (add return or assert(false) statement)",fd.loc);
+				if(!mayDivergeByError(bdy)) // (error recovery: e.g., after `if tqx(!a) { return x; }` for `a:⊥`, whose condition would not complete)
+					sc.error("control flow might reach end of function (add return or assert(false) statement)",fd.loc);
 				fd.setSemError();
 			}
 		}
@@ -11515,6 +11567,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
+	if(!ret.e.type&&ret.e.isSemError()) if(auto fsc=fd.fscope_) fsc.erroneousReturn=true;
 	if(cast(CommaExp)ret.e){
 		sc.error("use parentheses for multiple return values",ret.e.loc);
 		ret.setSemError();
@@ -11543,7 +11596,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 	}
 	if(ret.isSemError()){
-		static if(language==silq) if(sc.returnEndsBranch()){ // (error recovery: it still closes the scope, see `Scope.close`, otherwise the merge closes the branch as one that aborts, whose consumptions can make variables unavailable after the conditional, e.g., `v0` for `v0:=dup(a); t:=measure(v0); if c { a:=X(a); return (a,tq); } u:=!v0;`)
+		static if(language==silq) if(sc.returnEndsBranch()||sc.codeAfterStatement&&sc.returnInBodyBlocks()){ // (error recovery: it still closes the scope, see `Scope.close`, otherwise the merge closes the branch as one that aborts, whose consumptions can make variables unavailable after the conditional, e.g., `v0` for `v0:=dup(a); t:=measure(v0); if c { a:=X(a); return (a,tq); } u:=!v0;`, and the code after it sees the variables as after a `return` without errors, e.g., not `b` in `if c { return (x,tqx); b:=3; }`)
 			sc.clearConsumed();
 			sc.releaseTypeConstBlocks(typeConstBlockSave,true);
 			sc.close(ret);
@@ -11700,6 +11753,17 @@ CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibl
 		if(definitelyReturns(b)&&returnsOnEveryPath(b)&&!containsReturn(o)&&!definitelyReturns(o)) return o;
 	}
 	return null;
+}
+bool mayDivergeByError(Expression e){ // (whether `e` may not complete only because of an error, e.g., in a condition, after which its end may not be reachable)
+	if(auto ce=cast(CompoundExp)e) return ce.s.any!mayDivergeByError;
+	if(auto we=cast(WhileExp)e) return we.cond.isSemError(); // (e.g., `while tqx { …; return x; }`, which may not terminate, as `while true`)
+	if(auto ite=cast(IteExp)e){
+		if(ite.cond.isSemError()) return true;
+		return only(ite.then,ite.othw).all!(b=>b&&(definitelyReturns(b)||mayDivergeByError(b)));
+	}
+	if(auto ce=cast(CallExp)e) return returnTypeUnknown(ce); // (e.g., `foo()` for `def foo()⇒tqx(foo());`, see `callSemantic`)
+	if(auto de=cast(DefineExp)e) if(auto ce=cast(CallExp)de.e2) return mayDivergeByError(ce);
+	return false;
 }
 bool definitelyReturns(Expression e){
 	if(e.type) return isEmpty(e.type);

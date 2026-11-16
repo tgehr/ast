@@ -1224,6 +1224,7 @@ final class LastUse{
 					}
 					return Forgettability.forgettable;
 				}
+				if(parent&&!parent.type&&parent.isSemError()&&!decl.isSemError()) return Forgettability.forgettable; // (error recovery: an erroneous expression that ends the `const` block, e.g., the condition `tqx(w)`, see `forget`)
 				return Forgettability.none;
 			case consumption:
 				return Forgettability.none;
@@ -1371,6 +1372,11 @@ final class LastUse{
 					constConsume.forget(true);
 					markConsumed(use,false);
 					return;
+				}
+				if(parent&&!parent.type&&parent.isSemError()&&!canAddForget(parent)){ // (error recovery: forgotten after the erroneous expression, without a forget in the code)
+					use=null;
+					isForget=true;
+					break;
 				}
 				assert(canAddForget(parent));
 				use=addForget(parent,decl,scope_);

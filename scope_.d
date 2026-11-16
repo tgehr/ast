@@ -2068,6 +2068,7 @@ abstract class Scope{
 		import ast.semantic_: unrealizable,typeConstBlocked;
 		bool errors=false;
 		Declaration[] pending,hidden; // (`hidden`: splits forgotten here, which do not block the variables that their types mention; still visible to the code after a return)
+		static if(is(T==ReturnExp)) Id[] unknown; // (consumed by an erroneous `return` with code after it, see below)
 		static if(is(T==ReturnExp)){
 			auto erroneous=loc.isSemError(); // (it consumes the variables that it cannot forget without errors, as its expression may have, see `returnExpSemantic`)
 			auto dropsClassical=!codeAfterStatement&&dropsClassicalAtReturn(); // (the unreachable code after the `return` sees the variables that it does not consume, see `hiddenAfterReturn`)
@@ -2116,6 +2117,7 @@ abstract class Scope{
 								forgot=true;
 								consume(d,null);
 								clearConsumed();
+								if(codeAfterStatement) unknown~=d.name.id; // (the code after it does not see it, but its uses are not reported, as after the error at a `return` without errors that does not consume it)
 							}
 							continue;
 						}
@@ -2158,6 +2160,10 @@ abstract class Scope{
 			deferBlocked=forgot;
 		}
 		foreach(split;hidden) symtabInsert(split);
+		static if(is(T==ReturnExp)) foreach(id;unknown){
+			import ast.semantic_: addVar;
+			if(canInsert(id)) insert(addVar(id,null,loc.loc,null));
+		}
 		return errors;
 	}
 
@@ -2177,6 +2183,16 @@ abstract class Scope{
 			auto p=bs.parentScope();
 			if(cast(FunctionScope)p) return s !is this;
 			if(!bs.isBranch||bs.returningConditional) return false;
+			s=p;
+		}
+	}
+	final bool returnInBodyBlocks(){ // (a `return` in the block of the function, or in branches and loop bodies within it, not, e.g., in a `with` transformation)
+		for(Scope s=this;;){
+			auto bs=cast(BlockScope)s;
+			if(!bs) return false;
+			auto p=bs.parentScope();
+			if(cast(FunctionScope)p) return true;
+			if(!bs.isBranch&&!bs.isLoopBody) return false;
 			s=p;
 		}
 	}
@@ -4665,6 +4681,7 @@ class CapturingScope(T): NestedScope{
 class FunctionScope: CapturingScope!FunctionDef{
 	alias fd=decl;
 	static if(language==silq) bool returnAnalyzed=false; // (a capture consumed afterwards requires another analysis)
+	bool erroneousReturn=false; // (a `return` whose value has an error, which the inferred return type does not include, see `returnTypeUnknown`)
 	static if(language==silq) Q!(Scope,BlockScope[])[] pendingBranchOrders; // (of the conditionals of the function, see `checkBranchOrder`)
 	this(Scope parent,FunctionDef fd){
 		super(parent,fd);
