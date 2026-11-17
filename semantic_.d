@@ -4421,6 +4421,10 @@ bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref
 		creplss=unnestComponentReplacements(creplss,loc,sc);
 	return buildIndexReplacements(creplss,sc,flags,prologues,epilogues,loc);
 }
+void abandonIndexReplacements(Scope sc,bool unknownValues){ // (error recovery: the replaced components are not written back, so the aggregates are erroneous where their values are not known, e.g., `xs` after `xs[0]:=app0(tqx(xs[0]))`, whose type is not known either)
+	if(unknownValues) foreach(decl;sc.declProps.withReplacements()) decl.setSemForceError();
+	sc.resetLocalComponentReplacements();
+}
 
 void replacePromotedMeanings(Expression e,ref MapX!(Declaration,Declaration) replacements,Scope sc){
 	if(auto id=cast(Identifier)e){
@@ -5174,6 +5178,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc,false);
 	}
 	propErr(be.e1,be);
+	auto lhsError=be.e1.isSemError()||prologues.any!(p=>p.isSemError()); // (see `abandonIndexReplacements`)
 	static if(language==silq) auto patternComponentForgets=getPatternComponentForgets(be,sc);
 	static if(language==psi){ // TODO: remove this?
 		if(auto ce=cast(CallExp)be.e2){
@@ -5206,7 +5211,12 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			handler.suppress++;
 			scope(exit) handler.suppress--;
 			if(!ce.e.isSemError()) ce.e=expressionSemantic(ce.e,context.nestConsumed);
-			ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
+			auto ft=cast(ProductTy)ce.e.type;
+			auto tpl=cast(TupleExp)ce.arg;
+			if(ft&&ft.isSquare==ce.isSquare&&ft.isTuple&&tpl&&tpl.length==ft.nargs){ // (the arguments of `const` parameters are only read, e.g., `y` in `CNOT(y,t):=e`)
+				foreach(i,ref a;tpl.e) a=expressionSemantic(a,ft.isConstForReverse[i]?context.nestConst:context.nestConsumed);
+				tpl.setSemForceError();
+			}else ce.arg=expressionSemantic(ce.arg,context.nestConsumed);
 			foreach(e;ce.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
 			ce.setSemForceError();
 		}
@@ -5260,7 +5270,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 				if(!crepl.name) continue;
 				if(auto d=sc.rnsymtab.get(crepl.name,null)) sc.symtabRemove(d);
 			}
-			sc.resetLocalComponentReplacements();
+			abandonIndexReplacements(sc,!lhsError&&be.e2.isSemError());
 			epilogues=[]; // (avoids error messages)
 			// TODO: clean up other temporaries
 		}
@@ -5506,6 +5516,7 @@ bool guaranteedDifferentValues(Expression e1,Expression e2,Location loc,Scope sc
 	}
 	e1=expressionSemantic(e1,expSemContext(sc,ConstResult.yes,inType));
 	e2=expressionSemantic(e2,expSemContext(sc,ConstResult.yes,inType));
+	if(isEmpty(e1.type)||isEmpty(e2.type)) return true; // (no values, e.g., the variable of a loop over an erroneous range, see `replaceErroneousContainer`)
 	if(!util.among(e1.type,Bool(true),ℕt(true),ℤt(true))||!util.among(e2.type,Bool(true),ℕt(true),ℤt(true)))
 		return false;
 	Expression neq=new NeqExp(e1,e2);
@@ -6530,6 +6541,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}
 	}
 	CompoundExp[] prologues,epilogues;
+	bool lhsError=false; // (see `abandonIndexReplacements`)
 	Expression tde=null;
 	static if(language==silq)
 	if(sc.allowsLinear){
@@ -6547,6 +6559,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		auto oe1=ae.e1.copy();
 		prepareIndexReplacements(oe1,sc,flags,prologues,epilogues,ae.loc,true);
 		propErr(oe1,ae.e1); // (e.g., invalid index for component replacement)
+		lhsError=oe1.isSemError()||prologues.any!(p=>p.isSemError());
 	}
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
 	propErr(ae.e2,ae);
@@ -6796,7 +6809,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			finishIndexReplacement(ae,sc);
 		}
 	}else{
-		sc.resetLocalComponentReplacements();
+		abandonIndexReplacements(sc,!lhsError&&ae.e2.isSemError());
 		epilogues=[]; // (avoids error messages)
 		// TODO: clean up other temporaries
 	}
@@ -6852,6 +6865,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc,true);
 		propErr(be.e1,oe1); // (e.g., invalid index for component replacement)
 	}
+	auto lhsError=oe1.isSemError()||prologues.any!(p=>p.isSemError()); // (see `abandonIndexReplacements`)
 	static if(language==silq)
 	if(!oe1.isSemError()&&!cast(CatExp)be.e1&&!cast(Identifier)be.e1){
 		auto tmp=temporaryIdentifier(be.e1.loc);
@@ -6866,7 +6880,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		we.loc=be.loc;
 		auto r=statementSemantic(we,sc,flags);
 		if(r.isSemError()){
-			sc.resetLocalComponentReplacements();
+			abandonIndexReplacements(sc,!lhsError); // (the update has an error)
 			epilogues=[]; // (avoids error messages)
 		}else finishIndexReplacement(r,sc);
 		return lowerIndexReplacement(prologues,epilogues,r,sc,flags);
@@ -6940,7 +6954,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		}
 	}
 	if(be.isSemError()){
-		sc.resetLocalComponentReplacements();
+		abandonIndexReplacements(sc,!lhsError&&be.e2.isSemError());
 		if(auto id=cast(Identifier)be.e1){
 			if(id.meaning){
 				id.meaning.setSemForceError();
@@ -7048,7 +7062,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 			finishIndexReplacement(be,sc);
 		}
 	}else{
-		sc.resetLocalComponentReplacements();
+		abandonIndexReplacements(sc,!lhsError&&be.e2.isSemError());
 		epilogues=[]; // (avoids error messages)
 		if(id&&id.meaning&&id.meaning.getName.startsWith("__"))
 			sc.consume(id.meaning,id);
@@ -7477,8 +7491,9 @@ FunctionDef calleeFunctionDef(Expression callee,int depth=0){
 	}
 	return null;
 }
-bool returnTypeUnknown(FunctionDef fd){ // (a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`)
-	return fd&&!fd.rret&&fd.fscope_&&fd.fscope_.erroneousReturn;
+bool returnTypeUnknown(FunctionDef fd){ // (a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`, or whose return type annotation has an error, e.g., `def f():tqx(!𝔹){ return true; }`)
+	if(fd&&fd.rret) return fd.rret.isSemError();
+	return fd&&fd.fscope_&&fd.fscope_.erroneousReturn;
 }
 bool returnTypeUnknown(CallExp ce){ // (a call of such a function)
 	if(!ce.e.isSemError()) return false;
@@ -8761,8 +8776,10 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					return true;
 				}else{
 					if(!meaning.isSemError()){
-						sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
-						sc.explainUnforgettable(meaning);
+						if(!sc.dependencyLostByError(meaning)){
+							sc.error(format("cannot synthesize forget expression for `%s`",meaning.name),fe.var.loc);
+							sc.explainUnforgettable(meaning);
+						}
 						meaning.setSemForceError();
 					}
 					id.meaning=meaning; // (the consumed version, which later uses mention, see `ConsumedDecl`)
@@ -10081,7 +10098,7 @@ Expression powerType(Expression t1, Expression t2){
 		}
 		return null;
 	}
-	if(isEmpty(t1)) return bottom;
+	if(isEmpty(t1)||isEmpty(t2)) return bottom; // (e.g., `2^i` for the variable `i` of a loop over an erroneous range, see `replaceErroneousContainer`)
 	if(num1 == NumericType.Bool && num2 && num2 <= NumericType.ℕt) return Bool(classical);
 	if(num1 == NumericType.ℕt && num2 && num2 <= NumericType.ℕt) return ℕt(classical);
 	if(num1 == NumericType.ℤt && num2 && num2 <= NumericType.ℕt) return ℤt(classical);
@@ -11639,6 +11656,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	if(fd.inferringReturnType){
 		determineType(ret.e,context,(ty){
+			if(ret.e.isSemError()) return; // (error recovery: its type may not be known, see below)
 			static if(language==silq){
 				if(ty.hasClassicalComponent()&&quantumControlled){
 					if(auto qty=ty.getQuantum())
@@ -11652,7 +11670,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
-	if(!ret.e.type&&ret.e.isSemError()) if(auto fsc=fd.fscope_) fsc.erroneousReturn=true;
+	if(ret.e.isSemError()) if(auto fsc=fd.fscope_) fsc.erroneousReturn=true;
 	if(cast(CommaExp)ret.e){
 		sc.error("use parentheses for multiple return values",ret.e.loc);
 		ret.setSemError();
@@ -11681,7 +11699,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 		}
 	}
 	if(ret.isSemError()){
-		static if(language==silq) if(sc.returnEndsBranch()||sc.codeAfterStatement&&sc.returnInBodyBlocks()){ // (error recovery: it still closes the scope, see `Scope.close`, otherwise the merge closes the branch as one that aborts, whose consumptions can make variables unavailable after the conditional, e.g., `v0` for `v0:=dup(a); t:=measure(v0); if c { a:=X(a); return (a,tq); } u:=!v0;`, and the code after it sees the variables as after a `return` without errors, e.g., not `b` in `if c { return (x,tqx); b:=3; }`)
+		static if(language==silq) if(sc.returnEndsBranch()||sc.returnInBodyBlocks()){ // (error recovery: it still closes the scope, see `Scope.close`, otherwise the merge closes the branch as one that aborts, whose consumptions can make variables unavailable after the conditional, e.g., `v0` for `v0:=dup(a); t:=measure(v0); if c { a:=X(a); return (a,tq); } u:=!v0;`, and the code after it sees the variables as after a `return` without errors, e.g., not `b` in `if c { return (x,tqx); b:=3; }`)
 			sc.clearConsumed();
 			sc.releaseTypeConstBlocks(typeConstBlockSave,true);
 			sc.close(ret);

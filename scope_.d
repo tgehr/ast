@@ -68,6 +68,7 @@ struct Dependency{
 	Dependency dup(){
 		return Dependency(isTop, dependencies.dup, lostVar, lostAt);
 	}
+	bool lostByError(){ return isTop&&lostAt&&lostAt.erroneousUse; } // (error recovery: an erroneous use consumed what it depended on, see `dependencyLostByError`)
 	private Q!(bool,SetX!Id) getIds(){
 		SetX!Id result;
 		foreach(decl;dependencies){
@@ -2130,7 +2131,7 @@ abstract class Scope{
 								done=true;
 							}else continue; // TODO: catch this early
 						}
-						if(!done) done=lastUses.betterUnforgettableError(d,this);
+						if(!done) done=lastUses.betterUnforgettableError(d,this)||dependencyLostByError(d);
 						if(!done) if(auto lu=lastUses.get(d,true)) if(lu.kind==LastUse.Kind.constPinned&&lu.parent&&lu.parent.isSemError()) done=true; // (error recovery: a `const` capture of an erroneous function, whose consumption is not known, e.g., `d` for `g:=λ(const x:𝔹)⇒(x⊕d,tqx)[0];`)
 						if(!done){
 							if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
@@ -2193,7 +2194,7 @@ abstract class Scope{
 			if(!bs) return false;
 			auto p=bs.parentScope();
 			if(cast(FunctionScope)p) return true;
-			if(!bs.isBranch&&!bs.isLoopBody) return false;
+			if(!bs.isBranch&&!bs.isLoopBody&&!bs.isLoopReset) return false;
 			s=p;
 		}
 	}
@@ -2782,6 +2783,11 @@ abstract class Scope{
 		note(format("`%s` depends on `%s`, which is consumed here",decl.getName,dep.lostVar.getName),dep.lostAt.loc);
 		if(dep.lostAt.sstate==SemState.started) dep.lostAt.setSemError(); // (being looked up: no additional note that the lookup caused the error)
 	}
+	final bool dependencyLostByError(Declaration decl){ // (error recovery: e.g., of `v` after `v:=dup(q); w:=dup(tqx(q));`, as for `explainUnforgettable`)
+		if(auto lu=lastUses.get(decl,true))
+			if(auto llu=LastUse.lostDependency(lu)) return llu.dep.lostByError();
+		return dependencyTracked(decl)&&getDependency(decl).lostByError();
+	}
 	final void explainUnforgettable(Declaration decl){
 		if(auto lu=lastUses.get(decl,true))
 			if(auto llu=LastUse.lostDependency(lu)) return explainUnknownDependency(decl,llu.dep);
@@ -3192,7 +3198,7 @@ abstract class Scope{
 				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
 					splitSym();
-					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)){
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						scopes[0].explainUnforgettable(sym);
 						errors=true;
@@ -3227,7 +3233,7 @@ abstract class Scope{
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								splitSym(), sc.split(osym,null);
 								if(sym.isSemCompleted()&&osym.isSemCompleted()){
-									auto symOk=scopes[0].canForgetAppend(sym),osymOk=sc.canForgetAppend(osym);
+									auto symOk=scopes[0].canForgetAppend(sym)||scopes[0].dependencyLostByError(sym),osymOk=sc.canForgetAppend(osym)||sc.dependencyLostByError(osym);
 									if(!symOk||!osymOk){
 										error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
@@ -3250,7 +3256,7 @@ abstract class Scope{
 				auto type=typeForDecl(sym);
 				if(auto gone=goneMention(type)) if(!visibleType(type)){ // (not merged, as for incompatible types on different paths)
 					splitSym();
-					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)){
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						scopes[0].explainUnforgettable(sym);
 						note(format("its type `%s` mentions `const` variable `%s`, which is not visible after its block",type,gone.getName),gone.loc);
@@ -3363,7 +3369,7 @@ abstract class Scope{
 					}
 					sym=sc.split(sym,null);
 					forgotten.insert(sym);
-					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)){
+					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)&&!sc.dependencyLostByError(sym)){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						sc.explainUnforgettable(sym);
 						errors=true;

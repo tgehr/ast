@@ -989,7 +989,9 @@ final class LastUse{
 	}
 
 	private void reportUnforgettable(){ // (a forget whose dependency is unknown)
-		if(use&&use.scope_&&cast(ForgetExp)parent){
+		if(dep.lostByError()){
+			// (error recovery, see `Scope.dependencyLostByError`)
+		}else if(use&&use.scope_&&cast(ForgetExp)parent){
 			scope_.error(format("cannot synthesize forget expression for `%s`",use),use.loc);
 			scope_.explainUnknownDependency(decl,dep);
 		}else if(use && use.isSemError()){
@@ -1495,7 +1497,7 @@ final class LastUse{
 						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
 					}else{
 						ok=false;
-						if(!nsc.lastUses.betterUnforgettableError(cdecl,nsc)){
+						if(!nsc.lastUses.betterUnforgettableError(cdecl,nsc)&&!nsc.dependencyLostByError(cdecl)){
 							nsc.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
 							nsc.explainUnforgettable(cdecl);
 						}
