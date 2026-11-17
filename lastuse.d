@@ -1034,6 +1034,8 @@ final class LastUse{
 			if(!use){
 				scope_.error(format("variable `%s` is not consumed",decl.getName),decl.loc);
 				// TODO: needs a note indicating the end of scope
+			}else if(use.erroneousUse){
+				// (error recovery: whether the erroneous call consumes it is not known, see `argSemanticWithoutFunction`)
 			}else if(nconstBlock !is use){
 				scope_.error(format("cannot consume `const` %s `%s`",decl.kind,use), use.loc);
 				scope_.note(format("%s was made `const` here", decl.kind), nconstBlock.loc);

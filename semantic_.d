@@ -2050,16 +2050,16 @@ Declaration[] discardedLoopForgetCandidates(Scope sc){
 }
 Expression anchorLoopConstForgets(Scope sc,Expression loopExp,scope Declaration[] candidates,BlockScope loopScope=null,BlockScope forgetScope=null,bool lowered=false){
 	CompoundExp wrapper=null;
-	SetX!Id consumedByError,definedByError; // (error recovery: the variables that erroneous expressions in the loop consume and that it does not define again without errors are not anchored, e.g., `x` in `repeat 1 { g(x); }` for an undefined `g`; those that it defines again with errors are erroneous after it, e.g., `x` in `repeat 3 { x:=tqx(x); }`)
+	SetX!Id consumedByError; // (error recovery: the variables that erroneous expressions in the loop consume and that it does not define again without errors are not anchored and are erroneous after it, e.g., `x` in `repeat 1 { g(x); }` for an undefined `g`, also where it defines them again with errors, e.g., `x` in `repeat 3 { x:=tqx(x); }`)
 	if(loopExp.isSemError()){
 		import ast.reverse: definedIdentifiers,nameOf;
 		SetX!Id defined;
-		foreach(e;loopExp.subexpressions) if(auto de=cast(DefineExp)e) foreach(id;definedIdentifiers(de)) (de.isSemError()?definedByError:defined).insert(nameOf(id));
+		foreach(e;loopExp.subexpressions) if(auto de=cast(DefineExp)e) if(!de.isSemError()) foreach(id;definedIdentifiers(de)) defined.insert(nameOf(id));
 		foreach(e;loopExp.subexpressions) if(auto id=cast(Identifier)e) if(id.erroneousUse&&!id.constLookup&&nameOf(id) !in defined) consumedByError.insert(nameOf(id));
 	}
 	void anchor(Declaration decl){
 		if(decl.name&&decl.name.id in consumedByError){
-			if(decl.name.id in definedByError) if(auto cur=sc.rnsymtab.get(decl.getId,null)) if(!cast(DeadDecl)cur) cur.setSemForceError();
+			if(auto cur=sc.rnsymtab.get(decl.getId,null)) if(!cast(DeadDecl)cur) cur.setSemForceError();
 			return;
 		}
 		auto cur=sc.rnsymtab.get(decl.getId,null);
@@ -3432,6 +3432,19 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 						id.meaning.setSemError();
 				}
 			}
+		}
+	}
+	static if(!isPresemantic) if(result.isSemError()) if(auto id=cast(Identifier)unwrap(ce.e)){ // (error recovery: the reversal, which would consume the function, is not analyzed, e.g., `reverse(f)` for `f(tqx(y)):=y` with a closure `f`: it consumes it without diagnostics, see `argSemanticWithoutFunction`)
+		Declaration meaning=id.meaning;
+		if(!meaning) meaning=sc.lookup(id,false,true,Lookup.probing,null);
+		if(auto vd=cast(VarDecl)meaning) if(!vd.isSemError()){
+			auto handler=sc.handler;
+			handler.suppress++;
+			scope(exit) handler.suppress--;
+			auto use=new Identifier(id.id);
+			use.loc=id.loc;
+			auto consumed=expressionSemantic(use,expSemContext(sc,ConstResult.no,InType.no));
+			foreach(e;consumed.subexpressions) if(auto rid=cast(Identifier)e) rid.erroneousUse=true;
 		}
 	}
 	return result;
@@ -9191,6 +9204,7 @@ bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,Index
 					}
 				}
 			}
+	if(auto cd=cast(ConsumedDecl)sc.rnsymtab.get(crepl.name,null)) if(cd.use&&cd.use.erroneousUse) return true; // (error recovery: consumed by an erroneous expression, e.g., `tqx(x[0])`, as for a variable, see `consumedByError`)
 	if(!crepl.write.isSemError()&&!idx.isSemError()){
 		if(indexed?guaranteedSameLocations(crepl.write,idx,idx.loc,sc,inType):guaranteedOverlappingComponents(crepl.write,idx,idx.loc,sc,inType)){
 			sc.error("lookup of index refers to consumed value",idx.loc);
@@ -9202,6 +9216,25 @@ bool indexReplacementAliasError(Scope.DeclProp.ComponentReplacement* crepl,Index
 	return true;
 }
 
+static if(language==silq)
+void consumeReplacedComponentsByError(IndexExp idx,ExpSemContext context){ // (error recovery: an erroneous index may refer to a component of the aggregate that is being replaced, e.g., `x[tqx(j)]` in `x[j]:=if c { X(x[tqx(j)]) } else { x[j] };`, where the other branch consumes it: it consumes them without diagnostics, see `argSemanticWithoutFunction`)
+	auto sc=context.sc;
+	auto cid=getIdFromIndex(idx);
+	if(!cid||!cid.meaning) return;
+	auto handler=sc.handler;
+	handler.suppress++;
+	scope(exit) handler.suppress--;
+	foreach(vcrepl;sc.versionComponentReplacements(cid.meaning)){
+		auto crepl=vcrepl[1];
+		if(!crepl.write||crepl.read) continue;
+		auto id=new Identifier(crepl.name);
+		auto meaning=sc.lookup(id,false,true,Lookup.probing,null);
+		if(!meaning||cast(DeadDecl)meaning) continue; // (e.g., consumed already)
+		id.loc=idx.loc;
+		auto r=expressionSemantic(id,context.condition?context.nestConst:context.nestConsumed);
+		foreach(e;r.subexpressions) if(auto rid=cast(Identifier)e) rid.erroneousUse=true;
+	}
+}
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	if(idx.byRef){
@@ -9249,8 +9282,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	static if(language==silq) if(holdAggregate) idx.e=weakenHeld(idx.e,aggContext);
 	propErr(idx.a,idx);
 	explainSliceSyntax(idx,index,sc); // e.g., `x[1:3]` instead of `x[1..3]`
-	if(idx.isSemError())
+	if(idx.isSemError()){
+		static if(language==silq) if(idx.a.isSemError()&&!inType) consumeReplacedComponentsByError(idx,context);
 		return idx;
+	}
 	static if(language==silq){
 		bool replaceIndex=false;
 		size_t replaceIndexLoc=size_t.max;
@@ -9796,7 +9831,10 @@ Expression expressionSemanticImpl(VectorForExp vfe,ExpSemContext context){
 	assert(!!vfe.fe);
 	vfe.fe.aggr=forAggregateSemantic(vfe.fe.aggr,context,vfe.fe);
 	propErr(vfe.fe,vfe);
-	if(vfe.isSemError()) return vfe;
+	if(vfe.isSemError()){
+		if(vfe.fe.bdy&&vfe.fe.bdy.s.length) vectorForFunction(vfe,bottom,context); // (error recovery: the body consumes what it moves, e.g., `a` for `[move(a)+i for i in [tqx(0)..2)]`, as for a `for` loop over an erroneous range, see `replaceErroneousContainer`)
+		return vfe;
+	}
 	vfe.len=vectorForLength(vfe,context);
 	if(vfe.isSemError()) return vfe;
 	auto elemTy=vfe.fe.aggr.elementType();
