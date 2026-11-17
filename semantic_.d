@@ -560,6 +560,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 					declareErroneous(ce.e2,argument);
 				}else if(auto ce=cast(CallExp)e) declareErroneous(ce.arg,true); // (a reversed call, e.g., `expand(x):=e` for `expand[n:!ℕ](x:uint[n])` and an erroneous `e`, from which `n` is not inferred)
 				else if(auto le=cast(LetExp)e) foreach(id;le.freeIdentifiers) declareErroneous(id,true); // (the variables that its reversal defines, e.g., `b` for `let{ a:=X(b); c:=X(a); } in c`)
+				else if(auto fe=cast(ForgetExp)e) declareErroneous(fe.var,argument); // (the variables that its reversal defines, e.g., `x` for `forget(x=2):=forget(x=1)` with an erroneous `x`)
 				else if(auto ite=cast(IteExp)e) foreach(b;only(ite.then,ite.othw)) if(b&&b.s.length==1) declareErroneous(b.s[0],argument); // (e.g., `(if c then (a,b) else (b,a)):=e` for an erroneous `c`)
 			}
 			declareErroneous(be.e1);
@@ -1482,12 +1483,16 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq)
 	if(with_.isIndices&&!with_.trans.isSemError()) promoteQuantumReadAggregates(with_.trans.s,with_.trans,sc); // (as for the replacement of components it is lowered from, see `buildIndexReplacements`, e.g., in a copy of a loop body that is lowered)
 	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
+	Id[] erroneousTransLocals; // (error recovery: they are not visible after the statement either, see below)
 	if(auto bsc=with_.trans.blscope_){
 		static if(language==silq) foreach(d;bsc.rnsymtab.liveValues()){
-			if(d.isSemError()||!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
+			if(!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
 			auto origin=d;
 			while(origin.splitFrom) origin=origin.splitFrom;
-			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)) transLocals~=q(d.name.id,isConstLocal(d));
+			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)){
+				if(!d.isSemError()) transLocals~=q(d.name.id,isConstLocal(d));
+				else if(d.name.id !in outerNames) erroneousTransLocals~=d.name.id; // (not an erroneous version of a variable from outside, e.g., `xs` for `with{ for i in 0..5{ xs[i]:=H(xs[i]); } }do{ }` with a `const` variable `xs`)
+			}
 		}
 		bsc.keepConstLocals=true;
 		sc.merge(false,bsc);
@@ -1606,8 +1611,20 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		}
 		propErr(with_.itrans,with_);
 	}
-	static if(language==silq) if(!with_.itrans||with_.itrans.isSemError()) // (error recovery: there is no inverse, or it has an error, so it does not consume the locals of the transformation, e.g., `h` for `with{ def h(){ … } def g(){ h(); return tqx; } }do{ … }`)
-		foreach(local;transLocals) if(auto d=transLocal(local,sc)) d.setSemForceError();
+	static if(language==silq) if(!with_.itrans||with_.itrans.isSemError()){ // (error recovery: there is no inverse, or it has an error, so it does not consume the locals of the transformation, e.g., `h` for `with{ def h(){ … } def g(){ h(); return tqx; } }do{ … }`, and it does not restore the variables that the transformation consumes, which are erroneous after it, e.g., `x` for `with{ y:=X(x); z:=tqx; }do{ … }`)
+		foreach(name;chain(transLocals.map!(local=>local[0]),erroneousTransLocals)){ // (they are not visible after the statement, as after the inverse, which consumes them, also for a later definition of the same name)
+			auto d=sc.peekSymtab(name,false);
+			if(!d||cast(DeadDecl)d) continue;
+			d.setSemForceError();
+			if(sc.rnsymtab.get(d.getId,null) is d) sc.symtabRemove(d);
+		}
+		foreach(e;with_.trans.subexpressions) if(auto id=cast(Identifier)e) if(id.meaning&&!id.constLookup&&!id.implicitDup&&!id.meaning.isToplevelDeclaration()){
+			auto origin=id.meaning;
+			while(origin.splitFrom) origin=origin.splitFrom; // (e.g., the version of a variable from outside in the scope of the transformation)
+			if(auto bsc=with_.trans.blscope_) if(origin.scope_&&origin.scope_.isNestedIn(bsc)) continue; // (a local of the transformation)
+			if(sc.canInsert(id.id)) sc.insert(addVar(id.id,null,id.loc,sc));
+		}
+	}
 	static if(language==silq) foreach(local;transLocals){
 		auto d=transLocal(local,sc);
 		if(!d) continue;
@@ -3822,7 +3839,9 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 		initializer=expressionSemantic(ninit,context.expSem.nestConst);
 		propErr(initializer,tae);
 	}
-	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,tae.type,initializer));
+	static if(!isPresemantic) auto ntype=!tae.type&&tae.t.isSemError()?bottom:tae.type; // (error recovery: as for `⊥`, e.g., for `[a]~xs` in `([a]~xs:_^m)~ys:=e` with an erroneous `m`)
+	else auto ntype=tae.type;
+	tae.e=defineLhsSemantic!isPresemantic(tae.e,context.nest(context.constResult,ntype,initializer));
 	static if(!isPresemantic){
 		if(cast(CallExp)unwrap(tae.e)) return tae.e;
 		return expressionSemantic(tae,context.expSem);
@@ -7410,12 +7429,14 @@ FunctionDef calleeFunctionDef(Expression callee,int depth=0){
 	}
 	return null;
 }
-bool returnTypeUnknown(CallExp ce){ // (a call of a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `f(x)` for `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`)
+bool returnTypeUnknown(FunctionDef fd){ // (a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`)
+	return fd&&!fd.rret&&fd.fscope_&&fd.fscope_.erroneousReturn;
+}
+bool returnTypeUnknown(CallExp ce){ // (a call of such a function)
 	if(!ce.e.isSemError()) return false;
 	auto ft=cast(FunTy)ce.e.type;
 	if(!ft||!isEmpty(ft.cod)) return false;
-	auto fd=calleeFunctionDef(ce.e);
-	return fd&&!fd.rret&&fd.fscope_&&fd.fscope_.erroneousReturn;
+	return returnTypeUnknown(calleeFunctionDef(ce.e));
 }
 string describeCallee(Expression callee){
 	if(cast(LambdaExp)unwrap(callee)) return "lambda";
@@ -8546,6 +8567,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	if(le.fd.sstate==SemState.passive)
 		le.fd.setSemCompleted(); // TODO: ok?
 	le.type=typeForDecl(le.fd);
+	if(le.isSemError()) if(auto ft=cast(FunTy)le.type) if(isEmpty(ft.cod)&&returnTypeUnknown(le.fd)) le.type=null; // (error recovery: as for a call, see `callSemantic`)
 	if(!le.type){
 		if(!le.isSemError()) sc.error("invalid forward reference",le.loc); // (not after an error in the function, e.g., in the type of a parameter)
 		le.setSemError();

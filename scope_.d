@@ -1584,7 +1584,7 @@ abstract class Scope{
 				return read;
 		return null;
 	}
-	final Declaration consume(Declaration decl,Identifier use,IndexExp consumedComponent=null,bool splitting=false){
+	final Declaration consume(Declaration decl,Identifier use,IndexExp consumedComponent=null,bool splitting=false,bool constBlockEnded=false){ // (`constBlockEnded`: a lazy consumption at a use where `decl` was `const`, see `LastUse.consume`)
 		if(use&&!decl.isSemError&&!use.isSemError){
 			if(auto read=isConstThroughSplits(decl)){
 				if(!(consumedComponent&&componentConstBlocksAllow(decl,consumedComponent,use.loc))){
@@ -1596,7 +1596,7 @@ abstract class Scope{
 							}
 						}
 					}
-					recordConstBlockedConsumption(read,use);
+					if(!constBlockEnded) recordConstBlockedConsumption(read,use); // (after the end of the `const` block, `LastUse.checkConsumable` checks the dependency as it was there, e.g., `x` for `y:=dup(x); z:=cnot(y,y); return (x,z);`, whose consumption processes the last use of `y` first)
 				}
 			}
 		}
@@ -2131,6 +2131,7 @@ abstract class Scope{
 							}else continue; // TODO: catch this early
 						}
 						if(!done) done=lastUses.betterUnforgettableError(d,this);
+						if(!done) if(auto lu=lastUses.get(d,true)) if(lu.kind==LastUse.Kind.constPinned&&lu.parent&&lu.parent.isSemError()) done=true; // (error recovery: a `const` capture of an erroneous function, whose consumption is not known, e.g., `d` for `g:=λ(const x:𝔹)⇒(x⊕d,tqx)[0];`)
 						if(!done){
 							if(cast(Parameter)d) error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
 							else error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);

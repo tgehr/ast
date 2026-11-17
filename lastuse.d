@@ -1075,16 +1075,18 @@ final class LastUse{
 		}
 		Declaration result=scope_.getSplit(decl);
 		Identifier[] oldConstBlock;
+		bool constBlockEnded=false;
 		if(constBlock.length){
 			if(auto prop=scope_.updateDeclProps(decl)){
 				oldConstBlock=prop.constBlock;
+				constBlockEnded=!oldConstBlock.canFind(constBlock[$-1]);
 				prop.constBlock=constBlock;
 				scope_.declProps.noteBlocked(decl);
 			}
 		}
 		auto prevForgetting=scope_.forgetting;
 		scope_.forgetting=isForget?result:null; // (see `Scope.forgetting`)
-		result=scope_.consume(result,use);
+		result=scope_.consume(result,use,null,false,constBlockEnded);
 		scope_.forgetting=prevForgetting;
 		if(!use&&explanationUse) scope_.recordConsumption(result,explanationUse);
 		if(constBlock.length){
