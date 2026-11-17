@@ -739,6 +739,17 @@ Expression lowerDefine(LowerDefineFlags flags)(Expression olhs,Expression orhs,L
 		auto ft=cast(FunTy)ce.e.type;
 		assert(!!ce);
 		if(!ft) {
+			if(ce.e.isSemError()){ // (error recovery: as for such a call on its own, e.g., `y` for `tqx(y)` in `id(tqx(y)):=1`, see `makeDeclaration`)
+				void declareUndefined(Expression e){
+					e=unwrap(e);
+					if(auto id=cast(Identifier)e){
+						if(!sc.lookup(id,false,true,Lookup.probing,null)&&sc.canInsert(id.id)) sc.insert(addVar(id.id,null,id.loc,sc));
+					}else if(auto tpl=cast(TupleExp)e) foreach(x;tpl.e) declareUndefined(x);
+					else if(auto ce2=cast(CallExp)e) declareUndefined(ce2.arg);
+				}
+				declareUndefined(ce.arg);
+				return error();
+			}
 			sc.error("call to non-function not supported as definition left-hand side", ce.e.loc);
 			return error();
 		}

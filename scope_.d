@@ -3051,7 +3051,12 @@ abstract class Scope{
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
 		bool consumedByError(Id id){ // (by an erroneous expression in a branch: not reported again)
-			foreach(sc;scopes) if(auto cd=cast(ConsumedDecl)sc.rnsymtab.get(id,null)) if(cd.use.erroneousUse) return true;
+			static bool byError(Declaration d,int depth=0){ // (also within a loop or a branch of the branch, whose merge is dead, e.g., `q` for `if c==0 { repeat 2 { t:=tqx(q); } }`)
+				if(auto cd=cast(ConsumedDecl)d) return cd.use.erroneousUse;
+				if(auto dm=cast(DeadMerge)d) if(depth<8) return dm.mergedFrom.any!(m=>byError(m,depth+1));
+				return false;
+			}
+			foreach(sc;scopes) if(byError(sc.rnsymtab.get(id,null))) return true;
 			return false;
 		}
 		MapSX!(Id,DeadMerge) deadMerges;

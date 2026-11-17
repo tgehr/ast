@@ -566,6 +566,7 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 				}else if(auto ce=cast(CallExp)e) declareErroneous(ce.arg,true); // (a reversed call, e.g., `expand(x):=e` for `expand[n:!ℕ](x:uint[n])` and an erroneous `e`, from which `n` is not inferred)
 				else if(auto le=cast(LetExp)e) foreach(id;le.freeIdentifiers) declareErroneous(id,true); // (the variables that its reversal defines, e.g., `b` for `let{ a:=X(b); c:=X(a); } in c`)
 				else if(auto fe=cast(ForgetExp)e) declareErroneous(fe.var,argument); // (the variables that its reversal defines, e.g., `x` for `forget(x=2):=forget(x=1)` with an erroneous `x`)
+				else if(auto vfe=cast(VectorForExp)e){ if(auto c=vfe.fe.aggr.isContainer()) declareErroneous(c.e,argument); } // (the vector that its reversal defines, e.g., `xs` for `[H(x) for x in xs]:=e`)
 				else if(auto ite=cast(IteExp)e) foreach(b;only(ite.then,ite.othw)) if(b&&b.s.length==1) declareErroneous(b.s[0],argument); // (e.g., `(if c then (a,b) else (b,a)):=e` for an erroneous `c`)
 			}
 			declareErroneous(be.e1);
@@ -3693,7 +3694,9 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 		}
 		return false;
 	}
-	if(!checkReplaceable(idx)||idx.isSemError()){ // (e.g., the index is not `qfree`)
+	auto unknownComponent=erroneousIndex(idx); // (error recovery: e.g., `a[tqx(i)]:=X(a[i])`)
+	if(unknownComponent||!checkReplaceable(idx)||idx.isSemError()){ // (e.g., the index is not `qfree`)
+		if(unknownComponent) if(auto id=getIdFromIndex(idx)) if(id.meaning) id.meaning.setSemForceError(); // (the replaced component is not known: the right-hand side does not consume a component that is being replaced, e.g., `a[i]`, and it is not checked against the components that are `const` or being replaced)
 		idx.setSemError();
 		return idx;
 	}
@@ -5688,8 +5691,30 @@ struct ArrayConsumer{
 	}
 }
 
+static if(language==silq){
+bool erroneousIndex(IndexExp idx){ // (of the component or of an enclosing aggregate)
+	for(auto e=idx;e;e=cast(IndexExp)unwrap(e.e)) if(e.a.isSemError()) return true;
+	return false;
+}
+bool erroneousComponentAccess(Expression e,IndexExp component){ // (whether `e` accesses a component of the aggregate of `component` with an erroneous index, which may be `component`, e.g., `a[j]` with an undefined `j` for `a[i]`, also within a lambda, e.g., `() ⇒ a[tqx(0)]`)
+	import ast.reverse: nameOf;
+	auto id=getIdFromIndex(component);
+	if(!id||!e) return false;
+	foreach(x;e.subexpressions){
+		if(auto le=cast(LambdaExp)x){
+			if(le.fd&&le.fd.body_&&erroneousComponentAccess(le.fd.body_,component)) return true;
+			continue;
+		}
+		auto idx=cast(IndexExp)x;
+		if(!idx||!idx.a.isSemError()) continue;
+		if(auto oid=getIdFromIndex(idx)) if(nameOf(oid)==nameOf(id)) return true;
+	}
+	return false;
+}
+}
 void checkIndexReplacement(Expression be,Scope sc){
 	auto inType=InType.no;
+	auto lhs=cast(ABinaryExp)be?(cast(ABinaryExp)be).e1:null, rhs=cast(ABinaryExp)be?(cast(ABinaryExp)be).e2:null;
 	auto creplss=sc.localComponentReplacementsByDecl();
 	foreach(crepls;creplss){
 		auto indicesToReplace=crepls.map!(x=>x.write).filter!(x=>!!x).array;
@@ -5702,9 +5727,11 @@ void checkIndexReplacement(Expression be,Scope sc){
 				// (scope will handle this)
 				if(idx2.isSemError()) continue;
 				if(!guaranteedDisjointComponents(idx1,idx2,be.loc,sc,inType)){
-					if(guaranteedOverlappingComponents(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
-					else sc.error("indices may refer to same value in reassignment",idx2.loc);
-					sc.note("other index is here",idx1.loc);
+					if(!erroneousComponentAccess(rhs,idx2)){ // (error recovery: the right-hand side may swap them, e.g., `(x[i],x[j]):=(x[j],x[tqx(i)])`, see `swapSemantic`)
+						if(guaranteedOverlappingComponents(idx1,idx2,be.loc,sc,inType)) sc.error("indices refer to same value in reassignment",idx2.loc);
+						else sc.error("indices may refer to same value in reassignment",idx2.loc);
+						sc.note("other index is here",idx1.loc);
+					}
 					idx2.setSemError();
 					//return;
 				}
@@ -5712,7 +5739,7 @@ void checkIndexReplacement(Expression be,Scope sc){
 		}
 		foreach(crepl;crepls){
 			if(crepl.write&&!crepl.read){
-				sc.error("replaced component must be consumed in right-hand side", crepl.write.loc);
+				if(!erroneousComponentAccess(rhs,crepl.write)&&!erroneousComponentAccess(lhs,crepl.write)) sc.error("replaced component must be consumed in right-hand side", crepl.write.loc); // (error recovery: the right-hand side may consume it, e.g., `a[i]:=H(a[j])` with an undefined `j`, or it does not as the aggregate is erroneous, e.g., `a[0]` in `(a[0],a[tqx(1)]):=(a[1],a[0])`, see `defineLhsSemanticImpl(IndexExp)`)
 				crepl.write.setSemError();
 				be.setSemError();
 				if(auto d=sc.rnsymtab.get(crepl.name,null)) sc.symtabRemove(d); // (avoids redefinition error)
@@ -7512,9 +7539,17 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto handler=context.sc.handler;
 			handler.suppress++;
 			scope(exit) handler.suppress--;
-			static if(isRhs) ce.arg=expressionSemantic(ce.arg,context.condition?context.nestConst:context.nestConsumed);
-			else ce.arg=defineLhsSemantic!isPresemantic(ce.arg,context.nest(ConstResult.no,bottom,null));
+			static if(isRhs){
+				auto fd=calleeFunctionDef(ce.e); // (a function whose parameters are known, e.g., with an erroneous parameter type)
+				if(fd&&fd.isSquare&&!ce.isSquare&&fd.body_&&fd.body_.s.length==1) if(auto ret=cast(ReturnExp)fd.body_.s[0]) fd=calleeFunctionDef(ret.e); // (omitted square-bracket arguments)
+				auto isConst=fd&&fd.isSquare==ce.isSquare?fd.params.map!(p=>p.isConst).array:[];
+				if(isConst.length&&isConst.all!(c=>c==isConst[0])) ce.arg=expressionSemantic(ce.arg,isConst[0]?context.nestConst:context.nestConsumed);
+				else ce.arg=expressionSemantic(ce.arg,context.condition?context.nestConst:context.nestConsumed);
+			}else ce.arg=defineLhsSemantic!isPresemantic(ce.arg,context.nest(ConstResult.no,bottom,null));
 			foreach(e;ce.arg.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
+		}else foreach(e;ce.arg.subexpressions) if(auto idx=cast(IndexExp)e) if(auto id=getIdFromIndex(idx)){ // (the replaced components are not known, e.g., `b[0]` in `X(tqx(b[0])):=b[0]`, see `defineLhsSemanticImpl(IndexExp)`)
+			auto meaning=id.meaning?id.meaning:context.sc.lookup(id,false,true,Lookup.probing,null);
+			if(meaning&&!cast(DeadDecl)meaning) meaning.setSemForceError();
 		}
 	}
 	static if(language==silq&&isRhs) if(!ce.checkReverse&&!ce.isSquare) if(auto sce=cast(CallExp)ce.e){
@@ -8003,6 +8038,11 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			auto aty=ce.arg.type;
 			static if(isRhs) if(isEmpty(aty)) return ce.arg;
 			if(ft.isSquare&&!ce.isSquare&&isEmpty(ft.cod)){
+				if(ce.e.isSemError()&&returnTypeUnknown(calleeFunctionDef(ce.e))){ // (error recovery: the type of the function that it returns is not known, e.g., with an erroneous parameter type, as for a callee without a type)
+					ce.setSemError();
+					argSemanticWithoutFunction();
+					return ce;
+				}
 				auto lit=LiteralExp.makeBoolean(false);
 				lit.loc=ce.e.loc;
 				auto garg=new AssertExp(lit); // TODO: detect and error out if this makes it past type checking?
@@ -10822,8 +10862,10 @@ Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){
 			return va;
 		}
 	}else{
-		sc.error("argument to variadic type must be a tuple, vector, or array",va.loc);
-		sc.note(format("type of argument is `%s`",next.type),va.next.loc);
+		if(next.type){ // (not for an erroneous argument without a type)
+			sc.error("argument to variadic type must be a tuple, vector, or array",va.loc);
+			sc.note(format("type of argument is `%s`",next.type),va.next.loc);
+		}
 		va.setSemError();
 		return va;
 	}
@@ -11800,6 +11842,14 @@ CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibl
 bool mayDivergeByError(Expression e){ // (whether `e` may not complete only because of an error, e.g., in a condition, after which its end may not be reachable)
 	if(auto ce=cast(CompoundExp)e) return ce.s.any!mayDivergeByError;
 	if(auto we=cast(WhileExp)e) return we.cond.isSemError(); // (e.g., `while tqx { …; return x; }`, which may not terminate, as `while true`)
+	if(auto re=cast(RepeatExp)e) return (re.num.isSemError()||isPositive(re.num))&&(definitelyReturns(re.bdy)||mayDivergeByError(re.bdy)); // (e.g., `repeat tqx(2) { return 1; }`, which may run)
+	if(auto fe=cast(ForExp)e){ // (e.g., `for i in [0..tqx(n)) { return 1; }`)
+		bool erroneousRange=false;
+		if(auto r=fe.aggr.isRange()) erroneousRange=r.left&&r.left.isSemError()||r.right&&r.right.isSemError()||r.step&&r.step.isSemError();
+		else if(auto c=fe.aggr.isContainer()) erroneousRange=c.e.isSemError();
+		return erroneousRange&&(definitelyReturns(fe.bdy)||mayDivergeByError(fe.bdy));
+	}
+	static if(language==silq) if(auto dw=cast(DoWhileExp)e) return dw.cond.isSemError()||mayDivergeByError(dw.bdy); // (its body runs)
 	if(auto ite=cast(IteExp)e){
 		if(ite.cond.isSemError()) return true;
 		return only(ite.then,ite.othw).all!(b=>b&&(definitelyReturns(b)||mayDivergeByError(b)));
