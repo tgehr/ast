@@ -337,8 +337,13 @@ void joinAnnotation(FunctionDef fd){ // (at the start of an analysis, see `annot
 }
 bool annotationMismatch(FunctionDef fd){ // (once the types that the value of the annotation depends on are final, see `annotationSource`)
 	if(!fd.annotationSource||fd.isSemError()) return false;
+	auto source=fd.annotationSource;
 	fd.annotationSource=null;
 	if(fd.ret==fd.annotationValue) return false;
+	if(!evaluateAnnotation(fd,source.copy())){ // (error recovery: the value of the annotation is not known after all, e.g., `typeof(f())` once `f` turns out to have a `return` with an error, see `returnTypeUnknown`)
+		fd.setSemError();
+		return true;
+	}
 	auto inferred=fd.ret;
 	fd.ret=fd.annotationValue; // (analyzed again with the value of the annotation, which reports the returned values that are incompatible with it)
 	fd.inferringReturnType=false;
@@ -3170,6 +3175,8 @@ struct DefineLhsContext{
 		sc.nameIndex(index,name);
 		return name;
 	}
+	bool erroneousInitializer=false; // (error recovery: the type of the right-hand side may be incomplete, e.g., with the provisional return type of a function in a cycle that turns out to have an error, so the number of its entries is not checked)
+	bool assignment=false; // (the left-hand side of an assignment, which is not a reversed call)
 	Expression type;
 	Expression initializer;
 }
@@ -3180,7 +3187,13 @@ Expression definedValue(Expression e){ // (the known value of a variable that `e
 	return r is e?e.eval():r;
 }
 auto defineLhsContext(ExpSemContext expSem,Expression type,Expression initializer){
-	return DefineLhsContext(expSem,type,initializer);
+	return DefineLhsContext(expSem,false,false,type,initializer);
+}
+auto defineLhsContext(ExpSemContext expSem,bool erroneousInitializer,Expression type,Expression initializer){
+	return DefineLhsContext(expSem,erroneousInitializer,false,type,initializer);
+}
+auto defineLhsContext(ExpSemContext expSem,bool erroneousInitializer,bool assignment,Expression type,Expression initializer){
+	return DefineLhsContext(expSem,erroneousInitializer,assignment,type,initializer);
 }
 auto nest(DefineLhsContext context,ConstResult newConstResult,Expression newType,Expression newInitializer){
 	return defineLhsContext(context.expSem.nest(newConstResult),context.tupleof[1..$-2],newType,newInitializer);
@@ -3235,7 +3248,7 @@ CompoundExp branchBlockSemanticLhs(CompoundExp branch, DefineLhsContext context,
 	auto restriction_ = quantumControl ? Annotation.mfree : Annotation.none;
 
 	assert(branch.s.length == 1);
-	branch.s[0] = branchSemanticLhs(branch.s[0], DefineLhsContext(expSemContext(branch.blscope_, context.expSem.constResult, context.expSem.inType), context.type, context.initializer), quantumControl);
+	branch.s[0] = branchSemanticLhs(branch.s[0], DefineLhsContext(expSemContext(branch.blscope_, context.expSem.constResult, context.expSem.inType), context.erroneousInitializer, context.assignment, context.type, context.initializer), quantumControl);
 	static if(language==silq) branch.blscope_.clearConsumed();
 
 	static if(!isPresemantic){
@@ -3514,7 +3527,10 @@ Expression defineLhsSemanticImpl(IndexExp idx,DefineLhsContext context){
 			return e;
 		if(auto id=cast(Identifier)next){
 			auto meaning=id.meaning?id.meaning:context.sc.lookup(id,false,true,Lookup.probing,null);
-			if(meaning&&cast(FunTy)typeForDecl(meaning)){ // (a call, e.g., `f[x]:=g[y];`, analyzed as `f(x):=g(y);`, which looks up `f` after the right-hand side)
+			bool call=meaning&&cast(FunTy)typeForDecl(meaning);
+			if(!call&&!context.assignment&&e is idx&&meaning&&meaning.isSemError()&&!typeForDecl(meaning)) // (error recovery: an erroneous variable without a type may be a function, e.g., `f` in `f[x]:=f[H(1:𝔹)]`, whose reversed call defines `x`, see `makeDeclaration`)
+				call=e.a.freeIdentifiers.any!(x=>!context.sc.lookup(x,false,true,Lookup.probing,null));
+			if(call){ // (a call, e.g., `f[x]:=g[y];`, analyzed as `f(x):=g(y);`, which looks up `f` after the right-hand side)
 				auto ce=new CallExp(id,e.a,true,false);
 				ce.loc=e.loc;
 				if(context.constResult) return callSemantic(ce,context.expSem);
@@ -3734,7 +3750,8 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 		if(context.type){
 			if(tt){
 				if(tpl.length!=tt.length){
-					specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc,tpl);
+					if(context.erroneousInitializer) tpl.setSemError();
+					else specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.length," vs. ",tt.length),tpl.loc,tpl);
 				}
 			}else if(vt){
 				// TODO: technically this violates type refinement
@@ -3743,7 +3760,8 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 				neq=expressionSemantic(neq,context.expSem.nestConst);
 				assert(neq.isSemCompleted());
 				if(neq.eval()==LiteralExp.makeBoolean(1)){
-					specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc,tpl);
+					if(context.erroneousInitializer) tpl.setSemError();
+					else specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc,tpl);
 				}
 			}else if(!at&&!isBottom){
 				sc.error(format("cannot unpack type `%s` as a tuple",context.type),tpl.loc);
@@ -3782,7 +3800,8 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 		if(context.type){
 			if(tt){
 				if(vec.e.length!=tt.length){
-					specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",tt.length),vec.loc,vec);
+					if(context.erroneousInitializer) vec.setSemError();
+					else specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",tt.length),vec.loc,vec);
 				}
 			}else if(vt){
 				// TODO: technically this violates type refinement
@@ -3791,7 +3810,8 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 				neq=expressionSemantic(neq,context.expSem.nestConst);
 				assert(neq.isSemCompleted());
 				if(neq.eval()==LiteralExp.makeBoolean(1)){
-					specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc,vec);
+					if(context.erroneousInitializer) vec.setSemError();
+					else specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc,vec);
 				}
 			}else if(!at&&!isBottom){ // (`⊥`: as for a tuple)
 				sc.error(format("cannot unpack type `%s` as a vector",context.type),vec.loc);
@@ -4361,7 +4381,7 @@ Expression swapSemantic(DefineExp be,Scope sc){
 		consumer.redefineArrays(be,sc);
 		if(consumer.failed) be.setSemForceError();
 	}
-	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.type,be.e2));
+	be.e1=defineLhsSemantic(be.e1,DefineLhsContext(econtext,be.e2.isSemError(),false,be.e2.type,be.e2));
 	propErr(be.e1,be);
 	be.type=unit;
 	be.setSemCompleted();
@@ -4383,9 +4403,9 @@ Expression swapSemantic(DefineExp be,Scope sc){
 	return ce;
 }
 
-bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc){
+bool prepareIndexReplacements(ref Expression lhs,Scope sc,ref StmFlags flags,ref CompoundExp[] prologues,ref CompoundExp[] epilogues,Location loc,bool assignment){
 	auto econtext=expSemContext(sc,ConstResult.no,InType.no);
-	auto dcontext=defineLhsContext(econtext,null,null);
+	auto dcontext=defineLhsContext(econtext,false,assignment,null,null);
 	auto creplsCtx=sc.moveLocalComponentReplacements(); // TODO: get rid of this
 	lhs=defineLhsPresemantic(lhs,dcontext);
 	//writeln("{",indicesToReplace.map!(x=>text(x[0]?x[0].toString:"null",",",x[1],",",x[2]?x[2].toString():"null")).join(";"),"}");
@@ -5148,7 +5168,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 	static if(language==silq)
 	if(sc.allowsLinear){
 		if(auto r=swapSemantic(be,sc)) return r;
-		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc);
+		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc,false);
 	}
 	propErr(be.e1,be);
 	static if(language==silq) auto patternComponentForgets=getPatternComponentForgets(be,sc);
@@ -5174,7 +5194,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			auto initializer=be.e2;
 			if(initializer.isSemCompleted()&&initializer.isConstant())
 				if(auto folded=initializer.eval()) initializer=folded;
-			auto dcontext=defineLhsContext(context,be.e2.type,initializer);
+			auto dcontext=defineLhsContext(context,be.e2.isSemError(),be.e2.type,initializer);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
 			recordExplicitType(be); // (for diagnostics)
@@ -6498,7 +6518,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			ae.e2=tmp;
 		}
 		auto oe1=ae.e1.copy();
-		prepareIndexReplacements(oe1,sc,flags,prologues,epilogues,ae.loc);
+		prepareIndexReplacements(oe1,sc,flags,prologues,epilogues,ae.loc,true);
 		propErr(oe1,ae.e1); // (e.g., invalid index for component replacement)
 	}
 	ae.e2=expressionSemantic(ae.e2,context.nestConsumed);
@@ -6698,6 +6718,7 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 					if(tpll.length!=tt.length){
 						assert(ae.isSemError()||sc.inferenceMode);
 						foreach(i,exp;tpll.e[0..min($,tt.length)]) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
+						if(ae.isSemError()) foreach(exp;tpll.e[min($,tt.length)..$]) updateVars2(exp,exp,indexed,null,rhsdep,stage); // (error recovery: as for a right-hand side without a type, e.g., `(a,b)=f(3)` for an erroneous `f` with the inferred return type `⊥^0` of `return []`)
 						return;
 					}
 					foreach(i,exp;tpll.e) updateVars2(exp,exp,indexed,tt[i],rhsdep,stage);
@@ -6801,7 +6822,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	static if(language==silq)
 	if(sc.allowsLinear){
 		oe1=be.e1.copy();
-		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc);
+		prepareIndexReplacements(be.e1,sc,flags,prologues,epilogues,be.loc,true);
 		propErr(be.e1,oe1); // (e.g., invalid index for component replacement)
 	}
 	static if(language==silq)

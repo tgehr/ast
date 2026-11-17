@@ -1075,10 +1075,12 @@ class Checker {
 		bool passTrue = ifTrue.visCompoundValue(e.then, "if-true", e.constLookup);
 		bool passFalse = ifFalse.visCompoundValue(e.othw, "if-false", e.constLookup);
 
-		assert(ifTrue.nscope.mergedVars.length == 0);
+		if(!passTrue) assert(!ifTrue.nscope.mergedVars);
+		if(!passFalse) assert(!ifFalse.nscope.mergedVars);
+		if(passTrue && passFalse) visMerge(ifTrue, ifFalse, e); // (as for `if` statements, e.g., the versions of a `once` function that the branches call, which is spent after them)
+		else if(passTrue) visMerge(ifTrue, e);
+		else if(passFalse) visMerge(ifFalse, e);
 		if(passTrue) ifTrue.checkEmpty(); // (as for `if` statements, a branch that diverges need not consume its variables)
-
-		assert(ifFalse.nscope.mergedVars.length == 0);
 		if(passFalse) ifFalse.checkEmpty();
 	}
 
