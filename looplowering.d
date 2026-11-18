@@ -4502,12 +4502,13 @@ private void restoreBeforeLoop(Expression loop,ref FixedPointIterState state,Sco
 		anchorLoopConstForgets(sc,loop,u.constForgets,state.loopScope,state.forgetScope);
 		u.error=unreachableSemantic(u.stms,loop,sc,u.flags,u.restriction,u.resetConst).isSemError();
 	}
+	static if(language==silq) if(isEmpty(loop)) if(auto bs=cast(BlockScope)sc) if(bs.isBranch&&!bs.loweredLoopEnd) bs.loweredLoopEnd=new AbortingBranchEnd(bs); // (the lowering passes the variables that the loop carries to a function that does not return and drops the code after it, see `abortingBranchEnd`)
 	sc.restoreStateSnapshot(state.origStateSnapshot);
 }
 private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,ref StmFlags flags){
 	static if(language==silq) enum isDoWhile=is(T==DoWhileExp);
 	else enum isDoWhile=false;
-	static if(language==silq) bool singleIteration=!loopContainsReturn(loop)&&definitelyReturns(loop.bdy); // (the body does not complete an iteration)
+	static if(language==silq) bool singleIteration=definitelyReturns(loop.bdy); // (the body does not complete an iteration, also where it returns: the variables keep their known values, as for the analysis of the loop, e.g., `x` in `x:=vector(m,0:𝔹); while k<1 { …; m+=2; x:=vector(m,0:𝔹); …; return x; }`, which is forgotten before `m+=2`, but not as a parameter of a recursive function)
 	else enum singleIteration=false;
 	static if(language==silq) if(auto r=borrowAccessedComponents(loop,state,sc,flags)) return r;
 	if(!singleIteration){
@@ -4539,7 +4540,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	// continuation-passing lowering for loops with early returns:
 	// the statements after the loop (which end in a `return`) become the base case of the recursion
 	Expression[] continuation=null;
-	static if(language==silq) if(!isEmpty(loop)&&loopContainsReturn(loop)) continuation=sc.loopContinuation.take(loop,true); // (not after a loop that does not exit normally, e.g., `repeat 2 { return 1; }`, see `lowerLoop`)
+	static if(language==silq) if(!isEmpty(loop)&&loopContainsReturn(loop)&&!singleIteration) continuation=sc.loopContinuation.take(loop,true); // (not after a loop that does not exit normally, e.g., `repeat 2 { return 1; }`, see `lowerLoop`, or one whose body does not complete an iteration, which is lowered as an `if` statement)
 	// with a continuation, lifted loop-carried variables are threaded through the recursion as `const`
 	// parameters, so that they are still lifted in the code after the loop and in join points in the body
 	foreach(st;continuation){ // (the continuation becomes part of the recursive function)

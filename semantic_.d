@@ -1344,9 +1344,14 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);
 	propErr(ite.othw,ite);
+	static if(language==silq){
+		auto bothDiverge=definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
+		AbortingBranchEnd[] abortEnds;
+	}
 	foreach(branch;only(ite.then,ite.othw)){
 		if(definitelyReturns(branch)){
 			branch.blscope_.returns=returnsOnEveryPath(branch);
+			static if(language==silq) if(bothDiverge) if(auto end=abortingBranchEnd(branch)) abortEnds~=end;
 			branch.blscope_.closeUnreachable(sc,null,mentionsOf(branch));
 		}
 	}
@@ -1356,6 +1361,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
+	static if(language==silq) if(abortEnds.length) continueAbortingBranches(ite,sc,abortEnds);
 	static if(language==silq){
 		imported!"ast.lastuse".queueBranchOrder(sc,[ite.then.blscope_,ite.othw.blscope_]);
 		if(continued&&imported!"ast.lastuse".LastUse.interleavable(continued.blscope_)) if(auto nsc=cast(NestedScope)sc) nsc.addContinuedBranch(continued.blscope_);
@@ -1434,6 +1440,64 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		return r;
 	}
 	return ite;
+}
+
+static if(language==silq)
+AbortingBranchEnd abortingBranchEnd(CompoundExp branch){ // (of a branch that diverges, unless it returns on every path, see `continueAbortingBranches`)
+	auto bs=branch.blscope_;
+	bool returns=returnsOnEveryPath(branch);
+	if(!bs.loweredLoopEnd) return returns?null:new AbortingBranchEnd(bs);
+	for(Expression s=branch;;){ // (`--remove-loops`: a loop that does not exit normally, which makes the branch diverge, does not return on every path, and the end is the state after it as without the lowering, see `restoreBeforeLoop`, as for normal mode)
+		auto ce=cast(CompoundExp)s;
+		if(!ce) break;
+		if(ce.lowersLoop){ returns=false; break; }
+		auto next=ce.s.find!(x=>definitelyReturns(x));
+		if(next.empty) break;
+		s=next.front;
+	}
+	return returns?null:bs.loweredLoopEnd;
+}
+static if(language==silq)
+void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // (both branches diverge, so the code after the conditional is not reachable: it continues the branches that abort, as the code after a statement that aborts continues it, e.g., `b` in `if c { b:=fail(b); } else { b:=(X(b),)[1]; } return measure(b);`; the variables from outside that the branches consumed get the versions that a merge of those branches would give, where all of them define one and their types join, but they are not merged from them, as the code after the conditional is not generated)
+	SetX!Id seen;
+	foreach(branch;only(ite.then,ite.othw)) foreach(split;branch.blscope_.splitVars){
+		auto id=split.getId;
+		if(id in seen) continue;
+		seen.insert(id);
+		auto dd=cast(DeadDecl)sc.rnsymtab.get(id,null);
+		if(!dd) continue; // (not consumed by the split)
+		Declaration first=null;
+		Expression type=null;
+		bool erroneous=false;
+		foreach(end;ends){
+			auto d=end.table.get(id,null);
+			auto t=d&&!cast(DeadDecl)d?typeForDecl(d):null;
+			if(d&&!cast(DeadDecl)d) erroneous|=d.isSemError();
+			if(t&&type) t=joinTypes(type,t);
+			if(!t){ first=null; break; }
+			if(!first) first=d;
+			type=t;
+		}
+		if(first&&type.freeIdentifiers.any!(fid=>fid.meaning&&fid.meaning.scope_&&fid.meaning.scope_.getFunction() is sc.getFunction()&&sc.rnsymtab.get(fid.meaning.getId,null) !is fid.meaning)) first=null; // (it mentions a version that is not visible after the conditional, e.g., of a `const` local of a branch)
+		if(!first){ // (as for a merge, which reports a version that a branch cannot forget, see `Scope.merge`, where code follows)
+			if(sc.codeAfterStatement&&!erroneous&&!dd.consumedByError()){
+				foreach(end;ends){
+					if(id !in end.unforgettable) continue;
+					auto d=end.table[id];
+					sc.error(format("variable `%s` is not consumed",d.getName),d.loc);
+					sc.note("trying to merge branches of this if expression",ite.loc);
+					ite.setSemError();
+					break;
+				}
+			}
+			continue;
+		}
+		auto var=sc.addVariable(first,type,true);
+		if(!var) continue;
+		if(erroneous) var.setSemForceError();
+		sc.addDefaultDependency(var);
+		sc.lastUses.definition(var,null);
+	}
 }
 
 static if(language==silq)
@@ -2258,9 +2322,10 @@ void runFinalLoopIteration(T)(
 	bool lowerThisPass=shouldLowerLoop(sc);
 	if(loop.isSemError()||bdy.isSemError()) return;
 	Declaration[] candidates;
-	if(lowerThisPass)
-		candidates=dummyAnalysisCandidates(sc,state.prevStateSnapshot,state.loopScope);
-	else if(astopt.removeLoops&&insideLoopBody(sc)&&sc.dummyWitnessActive){
+	auto singleIteration=definitelyReturns(bdy); // (lowered as an `if` statement for the first iteration, which passes no variables to a recursive function, see `lowerLoopImpl`)
+	if(lowerThisPass){
+		if(!singleIteration) candidates=dummyAnalysisCandidates(sc,state.prevStateSnapshot,state.loopScope);
+	}else if(astopt.removeLoops&&insideLoopBody(sc)&&sc.dummyWitnessActive&&!singleIteration){
 		// This loop will be lowered as part of the body of the recursive function
 		// generated for an enclosing loop whose dummy analysis is currently in
 		// progress; report which variables it carries (see `noteNestedLoopCarried`).

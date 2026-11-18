@@ -318,6 +318,22 @@ enum Lookup{
 	probingWithCapture,
 }
 
+static if(language==silq)
+final class AbortingBranchEnd{ // (the versions of the variables at the end of a branch that aborts, before it is closed, see `continueAbortingBranches`)
+	SymbolTable table;
+	SetX!Id unforgettable; // (variables from outside whose versions have quantum values without a known dependency)
+	this(BlockScope bs){
+		import ast.semantic_: typeForDecl;
+		table=bs.rnsymtab.dup;
+		foreach(split;bs.splitVars){
+			auto d=table.get(split.getId,null);
+			if(!d||cast(DeadDecl)d||d.isSemError()) continue;
+			auto type=typeForDecl(d);
+			if(type&&!type.isClassical()&&!(bs.dependencyTracked(d)&&!bs.getDependency(d).isTop)) unforgettable.insert(d.getId);
+		}
+	}
+}
+
 final class Mentions{ // (the variables that a branch or a loop body that diverges mentions, see `Scope.closeUnreachable`)
 	private bool[Id] names;
 	Id[] ids;
@@ -4778,6 +4794,7 @@ class BlockScope: NestedScope{
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
 	bool returningBeforeContinuation=false; // (it returns on every path, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
+	static if(language==silq) AbortingBranchEnd loweredLoopEnd; // (the end of the branch after a loop that does not exit normally, as without its lowering, see `restoreBeforeLoop` and `abortingBranchEnd`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)
 	bool loopFinalPass=false;
 	bool speculative=false,cutShort=false;
