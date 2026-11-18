@@ -4110,6 +4110,13 @@ abstract class Scope{
 						}
 				return false;
 			}
+			Q!(Id,Declaration)[] withErroneousRedefinitions; // (variables from outside that a `with` transformation analyzed in this scope defines again with an error, with their versions from before, see `declareVariable`)
+			final bool erroneouslyRedefined(Declaration d){ // (a version of a variable that an enclosing `with` transformation defines again with an error, which the rest of the statement treats as erroneous)
+				for(auto sc=this;sc;sc=sc.parentScope())
+					foreach(r;sc.withErroneousRedefinitions)
+						if(d is r[1]||d.isDerivedFrom(r[1])) return true;
+				return false;
+			}
 			bool withTransInverse=false; // analyzing the inverse transformation of a `with` (the write-back machinery)
 			final Scope getWithTransInverse(){
 				for(auto sc=this;sc;sc=sc.parentScope())

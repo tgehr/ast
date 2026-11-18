@@ -358,9 +358,12 @@ bool annotationMismatch(FunctionDef fd){ // (once the types that the value of th
 }
 
 bool inWithTransformation(Scope sc){
+	return !!withTransformationScope(sc);
+}
+BlockScope withTransformationScope(Scope sc){ // (of the innermost `with` statement whose transformation `sc` is in)
 	for(Scope s=sc;s&&!cast(FunctionScope)s;s=s.parentScope())
-		if(auto bs=cast(BlockScope)s) if(cast(WithExp)bs.restrictionCause_.cause) return true;
-	return false;
+		if(auto bs=cast(BlockScope)s) if(cast(WithExp)bs.restrictionCause_.cause) return bs;
+	return null;
 }
 VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success){
 	VarDecl vd=null;
@@ -378,7 +381,15 @@ VarDecl declareVariable(Identifier id,Scope sc,bool forceInsert,ref bool success
 	if(!vd.scope_){
 		if(forceInsert||sc.canInsert(vd.name.id))
 			success&=sc.insert(vd);
-		else if(auto prev=sc.peekSymtab(vd.name.id,false)) if(!inWithTransformation(sc)&&sc.lastUses.canRedefine(prev)) success&=sc.insert(vd); // (error recovery: an erroneous definition replaces a version that a definition without errors would replace, e.g., `x` in `x:=tqx(x as 𝔹^3)`, which the later uses would otherwise refer to, with its type; not in a `with` transformation, whose inverse restores it)
+		else if(auto prev=sc.peekSymtab(vd.name.id,false)){
+			if(!inWithTransformation(sc)){
+				if(sc.lastUses.canRedefine(prev)) success&=sc.insert(vd); // (error recovery: an erroneous definition replaces a version that a definition without errors would replace, e.g., `x` in `x:=tqx(x as 𝔹^3)`, which the later uses would otherwise refer to, with its type; not in a `with` transformation, whose inverse restores it)
+			}else static if(language==silq) if(auto tsc=withTransformationScope(sc)) if(!sc.getWithTransTrial()){ // (a variable from outside: the rest of the statement treats it as erroneous, see `expressionSemanticImpl(Identifier)`; not in the trial analysis of the transformation, see `prepareWithTransReplacements`)
+				auto origin=prev;
+				while(origin.splitFrom) origin=origin.splitFrom;
+				if(origin.scope_&&!origin.scope_.isNestedIn(tsc)) tsc.parentScope().withErroneousRedefinitions~=q(vd.name.id,prev);
+			}
+		}
 		id.meaning=vd;
 		id.id=vd.getId;
 		id.scope_=sc;
@@ -722,15 +733,19 @@ void finalizeToplevel(ToplevelDefinition td){
 void completeToplevel(ToplevelDefinition td){
 	auto rhs=td.result;
 	if(auto de=cast(DefineExp)rhs) rhs=de.e2;
+	static Expression bottomPart(Expression e){ // (not an aggregate whose index has an error, which keeps its part from being known, e.g., `us` in `us[tqx(0)]`, see `toplevelProjection`)
+		if(auto idx=cast(IndexExp)e) if(idx.a.isSemError()) return null;
+		if(e.type==bottom&&!e.isSemError()) return e;
+		foreach(c;e.components) if(auto r=bottomPart(c)) return r;
+		return null;
+	}
 	if(rhs&&!td.isSemError()&&td.vars.length){
-		foreach(e;rhs.subexpressions){
-			if(e.type!=bottom||e.isSemError()) continue;
+		if(auto e=bottomPart(rhs)){
 			auto sc=td.vars[0].scope_;
 			sc.error("value of top-level definition depends on itself",e.loc);
 			sc.note("top-level definition is here",td.definition.loc);
 			td.setSemError();
 			foreach(vd;td.vars) vd.setSemForceError();
-			break;
 		}
 	}
 	notifyDependents(td);
@@ -1438,6 +1453,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	static if(language==silq){
 		auto nacr=sc.aliasedConstReads.length;
 		scope(exit) if(sc.aliasedConstReads.length>nacr) sc.aliasedConstReads.length=nacr;
+		auto nwer=sc.withErroneousRedefinitions.length;
+		scope(exit) sc.withErroneousRedefinitions.length=nwer; // (the version from before is visible after the statement, as after the inverse)
 	}
 	if(with_.bdy.s.length){
 		if(auto ret=cast(ReturnExp)with_.bdy.s[$-1]){ // TODO: generalize?
@@ -1495,6 +1512,8 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 	if(with_.isIndices&&!with_.trans.isSemError()) promoteQuantumReadAggregates(with_.trans.s,with_.trans,sc); // (as for the replacement of components it is lowered from, see `buildIndexReplacements`, e.g., in a copy of a loop body that is lowered)
 	Q!(Id,bool)[] transLocals; // (locals of the transformation are scoped to the whole `with`)
 	Id[] erroneousTransLocals; // (error recovery: they are not visible after the statement either, see below)
+	Id[] redefinedOuters; // (variables from outside that the transformation defines again, e.g., `x` for `with{ x:=x as !uint[5]; … }do{ … }`)
+	Declaration[] redefinedVersions; // (their versions after the transformation)
 	if(auto bsc=with_.trans.blscope_){
 		static if(language==silq) foreach(d;bsc.rnsymtab.liveValues()){
 			if(!cast(VarDecl)d&&!cast(FunctionDef)d||cast(Parameter)d) continue;
@@ -1503,10 +1522,11 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)){
 				if(!d.isSemError()) transLocals~=q(d.name.id,isConstLocal(d));
 				else if(d.name.id !in outerNames) erroneousTransLocals~=d.name.id; // (not an erroneous version of a variable from outside, e.g., `xs` for `with{ for i in 0..5{ xs[i]:=H(xs[i]); } }do{ }` with a `const` variable `xs`)
-			}
+			}else if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&!d.isSemError()) redefinedOuters~=d.name.id;
 		}
 		bsc.keepConstLocals=true;
 		sc.merge(false,bsc);
+		foreach(name;redefinedOuters) redefinedVersions~=sc.peekSymtab(name,false);
 	}
 	Declaration transLocal(Q!(Id,bool) local,Scope isc){
 		auto d=isc.peekSymtab(local[0],false);
@@ -1628,6 +1648,13 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			if(!d||cast(DeadDecl)d) continue;
 			d.setSemForceError();
 			if(sc.rnsymtab.get(d.getId,null) is d) sc.symtabRemove(d);
+		}
+		foreach(i,name;redefinedOuters){ // (their versions from the transformation, which the inverse would replace by those from before the statement, are erroneous after it, as those that the transformation consumes, see below, e.g., `x` for `with{ x:=x as !uint[5]; t:=x[tqx(1)]; }do{ … }`)
+			auto d=sc.peekSymtab(name,false);
+			if(!d||cast(DeadDecl)d||d !is redefinedVersions[i]) continue; // (e.g., defined again by the body)
+			d.setSemForceError();
+			if(sc.rnsymtab.get(d.getId,null) is d) sc.symtabRemove(d);
+			if(sc.canInsert(name)) sc.insert(addVar(name,null,d.loc,sc));
 		}
 		foreach(e;with_.trans.subexpressions) if(auto id=cast(Identifier)e) if(id.meaning&&!id.constLookup&&!id.implicitDup&&!id.meaning.isToplevelDeclaration()){
 			auto origin=id.meaning;
@@ -6605,16 +6632,17 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 	prepareLhs(ae.e1);
 	ae.e1=expressionSemantic(ae.e1,context.nestLhs);
 	propErr(ae.e1,ae);
-	static bool assignsDefinedVariables(Expression lhs){ // (a tuple of variables some of which are undefined or erroneous, e.g., `(x,y) = e` with `x` undefined: the assignment still replaces the others, so that their later uses are not reported)
-		auto tpl=cast(TupleExp)lhs;
-		if(!tpl) return false;
+	static bool assignsDefinedVariables(Expression lhs){ // (a tuple of variables some of which are undefined or erroneous, e.g., `(x,y) = e` with `x` undefined, also nested, e.g., `((x,y),z) = e`: the assignment still replaces the others, so that their later uses are not reported)
+		if(!cast(TupleExp)lhs) return false;
 		bool defined=false;
-		foreach(e;tpl.e){
+		bool variables(Expression e){
+			if(auto tpl=cast(TupleExp)e) return tpl.e.all!variables;
 			auto id=cast(Identifier)e;
 			if(!id||id.meaning&&id.isSemError()&&!id.meaning.isSemError()) return false;
 			if(id.meaning&&!id.meaning.isSemError()) defined=true;
+			return true;
 		}
-		return defined;
+		return variables(lhs)&&defined;
 	}
 	if(ae.e1.isSemError()&&!(language==silq&&assignsDefinedVariables(ae.e1))){
 		static if(language==silq) undefinedNote.explain(ae.e2.type,sc,ae.e1);
@@ -8928,6 +8956,10 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	if(!id.meaning){
 		id.meaning=lookupMeaning(id,Lookup.probing,sc,false,null);
 		if(inOwnParameterTypes()) return id;
+		static if(language==silq) if(id.meaning&&sc.erroneouslyRedefined(id.meaning)){ // (see `declareVariable`)
+			id.setSemError();
+			return id;
+		}
 		id.constLookup=isConstLookup(id,context);
 		if(id.meaning) setImplicitDup();
 		bool avoidCapture=false;
