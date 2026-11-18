@@ -2802,12 +2802,16 @@ abstract class Scope{
 		foreach(d;dependents)
 			if(!lastUses.canForget(d,true,false))
 				return false;
+		Q!(BlockScope,CompoundExp[])[] continued;
 		foreach(d;dependents)
 			for(auto s=cast(NestedScope)this;s&&!cast(FunctionScope)s;s=cast(NestedScope)s.parent)
 				if(auto bs=cast(BlockScope)s) if(bs.isLoopReset){
-					if(!d.scope_||!d.scope_.isNestedIn(bs.parent)) return false; // (the exit of a `do`-`while` loop follows the resets of the earlier iterations: a variable from outside the loop would have to be forgotten before it)
-					break;
+					if(d.scope_&&d.scope_.isNestedIn(bs.parent)) break;
+					CompoundExp[] blocks;
+					if(bs.restrictOuterForgets||!continuesToNextIteration(bs,blocks)||loopWithin(bs,d)) return false; // (the exit of a `do`-`while` loop follows the resets of the earlier iterations: a variable from outside the loop has to be forgotten before it, which the analysis of the loop does only through a reset that continues with the next iteration, and not where an enclosing loop keeps the variable)
+					continued~=q(bs,blocks);
 				}
+		foreach(x;continued) x[0].outerForgetBlocks~=x[1];
 		EarlyForgottenDecl firstEFD=null;
 		foreach(d;dependents){
 			lastUses.forget(d,false);
@@ -2834,6 +2838,25 @@ abstract class Scope{
 		auto result=!typeConstBlocked(decl,this);
 		if(result) decl.earlyForgotten=firstEFD;
 		return result;
+	}
+	static bool loopWithin(BlockScope reset,Declaration d){ // (the `do`-`while` loop of `reset` is nested in a loop that is nested in the scope of `d`)
+		auto lsc=cast(NestedScope)reset.parent;
+		for(auto s=lsc?cast(NestedScope)lsc.parent:null;s&&!cast(FunctionScope)s;s=cast(NestedScope)s.parent){
+			if(s is d.scope_) return false;
+			if(auto bs=cast(BlockScope)s) if(bs.isLoopBody||bs.isLoopReset) return true;
+		}
+		return false;
+	}
+	final bool continuesToNextIteration(BlockScope reset,ref CompoundExp[] blocks){ // (the blocks from here to the reset do not return on every path, as far as known before their analysis)
+		import ast.semantic_: definitelyReturns;
+		for(auto s=cast(NestedScope)this;s;s=cast(NestedScope)s.parent){
+			if(auto bs=cast(BlockScope)s) if(bs.block){
+				if(definitelyReturns(bs.block)) return false;
+				blocks~=bs.block;
+			}
+			if(s is reset) return true;
+		}
+		return false;
 	}
 	Declaration[] mergedVars;
 	Declaration[] producedOuter;
@@ -4736,6 +4759,9 @@ class BlockScope: NestedScope{
 	bool isLoopEntry=false; // (merged with the loop body for the state at the start of an iteration: its forgets happen before the loop)
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
+	CompoundExp block; // (its statements, see `continuesToNextIteration`)
+	CompoundExp[] outerForgetBlocks; // (of a reset: the blocks from the forgets of variables from outside the loop to the reset, see `statementSemanticImpl(DoWhileExp)`)
+	bool restrictOuterForgets=false; // (of a reset, see `tryUncomputeTypeDependents`)
 	bool supersededIteration=false; // (of an iteration of the analysis of a loop body before the last one, see `LastUse.fromDiscardedAnalysis`)
 	bool isBranch=false; // (of a conditional, see `LastUses.dependencyAtSplit`)
 	Expression conditional; // (of a branch, for diagnostics, see `cancelDup`)

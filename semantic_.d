@@ -2574,6 +2574,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 	bool anyDeferredSpecificityCheck=false; // tracks across iterations
 	Declaration[] constForgets;
 	bool resetReturns=false;
+	bool restrictOuterForgets=false,retryRestricted=false; // (a block of the reset returns after a forget of a variable from outside the loop, see `outerForgetBlocks`)
 	Declaration[] exitDrops; // (versions at the exit of variables of the body that the next iteration can only forget at their last uses)
 	void finishIteration(){
 		xsc=null;
@@ -2587,6 +2588,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		lsc.clearConsumed();
 		auto rsc=new BlockScope(lsc);
 		rsc.isLoopReset=true;
+		rsc.restrictOuterForgets=restrictOuterForgets;
 		xsc=new BlockScope(lsc);
 		foreach(_,d;xsc.rnsymtab.dup) // (the state at the exit is not affected by the reset)
 			if(d.scope_ is lsc&&!cast(DeadDecl)d&&!d.isSemError()) xsc.forkSplit(d);
@@ -2594,6 +2596,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		rst=compoundExpSemantic(rst,lsc,flags);
 		propErr(rst,dw);
 		resetReturns=definitelyReturns(rst);
+		if(!restrictOuterForgets&&!dw.isSemError()&&rsc.outerForgetBlocks.any!(b=>definitelyReturns(b))) restrictOuterForgets=retryRestricted=true; // (e.g., `c+=1; fail();` for a function `fail` that aborts: the forget does not continue with the next iteration after all)
 		if(resetReturns) rsc.closeUnreachable(lsc,sc); // (bounded like the closing of the loop scope that follows, while the exit scope still gets the splits)
 		exitDrops=[];
 		Q!(Declaration,Declaration)[] kept,dropped; // (the versions at the exit and in the reset)
@@ -2687,6 +2690,10 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		finishIteration();
 		auto returns=finalizeLoopIteration(state,sc,flags,bdy,dw,"do-while",constForgets,anyDeferredSpecificityCheck,resetReturns);
 		converged|=loopIterationConverged(bdy,dw,returns,state);
+		if(retryRestricted){ // (the next iteration reports the updates of the reset that forget variables from outside the loop)
+			retryRestricted=false;
+			if(!bdy.isSemError()&&!dw.isSemError()) converged=false;
+		}
 		iterations.adjust(converged,bdy.isSemError()||dw.isSemError(),anyDeferredSpecificityCheck);
 		if(!converged && ++numTries>astopt.inferenceLimit){
 			sc.error("cannot determine types for variables in do-while loop",dw.loc);
@@ -2823,6 +2830,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 	if(blscope) {
 		if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 		bsc = ce.blscope_;
+		ce.blscope_.block=ce;
 	}
 	foreach(i,ref e;ce.s){
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
@@ -9221,12 +9229,14 @@ void consumeReplacedComponentsByError(IndexExp idx,ExpSemContext context){ // (e
 	auto sc=context.sc;
 	auto cid=getIdFromIndex(idx);
 	if(!cid||!cid.meaning) return;
+	Id[] borrowed; // (by an enclosing `with` statement for all of its transformation and body, whose later accesses use them)
+	foreach(wsc;only(sc.getWithTransTransformation(),sc.getWithTransBody())) if(wsc) foreach(crepl;wsc.localComponentReplacements()) borrowed~=crepl.name;
 	auto handler=sc.handler;
 	handler.suppress++;
 	scope(exit) handler.suppress--;
 	foreach(vcrepl;sc.versionComponentReplacements(cid.meaning)){
 		auto crepl=vcrepl[1];
-		if(!crepl.write||crepl.read) continue;
+		if(!crepl.write||crepl.read||borrowed.canFind(crepl.name)&&crepl.write.loc.rep !is idx.loc.rep) continue; // (a borrowed component only by the access it is borrowed for)
 		auto id=new Identifier(crepl.name);
 		auto meaning=sc.lookup(id,false,true,Lookup.probing,null);
 		if(!meaning||cast(DeadDecl)meaning) continue; // (e.g., consumed already)
@@ -11956,7 +11966,7 @@ private bool definitelyReturnsImpl(DoWhileExp dw){
 }
 static if(language==silq)
 private bool definitelyReturnsImpl(WithExp we){
-	return definitelyReturns(we.trans)||definitelyReturns(we.bdy);
+	return definitelyReturns(we.trans)||definitelyReturns(we.bdy)||we.itrans&&we.itrans.type&&definitelyReturns(we.itrans); // (e.g., the write-back of a component of type `⊥` after `x[0]+=2^(j,)[2]`, see `lowerIndexReplacement`)
 }
 static if(language==silq)
 Expression withType(WithExp we){
