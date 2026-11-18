@@ -2201,6 +2201,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			Frame[] open;
 			Expression[] top;
 			SetX!Id topLocals,outOfScope;
+			SetX!Id consumedInStm; // (by the atoms of this statement so far, see below)
 			void emit(Expression e){
 				if(!open.length) top~=e;
 				else open[$-1].block.s~=e;
@@ -2483,10 +2484,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						}
 						if(dname in f.locals) known=true;
 					}
-					if(dname in isCarried||dname in topLocals||dname in bodyLocals&&dname !in ainfos[a].fresh||open.any!(f=>dname in f.locals)) continue; // (an update of a variable from an earlier statement is not local to the conditional, e.g., of the version of `b` that `b:=X(b);` defines before `if a { for j in 0..1 { b:=X(b); } b:=X(b); } else { b:=X(b); }`, whose copy within the loop updates it)
+					if(dname in isCarried||dname in topLocals||dname in bodyLocals&&(dname !in ainfos[a].fresh||dname in consumedInStm)||open.any!(f=>dname in f.locals)) continue; // (an update of a variable from an earlier statement is not local to the conditional, e.g., of the version of `b` that `b:=X(b);` defines before `if a { for j in 0..1 { b:=X(b); } b:=X(b); } else { b:=X(b); }`, whose copy within the loop updates it, also a definition after the statement consumed the variable, e.g., the second one in `if a { b:=X(b); b:=X(b); }`, as the first one defines an intermediate version, see `renameBlock`)
 					if(open.length) open[$-1].locals.insert(dname);
 					else topLocals.insert(dname);
 				}
+				foreach(u;ainfos[a].consumed) consumedInStm.insert(u);
 				emit(cp(atoms[a].e));
 			}
 			auto next=atoms.length-atoms.find!(t=>t.stm>i).length; // (the first atom of the next statement)

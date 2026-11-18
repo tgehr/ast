@@ -505,6 +505,22 @@ class ErrorExp: Expression{
 	}
 }
 
+class ToplevelPartExp: Expression{ // (a part of the initializer of a top-level definition that is not a constant, of which a reference from another part only keeps the type, see `toplevelProjection`)
+	string text; // (of the reference, e.g., `xs[1]`)
+	this(string text,Expression type){ this.text=text; this.type=type; }
+	override string toString(){ return _brk(text); }
+	override @property string kind(){ return "part of a top-level definition"; }
+	override ToplevelPartExp copyImpl(CopyArgs args){
+		return new ToplevelPartExp(text,type);
+	}
+
+	override Expression evalImpl(){ return this; }
+	mixin VariableFree;
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0;
+	}
+}
+
 class LiteralExp: Expression{
 	Token lit; // TODO: add literal expressions with dedicated types
 	this(Token lit){ // TODO: suitable contract

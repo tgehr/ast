@@ -3080,12 +3080,7 @@ abstract class Scope{
 		auto nestedControlDependency=scopes[0].controlDependency.dup;
 		bool errors=false;
 		bool consumedByError(Id id){ // (by an erroneous expression in a branch: not reported again)
-			static bool byError(Declaration d,int depth=0){ // (also within a loop or a branch of the branch, whose merge is dead, e.g., `q` for `if c==0 { repeat 2 { t:=tqx(q); } }`)
-				if(auto cd=cast(ConsumedDecl)d) return cd.use.erroneousUse;
-				if(auto dm=cast(DeadMerge)d) if(depth<8) return dm.mergedFrom.any!(m=>byError(m,depth+1));
-				return false;
-			}
-			foreach(sc;scopes) if(byError(sc.rnsymtab.get(id,null))) return true;
+			foreach(sc;scopes) if(auto dd=cast(DeadDecl)sc.rnsymtab.get(id,null)) if(dd.consumedByError()) return true;
 			return false;
 		}
 		MapSX!(Id,DeadMerge) deadMerges;
@@ -4724,6 +4719,8 @@ class FunctionScope: CapturingScope!FunctionDef{
 	alias fd=decl;
 	static if(language==silq) bool returnAnalyzed=false; // (a capture consumed afterwards requires another analysis)
 	bool erroneousReturn=false; // (a `return` whose value has an error, which the inferred return type does not include, see `returnTypeUnknown`)
+	bool valueReturned=false; // (a `return` whose value has no error)
+	bool endByError=false; // (the inferred return type `𝟙` is only from the end of the body, which it may not reach but for an error, see `returnTypeUnknown`)
 	static if(language==silq) Q!(Scope,BlockScope[])[] pendingBranchOrders; // (of the conditionals of the function, see `checkBranchOrder`)
 	this(Scope parent,FunctionDef fd){
 		super(parent,fd);

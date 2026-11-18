@@ -429,11 +429,11 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 		return ce;
 	}
 	if(auto be=cast(DefineExp)expr){
-		VarDecl makeVar(Identifier id){
+		VarDecl makeVar(Identifier id,bool insert=true){ // (`insert`: also if `declareVariable` does not insert it)
 			auto vd=declareVariable(id,sc,!be.isSemError(),success);
 			vd.dtype=id.type;
 			if(!isForwardDeclaration){
-				if(!vd.dtype) vd.setSemError();
+				if(!vd.dtype||!insert&&!vd.scope_) vd.setSemError();
 				else vd=varDeclSemantic(vd,sc);
 			}
 			vd.definition=be;
@@ -492,6 +492,8 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 						if(!sc.lookup(id,false,true,Lookup.probing,null))
 							makeVar(id).setSemForceError();
 					}else if(auto tpl=cast(TupleExp)e) foreach(x;tpl.e) declareUndefined(x);
+					else if(auto vec=cast(VectorExp)e) foreach(x;vec.e) declareUndefined(x); // (e.g., `s` and `t` in `f([s,t]):=e`)
+					else if(auto cat=cast(CatExp)e){ declareUndefined(cat.e1); declareUndefined(cat.e2); }
 					else if(auto ce2=cast(CallExp)e) declareUndefined(ce2.arg); // (a reversed call in the argument, e.g., `u` in `tqx(X(u)):=e`)
 				}
 				declareUndefined(ce.arg);
@@ -512,11 +514,14 @@ Expression makeDeclaration(Expression expr,ref bool success,Scope sc,bool ignore
 					return null;
 				}
 				auto movedIndices=iota(tpl.length).filter!(i=>!ft.isConstForReverse[i]);
+				bool usedByConstArgument(Identifier id){ // (error recovery: without the lowering, e.g., for a function with an error, the argument of a `const` parameter is only read, while the lowering may consume the previous version of the variable before the definition, e.g., `measure(x)` in `f(x,measure(x)):=y`)
+					return be.isSemError()&&iota(tpl.length).any!(i=>ft.isConstForReverse[i]&&tpl.e[i].freeIdentifiers.any!(fid=>fid.name==id.name));
+				}
 				VarDecl[] vds;
 				foreach(exp;movedIndices.map!(i=>tpl.e[i])){
 					if(auto id=cast(Identifier)exp){
 						if(!id.implicitDup)
-							vds~=makeVar(id);
+							vds~=makeVar(id,!usedByConstArgument(id));
 					}else goto LbadDefLhs;
 				}
 				foreach(vd;vds) if(vd) propErr(vd,be);
@@ -730,17 +735,17 @@ void finalizeToplevel(ToplevelDefinition td){
 	td.typeFinal=true;
 	completeToplevel(td);
 }
+Expression toplevelBottomPart(Expression e){ // (a part of the initializer of a top-level definition that depends on itself, see `completeToplevel`; not an aggregate whose index has an error, which keeps its part from being known, e.g., `us` in `us[tqx(0)]`, see `toplevelProjection`)
+	if(auto idx=cast(IndexExp)e) if(idx.a.isSemError()) return null;
+	if(e.type==bottom&&!e.isSemError()) return e;
+	foreach(c;e.components) if(auto r=toplevelBottomPart(c)) return r;
+	return null;
+}
 void completeToplevel(ToplevelDefinition td){
 	auto rhs=td.result;
 	if(auto de=cast(DefineExp)rhs) rhs=de.e2;
-	static Expression bottomPart(Expression e){ // (not an aggregate whose index has an error, which keeps its part from being known, e.g., `us` in `us[tqx(0)]`, see `toplevelProjection`)
-		if(auto idx=cast(IndexExp)e) if(idx.a.isSemError()) return null;
-		if(e.type==bottom&&!e.isSemError()) return e;
-		foreach(c;e.components) if(auto r=bottomPart(c)) return r;
-		return null;
-	}
 	if(rhs&&!td.isSemError()&&td.vars.length){
-		if(auto e=bottomPart(rhs)){
+		if(auto e=toplevelBottomPart(rhs)){
 			auto sc=td.vars[0].scope_;
 			sc.error("value of top-level definition depends on itself",e.loc);
 			sc.note("top-level definition is here",td.definition.loc);
@@ -1502,6 +1507,15 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 		SetX!Id outerNames; // (variables declared before the transformation, which it may redefine)
 		for(Scope osc=sc;osc&&!cast(TopScope)osc;osc=osc.parentScope())
 			foreach(d;osc.rnsymtab.liveValues()) if(d.name) outerNames.insert(d.name.id);
+		bool consumedByError(Id name){ // (before the statement, by an erroneous use, also in a branch, after which the uses of the variable are erroneous, see `DeadDecl.consumedByError`)
+			for(Scope osc=sc;osc&&!cast(TopScope)osc;osc=osc.parentScope()){
+				if(auto d=osc.peekSymtab(name,false)){
+					auto dd=cast(DeadDecl)d;
+					return dd&&dd.consumedByError();
+				}
+			}
+			return false;
+		}
 	}
 	static if(language==silq)
 	if(haveWithTransReplacements) sc.withTransTransformation=sc;
@@ -1521,7 +1535,7 @@ Expression statementSemanticImpl(WithExp with_,Scope sc,ref StmFlags flags,bool 
 			while(origin.splitFrom) origin=origin.splitFrom;
 			if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&(isConstLocal(d)||d.name.id !in outerNames)){
 				if(!d.isSemError()) transLocals~=q(d.name.id,isConstLocal(d));
-				else if(d.name.id !in outerNames) erroneousTransLocals~=d.name.id; // (not an erroneous version of a variable from outside, e.g., `xs` for `with{ for i in 0..5{ xs[i]:=H(xs[i]); } }do{ }` with a `const` variable `xs`)
+				else if(d.name.id !in outerNames&&!consumedByError(d.name.id)) erroneousTransLocals~=d.name.id; // (not an erroneous version of a variable from outside, e.g., `xs` for `with{ for i in 0..5{ xs[i]:=H(xs[i]); } }do{ }` with a `const` variable `xs`, or of one that an erroneous use consumed, e.g., `a` for `b:=tqx(a); with a:=H(a) do { }`)
 			}else if(origin.scope_&&origin.scope_.isNestedIn(bsc)&&!d.isSemError()) redefinedOuters~=d.name.id;
 		}
 		bsc.keepConstLocals=true;
@@ -7084,7 +7098,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 		void define(Dependency dependency,DefinitionSources sources){
 			auto origId=id.meaning.name.id;
 			assert(!var);
-			var=addVar(origId,ce.type?ce.type:typeForDecl(id.meaning),be.loc,sc,be); // (error recovery: keep the type if the operation does not type check)
+			var=addVar(origId,ce.type?ce.type:!ce.e1.isSemError()?typeForDecl(id.meaning):null,be.loc,sc,be); // (error recovery: keep the type if the operation does not type check, but not where the previous version is erroneous, as its type may not be the type of the operation, e.g., `!ℤ` for `x%=n` with `n:!ℕ`: the new version is erroneous as well)
 			static if(language==silq) if(auto nvd=cast(VarDecl)var) nvd.knownValue=definedValue(ce); // (the new version, see `knownValueOf`)
 			be.replacements~=AAssignExp.Replacement(id.meaning,var);
 			if(var.scope_ is sc){
@@ -7545,15 +7559,17 @@ FunctionDef calleeFunctionDef(Expression callee,int depth=0){
 	}
 	return null;
 }
-bool returnTypeUnknown(FunctionDef fd){ // (a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`, or whose return type annotation has an error, e.g., `def f():tqx(!𝔹){ return true; }`)
+bool returnTypeUnknown(FunctionDef fd){ // (a function with an error whose return type `⊥` is inferred only from `return` statements with errors, e.g., `def f(x:𝔹){ return tqx(x); }`, rather than declared or from its body, e.g., for `def f(){ x:=tqx; assert(false); }`, or whose return type `𝟙` is inferred only from the end of its body, which it may not reach but for an error, e.g., `def f(n:!ℕ){ while tqx(n) { n+=1; } }`, or whose return type annotation has an error, e.g., `def f():tqx(!𝔹){ return true; }`)
 	if(fd&&fd.rret) return fd.rret.isSemError();
-	return fd&&fd.fscope_&&fd.fscope_.erroneousReturn;
+	return fd&&fd.fscope_&&(fd.fscope_.erroneousReturn||fd.fscope_.endByError);
+}
+bool returnTypeUnknown(FunctionDef fd,Expression cod){ // (whether the return type `cod` of `fd` is such a type)
+	return fd&&(isEmpty(cod)||cod==unit&&fd.fscope_&&fd.fscope_.endByError)&&returnTypeUnknown(fd);
 }
 bool returnTypeUnknown(CallExp ce){ // (a call of such a function)
 	if(!ce.e.isSemError()) return false;
 	auto ft=cast(FunTy)ce.e.type;
-	if(!ft||!isEmpty(ft.cod)) return false;
-	return returnTypeUnknown(calleeFunctionDef(ce.e));
+	return ft&&returnTypeUnknown(calleeFunctionDef(ce.e),ft.cod);
 }
 string describeCallee(Expression callee){
 	if(cast(LambdaExp)unwrap(callee)) return "lambda";
@@ -7711,7 +7727,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 		return ce;
 	}
 	static if(isRhs) scope(success){ // (error recovery: the return type is not known, e.g., for `f(x)` with `def f(x:𝔹){ return tqx(x); }`, whose return type `⊥` is not inferred from a `return`: as for a callee without a type, the call has no type, rather than `⊥`, and the consumption of the argument is not reported again)
-		if(ce&&ce.type&&isEmpty(ce.type)&&returnTypeUnknown(ce)){
+		if(ce&&ce.type&&returnTypeUnknown(ce)){
 			ce.type=null;
 			ce.setSemError();
 			foreach(e;ce.arg.subexpressions) if(auto id=cast(Identifier)e) id.erroneousUse=true;
@@ -8697,7 +8713,7 @@ Expression expressionSemanticImpl(LambdaExp le,ExpSemContext context){
 	if(le.fd.sstate==SemState.passive)
 		le.fd.setSemCompleted(); // TODO: ok?
 	le.type=typeForDecl(le.fd);
-	if(le.isSemError()) if(auto ft=cast(FunTy)le.type) if(isEmpty(ft.cod)&&returnTypeUnknown(le.fd)) le.type=null; // (error recovery: as for a call, see `callSemantic`)
+	if(le.isSemError()) if(auto ft=cast(FunTy)le.type) if(returnTypeUnknown(le.fd,ft.cod)) le.type=null; // (error recovery: as for a call, see `callSemantic`)
 	if(!le.type){
 		if(!le.isSemError()) sc.error("invalid forward reference",le.loc); // (not after an error in the function, e.g., in the type of a parameter)
 		le.setSemError();
@@ -8722,6 +8738,20 @@ Expression moveSemantic(CallExp ce,ExpSemContext context){
 	if(!id||ce.isSquare){
 		sc.error("argument of `move` must be a variable",ce.arg.loc);
 		ce.setSemError();
+		if(!context.inType){ // (error recovery: the local variables of the argument are moved, by an erroneous use, as the argument may be meant to move one of them, e.g., `a` for `move(tqx(a))`, which is then not reported again, e.g., at a later definition of `a`)
+			auto handler=sc.handler;
+			handler.suppress++;
+			scope(exit) handler.suppress--;
+			foreach(fid;ce.arg.freeIdentifiers){
+				auto meaning=sc.lookup(fid,false,true,Lookup.probing,null);
+				if(!cast(VarDecl)meaning||meaning.isToplevelDeclaration()) continue;
+				auto use=new Identifier(fid.id);
+				use.loc=fid.loc;
+				use.moved=true;
+				use.erroneousUse=true;
+				expressionSemantic(use,context.nestConsumed);
+			}
+		}
 		return ce;
 	}
 	id.moved=true;
@@ -9394,6 +9424,17 @@ Expression toplevelProjection(Expression e,ExpSemContext context){ // (a part of
 			v.loc=r.loc;
 		}
 		if(v.type==r.type) r=v;
+	}else if(r.isSemError()&&!toplevelBottomPart(r)){ // (error recovery: an erroneous expression, so that the initializer does not grow with each projection either, e.g., for a table `fib:=(0,1,fib[0]+fib[1],fib[1]+fib[tqx(2)],fib[2]+fib[3],…)`, unless the part shows that it depends on itself)
+		auto err=new ErrorExp();
+		err.loc=e.loc;
+		err.type=r.type;
+		err.setSemError();
+		r=err;
+	}else if(r.isSemCompleted()&&!(isType(r)||isQNumeric(r))&&!toplevelBottomPart(r)){ // (not a constant, so the initializer is not one either: only its type, for the same reason, e.g., for `fib:=(0,1,g(fib[0],fib[1]),g(fib[1],fib[2]),…)` with a function `g`)
+		auto unknown=new ToplevelPartExp(e.toString(),r.type);
+		unknown.loc=e.loc;
+		unknown.setSemCompleted();
+		r=unknown;
 	}
 	return td.projections[key]=r;
 }
@@ -11626,6 +11667,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 		propErr(bdy,fd);
 		if(!definitelyReturns(bdy)){
 			if(!fd.ret || fd.ret == unit || fd.inferringReturnType&&fd.ret==bottom){
+				if(fd.inferringReturnType&&!fsc.valueReturned&&mayDivergeByError(bdy)) fsc.endByError=true; // (error recovery: e.g., for `def f(n:!ℕ){ while tqx(n) { n+=1; } }`, whose return type would be `⊥` for `while true`, see `returnTypeUnknown`)
 				auto tpl=new TupleExp([]);
 				tpl.loc=fd.loc;
 				auto rete=new ReturnExp(tpl);
@@ -11872,7 +11914,10 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	}
 	ret.e=expressionSemantic(ret.e,context);
 	propErr(ret.e,ret);
-	if(ret.e.isSemError()) if(auto fsc=fd.fscope_) fsc.erroneousReturn=true;
+	if(auto fsc=fd.fscope_){
+		if(ret.e.isSemError()) fsc.erroneousReturn=true;
+		else fsc.valueReturned=true;
+	}
 	if(cast(CommaExp)ret.e){
 		sc.error("use parentheses for multiple return values",ret.e.loc);
 		ret.setSemError();

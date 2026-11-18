@@ -735,6 +735,7 @@ abstract class DeadDecl: Declaration{
 	}
 	bool reportUndefinedIdentifier(Identifier id,Scope sc){ return false; }
 	bool reportRedefinition(Declaration decl,Scope sc){ return false; }
+	bool consumedByError(){ return false; } // (by an erroneous use, after which the uses of the variable are erroneous, see `ConsumedDecl.reportUndefinedIdentifier`)
 	abstract void explain(string kind,Scope sc);
 }
 
@@ -755,6 +756,7 @@ class ConsumedDecl: DeadDecl{
 		import std.format:format;
 		sc.note(format("%s `%s` consumed here",kind,use.meaning),use.loc);
 	}
+	override bool consumedByError(){ return use.erroneousUse; }
 	static if(language==silq)
 	override bool reportUndefinedIdentifier(Identifier id,Scope sc){
 		import std.format:format;
@@ -924,6 +926,21 @@ class DeadMerge: DeadDecl{
 	override bool reportRedefinition(Declaration decl,Scope sc){
 		SetX!DeadDecl visited;
 		return reportRedefinitionImpl(decl,sc,visited);
+	}
+	override bool consumedByError(){ // (in a branch, also within a loop or a branch of the branch, whose merge is dead, e.g., `q` for `if c==0 { repeat 2 { t:=tqx(q); } }`)
+		SetX!DeadDecl visited;
+		return consumedByErrorImpl(visited);
+	}
+	private bool consumedByErrorImpl(ref SetX!DeadDecl visited){
+		foreach(d;mergedFrom){
+			auto dd=cast(DeadDecl)d;
+			if(!dd||dd in visited) continue;
+			visited.insert(dd);
+			if(auto dm=cast(DeadMerge)dd){
+				if(dm.consumedByErrorImpl(visited)) return true;
+			}else if(dd.consumedByError()) return true;
+		}
+		return false;
 	}
 	private bool reportRedefinitionImpl(Declaration decl,Scope sc,ref SetX!DeadDecl visited){
 		foreach(d;mergedFrom){
