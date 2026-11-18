@@ -434,3 +434,225 @@ Expression evalNumericBinop(TokenType op)(Location loc, Expression ne1, Maybe!�
 	}
 	return null;
 }
+
+// the exact value of a classical constant of a numeric type whose operations the evaluation computes exactly (`𝔹`, `ℕ`, `ℤ` and `ℚ`, but not `ℝ`, which it approximates with floating point), for the evaluation of built-in functions (see `exactBuiltinCall`); it follows the expression as its evaluation at run time does, not its result of `eval`, which omits conversions to `ℝ` (e.g., in `floor((2^53+1):!ℝ)`), apart from the values of top-level constants, which the evaluation at run time also takes from `eval`
+Maybe!ℚ exactValue(Expression e){
+	static bool isExactTy(Expression t){
+		if(!t||isEmpty(t)||!t.isClassical()) return false;
+		auto nt=isNumericTy(t);
+		return nt==NumericType.Bool||nt==NumericType.ℕt||nt==NumericType.ℤt||nt==NumericType.ℚt;
+	}
+	if(!e||!e.isSemCompleted()||!isExactTy(e.type)) return none!ℚ;
+	if(auto v=e.asRationalConstant()){
+		if(v.get[3]>4096||v.get[3]< -4096) return none!ℚ;
+		auto r=ℚ(v.get[0],v.get[1]);
+		if(v.get[3]!=0) r=r*pow(ℚ(ℤ(v.get[2])),ℤ(v.get[3]));
+		return just(r);
+	}
+	if(auto id=cast(Identifier)e){
+		auto init=id.getInitializer();
+		return init&&init !is e?exactValue(init):none!ℚ;
+	}
+	if(auto fe=cast(FieldExp)e){ // (e.g., the length of a vector)
+		auto v=fe.eval();
+		return v !is fe?exactValue(v):none!ℚ;
+	}
+	if(auto idx=cast(IndexExp)e){
+		auto c=constantComponent(idx);
+		return c?exactValue(c):none!ℚ;
+	}
+	if(auto ue=cast(UnaryExp!(Tok!"-"))e){
+		if(auto v=exactValue(ue.e)) return just(-v.get);
+		return none!ℚ;
+	}
+	static foreach(op;["+","-","·","/","div","%","^"]){
+		if(auto be=cast(BinaryExp!(Tok!op))e){
+			auto v1=exactValue(be.e1),v2=exactValue(be.e2);
+			if(!v1||!v2) return none!ℚ;
+			auto a=v1.get,b=v2.get;
+			static if(op=="+") return just(a+b);
+			else static if(op=="-") return just(a-b);
+			else static if(op=="·") return just(a*b);
+			else static if(op=="/"||op=="div"||op=="%"){
+				if(b==0) return none!ℚ;
+				static if(op=="/") return just(a/b);
+				else{
+					auto q=a/b,f=ℚ(floordiv(q.num,q.den));
+					static if(op=="div") return just(f);
+					else return just(a-f*b);
+				}
+			}else{
+				if(b.den!=1||a==0&&b.num<0||(a.num.ulongLength+a.den.ulongLength)*abs(b.num)>1024) return none!ℚ; // (at most about 2^16 bits)
+				return just(pow(a,b.num));
+			}
+		}
+	}
+	if(auto tae=cast(TypeAnnotationExp)e){ // (a conversion that does not change the value)
+		auto v=exactValue(tae.e);
+		if(!v) return none!ℚ;
+		switch(isNumericTy(e.type)){
+			case NumericType.Bool: return v.get==0||v.get==1?v:none!ℚ;
+			case NumericType.ℕt: return v.get.den==1&&v.get>=0?v:none!ℚ;
+			case NumericType.ℤt: return v.get.den==1?v:none!ℚ;
+			default: return v;
+		}
+	}
+	if(auto ce=cast(CallExp)e) if(auto v=exactBuiltinCall(ce)) return just(ℚ(v.get));
+	return none!ℚ;
+}
+private Expression constantComponent(IndexExp idx){ // (the component that a constant index selects from a tuple or vector literal, or from the value of a top-level constant)
+	auto agg=idx.e;
+	if(auto id=cast(Identifier)agg) agg=id.getInitializer();
+	else if(auto inner=cast(IndexExp)agg) agg=constantComponent(inner);
+	if(!agg) return null;
+	Expression[] es;
+	if(auto tpl=cast(TupleExp)agg) es=tpl.e;
+	else if(auto vec=cast(VectorExp)agg) es=vec.e;
+	else return null;
+	auto i=idx.a.isSemCompleted()?idx.a.asIntegerConstant(true):none!ℤ;
+	if(!i||i.get<0||i.get>=es.length) return null;
+	return es[cast(size_t)i.get];
+}
+private string builtinName(Expression callee){ // (of a built-in function of the prelude that `exactBuiltinCall` evaluates)
+	import ast.declaration: FunctionDef;
+	import ast.semantic_: isPrimitive;
+	import ast.modules: isInPrelude;
+	auto id=cast(Identifier)callee;
+	if(!id) return null;
+	auto fd=cast(FunctionDef)id.meaning;
+	if(!fd||!fd.name||!isInPrelude(fd)) return null;
+	switch(isPrimitive(fd)){
+		case "real.floor": return "floor";
+		case "real.ceil": return "ceil";
+		case "real.log2": return "log2";
+		case "real.log10": return "log10";
+		case "real.sqrt": return "sqrt";
+		case "real.cbrt": return "cbrt";
+		case "real.exp2": return "exp2";
+		case "int.gcd": return "gcd";
+		default: break;
+	}
+	if(fd.getName=="log₂") return "log2";
+	if(fd.getName=="round") return "round";
+	return null;
+}
+private ℤ floorLog(ℚ v,ℤ base)in{ assert(v>0&&base>1); }do{ // (the largest `k` with `base^k ≤ v`)
+	ℤ k=0;
+	if(v>=1){
+		for(auto p=ℚ(base);p<=v;p=p*ℚ(base)) k+=1;
+	}else{
+		k=-1;
+		for(auto p=ℚ(1)/ℚ(base);p>v;p=p/ℚ(base)) k-=1;
+	}
+	return k;
+}
+private ℤ iroot(ℤ n,int d)in{ assert(n>=0&&(d==2||d==3)); }do{ // (the largest `k` with `k^d ≤ n`)
+	if(n<2) return n;
+	ℤ lo=0,hi=1;
+	while(pow(hi,ℤ(d))<=n) hi*=2;
+	while(hi-lo>1){
+		auto mid=(lo+hi)/2;
+		if(pow(mid,ℤ(d))<=n) lo=mid;
+		else hi=mid;
+	}
+	return lo;
+}
+private bool floatExact(alias f)(ℚ x,ℚ r){ // (the evaluation of `f(x)` in floating point computes exactly `r`, with either precision, see `QState.Value.realFunction`)
+	import std.math: isFinite;
+	import std.meta: AliasSeq;
+	static foreach(T;AliasSeq!(double,real)){{
+		static if(is(T==double)) T a=toDouble(x);
+		else T a=toReal(x);
+		T v=f(a);
+		if(!isFinite(v)||toℚ(v)!=r) return false;
+	}}
+	return true;
+}
+private Maybe!ℚ realArgument(Expression arg){ // (the exact value of the argument of a function with a real result, within the range of floating point, which the function converts it to also without an annotation)
+	if(auto tae=cast(TypeAnnotationExp)arg) if(isNumericTy(tae.type)==NumericType.ℝ) arg=tae.e;
+	auto v=exactValue(arg);
+	if(!v) return none!ℚ;
+	auto bound=pow(ℤ(2),ℤ(1000));
+	if(abs(v.get.num)>bound||v.get.den>bound) return none!ℚ;
+	return v;
+}
+private Maybe!ℤ roundedValue(Expression arg,bool up){ // (`floor(arg)` or `ceil(arg)` where its evaluation computes it exactly; for a function with a real result, where floating point resolves it: a rational result must be computed exactly, an irrational one must not be within a relative distance of 2^-40 of an integer)
+	import util.math: log2,log10,sqrt,cbrt,exp2;
+	auto ce=cast(CallExp)arg;
+	auto name=ce&&!ce.isSquare?builtinName(ce.e):null;
+	if(!util.among(name,"log2","log10","sqrt","cbrt","exp2")){
+		auto v=exactValue(arg);
+		if(!v) return none!ℤ;
+		return just(up?ceildiv(v.get.num,v.get.den):floordiv(v.get.num,v.get.den));
+	}
+	auto xv=realArgument(ce.arg);
+	if(!xv) return none!ℤ;
+	auto x=xv.get;
+	static ℚ eta(ℤ k){ return ℚ(abs(k)+1,pow(ℤ(2),ℤ(40))); } // (the distance from an integer that floating point resolves for a result of magnitude below |k|+1)
+	Maybe!ℚ exact; // (the result, if it is rational)
+	ℤ k; // (otherwise, its floor)
+	switch(name){
+		case "log2","log10":{
+			if(x<=0) return none!ℤ;
+			auto base=ℤ(name=="log2"?2:10);
+			k=floorLog(x,base);
+			auto p=pow(ℚ(base),k);
+			if(x==p){
+				if(name=="log2"?!floatExact!log2(x,ℚ(k)):!floatExact!log10(x,ℚ(k))) return none!ℤ;
+				exact=just(ℚ(k));
+			}else{
+				auto μ=ℚ(4)*eta(k);
+				if(x<p*(ℚ(1)+μ)||x>p*ℚ(base)*(ℚ(1)-μ)) return none!ℤ;
+			}
+			break;
+		}
+		case "sqrt","cbrt":{
+			auto d=name=="sqrt"?2:3;
+			if(x<0&&d==2) return none!ℤ;
+			auto w=x<0?-x:x;
+			auto rn=iroot(w.num,d),rd=iroot(w.den,d);
+			if(pow(rn,ℤ(d))==w.num&&pow(rd,ℤ(d))==w.den){
+				auto r=ℚ(x<0?-rn:rn,rd);
+				if(d==2?!floatExact!sqrt(x,r):!floatExact!cbrt(x,r)) return none!ℤ;
+				exact=just(r);
+			}else{
+				auto m=iroot(floordiv(w.num,w.den),d);
+				auto η=eta(m);
+				if(w<pow(ℚ(m)+η,ℤ(d))||w>pow(ℚ(m+1)-η,ℤ(d))) return none!ℤ;
+				k=x<0?-m-1:m;
+			}
+			break;
+		}
+		case "exp2":{
+			if(x.den!=1||abs(x.num)>1000) return none!ℤ;
+			auto r=pow(ℚ(2),x.num);
+			if(!floatExact!exp2(x,r)) return none!ℤ;
+			exact=just(r);
+			break;
+		}
+		default: assert(0);
+	}
+	if(exact) return just(up?ceildiv(exact.get.num,exact.get.den):floordiv(exact.get.num,exact.get.den));
+	return just(up?k+1:k);
+}
+Maybe!ℤ exactBuiltinCall(CallExp ce){ // (the integer result of a call of a built-in function where its evaluation computes it exactly, e.g., `floor(1.5)`, `ceil(log₂(5))` or `gcd(12,18)`; functions with real results are only evaluated in the argument of `floor` and `ceil`, see `roundedValue`)
+	if(ce.isSquare||!ce.arg) return none!ℤ;
+	switch(builtinName(ce.e)){
+		case "floor": return roundedValue(ce.arg,false);
+		case "ceil": return roundedValue(ce.arg,true);
+		case "round":{
+			auto v=exactValue(ce.arg);
+			if(!v) return none!ℤ;
+			auto w=v.get+ℚ(1,2);
+			return just(floordiv(w.num,w.den));
+		}
+		case "gcd":{
+			auto tpl=cast(TupleExp)ce.arg;
+			if(!tpl||tpl.e.length!=2) return none!ℤ;
+			auto a=exactValue(tpl.e[0]),b=exactValue(tpl.e[1]);
+			if(!a||!b||a.get.den!=1||b.get.den!=1) return none!ℤ;
+			return just(gcd(a.get.num,b.get.num));
+		}
+		default: return none!ℤ;
+	}
+}

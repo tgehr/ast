@@ -300,6 +300,8 @@ class ToplevelDefinition: FixedPointDeclaration{
 	Expression result;
 	VarDecl[] vars;
 	int numActiveUpdates=0; // (analyses, together with the following reanalysis of dependents)
+	string[] projecting; // (the parts of the value that are being analyzed on demand, see `toplevelProjection`)
+	Expression[string] projections; // (the analyzed parts, each analyzed once per analysis of the definition)
 	this(DefineExp definition){
 		super(null);
 		this.definition=definition;

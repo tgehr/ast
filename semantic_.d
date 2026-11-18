@@ -704,6 +704,7 @@ Expression analyzeToplevel(ToplevelDefinition td,DefineExp expr,Scope sc){
 	assert(!!top);
 	top.analyzingDefinitions~=td;
 	td.sstate=SemState.started;
+	td.projections=null; // (of an earlier analysis)
 	scope(exit){
 		assert(top.analyzingDefinition is td);
 		top.analyzingDefinitions=top.analyzingDefinitions[0..$-1];
@@ -827,7 +828,7 @@ void notifyToplevel(ToplevelDefinition td){
 	if(--td.numUpdatesPending==0&&!td.numActiveUpdates) finalizeToplevel(td); // (otherwise, at the end of the update)
 	else if(!td.numActiveUpdates) finalizeClosure(td);
 }
-Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
+ToplevelDefinition toplevelDefinition(DefineExp expr){ // (also before its analysis, see `toplevelProjection`)
 	auto td=cast(ToplevelDefinition)expr.toplevel;
 	if(!td&&!expr.isSemCompleted()&&!expr.isSemError()){
 		td=new ToplevelDefinition(expr);
@@ -841,6 +842,10 @@ Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
 		args.preserveMeanings=true;
 		td.original=expr.copy(args);
 	}
+	return td;
+}
+Expression toplevelSemanticImpl(DefineExp expr,Scope sc){
+	auto td=toplevelDefinition(expr);
 	if(!td){
 		StmFlags flags; // TODO: check?
 		return defineOrAssignSemantic(expr,sc,flags);
@@ -6077,7 +6082,7 @@ bool checkNonConstDecl(string action,string continuous)(Declaration meaning,Loca
 Expression typeForDeclAnalyzing(Declaration meaning){ // (analyzes a top-level definition referenced before it is defined)
 	auto type=typeForDecl(meaning);
 	if(!type) if(auto vd=cast(VarDecl)meaning) if(vd.definition){
-		toplevelSemantic(vd.definition,vd.scope_);
+		reportingErrorsOf(vd,toplevelSemantic(vd.definition,vd.scope_));
 		type=typeForDecl(meaning);
 	}
 	return type;
@@ -8990,7 +8995,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			id.type=id.typeFromMeaning;
 		}else if(auto vd=cast(VarDecl)id.meaning){
 			if(vd.definition){
-				toplevelSemantic(vd.definition,vd.scope_);
+				reportingErrorsOf(vd,toplevelSemantic(vd.definition,vd.scope_)); // (also within an analysis whose errors are suppressed, e.g., of a part of a top-level definition, see `toplevelProjection`)
 				id.type=id.typeFromMeaning;
 				if(!id.type){
 					auto td=cast(ToplevelDefinition)vd.definition.toplevel;
@@ -9035,6 +9040,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 
 Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
+	static if(language==silq) if(auto r=toplevelProjection(fe,context)) return r;
 	fe.e=expressionSemantic(fe.e,context.nestConst);
 	propErr(fe.e,fe);
 	if(fe.isSemError())
@@ -9245,8 +9251,124 @@ void consumeReplacedComponentsByError(IndexExp idx,ExpSemContext context){ // (e
 		foreach(e;r.subexpressions) if(auto rid=cast(Identifier)e) rid.erroneousUse=true;
 	}
 }
+static if(language==silq){
+Expression annotationComponentType(Expression t,size_t i){ // (the type of the `i`-th component of a value of the annotated type `t`, if its syntax determines it, e.g., `!uint[3]` for `!uint[3]^_`)
+	if(auto ue=cast(UnaryExp!(Tok!"¬"))t){
+		auto r=annotationComponentType(ue.e,i);
+		if(!r) return null;
+		auto nr=new UnaryExp!(Tok!"¬")(r);
+		nr.loc=r.loc;
+		return nr;
+	}
+	if(auto pe=cast(PowExp)t) return pe.e1;
+	if(auto pr=cast(BinaryExp!(Tok!"×"))t){
+		auto ts=cartesianTypes(pr);
+		return i<ts.length?ts[i]:null;
+	}
+	if(auto idx=cast(IndexExp)t) if(idx.isArraySyntax) if(auto tpl=cast(TupleExp)idx.a) if(!tpl.length) return idx.e;
+	return null;
+}
+Expression annotationLength(Expression t){ // (the length of a value of the annotated type `t`, if its syntax determines it, e.g., `5` for `𝔹^5`, but not for `𝔹^_`)
+	if(auto ue=cast(UnaryExp!(Tok!"¬"))t) return annotationLength(ue.e);
+	if(auto pe=cast(PowExp)t) if(!cast(WildcardExp)pe.e2&&!cast(PlaceholderExp)pe.e2) return pe.e2;
+	if(auto pr=cast(BinaryExp!(Tok!"×"))t){
+		auto r=LiteralExp.makeInteger(cartesianTypes(pr).length);
+		r.loc=t.loc;
+		return r;
+	}
+	return null;
+}
+Expression initializerPart(Expression rhs,ptrdiff_t[] path){ // (the part of the value of `rhs` at `path`: indices, and -1 for the length at the end; e.g., `0` at `[0]` of `(0,xs[0]+1)`, and `0:!ℤ` for `(0,xs[0]+1):!ℤ×!ℤ`)
+	if(!path.length) return rhs;
+	if(auto tae=cast(TypeAnnotationExp)rhs){
+		if(path[0]<0){
+			if(auto len=annotationLength(tae.t)) return path.length==1?len:null;
+			return initializerPart(tae.e,path);
+		}
+		auto c=initializerPart(tae.e,path[0..1]);
+		auto t=c?annotationComponentType(tae.t,path[0]):null;
+		if(!t) return null;
+		auto r=new TypeAnnotationExp(c,t,tae.annotationType);
+		r.loc=c.loc;
+		return initializerPart(r,path[1..$]);
+	}
+	Expression[] es;
+	if(auto tpl=cast(TupleExp)rhs) es=tpl.e;
+	else if(auto vec=cast(VectorExp)rhs) es=vec.e;
+	else return null;
+	if(path[0]<0){
+		if(path.length!=1) return null;
+		auto r=LiteralExp.makeInteger(es.length);
+		r.loc=rhs.loc;
+		return r;
+	}
+	if(path[0]>=es.length) return null;
+	return initializerPart(es[path[0]],path[1..$]);
+}
+Expression toplevelProjection(Expression e,ExpSemContext context){ // (a part of the value of a top-level variable whose definition is being analyzed, e.g., `xs[0]` or `xs.length` in `xs:=(0,xs[0]+1)`, stands for that part of its initializer, unless it depends on itself)
+	auto sc=context.sc;
+	if(sc.getFunction()) return null;
+	auto top=sc.getTopScope();
+	if(!top||!top.analyzingDefinitions.length) return null;
+	ptrdiff_t[] path;
+	Expression base=e;
+	for(;;){
+		if(auto idx=cast(IndexExp)base){
+			auto lit=cast(LiteralExp)idx.a;
+			if(!lit) return null;
+			auto v=lit.asIntegerConstant();
+			if(!v||v.get()<0||v.get()>=size_t.max/2) return null;
+			path~=cast(ptrdiff_t)v.get();
+			base=idx.e;
+		}else if(auto fe=cast(FieldExp)base){
+			if(fe.f.name!="length"||path.length) return null;
+			path~=-1;
+			base=fe.e;
+		}else break;
+	}
+	auto id=cast(Identifier)base;
+	if(!id||!path.length) return null;
+	reverse(path);
+	auto probe=new Identifier(id.id);
+	probe.loc=id.loc;
+	auto vd=cast(VarDecl)lookupMeaning(probe,Lookup.probing,sc,false,null);
+	if(!vd||!vd.definition||!vd.isToplevelDeclaration()) return null;
+	auto td=toplevelDefinition(vd.definition);
+	if(!td||td.isSemError()||!td.original||td.vars.length!=1||td.vars[0] !is vd||!cast(Identifier)td.original.e1) return null;
+	if(td.sstate!=SemState.started&&(td.sstate!=SemState.initial||td.result)) return null; // (being analyzed, or not yet: a definition that refers to a part of another one does not depend on its other parts, e.g., `ys[0]` in `xs:=(0,ys[0]); ys:=(1,xs[1]);`)
+	auto part=initializerPart(td.original.e2,path);
+	if(!part) return null;
+	auto key=text(path);
+	if(auto analyzed=key in td.projections){
+		Expression.CopyArgs cargs={preserveSemantic: true};
+		auto r=analyzed.copy(cargs);
+		if(r !is *analyzed) r.loc=e.loc;
+		return r;
+	}
+	if(td.projecting.canFind(key)) return null; // (it depends on itself, see `completeToplevel`)
+	td.projecting~=key;
+	scope(exit) td.projecting=td.projecting[0..$-1];
+	Expression.CopyArgs args={preserveMeanings: true};
+	auto r=part.copy(args);
+	r.loc=e.loc;
+	auto handler=sc.handler;
+	handler.suppress++; // (its errors are reported where the initializer has it)
+	scope(exit) handler.suppress--;
+	r=expressionSemantic(r,context);
+	if(r.isSemCompleted()&&r.isConstant()){ // (its value, so that the initializer does not grow with each projection, e.g., for a table `fib:=(0,1,fib[0]+fib[1],fib[1]+fib[2],…)`)
+		auto v=r.eval();
+		if(v.type!=r.type) if(auto c=v.asIntegerConstant()){
+			v=makeIntConstant(c.get,r.type);
+			v.loc=r.loc;
+		}
+		if(v.type==r.type) r=v;
+	}
+	return td.projections[key]=r;
+}
+}
 Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
+	static if(language==silq) if(auto r=toplevelProjection(idx,context)) return r;
 	if(idx.byRef){
 		if(auto cid=getIdFromIndex(idx)){
 			auto meaning=lookupMeaning(cid,Lookup.probingWithCapture,sc,false,null);

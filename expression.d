@@ -1751,6 +1751,7 @@ class IndexExp: Expression{ //e[a]
 		if(auto tt=cast(TupleTy)e.type) return 0<=idx.get()&&idx.get()<tt.length;
 		return false;
 	}
+	override bool isConstant(){ return e.isConstant()&&a.isConstant()&&isTotal(); }
 
 	AAssignExp.Replacement[] replacements;
 }
@@ -2062,10 +2063,18 @@ class CallExp: Expression{
 			if(auto zmt=isℤmodTy(this))
 				return zmt.N.isConstant();
 		}
+		import ast.consteval:exactBuiltinCall;
+		if(exactBuiltinCall(this)) return true; // (e.g., `ceil(log₂(5))`, see `evalImpl`)
 		return super.isConstant();
 	}
 
 	override Expression evalImpl(){
+		import ast.consteval:exactBuiltinCall;
+		if(auto v=exactBuiltinCall(this)){ // (a built-in function with an integer result of arguments that are known exactly)
+			auto lit=makeIntConstant(v.get,type);
+			lit.loc=loc;
+			return lit;
+		}
 		auto ne=e.eval(), narg=arg.eval();
 		CallExp r;
 		if(ne is e && narg is arg) r=this;
