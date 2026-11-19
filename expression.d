@@ -1641,11 +1641,13 @@ class IndexExp: Expression{ //e[a]
 	bool isArraySyntax=false; // e[] vs e[()]
 	static if(language==silq) bool isClassical_=false;
 	else enum isClassical_=true;
+	static if(language==silq) bool moved=false; // (by `move`, which consumes it rather than `dup`ing it, see `moveSemantic`)
 	this(Expression exp, Expression arg){e=exp; a=arg;}
 	override IndexExp copyImpl(CopyArgs args){
 		auto r=new IndexExp(e.copy(args),a.copy(args));
 		r.isArraySyntax=isArraySyntax;
 		static if(language==silq) r.isClassical_=isClassical_;
+		static if(language==silq) r.moved=moved;
 		return r;
 	}
 	mixin PrecedenceToString;
@@ -1670,6 +1672,7 @@ class IndexExp: Expression{ //e[a]
 		auto r=new IndexExp(ne,na);
 		r.isArraySyntax=isArraySyntax;
 		static if(language==silq) r.isClassical_=isClassical_;
+		static if(language==silq) r.moved=moved;
 		r.loc=loc;
 		static if(language==silq) if(type&&ne.type&&na.type){ // (the type of the components of the substituted aggregate, which can be a subtype, e.g., `(1,0)[i]` for a parameter `t:!ℕ^2`)
 			import ast.semantic_:indexType;
@@ -1775,9 +1778,12 @@ class IndexExp: Expression{ //e[a]
 class SliceExp: Expression{
 	Expression e;
 	Expression l,r;
+	static if(language==silq) bool moved=false; // (by `move`, see `moveSemantic`)
 	this(Expression exp, Expression left,Expression right){e=exp; l=left; r=right; }
 	override SliceExp copyImpl(CopyArgs args){
-		return new SliceExp(e.copy(args),l.copy(args),r.copy(args));
+		auto res=new SliceExp(e.copy(args),l.copy(args),r.copy(args));
+		static if(language==silq) res.moved=moved;
+		return res;
 	}
 	mixin PrecedenceToString;
 	override string toStringImpl(int cl,int cr){

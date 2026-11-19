@@ -5466,7 +5466,10 @@ void consumedNames(Expression e,ref SetX!Id consumed,ref SetX!Id other){
 			consumed.insert(varName(id));
 			if(!plainForget) other.insert(varName(id));
 		}else if(auto tpl=cast(TupleExp)x) foreach(c;tpl.e) add(c,plainForget);
+		else if(auto vec=cast(VectorExp)x) foreach(c;vec.e) add(c,plainForget);
+		else if(auto tae=cast(TypeAnnotationExp)x) add(tae.e,plainForget);
 		else if(auto idx=cast(IndexExp)x) add(idx.e,false);
+		else if(auto sl=cast(SliceExp)x) add(sl.e,false);
 	}
 	visitStm(e,(Expression x){
 		if(auto fe=cast(ForgetExp)x) add(fe.var,!fe.val);
@@ -6149,9 +6152,26 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		args.mapExp=(Expression x,ref Expression.CopyArgs args){
 			auto ce=cast(CallExp)x;
 			if(!ce||ce.isSquare) return null;
-			auto f=cast(Identifier)ce.e,a=cast(Identifier)ce.arg;
-			if(!f||f.id!=Id.s!"move"||!a||!info.moved.canFind(a.id)||info.consumed.any!(c=>c[0]==a.id&&needsPlaceholder(c[0]))) return null;
-			return cast(Expression)a.copy(args);
+			auto f=cast(Identifier)ce.e;
+			if(!f||f.id!=Id.s!"move") return null;
+			bool keeps(Expression a){ auto id=cast(Identifier)a; return id&&info.moved.canFind(id.id)&&!info.consumed.any!(c=>c[0]==id.id&&needsPlaceholder(c[0])); }
+			bool anyKeeps(Expression a){ // (also as a component of a tuple or a vector, which `move` moves separately, see `moveSemantic`)
+				if(keeps(a)) return true;
+				if(auto tpl=cast(TupleExp)a) return tpl.e.any!anyKeeps;
+				if(auto vec=cast(VectorExp)a) return vec.e.any!anyKeeps;
+				return false;
+			}
+			if(!anyKeeps(ce.arg)) return null;
+			Expression moved(Expression a){
+				if(keeps(a)) return a.copy(args);
+				Expression r;
+				if(auto tpl=cast(TupleExp)a) r=new TupleExp(tpl.e.map!moved.array);
+				else if(auto vec=cast(VectorExp)a) r=new VectorExp(vec.e.map!moved.array);
+				else r=new CallExp(f.copy(args),a.copy(args),false,ce.isClassical_);
+				r.loc=a.loc;
+				return r;
+			}
+			return moved(ce.arg);
 		};
 		return ret.e.copy(args);
 	}

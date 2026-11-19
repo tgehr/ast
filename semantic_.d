@@ -8797,17 +8797,52 @@ Expression expressionSemanticImpl(CallExp ce,ExpSemContext context){
 }
 
 static if(language==silq){
-Expression moveSemantic(CallExp ce,ExpSemContext context){
+Expression moveSemantic(CallExp ce,ExpSemContext context){ // (the variables and components that the argument consists of, also as the components of tuples and vectors, are consumed rather than implicitly `dup`ed, e.g., `x` and `y` for `move(x,y)`; any other argument is a temporary, which it passes on, e.g., `move(a+1)`)
 	auto sc=context.sc;
-	auto id=cast(Identifier)unwrap(ce.arg);
-	if(!id||ce.isSquare){
-		sc.error("argument of `move` must be a variable",ce.arg.loc);
+	if(ce.isSquare){
+		sc.error("argument of `move` must be in parentheses",ce.arg.loc);
 		ce.setSemError();
-		if(!context.inType){ // (error recovery: the local variables of the argument are moved, by an erroneous use, as the argument may be meant to move one of them, e.g., `a` for `move(tqx(a))`, which is then not reported again, e.g., at a later definition of `a`)
+		return ce;
+	}
+	bool moves=false;
+	Expression[] others; // (for error recovery, see below: the parts of the argument that are not moved variables, or the aggregates of moved components)
+	void mark(Expression e){
+		if(auto id=cast(Identifier)e){
+			id.moved=true;
+			moves=true;
+		}else if(auto idx=cast(IndexExp)e){
+			idx.moved=true;
+			moves=true;
+			if(auto id=getIdFromDefLhs(idx)) others~=id;
+		}else if(auto sl=cast(SliceExp)e){
+			sl.moved=true;
+			moves=true;
+			if(auto id=getIdFromDefLhs(sl)) others~=id;
+		}else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) mark(c);
+		else if(auto vec=cast(VectorExp)e) foreach(c;vec.e) mark(c);
+		else if(auto tae=cast(TypeAnnotationExp)e) mark(tae.e);
+		else if(auto let=cast(LetExp)e){
+			if(auto fwd=let.isForward(false)) mark(fwd); // (e.g., nested by a substitution)
+			else others~=e;
+		}else others~=e;
+	}
+	mark(ce.arg);
+	Expression r;
+	if(moves&&context.constResult!=ConstResult.no&&!context.inType){ // (in a `const` position, the moved value is a temporary)
+		auto tmp=temporaryIdentifier(ce.loc);
+		auto def=new DefineExp(tmp,ce.arg);
+		def.loc=ce.loc;
+		auto le=new LetExp(new CompoundExp([def]),tmp.copy());
+		le.loc=le.s.loc=ce.loc;
+		r=expressionSemanticImpl(le,context);
+	}else r=expressionSemantic(ce.arg,context);
+	if(r.isSemError()){
+		ce.setSemError();
+		if(!context.inType&&others.length){ // (error recovery: the local variables of the other parts of the argument and the aggregates of its components are moved, by an erroneous use, as the argument may be meant to move them, e.g., `a` for `move(tqx(a))` or `xs` for `move(xs[0])`, which is then not reported again, e.g., at a later definition of `a`)
 			auto handler=sc.handler;
 			handler.suppress++;
 			scope(exit) handler.suppress--;
-			foreach(fid;ce.arg.freeIdentifiers){
+			foreach(other;others) foreach(fid;other.freeIdentifiers){
 				auto meaning=sc.lookup(fid,false,true,Lookup.probing,null);
 				if(!cast(VarDecl)meaning||meaning.isToplevelDeclaration()) continue;
 				auto use=new Identifier(fid.id);
@@ -8817,19 +8852,7 @@ Expression moveSemantic(CallExp ce,ExpSemContext context){
 				expressionSemantic(use,context.nestConsumed);
 			}
 		}
-		return ce;
 	}
-	id.moved=true;
-	if(context.constResult!=ConstResult.no&&!context.inType){ // (in a `const` position, the moved value is a temporary)
-		auto tmp=temporaryIdentifier(ce.loc);
-		auto def=new DefineExp(tmp,ce.arg);
-		def.loc=ce.loc;
-		auto le=new LetExp(new CompoundExp([def]),tmp.copy());
-		le.loc=le.s.loc=ce.loc;
-		return expressionSemanticImpl(le,context);
-	}
-	auto r=expressionSemantic(id,context);
-	if(r.isSemError()) ce.setSemError();
 	return r;
 }
 }
@@ -9697,7 +9720,10 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 					return tid;
 				}
 		}
-		if(dep.isTop){
+		if(idx.moved){ // (a moved component is not `dup`ed, see `moveSemantic`)
+			sc.error("cannot move component that is not being replaced",idx.loc);
+			idx.setSemError();
+		}else if(dep.isTop){
 			sc.error("cannot consume component of quantum aggregate",idx.loc);
 			if(!explainConsumedComponent(idx,discardedCall,sc))
 				sc.note(format("did you mean to write `dup(%s)`?",idx.loc.rep),idx.loc);
@@ -9869,7 +9895,10 @@ Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 		if(auto id=getIdFromDefLhs(sl))
 			if(id.meaning)
 				sc.pushUp(dep,id.meaning);
-		if(dep.isTop){
+		if(sl.moved){ // (see `moveSemantic`)
+			sc.error("cannot move slice of aggregate",sl.loc);
+			sl.setSemError();
+		}else if(dep.isTop){
 			sc.error("cannot consume components of quantum aggregate",sl.loc);
 			sc.note(format("did you mean to write `dup(%s)`?",sl.loc.rep),sl.loc);
 			sl.setSemError();

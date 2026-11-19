@@ -456,11 +456,11 @@ final class LastUse{
 		if(d&&d.scope_&&d.scope_ !is sc.parent&&sc.parent.isNestedIn(d.scope_)) d=sc.parent.getSplit(d); // (a version from further out)
 		return d&&d.scope_ is sc.parent?d:null;
 	}
-	static BlockScope splitBranch(LastUse lu){ // (the innermost branch that splits the variable from its enclosing scope, through blocks that run once)
+	static BlockScope splitBranch(LastUse lu,bool inOrder=false){ // (the innermost branch that splits the variable from its enclosing scope, through blocks that run once; `inOrder`: also one whose conditional the code generator does not interleave)
 		for(auto nsc=cast(NestedScope)lu.scope_;nsc;nsc=cast(NestedScope)nsc.parent){
 			auto bs=cast(BlockScope)nsc;
 			if(!bs||bs.isLoopBody||bs.isLoopEntry||bs.isLoopReset) return null;
-			if(bs.isBranch&&outerVersion(lu.decl,bs)) return interleavable(bs)?bs:null;
+			if(bs.isBranch&&outerVersion(lu.decl,bs)) return inOrder||interleavable(bs)?bs:null;
 		}
 		return null;
 	}
@@ -680,9 +680,10 @@ final class LastUse{
 			}else for(start=this;start&&start.prev&&start.prev.splitFrom;)
 				start=start.prev; // TODO: this is a hack, would be better to insert lazy splits in dependency order
 		}
-		auto branch=cdep.isTop?splitBranch(consumption):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`)
+		auto branch=cdep.isTop?splitBranch(consumption,true):null; // (the uncomputations before the consumption keep their dependencies, see `checkBranchOrder`; also in a branch that the code generator does not interleave with the others, which runs in order)
+		auto inOrder=branch&&!interleavable(branch);
 		auto fromConditional=from&&splitBranch(consumption)?from:null; // (not in loop bodies, whose next iterations come after the consumption)
-		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&!(lu.kind==Kind.consumption&&(lu.consumedAt>=consumption.consumedAt||lu.consumesConst()))&&!(lu.use&&lu.use.implicitDup); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later, and not consumptions in nested scopes after the consumption)
+		bool before(LastUse lu){ return branch&&lu.time<consumption.consumedAt&&lu.scope_.isNestedIn(branch)&&!(lu.kind==Kind.consumption&&(lu.consumedAt>=consumption.consumedAt||lu.consumesConst()))&&!(lu.use&&lu.use.implicitDup)&&!(inOrder&&lu.kind.among(Kind.lazySplit,Kind.lazySplitSink)); } // (not consumptions of `const` variables and implicit `dup`s, whose variables are forgotten later, and not consumptions in nested scopes after the consumption; in a branch that runs in order, not the versions that continue into its nested conditionals, whose other branches run after the consumption: they are forgotten at the split, e.g., `t` for `if k>0 { if k>1 { return x; } }` in a loop body)
 		auto inNestedBranch=from&&scope_.activeNestedScopes.any!(n=>isBranch(n)&&from.isNestedIn(n)); // (the consumption is in a branch of a nested conditional that is being analyzed, after the last uses of this scope and of its earlier nested scopes)
 		LastUse endAfterMerges(Declaration d,Scope sc){ // (the forget or consumption of the version `d` of `sc` after the merges of the branches around it, in the scope of the walk)
 			for(auto nsc=cast(NestedScope)sc;nsc&&nsc !is scope_&&nsc.isNestedIn(scope_)&&isBranch(nsc)&&!nsc.diverges;nsc=cast(NestedScope)nsc.parent){
@@ -911,7 +912,7 @@ final class LastUse{
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget&&(fromBranch||lu.scope_ !is scope_)) continue; // (a forget in the branch itself is checked here; not a consumption in the scope where the walk starts, which comes after its start, e.g., `a:=X(a)` for the forget of `v1` at `u:=!v1` in `if k { u:=!v1; a:=X(a); t:=measure(v2); }` with `v2:=!v1`: the walk does not visit the version in the enclosing scope)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
-			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`)
+			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)&&(!cdep.lostAt||!cdep.lostAt.scope_||cdep.lostAt.scope_.isNestedIn(lu.scope_))); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`; not where it is consumed in another branch, after the split)
 			if(!nested&&hoisted){ // (its dependency is the one at the split, which comes before the consumption)
 				cdep.replace(lu.decl,lu.dep,lu.use);
 				ccont.replace(lu.decl,lu.dep,lu.use);
