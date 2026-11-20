@@ -5772,6 +5772,7 @@ struct ERPReturn{
 	Q!(Id,Expression)[] consumed; // quantum variables consumed by the returned expression
 	Id[] moved; // variables that the returned expression moves explicitly, e.g., `y` in `return (move(y),k);`
 	Q!(Id,Expression)[] types; // (of the variables before the return, see `erpLoopExplicit`)
+	SetX!Id unforgettable; // (quantum variables that the returned expression does not consume and that cannot be forgotten after it, see `erpBeforeClose`)
 	bool recorded=false; // (the information above, see `erpBeforeReturn`)
 }
 ERPReturn[size_t] erpReturns;
@@ -5847,11 +5848,15 @@ void erpBeforeClose(ReturnExp ret,Scope sc){
 	auto fun=sc.getFunction();
 	SetX!Identifier returned;
 	if(ret.e) visitStm(ret.e,(Expression x){ if(auto id=cast(Identifier)x) returned.insert(id); });
-	SetX!Id decided;
+	SetX!Id decided,unforgettable;
 	for(Scope c=sc;c;c=c.parentScope()){
 		foreach(_,d;c.rnsymtab){
 			if(!d.name||d.name.id in decided) continue;
 			decided.insert(d.name.id);
+			if(!cast(DeadDecl)d) if(auto vd=cast(VarDecl)d) if(!vd.isSemError()&&vd.scope_&&vd.scope_.getFunction() is fun){
+				auto type=typeForDecl(vd);
+				if(type&&!type.isClassical()&&!sc.canRecompute(vd)) unforgettable.insert(d.name.id); // (in the iterations of the analysis of the loops, as `consumed`)
+			}
 			if(!cast(DeadDecl)d||cast(DeadMerge)d) continue; // (merged in the returned expression, e.g., `return if c then x else x;`)
 			auto cd=cast(ConsumedDecl)d;
 			bool captured=cd&&cd.use.meaning&&cd.use.meaning.scope_&&cd.use.meaning.scope_.getFunction() !is fun;
@@ -5862,6 +5867,7 @@ void erpBeforeClose(ReturnExp ret,Scope sc){
 		}
 		if(cast(FunctionScope)c) break;
 	}
+	if(auto p=erpKey(ret) in erpReturns) foreach(n;unforgettable) p.unforgettable.insert(n);
 }
 void erpRecordReturn(ReturnExp ret,Scope sc){
 	if(!erpRecording(sc)) return;
@@ -5874,7 +5880,10 @@ void erpRecordReturn(ReturnExp ret,Scope sc){
 			if(cast(VarDecl)id.meaning&&id.moved) r.moved~=id.id;
 		}
 	});
-	if(auto p=erpKey(ret) in erpReturns) r.types=p.types; // (see `erpBeforeReturn`)
+	if(auto p=erpKey(ret) in erpReturns){ // (see `erpBeforeReturn` and `erpBeforeClose`)
+		r.types=p.types;
+		r.unforgettable=p.unforgettable;
+	}
 	r.recorded=true;
 	if(erpKey(ret)) erpReturns[erpKey(ret)]=r;
 }
@@ -6065,8 +6074,9 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		return r1&&!c2||r2&&!c1;
 	}
 	// (`prefix`: the variables that the code before `stms` mentions; the variables after the loop that it does not mention
-	// may be forgotten when the loop body starts, e.g., if it only defines them again)
-	void checkGuards(Expression[] stms,Expression[] cont,SetX!Id prefix){
+	// may be forgotten when the loop body starts, e.g., if it only defines them again; `reached`: the code that the paths
+	// that return in `stms` reach after it in the rewritten loop, see `guard`)
+	void checkGuards(Expression[] stms,Expression[] cont,SetX!Id prefix,Expression[] reached){
 		foreach(i,st;stms){
 			if(!containsReturn(st)) continue;
 			auto rest=endsWithReturn(st)?[]:stms[i+1..$]; // (the rest is not reached)
@@ -6090,6 +6100,13 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 				if(auto ret=cast(ReturnExp)x) if(auto consumed=erpKey(ret) in erpConsumedBeforeReturn)
 					foreach(n;*consumed) if(n in inStm&&n in used) ok=false;
 			});
+			// (as do the variables that a return in `st` makes unforgettable: the rewritten loop keeps them on the path that returns,
+			// e.g., `o` in `o:=dup(x); if c { if d { return measure(x); } } b:=measure(o);`)
+			auto kept=names(returningBranch(st)?reached:rest~reached);
+			visitStm(st,(Expression x){
+				if(auto ret=cast(ReturnExp)x) if(auto info=erpKey(ret) in erpReturns)
+					foreach(n;info.unforgettable) if(n in kept) ok=false;
+			});
 			// (as do the loops in `st` that consume a variable from before them before a return: the rewritten loops continue,
 			// so the next iteration reads it again, e.g., `n` in `n:=1; repeat 1 { forget(n); return 0; }`)
 			visitStm(st,(Expression x){
@@ -6106,21 +6123,22 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 			});
 			if(auto ite=cast(IteExp)st){
 				foreach(n;names([ite.cond])) before.insert(n);
-				checkGuards(ite.then.s,rest~cont,before);
-				if(ite.othw) checkGuards(ite.othw.s,rest~cont,before);
-			}else if(auto ce=cast(CompoundExp)st) checkGuards(ce.s,rest~cont,before);
-			else if(auto fe=cast(ForExp)st) checkGuards(fe.bdy.s,rest~cont,before);
-			else if(auto re=cast(RepeatExp)st) checkGuards(re.bdy.s,rest~cont,before);
-			else if(auto we=cast(WhileExp)st) checkGuards(we.bdy.s,rest~cont,before);
-			checkGuards(rest,cont,upTo);
+				auto r=returningBranch(st)?reached:rest~reached;
+				checkGuards(ite.then.s,rest~cont,before,r);
+				if(ite.othw) checkGuards(ite.othw.s,rest~cont,before,r);
+			}else if(auto ce=cast(CompoundExp)st) checkGuards(ce.s,rest~cont,before,rest~reached);
+			else if(auto fe=cast(ForExp)st) checkGuards(fe.bdy.s,rest~cont,before,rest~reached);
+			else if(auto re=cast(RepeatExp)st) checkGuards(re.bdy.s,rest~cont,before,rest~reached);
+			else if(auto we=cast(WhileExp)st) checkGuards(we.bdy.s,rest~cont,before,rest~reached);
+			checkGuards(rest,cont,upTo,reached);
 			break;
 		}
 	}
 	SetX!Id condNames;
 	if(auto we=cast(WhileExp)loop) condNames=names([we.cond]);
-	if(auto fe=cast(ForExp)loop) checkGuards(fe.bdy.s,[],condNames);
-	else if(auto re=cast(RepeatExp)loop) checkGuards(re.bdy.s,[],condNames);
-	else if(auto we=cast(WhileExp)loop) checkGuards(we.bdy.s,[],condNames);
+	if(auto fe=cast(ForExp)loop) checkGuards(fe.bdy.s,[],condNames,[]);
+	else if(auto re=cast(RepeatExp)loop) checkGuards(re.bdy.s,[],condNames,[]);
+	else if(auto we=cast(WhileExp)loop) checkGuards(we.bdy.s,[],condNames,[]);
 	if(!ok) return null;
 	auto loc=loop.loc;
 	Expression.CopyArgs cargs;

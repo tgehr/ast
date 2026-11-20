@@ -676,7 +676,13 @@ Expression[] annotateEmpty(Expression[] args,Expression type,ExpSemContext conte
 }
 
 Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression original,Expression[] args,Location loc,ExpSemContext context){
-	if(original&&original.type&&!isEmpty(original.type)&&args.any!(arg=>isEmpty(arg.type))){ // (the call aborts, but the other operands are evaluated as well, e.g., `x+(1,)[2]` for `x:!ℝ`)
+	bool coerceResult=false;
+	if(original&&original.type&&isEmpty(original.type)&&args.any!(arg=>isEmpty(arg.type))&&args.any!(arg=>!isEmpty(arg.type))&&args.all!(arg=>isEmpty(arg.type)||arg.type.isClassical())){ // (also where the operation has the type `⊥`, e.g., `measure(a)+(0,)[2]`, whose operands are consumed as well, e.g., where the comparison `measure(a)+(0,)[2]==0` has the type `!𝔹`; not for quantum operands, for which the operation may have no type, e.g., `𝔹+𝔹`)
+		coerceResult=true;
+		auto type=args.find!(arg=>!isEmpty(arg.type))[0].type;
+		if(behavior==OB.pow&&isℤmodTy(type)) type=ℕt(true); // (the exponent, see `powerType`)
+		args=annotateEmpty(args,type,context);
+	}else if(original&&original.type&&!isEmpty(original.type)&&args.any!(arg=>isEmpty(arg.type))){ // (the call aborts, but the other operands are evaluated as well, e.g., `x+(1,)[2]` for `x:!ℝ`)
 		auto type=original.type;
 		foreach(arg;args) if(!isEmpty(arg.type)){ type=arg.type; break; }
 		if(behavior==OB.pow&&isℤmodTy(type)) type=ℕt(true); // (the exponent, see `powerType`)
@@ -728,7 +734,13 @@ Expression makeFunctionCall(OperatorBehavior behavior,string name,Expression ori
 	}
 	auto ce=new CallExp(fun,arg,isSquare,isClassical);
 	ce.loc=loc;
-	return expressionSemantic(ce,context);
+	auto r=expressionSemantic(ce,context);
+	if(coerceResult&&r.type&&!isEmpty(r.type)){ // (it aborts at the operand of type `⊥`)
+		auto tae=new TypeAnnotationExp(r,original.type,TypeAnnotationType.coercion);
+		tae.loc=loc;
+		r=expressionSemantic(tae,context);
+	}
+	return r;
 }
 
 private alias OB=OperatorBehavior;

@@ -1323,9 +1323,10 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
 	ite.then.blscope_.conditional=ite.othw.blscope_.conditional=ite;
-	auto continued=insideLoopBody(sc)?null:continuedBranch(ite); // (not in a loop body: `--remove-loops` rewrites the returns there, and the code after the conditional is then guarded by another conditional, see `erpLoopExplicit`)
+	auto continued=insideDoWhileBody(sc)?null:continuedBranch(ite); // (also in a loop body, where `--remove-loops` puts the code after the conditional into the other branch, see `guard` in `erpLoopExplicit`, or lowers the loop to a function whose body continues it; not yet in the body of a `do`-`while` loop, where the versions that the code after the conditional continues reach the merge after the condition, which does not keep their dependencies, e.g., `t` for `do { t:=dup(x); if k==0 { return x; } c+=1; } while c<3;`, TODO)
 	auto bothReturn=only(ite.then,ite.othw).all!(b=>definitelyReturns(b)&&returnsOnEveryPath(b)); // (the code generator interleaves their statements as for branches that do not return, and merges their results; in a loop body, `--remove-loops` rewrites the returns, see `erpLoopExplicit`, and the branches do not return)
-	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=insideLoopBody(sc)&&!bothReturn&&(containsReturn(ite.then)||containsReturn(ite.othw)); // (as for `continued`: elsewhere, the code generator interleaves the branches also where a branch returns on some paths)
+	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=insideLoopBody(sc)&&!continued&&!bothReturn&&(containsReturn(ite.then)||containsReturn(ite.othw)); // (in a loop body, `--remove-loops` rewrites the returns, and guards the code after the conditional by another conditional, see `erpLoopExplicit`, unless it continues the other branch)
+	ite.then.blscope_.loweredReturns=ite.othw.blscope_.loweredReturns=ite.then.blscope_.returningConditional&&!insideDoWhileBody(sc); // (`erpLoopExplicit` does not rewrite `do`-`while` loops whose body returns)
 	foreach(branch;only(ite.then,ite.othw)) branch.blscope_.returnsOnSomePath=containsReturn(branch);
 	if(continued) (continued is ite.then?ite.othw:ite.then).blscope_.returningBeforeContinuation=true;
 	auto dep=ite.cond.getDependency(sc);
@@ -2279,6 +2280,13 @@ bool isLoopStatement(Expression e){
 	return cast(ForExp)e||cast(WhileExp)e||cast(RepeatExp)e;
 }
 // Whether `sc` is inside a loop body of the function it belongs to.
+bool insideDoWhileBody(Scope sc){ // (the innermost loop body around `sc` is the body of a `do`-`while` loop)
+	for(auto s=sc;s;s=s.parentScope()){
+		if(cast(FunctionScope)s) break;
+		if(auto bs=cast(BlockScope)s) if(bs.isLoopBody) return bs.isDoWhileBody;
+	}
+	return false;
+}
 bool insideLoopBody(Scope sc){
 	for(auto s=sc;s;s=s.parentScope()){
 		if(cast(FunctionScope)s) break;
@@ -2796,6 +2804,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		state.beginIteration();
 		bdy=dw.bdy.copy(cargs);
 		lsc=bdy.blscope_=state.makeScopes(sc);
+		lsc.isDoWhileBody=true;
 		iterations.setup(lsc);
 		bdy=compoundExpSemantic(bdy,sc,flags);
 		finishIteration();
@@ -2814,7 +2823,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		}
 	}
 	if(!iterations.outer) runFinalLoopIteration(dw,sc,flags,state,bdy,"do-while",constForgets,anyDeferredSpecificityCheck,
-		(BlockScope nlsc){ lsc=nlsc; },
+		(BlockScope nlsc){ lsc=nlsc; nlsc.isDoWhileBody=true; },
 		(){ finishIteration(); },
 		()=>resetReturns);
 	state.fixSplitMergeGraph(sc);
@@ -10443,6 +10452,7 @@ Expression powerType(Expression t1, Expression t2){
 		if(num2 > NumericType.ℤt) return null;
 		return ℂ(classical);
 	}
+	if(num2 == NumericType.ℂ) return null; // (as for a complex base, see `cpow`)
 	if(num1 && num2 && num1 <= NumericType.ℚt && num2 <= NumericType.ℤt) return ℚt(classical);
 	return ℝ(classical); // TODO: good?
 }
@@ -10695,7 +10705,7 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 	if(!e.type){
 		sc.error(format("incompatible types `%s` and `%s` for %s",e1.type,e2.type,name),e.loc);
 		explainIncompatibleOperands(sc,e1,e2,name);
-		if(name=="power"&&isNumericTy(e1.type)==NumericType.ℂ&&isNumericTy(e2.type)>NumericType.ℤt)
+		if(name=="power"&&isNumericTy(e1.type)&&isNumericTy(e2.type)>NumericType.ℤt&&(isNumericTy(e1.type)==NumericType.ℂ||isNumericTy(e2.type)==NumericType.ℂ))
 			sc.note(format("use `cpow(%s, %s)` or specialized functions for non-integer complex power",e1,e2),e.loc);
 		e.setSemError();
 	}

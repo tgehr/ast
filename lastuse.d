@@ -218,7 +218,7 @@ final class LastUse{
 		for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent) if(isBranch(nsc)) return true;
 		return false;
 	}
-	static bool interleavable(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch&&!bs.returningConditional; } // (the code generator can interleave the statements of the branches of its conditional, see `checkBranchOrder`)
+	static bool interleavable(Scope sc){ auto bs=cast(BlockScope)sc; return bs&&bs.isBranch; } // (the code generator can interleave the statements of the branches of its conditional, see `checkBranchOrder`; also in a loop body where a branch returns on some paths, whose returns `--remove-loops` lowers, see `erpLoopExplicit`)
 	Scope scope_;
 	Declaration decl=null;
 	Identifier use=null;
@@ -603,7 +603,7 @@ final class LastUse{
 	private bool readSplitAtDefinition(Declaration d,ref Dependency forgetDep){
 		return readsSplitAtDefinition(scope_,decl,d,forgetDep);
 	}
-	static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep,bool continued=false){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way; `continued`: see `outerVersion`)
+	static bool readsSplitAtDefinition(Scope scope_,Declaration decl,Declaration d,ref Dependency forgetDep,bool continued=false,scope bool delegate(Declaration) inContinuation=null){ // (whether the definition of `d` in `scope_` reads a version of `decl` in it, and depends on it only that way; `continued`: see `outerVersion`; `inContinuation`: also the versions of the code after the conditional that continues `scope_`)
 		bool version_(Declaration x,Declaration y){
 			static bool derived(Declaration x,Declaration y,bool continued){
 				for(;x;x=sourceVersion(x,continued)) if(x is y) return true;
@@ -611,7 +611,7 @@ final class LastUse{
 			}
 			return derived(x,y,continued)||derived(y,x,continued);
 		}
-		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_); }
+		bool inScope(Declaration x){ return x.scope_&&x.scope_.isNestedIn(scope_)||inContinuation&&inContinuation(x); }
 		SetX!Declaration visited;
 		bool reads=false;
 		bool present(Declaration x){ // (not consumed before the forget)
@@ -1149,6 +1149,17 @@ final class LastUse{
 				if(lu.splitFrom.getForgettability(forceConsumed,earlyReturn)==Forgettability.none) return false;
 		return true;
 	}
+	bool loopConsumesDependency(){ // (a version of a variable from outside a loop around it that depends on what the loop consumes: at an early return, it is forgotten outside the loop where it can be, as the later iterations of the loop do not keep its dependency)
+		if(dep.isTop) return false;
+		auto origin=decl;
+		while(origin.splitFrom) origin=origin.splitFrom;
+		for(Scope s=scope_;s&&s !is origin.scope_;s=s.parentScope()){
+			if(cast(FunctionScope)s) break;
+			if(auto bs=cast(BlockScope)s) if(bs.isLoopBody)
+				foreach(d;dep.dependencies) if(bs.consumedOuter.any!(c=>c.getId==d.getId)) return true;
+		}
+		return false;
+	}
 	bool atLoopEntry(){
 		auto bs=cast(BlockScope)scope_;
 		return bs&&bs.isLoopEntry;
@@ -1194,7 +1205,7 @@ final class LastUse{
 			case lazySplit:
 				assert(!!splitFrom);
 				auto r=Forgettability.none;
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||atLoopEntry())
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&(dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||loopConsumesDependency())||atLoopEntry())
 					r=max(r,splitFrom.getForgettability(forceConsumed,earlyReturn,!!earlyReturn));
 				if(r==Forgettability.none&&(!dep.isTop||forgettableAtSplit(earlyReturn,enclosing))&&scope_.canSplit(decl)&&canForgetBeforeLoops(forceConsumed,earlyReturn))
 					r=Forgettability.forgettable; // (on entry, also at the split if the branch consumes what it depends on)
@@ -1310,7 +1321,7 @@ final class LastUse{
 				assert(0); // always forwarded
 			case lazySplit:
 				assert(!!splitFrom);
-				if(forceConsumed||isLastSplitSibling()||earlyReturn&&dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||atLoopEntry()){
+				if(forceConsumed||isLastSplitSibling()||earlyReturn&&(dep.isTop&&!forgettableAtSplit(earlyReturn,enclosing)||loopConsumesDependency())||atLoopEntry()){
 					if(splitFrom.canForget(forceConsumed,earlyReturn,!!earlyReturn)){
 						if(earlyReturn&&dep.isTop) // (forgotten before the split because of the early return)
 							splitFrom.decl.forgottenBeforeEarlyReturn=earlyReturn;
@@ -2096,7 +2107,7 @@ struct LastUses{
 		if(lu.kind==LastUse.Kind.lazyMerge){ // (continues the version of the only branch that reaches the merge, e.g., after the other one returns)
 			if(lu.nestedScopes.length!=1||!LastUse.isBranch(lu.nestedScopes[0])) return false;
 			auto nsc=lu.nestedScopes[0];
-			if(nsc.getSiblingScopes().any!(s=>s !is nsc&&!(cast(BlockScope)s&&(cast(BlockScope)s).returns))) return false; // (the HQIR merges the versions after a branch that aborts, after the splits)
+			if(nsc.getSiblingScopes().any!(s=>s !is nsc&&!(cast(BlockScope)s&&(cast(BlockScope)s).returns&&!(cast(BlockScope)s).loweredReturns))) return false; // (the HQIR merges the versions after a branch that aborts, after the splits; also after a branch whose returns `--remove-loops` lowers, which then reaches the merge, see `BlockScope.loweredReturns`)
 			auto cdecl=LastUse.versionIn(decl,nsc);
 			if(cdecl is decl||!nsc.lastUses.splitDependency(cdecl,result,split)) return false;
 			foreach(d;result.dependencies.dup){
@@ -2585,12 +2596,12 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return visit(d);
 	}
-	static Event definitionEvent(size_t i,Declaration d,Scope b,size_t p){ // (of the first version in `b` that it is derived or updated from)
+	static Event definitionEvent(size_t i,Declaration d,Scope b,size_t p,scope bool delegate(Declaration) inContinuation){ // (of the first version in `b` (or in the code after its conditional, which continues it) that it is derived or updated from)
 		size_t r=size_t.max;
 		Scope at=null;
 		SetX!Declaration visited;
 		void visit(Declaration x){
-			if(x in visited||!x.scope_||!x.scope_.isNestedIn(b)) return;
+			if(x in visited||!x.scope_||!x.scope_.isNestedIn(b)&&!inContinuation(x)) return;
 			visited.insert(x);
 			auto lus=x.scope_.lastUses.retired.get(x,null);
 			if(auto lu=lus.length?lus[0]:x.scope_.lastUses.here(x)) if(lu.time<r) r=lu.time, at=x.scope_;
@@ -2608,6 +2619,10 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			auto p=varIndex.get(c[0],size_t.max);
 			if(p!=size_t.max) events~=Event(i,c[1].consumedAt,p,c[1]);
 		}
+		auto log=logOf(b);
+		bool inContinuation(Declaration x){ // (a version that the code after the conditional of `b` defines, which continues `b`, see `ContinuedLog.createdAt`)
+			return log&&x.scope_ is b.parent&&log.createdAt.get(x,0)>log.numbers[b];
+		}
 		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
 			if(lu.fromDiscardedAnalysis()||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
@@ -2615,9 +2630,9 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
 				if(p==size_t.max) continue;
-				if(lu.decl.derivedSequence.all!(x=>x.scope_&&x.scope_.isNestedIn(b))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep,true)){ // (it reads the version of the branch)
+				if(lu.decl.derivedSequence.all!(x=>x.scope_&&(x.scope_.isNestedIn(b)||inContinuation(x)))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep,true,&inContinuation)){ // (it reads the version of the branch)
 					events~=Event(i,lu.time,p,lu,true,false,events.length+1);
-					events~=definitionEvent(i,lu.decl,b,p);
+					events~=definitionEvent(i,lu.decl,b,p,&inContinuation);
 				}else events~=Event(i,lu.time,p,lu,true,true);
 			}
 		}

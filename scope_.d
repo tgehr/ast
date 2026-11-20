@@ -2539,6 +2539,18 @@ abstract class Scope{
 		controlDependency.replace(decl,ndecl);
 		foreach(ref tt;trackedTemporaries) tt.dep.replace(decl,ndecl);
 	}
+	private static Identifier returnConsumption(Expression conditional,Declaration decl){ // (a use of the variable that a `return` in the branches of the conditional consumes, which explains the merged dependencies, see `BlockScope.loweredReturns`)
+		static if(language==silq){
+			import ast.looplowering:visitStm;
+			Identifier r=null;
+			if(conditional) visitStm(conditional,(Expression x){
+				if(auto ret=cast(ReturnExp)x) if(!r) visitStm(ret.e,(Expression y){
+					if(auto id=cast(Identifier)y) if(!r&&id.meaning&&id.meaning.getId==decl.getId&&!id.constLookup&&!id.implicitDup) r=id;
+				});
+			});
+			return r;
+		}else return null;
+	}
 	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null,bool mergesBranches=false){ // (`mergesBranches`: the merge of several branches pushes their versions, also of one branch whose merged versions do not depend on each other, see `unknownAfterMerge` in `merge`)
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
 		consumedDepLog[decl]=getDependency(decl).dup;
@@ -3037,6 +3049,10 @@ abstract class Scope{
 		}
 		scope(exit) mergingScopes=[];
 		static if(language==silq) bool continued=scopes.any!((sc){ auto bs=cast(BlockScope)sc; return bs&&bs.diverges&&bs.returningBeforeContinuation; }); // (the code after the conditional continues the other branch, see `NestedScope.continuedLog`)
+		static if(language==silq) bool loweredReturns=scopes.any!((sc){ auto bs=cast(BlockScope)sc; return bs&&bs.loweredReturns; }); // (the branches that return reach the merge after `--remove-loops`, see `BlockScope.loweredReturns`)
+		else enum loweredReturns=false;
+		Expression loweredConditional=null; // (for the explanations, see `returnConsumption`)
+		static if(language==silq) if(loweredReturns) loweredConditional=scopes.map!(sc=>cast(BlockScope)sc).filter!(bs=>bs&&bs.loweredReturns).front.conditional;
 		if(scopes.any!(sc=>sc.diverges))
 			scopes=scopes.filter!(sc=>!sc.diverges).array;
 		if(!scopes.length) return false;
@@ -3212,8 +3228,8 @@ abstract class Scope{
 				auto dep=getDependency(sym);
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
-				if(scopes.length==1||sym.getId in eagerIds) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`, or values computed from it depend on the merged version, see `eagerIds`)
-				else pushDependencies(sym,false);
+				if(scopes.length==1&&!loweredReturns||sym.getId in eagerIds) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`, or values computed from it depend on the merged version, see `eagerIds`)
+				else pushDependencies(sym,false,returnConsumption(loweredConditional,sym));
 				if(sym.isSemError())
 					var.setSemForceError();
 				sym=var;
@@ -3329,7 +3345,7 @@ abstract class Scope{
 							if(auto bs=cast(BlockScope)sc) bs.eagerMerges~=sym;
 							sc.continueDependencies(osym,sym);
 						}else if(!unknownAfterMerge) sc.continueDependencies(osym,sym); // (the code after the conditional continues the branch: the merged version has the value of the version of the branch, e.g., `a` for `v:=dup(a); if k { return a; } else { t:=measure(v); } forget(v);`)
-						else sc.pushDependencies(osym,false,null,unknownAfterMerge);
+						else sc.pushDependencies(osym,false,returnConsumption(loweredConditional,osym),unknownAfterMerge);
 					}
 					if(!cast(DeadDecl)sym){
 						if(auto mtype=typeForDecl(sym)){
@@ -4779,6 +4795,7 @@ class BlockScope: NestedScope{
 	bool isLoopEntry=false; // (merged with the loop body for the state at the start of an iteration: its forgets happen before the loop)
 	bool isLetBody=false;
 	bool isLoopReset=false; // (of a `do`-`while` loop)
+	bool isDoWhileBody=false;
 	CompoundExp block; // (its statements, see `continuesToNextIteration`)
 	CompoundExp[] outerForgetBlocks; // (of a reset: the blocks from the forgets of variables from outside the loop to the reset, see `statementSemanticImpl(DoWhileExp)`)
 	bool restrictOuterForgets=false; // (of a reset, see `tryUncomputeTypeDependents`)
@@ -4790,7 +4807,8 @@ class BlockScope: NestedScope{
 	SetX!Id keptValues; // (the variables whose versions the merge of this branch merges although they all keep the value from before the conditional: a `return` on another path consumed it, which gives the branches new versions, e.g., `a` for `if k { } else { if l { return a; } }`; the merged versions do not depend on each other all the same, see `unknownAfterMerge` in `Scope.merge`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
-	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path: the code generator does not interleave the branches)
+	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path, and the code after the conditional does not continue the other branch: a `return` does not end the branch, see `dropsClassicalAtReturn`)
+	bool loweredReturns=false; // (`returningConditional`, but not in the body of a `do`-`while` loop: `--remove-loops` lowers the returns to assignments of the result, of a flag and of dummy values for what they consume, so that the branches reach the merge, see `erpLoopExplicit`)
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
 	bool returningBeforeContinuation=false; // (it returns on every path, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
