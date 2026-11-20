@@ -627,6 +627,9 @@ class Checker {
 			}
 		}
 		visExpr(rhs);
+		foreach(w; e.witnesses) {
+			defineVar(w, "witness of union", e);
+		}
 		if(e.isSwap) {
 			assert(!!ast_low.getSwapLowering(e, nscope));
 			foreach(r; e.replacements) {
@@ -741,6 +744,9 @@ class Checker {
 		}
 
 		visExpr(e.e2);
+		static if(op.aop == binopAssign) foreach(w; e.witnesses) {
+			defineVar(w, "witness of union", e);
+		}
 
 		auto lhs = cast(ast_exp.Identifier) e.e1;
 		if(lhs) {

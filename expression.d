@@ -2164,6 +2164,11 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	static if(op==Tok!":="){
 		Declaration toplevel;
 	}
+	static if(language==silq) static if(op==Tok!":="||op==Tok!"←"){
+		VarDecl[] witnesses; // (of the bound variables of the unions that the value is in, which the definition or the assignment opens, see `openUnions`)
+		Expression[] opened; // (the unions, the inner ones with the witnesses of the outer ones, and the member)
+		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍1₎+1](x)` in a lowered loop)
+	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
 		Annotation annotation;
@@ -2180,7 +2185,9 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	}else{
 		this(Expression left, Expression right){super(left,right);}
 		override BinaryExp!op copyImpl(CopyArgs args){
-			return new BinaryExp!op(e1.copy(args),e2.copy(args));
+			auto r=new BinaryExp!op(e1.copy(args),e2.copy(args));
+			static if(language==silq) static if(op==Tok!":="||op==Tok!"←") r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
+			return r;
 		}
 		override string toStringImpl(int cl,int cr){
 			return _brk(e1.toStringImpl(cl,lbp!op) ~ " "~TokChars!op~" "~e2.toStringImpl(rbp!op,cr),cl,cr);

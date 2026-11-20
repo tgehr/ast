@@ -648,7 +648,7 @@ class ArrayTy: Type{
 		return new ArrayTy(next.copy(args));
 	}
 	override string toString(){
-		bool p=cast(FunTy)next||cast(UnionTy)next||next.isTupleTy()&&next!=unit;
+		bool p=cast(FunTy)next||cast(UnionTy)next||cast(VectorTy)next||next.isTupleTy()&&next!=unit; // (`(𝔹^n)[]`, not `𝔹^n[]`, which is `𝔹^(n[])`)
 		return p?"("~next.toString()~")[]":next.toString()~"[]";
 	}
 	override bool isConstant(){ return next.isConstant(); }
@@ -766,7 +766,7 @@ class VectorTy: Type, ITupleTy{
 	override string toString(){
 		import ast.parser: rbp;
 		import ast.lexer: Tok;
-		bool p=cast(FunTy)next||cast(UnionTy)next||next.isTupleTy&&next!=unit;
+		bool p=cast(FunTy)next||cast(UnionTy)next||cast(VectorTy)next||next.isTupleTy&&next!=unit; // (`(𝔹^n)^2`, not `𝔹^n^2`, which is `𝔹^(n^2)`)
 		return (p?"("~next.toString()~")^":next.toString()~"^")~num.toStringImpl(rbp!(Tok!"^"),Expression.prNone);
 	}
 	override bool isConstant(){ return next.isConstant() && num.isConstant(); }
@@ -1701,6 +1701,22 @@ class UnionTy: Type{ // (`⋃[x:τ]. ρ`: the values of the types `ρ[v/x]` for 
 	override Expression combineTypesImpl(Expression rhs,bool meet){
 		if(isSubtype(rhs,this)) return meet?rhs:this;
 		if(isSubtype(this,rhs)) return meet?this:rhs;
+		if(!meet){ // (the generalization of the members and `rhs`, which keeps the relations between the lengths of their vectors, e.g., `⋃[m:!ℕ]. (!ℕ^m)^2` for `⋃[n:!ℕ]. (!ℕ^(n+2))^2` and `(!ℕ^1)^2`, see `generalize`)
+			auto n=freshName(rhs),lc=relabel(n).cod;
+			Expression rc=rhs;
+			Id rn;
+			if(auto ru=cast(UnionTy)rhs){
+				rn=ru.freshName(lc);
+				while(rn==n) rn=rn.apos;
+				rc=ru.relabel(rn).cod;
+			}
+			Expression[2][] lengths;
+			Id[] names;
+			if(auto g=generalize(lc,rc,lengths,names,[lc,rc])) if(!g.hasFreeVar(n)&&!(rn&&g.hasFreeVar(rn))){
+				foreach_reverse(name;names) g=unionOf(name,ℕt(true),g);
+				if(isSubtype(this,g)&&isSubtype(rhs,g)) return g;
+			}
+		}
 		if(auto ru=cast(UnionTy)rhs) if(isEqual(dom,ru.dom,null)){
 			auto n=freshName(ru);
 			if(auto ncod=combineTypes(relabel(n).cod,ru.relabel(n).cod,meet)) return unionOf(n,dom,ncod);
@@ -1727,6 +1743,40 @@ class UnionTy: Type{ // (`⋃[x:τ]. ρ`: the values of the types `ρ[v/x]` for 
 	}
 }
 
+private Expression generalize(Expression a,Expression b,ref Expression[2][] lengths,ref Id[] names,Expression[] avoid){ // (a type whose instances are `a` and `b`, with a variable for each pair of different lengths of their vectors, the same variable for the same pair; or `null`, see `UnionTy.combineTypesImpl`)
+	if(a==b) return a;
+	auto va=cast(VectorTy)a,vb=cast(VectorTy)b;
+	if(va&&vb){
+		auto next=generalize(va.next,vb.next,lengths,names,avoid);
+		if(!next) return null;
+		Expression num=va.num==vb.num?va.num:null;
+		foreach(i,p;lengths) if(!num&&p[0]==va.num&&p[1]==vb.num) num=varTy(names[i],ℕt(true));
+		if(!num){
+			auto name=Id.intern("m");
+			while(avoid.any!(e=>e.hasFreeVar(name))||names.canFind(name)) name=name.apos;
+			lengths~=[va.num,vb.num];
+			names~=name;
+			num=varTy(name,ℕt(true));
+		}
+		return vectorTy(next,num);
+	}
+	auto aa=cast(ArrayTy)a,ab=cast(ArrayTy)b;
+	if(aa&&ab){
+		auto next=generalize(aa.next,ab.next,lengths,names,avoid);
+		return next?arrayTy(next):null;
+	}
+	auto ta=a.isTupleTy(),tb=b.isTupleTy();
+	if(ta&&tb&&ta.length==tb.length&&(cast(TupleTy)a||cast(TupleTy)b)){
+		Expression[] types;
+		foreach(i;0..ta.length){
+			auto t=generalize(ta[i],tb[i],lengths,names,avoid);
+			if(!t) return null;
+			types~=t;
+		}
+		return tupleTy(types);
+	}
+	return joinTypes(a,b);
+}
 Expression unionOf(Id name,Expression dom,Expression cod){ // (`⋃[name:dom]. cod`, normalized as by its evaluation, see `UnionTy.evalImpl`)
 	if(!name||!cod.hasFreeVar(name)) if(!isEmpty(dom)) return cod; // (`⋃[x:τ]. ρ ⊆ ρ`, and `ρ ⊆ ⋃[x:τ]. ρ` with any witness)
 	if(auto vt=cast(VectorTy)cod) if(auto id=cast(Identifier)vt.num) // (`⋃[n:!ℕ]. τ^n` and `τ[]` are mutual subtypes)
@@ -2058,6 +2108,26 @@ bool hasFreeIdentifier(Expression self,Id name){
 	foreach(id;self.freeIdentifiers) if(id.id==name) return true;
 	return false;
 }
+static if(language==silq){
+bool isUnionWitness(Declaration d){ // (the variable that a definition declares for the bound variable of the union of its value, see `ast.semantic_.openUnions`)
+	auto vd=cast(VarDecl)d;
+	return vd&&vd.isTemporary&&vd.getName.canFind("₍");
+}
+private Expression packWitness(Expression type,scope bool delegate(Declaration) eliminated){ // (`⋃[n:τ]. ρ[n/w]` for the last eliminated witness `w:τ` that `type` mentions, whose type does not mention it)
+	static size_t index(Declaration d){
+		auto s=d.getName.findSplitAfter("₍")[1];
+		return s.findSplitBefore("₎")[0].to!size_t;
+	}
+	Declaration last=null;
+	foreach(id;type.freeIdentifiers)
+		if(id.meaning&&eliminated(id.meaning)&&isUnionWitness(id.meaning)&&(!last||index(id.meaning)>index(last)))
+			last=id.meaning;
+	if(!last) return type;
+	auto dom=(cast(VarDecl)last).vtype,name=Id.intern(last.getName.findSplitBefore("₍")[0]);
+	while(type.hasFreeVar(name)) name=name.apos;
+	return unionOf(name,dom,type.substitute(last.getId,varTy(name,dom)));
+}
+}
 /// a supertype of `type` that does not mention the variables for which `eliminated` holds, as the join with a type that does not mention them, or `null`
 Expression eliminateVariables(Expression type,scope bool delegate(Declaration) eliminated){
 	bool mentions(Expression e){
@@ -2068,6 +2138,12 @@ Expression eliminateVariables(Expression type,scope bool delegate(Declaration) e
 	static if(language==silq){ // (an eliminated type variable stands for its value, see `typeVariableValue`)
 		auto u=unfoldTypeVariables(type,eliminated);
 		if(u !is type) return eliminateVariables(u,eliminated);
+		auto p=packWitness(type,eliminated); // (the values of the type for the values of the witness)
+		if(p !is type) return eliminateVariables(p,eliminated);
+		if(auto ut=cast(UnionTy)type){
+			auto dom=eliminateVariables(ut.dom,eliminated),cod=dom?eliminateVariables(ut.cod,eliminated):null;
+			return cod?unionOf(ut.name,dom,cod):null;
+		}
 	}
 	if(auto vt=cast(VectorTy)type){
 		auto next=eliminateVariables(vt.next,eliminated);

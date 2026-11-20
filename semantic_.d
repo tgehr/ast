@@ -1279,6 +1279,47 @@ Expression[] typeWitnesses(Expression e,ref Expression[] rest,ref Location[] loc
 	return r;
 }
 static if(language==silq)
+Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍1₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`; not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
+	static bool pattern(Expression e){
+		if(auto id=cast(Identifier)e) return !id.implicitDup;
+		if(cast(WildcardExp)e) return true;
+		if(auto tpl=cast(TupleExp)e) return tpl.e.all!pattern;
+		if(auto vec=cast(VectorExp)e) return vec.e.all!pattern;
+		return false;
+	}
+	if(!pattern(lhs)) return type;
+	while(true){
+		auto ut=cast(UnionTy)type;
+		if(!ut) break;
+		Id name;
+		if(witnesses.length<names.length) name=names[witnesses.length]; // (of the definition that this one is a copy of)
+		else{
+			auto k=freshNameCount();
+			freshName();
+			name=Id.intern(text(ut.name?ut.name.str:"x","₍",k,"₎")); // (unspeakable, see `isUnionWitness`)
+		}
+		auto vd=new VarDecl(temporaryIdentifier(name,rhs.loc));
+		vd.loc=rhs.loc;
+		vd.setTemporary(true);
+		vd.vtype=ut.dom;
+		vd.isConst_=true;
+		vd=varDeclSemantic(vd,sc);
+		if(vd.isSemError()) break;
+		witnesses~=vd;
+		opened~=ut;
+		auto use=new Identifier(vd.getId);
+		use.loc=vd.loc;
+		use.meaning=vd;
+		use.scope_=sc;
+		use.type=ut.dom;
+		use.constLookup=true; // (as in a type, which reads the witness)
+		use.setSemCompleted();
+		type=ut.name?ut.cod.substitute(ut.name,use).eval():ut.cod;
+	}
+	if(witnesses.length) opened~=type;
+	return type;
+}
+static if(language==silq)
 Expression lowerNondeterministicType(DefineExp be){ // (`w:=e; t:=uint[w];` for `t:=uint[e]` if `e` is not deterministic: the type variable stands for the type of its own evaluation of `e`, through which the analysis looks, while another evaluation of `uint[e]` can give another type, see `definitionValue`)
 	auto lhs=be.e1;
 	while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
@@ -5368,7 +5409,12 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 			auto initializer=be.e2;
 			if(initializer.isSemCompleted()&&initializer.isConstant())
 				if(auto folded=initializer.eval()) initializer=folded;
-			auto dcontext=defineLhsContext(context,be.e2.isSemError(),be.e2.type,initializer);
+			auto lhsType=be.e2.type;
+			static if(language==silq) if(!be.e2.isSemError()&&cast(UnionTy)lhsType&&!(cast(Identifier)be.e1&&(cast(Identifier)be.e1).byRef)){ // (not a variable that stands for a component, which keeps its type, e.g., during the update of the component, see `buildIndexReplacements`)
+				lhsType=openUnions(be.e1,be.e2,be.witnesses,be.opened,be.witnessNames,lhsType,sc);
+				if(lhsType !is be.e2.type) initializer=null;
+			}
+			auto dcontext=defineLhsContext(context,be.e2.isSemError(),lhsType,initializer);
 			be.e1=defineLhsSemantic(be.e1,dcontext);
 			propErr(be.e1,be);
 			recordExplicitType(be); // (for diagnostics)
@@ -6843,7 +6889,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			checkCompat(tae.e,type); // TODO: ok?
 		}else assert(ae.isSemError());
 	}
-	if(ae.e2.type) checkCompat(ae.e1,ae.e2.type);
+	auto rhsType=ae.e2.type;
+	static if(language==silq) if(!ae.isSemError()&&cast(UnionTy)rhsType) rhsType=openUnions(ae.e1,ae.e2,ae.witnesses,ae.opened,ae.witnessNames,rhsType,sc); // (a strong update, as a definition)
+	if(rhsType) checkCompat(ae.e1,rhsType);
 	enum Stage{
 		collectDeps,
 		consumeLhs,
@@ -6962,8 +7010,8 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 		}else if(auto tae=cast(TypeAnnotationExp)lhs){
 			return updateVars(tae.e,rhs,stage);
 		}
-		updateVars2(lhs,lhs,false,rhs.type,rhsdep,stage);
-		static if(language==silq) if(stage==Stage.defineVars) if(auto id=cast(Identifier)lhs) if(id.meaning) // (the new version, see `knownValueOf`)
+		updateVars2(lhs,lhs,false,rhs is ae.e2?rhsType:rhs.type,rhsdep,stage);
+		static if(language==silq) if(stage==Stage.defineVars&&!ae.witnesses.length) if(auto id=cast(Identifier)lhs) if(id.meaning) // (the new version, see `knownValueOf`)
 			if(auto var=cast(VarDecl)defined.get(id.meaning.getId,null)) var.knownValue=definedValue(rhs);
 	}
 	updateVars(ae.e1,ae.e2,Stage.collectDeps);

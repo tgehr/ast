@@ -3187,6 +3187,10 @@ abstract class Scope{
 			});
 			if(candidates.length) eagerIds=eagerMergeOrder(this,scopes,candidates);
 		}
+		static if(language==silq) bool packsWitness(Expression type){ // (`type` mentions the witness of a union that is a `const` local of a branch, see `isUnionWitness`)
+			if(type) foreach(id;type.freeIdentifiers) if(id.meaning&&id.meaning in goneConstLocals&&isUnionWitness(id.meaning)) return true;
+			return false;
+		}
 		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
 			type=unfoldBranchTypeVariables(type);
 			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
@@ -3281,6 +3285,8 @@ abstract class Scope{
 								if(isEmpty(ot)) if(auto qt=st.getQuantum) st=qt; // (e.g., the version after an erroneous assignment)
 							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
+							static if(language==silq) if(goneConstLocals.length&&(packsWitness(ot)||packsWitness(st))) // (the join of the types without the witnesses of the branches keeps the relations between their components, which the witnesses are packed into unions for, see `ast.type.eliminateVariables`)
+								if(auto vot=visibleType(ot)) if(auto vst=visibleType(st)) if(auto vnt=joinTypes(vot,vst)) nt=vnt;
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								splitSym(), sc.split(osym,null);
 								if(sym.isSemCompleted()&&osym.isSemCompleted()){
