@@ -1154,6 +1154,17 @@ class Checker {
 		sc.visType(e.cod);
 	}
 
+	void implExpr(ast_ty.UnionTy e) {
+		visType(e.dom);
+		auto sc = new Checker(nscope, this);
+		sc.strictScope = false;
+		foreach(p; e.params) {
+			if(p.name) sc.defineVar(p, "union type parameter", p.name);
+		}
+		sc.strictScope = true;
+		sc.visType(e.cod);
+	}
+
 	void visCall(ast_exp.CallExp callExpr, bool isReversed) {
 		ast_exp.Expression targetExpr = callExpr.e, argExpr = callExpr.arg;
 		if(auto targetId = cast(ast_exp.Identifier) targetExpr) {
@@ -1424,6 +1435,17 @@ class Checker {
 		if(auto c = cast(ast_conv.TransitiveConversion)conv) {
 			visConv(c.a);
 			visConv(c.b);
+		} else if(auto c = cast(ast_conv.UnionPackConversion)conv) {
+			visExpr(c.witness);
+			visConv(c.payload);
+		} else if(auto c = cast(ast_conv.UnionUnpackConversion)conv) {
+			auto sc = new Checker(nscope, this);
+			sc.strictScope = false;
+			foreach(p; c.relabeled.params) {
+				if(p.name) sc.defineVar(p, "union type parameter", p.name);
+			}
+			sc.strictScope = true;
+			sc.visConv(c.payload);
 		} else if(auto c = cast(ast_conv.TupleConversion)conv) {
 			foreach(sub; c.elements) {
 				visConv(sub);

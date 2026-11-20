@@ -683,6 +683,26 @@ struct Parser{
 			case Tok!"∏",Tok!"cprod":
 				nextToken();
 				return res=New!VariadicTy(parseExpression(nbp,false), false);
+			static if(language==silq){
+				case Tok!"⋃",Tok!"Un":{ // (dependent union type `⋃[x:τ]. ρ`, also with several binders, `⋃[x:τ][y:σ]. ρ` or `⋃[x:τ,y:σ]. ρ`)
+					auto ubegin=tok.loc;
+					nextToken();
+					Parameter[] binders;
+					do{
+						expect(Tok!"[");
+						auto bparams=parseArgumentList!(false,Parameter)(true,Tok!"]");
+						expect(Tok!"]");
+						binders~=cast(Parameter[])bparams[0];
+					}while(ttype==Tok!"[");
+					expect(Tok!".");
+					Expression ucod=parseType();
+					foreach_reverse(b;binders){
+						ucod=new UnionTy(b,ucod);
+						ucod.loc=ubegin.to(ptok.loc);
+					}
+					return res=ucod;
+				}
+			}
 			case Tok!"+":
 				nextToken();
 				return res=New!(UnaryExp!(Tok!"+"))(parseExpression(nbp,false));

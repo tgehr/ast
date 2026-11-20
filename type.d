@@ -189,6 +189,7 @@ private bool isSubtypeShallow(Expression lhs,Expression rhs,EqualityContext* ctx
 	} else if(!lhsClassical&&rhsClassical) {
 		return false;
 	}
+	if(auto ru=cast(UnionTy)rhs) if(!cast(UnionTy)lhs) return isSubtypeOfUnion(lhs,ru,ctx);
 	return lhs.isSubtypeImpl(rhs,ctx);
 }
 
@@ -201,6 +202,7 @@ Expression combineTypes(Expression lhs,Expression rhs,bool meet,bool allowQNumer
 	if(isEmpty(lhs)) return meet?lhs:rhs;
 	if(isEmpty(rhs)) return meet?rhs:lhs;
 	auto result = l.combineTypesImpl(r,meet);
+	static if(language==silq) if(!result&&cast(UnionTy)r&&!cast(UnionTy)l) result=r.combineTypesImpl(l,meet); // (see `UnionTy.combineTypesImpl`)
 	static if(language==silq) if(!result){ // (through the values of type variables, see `unfoldTypeVariables`)
 		if(isSubtype(l,r)) return meet?lhs:rhs;
 		if(isSubtype(r,l)) return meet?rhs:lhs;
@@ -518,7 +520,7 @@ class TupleTy: Type,ITupleTy{
 		if(!types.length) return "𝟙";
 		if(types.length==1) return "("~types[0].toString()~")¹";
 		string addp(Expression a){
-			if(cast(FunTy)a) return "("~a.toString()~")";
+			if(cast(FunTy)a||cast(UnionTy)a) return "("~a.toString()~")";
 			return a.toString();
 		}
 		return types.map!(a=>a.isTupleTy()&&a!=unit?"("~a.toString()~")":addp(a)).join(" × ");
@@ -646,7 +648,7 @@ class ArrayTy: Type{
 		return new ArrayTy(next.copy(args));
 	}
 	override string toString(){
-		bool p=cast(FunTy)next||next.isTupleTy()&&next!=unit;
+		bool p=cast(FunTy)next||cast(UnionTy)next||next.isTupleTy()&&next!=unit;
 		return p?"("~next.toString()~")[]":next.toString()~"[]";
 	}
 	override bool isConstant(){ return next.isConstant(); }
@@ -764,7 +766,7 @@ class VectorTy: Type, ITupleTy{
 	override string toString(){
 		import ast.parser: rbp;
 		import ast.lexer: Tok;
-		bool p=cast(FunTy)next||next.isTupleTy&&next!=unit;
+		bool p=cast(FunTy)next||cast(UnionTy)next||next.isTupleTy&&next!=unit;
 		return (p?"("~next.toString()~")^":next.toString()~"^")~num.toStringImpl(rbp!(Tok!"^"),Expression.prNone);
 	}
 	override bool isConstant(){ return next.isConstant() && num.isConstant(); }
@@ -1051,7 +1053,7 @@ class ProductTy: Type{
 			string d;
 			string addp(bool const_,Expression a,string del="()"){
 				auto paramKind=getParamKind(const_);
-				if(cast(ProductTy)a) return del[0]~(paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"")~del[1];
+				if(cast(ProductTy)a||cast(UnionTy)a) return del[0]~(paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"")~del[1];
 				if(a.isTupleTy()) return (paramKind?paramKind~"(":"")~a.toString()~(paramKind?")":"");
 				return paramKind~a.toString();
 			}
@@ -1604,6 +1606,180 @@ FunTy funTy(Expression dom,Expression cod,bool isSquare,bool isTuple,bool isClas
 	return funTy(dom,cod,isSquare,isTuple,pure_,isClassical);
 }
 
+class UnionTy: Type{ // (`⋃[x:τ]. ρ`: the values of the types `ρ[v/x]` for the values `v` of the classical type `τ`)
+	Parameter[] params; // (the binder `x:τ`)
+	Expression cod;
+	this(Parameter param,Expression cod)in{
+		assert(param&&cod);
+	}do{
+		this.params=[param];
+		this.cod=cod;
+	}
+	@property Id name(){ return params[0].name?params[0].getId:Id(); }
+	@property Expression dom(){ return params[0].vtype; }
+	override UnionTy copyImpl(CopyArgs args){
+		auto r=new UnionTy(params[0].copy(args),cod.copy(args));
+		return r;
+	}
+	override string toString(){
+		string r="⋃";
+		Expression e=this;
+		for(auto ut=cast(UnionTy)e;ut;ut=cast(UnionTy)e){
+			auto p=ut.params[0],ty=p.vtype?p.vtype:p.dtype;
+			r~="["~(p.name?p.name.toString():"_")~(ty?":"~ty.toString():"")~"]";
+			e=ut.cod;
+		}
+		return r~". "~e.toString();
+	}
+	override bool isConstant(){ return dom.isConstant()&&cod.isConstant(); }
+	override bool isTotal(){ return dom.isTotal()&&cod.isTotal(); }
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		if(auto ty=dom?dom:params[0].dtype) if(auto r=ty.freeVarsImpl(dg)) return r;
+		auto n=name;
+		return cod.freeVarsImpl(v=>n&&v.id==n?0:dg(v));
+	}
+	Id freshName(scope Expression[] avoid...){ // (a name for the bound variable that does not capture a variable of `avoid` or of the union)
+		auto nn=name?name:Id.intern("x");
+		while(avoid.any!(e=>e.hasFreeVar(nn))||nn!=name&&hasFreeVar(nn)) nn=nn.apos;
+		return nn;
+	}
+	UnionTy relabel(Id nname)in{
+		assert(!!nname);
+	}do{
+		if(nname==name) return this;
+		auto ncod=name?cod.substitute(name,varTy(nname,dom)):cod;
+		return unionTy(nname,dom,ncod);
+	}
+	override Expression substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
+		auto n=name;
+		if(n){
+			Expression[] captures;
+			foreach(k,v;subst) if(k!=n&&v.hasFreeVar(n)&&cod.hasFreeVar(k)) captures~=v;
+			if(captures.length){
+				foreach(k,v;subst) captures~=v;
+				return relabel(freshName(captures)).substituteImpl(subst,tt);
+			}
+		}
+		auto ndom=dom.substitute(subst,tt);
+		auto nsubst=subst.dup;
+		if(n) nsubst.remove(n);
+		auto ncod=cod.substitute(nsubst,tt);
+		return unionOf(n,ndom,ncod);
+	}
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
+		auto n=freshName(rhs);
+		while(n in subst) n=n.apos;
+		MapSX!(Id,UnificationResult) nsubst;
+		foreach(k,v;subst) nsubst[k]=v;
+		bool r;
+		if(auto ru=cast(UnionTy)rhs){
+			while(ru.hasFreeVar(n)||n in subst) n=n.apos;
+			r=dom.unify(ru.dom,nsubst,meet)&&relabel(n).cod.unify(ru.relabel(n).cod,nsubst,meet);
+		}else{ // (a member of the union: its bound variable is local to the unification, e.g., `a:=𝔹` for `⋃[n:!ℕ]. a^n` and `𝔹^3`, see `isSubtypeOfUnion`)
+			if(!meet) nsubst[n]=UnificationResult.init;
+			r=relabel(n).cod.unify(rhs,nsubst,meet);
+		}
+		foreach(k,v;nsubst) if(k!=n) subst[k]=v;
+		return r;
+	}
+	override Expression evalImpl(){
+		return unionOf(name,dom.eval(),cod.eval());
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto r=cast(UnionTy)rhs;
+		if(!r||!isEqual(dom,r.dom,&ctx)) return false;
+		auto n=freshName(r);
+		return isEqual(relabel(n).cod,r.relabel(n).cod,&ctx);
+	}
+	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){ // (each member is a subtype of `rhs`: the bound variable is not one of its variables)
+		if(auto ru=cast(UnionTy)rhs) if(isSubtype(dom,ru.dom)){ // (the members at the same value, e.g., for `⋃[a:*]. !a × (a !→ a)`, where unification does not find `a`, see `unionWitness`)
+			auto n=freshName(ru);
+			if(isSubtype(relabel(n).cod,ru.relabel(n).cod,ctx)) return true;
+		}
+		return isSubtype(relabel(freshName(rhs)).cod,rhs,ctx);
+	}
+	override Expression combineTypesImpl(Expression rhs,bool meet){
+		if(isSubtype(rhs,this)) return meet?rhs:this;
+		if(isSubtype(this,rhs)) return meet?this:rhs;
+		if(auto ru=cast(UnionTy)rhs) if(isEqual(dom,ru.dom,null)){
+			auto n=freshName(ru);
+			if(auto ncod=combineTypes(relabel(n).cod,ru.relabel(n).cod,meet)) return unionOf(n,dom,ncod);
+		}
+		auto n=freshName(rhs); // (the members combined with `rhs`, e.g., `!ℕ[]` for `⋃[n:!ℕ]. !ℕ^(n+2)` and `!ℕ^0`)
+		if(auto ncod=combineTypes(relabel(n).cod,rhs,meet)){
+			auto r=unionOf(n,dom,ncod);
+			if(meet?isSubtype(r,this)&&isSubtype(r,rhs):isSubtype(this,r)&&isSubtype(rhs,r)) return r;
+		}
+		return null;
+	}
+	override Expression getClassical(){
+		auto ncod=cod.getClassical();
+		return ncod?unionOf(name,dom,ncod):null;
+	}
+	override Expression getQuantum(){
+		auto ncod=cod.getQuantum();
+		return ncod?unionOf(name,dom,ncod):null;
+	}
+	override bool mayBeClassical(){ return cod.mayBeClassical(); }
+	override bool mayBeQuantum(){ return cod.mayBeQuantum(); }
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return 0; // (as for `ProductTy`, see `freeIdentifiers`)
+	}
+}
+
+Expression unionOf(Id name,Expression dom,Expression cod){ // (`⋃[name:dom]. cod`, normalized as by its evaluation, see `UnionTy.evalImpl`)
+	if(!name||!cod.hasFreeVar(name)) if(!isEmpty(dom)) return cod; // (`⋃[x:τ]. ρ ⊆ ρ`, and `ρ ⊆ ⋃[x:τ]. ρ` with any witness)
+	if(auto vt=cast(VectorTy)cod) if(auto id=cast(Identifier)vt.num) // (`⋃[n:!ℕ]. τ^n` and `τ[]` are mutual subtypes)
+		if(id.id==name&&!vt.next.hasFreeVar(name)&&dom==ℕt(true)) return arrayTy(vt.next);
+	return unionTy(name,dom,cod);
+}
+UnionTy unionTy(Id name,Expression dom,Expression cod)in{
+	assert(dom&&dom.isSemEvaluated());
+	assert(cod&&cod.isSemEvaluated());
+}do{
+	return memoize!((Id name,Expression dom,Expression cod){
+		Identifier id=null;
+		if(name){
+			id=varTy(name,dom);
+			cod=cod.substitute(name,id);
+		}
+		auto p=new Parameter(true,id,dom);
+		p.vtype=p.dtype;
+		p.setSemEvaluated();
+		auto r=new UnionTy(p,cod);
+		r.type=typeOfUnionTy(name,dom,cod);
+		r.setSemEvaluated();
+		return r;
+	})(name,dom,cod);
+}
+Expression typeOfUnionTy(Id name,Expression dom,Expression cod){ // (the values of the bound variable are classical data of the values of the union, as the lengths of arrays, see `typeOfArrayTy`)
+	if(!name||!cod.hasFreeVar(name)) return cod.type;
+	if(auto r=joinTypes(ctypeTy,cod.type)) return r;
+	return cod.type;
+}
+
+/// a witness `w:τ` with `lhs ⊆ ρ[w/x]` for `rhs=⋃[x:τ]. ρ`, from the bounds that unification determines, the least one first, e.g., `n` for `𝔹^n ⊆ ⋃[m:!ℕ]. 𝔹^m`, or `null`
+Expression unionWitness(Expression lhs,UnionTy rhs,out UnionTy relabeled,EqualityContext* ctx=null){
+	auto n=rhs.freshName(lhs);
+	auto u=rhs.relabel(n);
+	relabeled=u;
+	MapSX!(Id,Expression.UnificationResult) subst;
+	subst[n]=Expression.UnificationResult.init;
+	u.cod.unify(lhs,subst,false); // (its bounds are candidates also where it fails, e.g., `𝔹` for `!𝔹 × (𝔹 !→ 𝔹)` and `⋃[a:*]. !a × (a !→ a)`, whose lower bound `!𝔹` from `!a` does not unify with `𝔹`)
+	Expression[] candidates;
+	foreach(w;only(subst[n].bound(false),subst[n].bound(true))){
+		if(!w) continue;
+		candidates~=w;
+		if(isType(w)) foreach(v;only(w.getClassical(),w.getQuantum())) if(v) candidates~=v; // (e.g., `a` for `!a × (a !→ a)`, whose lower bound is `!a`)
+	}
+	foreach(w;candidates) if(w.type&&isSubtype(w.type,u.dom)&&isSubtype(lhs,u.cod.substitute(n,w),ctx)) return w;
+	return null;
+}
+private bool isSubtypeOfUnion(Expression lhs,UnionTy rhs,EqualityContext* ctx){
+	UnionTy u;
+	return !!unionWitness(lhs,rhs,u,ctx);
+}
+
 Expression typeOfVariadicTy(Expression next, bool isClassical)in{
 	assert(next&&next.type,text(next));
 	if(auto tpl=cast(TupleTy)next.type)
@@ -1847,6 +2023,16 @@ struct FreeIdentifiers{
 					if(auto r=dg(id)) return r;
 				foreach(id;pt.cod.freeIdentifiers){
 					if(pt.names.canFind(id.id)) continue;
+					if(auto r=dg(id)) return r;
+				}
+				return 0;
+			}
+			if(auto ut=cast(UnionTy)e){
+				if(auto ty=ut.dom?ut.dom:ut.params[0].dtype)
+					foreach(id;ty.freeIdentifiers)
+						if(auto r=dg(id)) return r;
+				foreach(id;ut.cod.freeIdentifiers){
+					if(ut.name&&id.id==ut.name) continue;
 					if(auto r=dg(id)) return r;
 				}
 				return 0;

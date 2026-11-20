@@ -4036,7 +4036,7 @@ private alias expKindsCommon=AliasSeq!(
 	BitOrExp,BitXorExp,BitAndExp,AndThenExp,OrElseExp,OrExp,XorExp,AndExp,
 	LtExp,LeExp,GtExp,GeExp,EqExp,NeqExp,CatExp,VectorForExp,
 	ClassicalTy,ProductTy,ArrayTy,TupleTy,VectorTy,VariadicTy,TypeTy,
-	QNumericTy,BottomTy,NumericTy,StringTy
+	QNumericTy,BottomTy,NumericTy,StringTy,UnionTy
 );
 static if(language==psi) alias expKinds=AliasSeq!(expKindsCommon,PlaceholderExp);
 else alias expKinds=expKindsCommon;

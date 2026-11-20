@@ -4344,6 +4344,9 @@ Expression defineLhsSemanticImpl(ProductTy e,DefineLhsContext context){
 Expression defineLhsSemanticImpl(VariadicTy e,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(e,context);
 }
+Expression defineLhsSemanticImpl(UnionTy e,DefineLhsContext context){
+	return defineLhsSemanticImplDefault(e,context);
+}
 Expression defineLhsSemanticImpl(TypeTy e,DefineLhsContext context){
 	return defineLhsSemanticImplDefault(e,context);
 }
@@ -11226,6 +11229,28 @@ Expression expressionSemanticImpl(ProductTy fa,ExpSemContext context){
 	fa.type=typeOfProductTy(fa.isConst,fa.names,fa.dom,fa.cod,fa.isSquare,fa.isTuple,captureAnnotation,fa.annotation,fa.isClassical_);
 	static if(language==silq) if(!context.inType&&!fa.isSemError()) sc.pinMentions(fa); // (the value of the type reads the variables that its parameter types and its result type mention)
 	return fa;
+}
+
+Expression expressionSemanticImpl(UnionTy ut,ExpSemContext context){
+	auto sc=context.sc;
+	auto usc=new RawProductScope(sc,Annotation.none,ut);
+	scope(exit) usc.forceClose();
+	declareParameters(ut,true,ut.params,usc); // (`type` if it has no type, as for a square-bracket parameter)
+	if(ut.isSemError()) return ut;
+	auto dom=ut.params[0].vtype;
+	if(dom&&!dom.isClassical()&&!isTypeTy(dom)){
+		sc.error("domain of dependent union type must be classical",ut.params[0].loc);
+		ut.setSemError();
+		return ut;
+	}
+	ut.cod=expressionSemantic(ut.cod,ExpSemContext.forType(usc));
+	auto cod=typeSemantic(ut.cod,usc);
+	if(cod) ut.cod=cod;
+	propErr(ut.cod,ut);
+	if(ut.isSemError()) return ut;
+	ut.type=typeOfUnionTy(ut.name,dom,ut.cod);
+	static if(language==silq) if(!context.inType) sc.pinMentions(ut);
+	return ut;
 }
 
 Expression expressionSemanticImpl(VariadicTy va,ExpSemContext context){

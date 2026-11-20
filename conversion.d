@@ -94,6 +94,31 @@ Conversion refl(Expression from,Expression to=null){
 	return null;
 }
 
+class UnionPackConversion: Conversion{ // (to a member of a union, with a witness for its bound variable, see `unionWitness`)
+	Expression witness;
+	Conversion payload; // (from `from` to the member)
+	this(Expression from,Expression to,Expression witness,Conversion payload)in{
+		assert(cast(UnionTy)to&&witness&&payload&&isNoOpConversion(from,payload.from));
+	}do{
+		this.witness=witness;
+		this.payload=payload;
+		super(from,to);
+	}
+}
+class UnionUnpackConversion: Conversion{ // (from a union: its members are subtypes of `to`, with the bound variable as the witness of the value, see `UnionTy.isSubtypeImpl`)
+	UnionTy relabeled; // (`from`, with a bound variable that `to` does not mention)
+	Conversion payload; // (from the codomain of `relabeled` to `to`)
+	TypeAnnotationType annotationType;
+	this(Expression from,Expression to,UnionTy relabeled,Conversion payload,TypeAnnotationType annotationType)in{
+		assert(cast(UnionTy)from&&relabeled&&payload&&isNoOpConversion(relabeled.cod,payload.from));
+	}do{
+		this.relabeled=relabeled;
+		this.payload=payload;
+		this.annotationType=annotationType;
+		super(from,to);
+	}
+}
+
 class TypeConversion: Conversion{
 	this(Expression from,Expression to)in{
 		assert(from.isTypeTy&&to.isTypeTy);
@@ -874,6 +899,23 @@ private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression fr
 		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
 		if(isTypeTy(from)&&isTypeTy(to)&&isSubtype(from,to)) return new TypeConversion(from,to);
+		static if(language==silq){
+			if(auto fu=cast(UnionTy)from){
+				if(auto tu=cast(UnionTy)to) if(isSubtype(fu.dom,tu.dom)){ // (the members at the same value, see `UnionTy.isSubtypeImpl`)
+					auto n=fu.freshName(tu);
+					auto lu=fu.relabel(n),ru=tu.relabel(n);
+					if(auto r=typeExplicitConversion!true(lu.cod,ru.cod,annotationType))
+						return new UnionUnpackConversion(from,to,lu,new UnionPackConversion(lu.cod,to,varTy(n,lu.dom),r),annotationType);
+				}
+				auto u=fu.relabel(fu.freshName(to));
+				if(auto r=typeExplicitConversion!true(u.cod,to,annotationType)) return new UnionUnpackConversion(from,to,u,r,annotationType);
+			}
+			if(auto tu=cast(UnionTy)to){
+				UnionTy u;
+				if(auto w=unionWitness(from,tu,u))
+					if(auto r=typeExplicitConversion!true(from,u.cod.substitute(u.name,w),annotationType)) return new UnionPackConversion(from,to,w,r);
+			}
+		}
 		if(from.isClassical()&&!to.isClassical()){
 			auto cto=to.getClassical();
 			if(auto r=typeExplicitConversion!true(from,cto,annotationType))
@@ -1039,6 +1081,8 @@ auto dispatchConversion(alias f,alias default_=unknownConvError,T...)(Conversion
 	if(auto nconv=cast(NoOpConversion)conv) return f(nconv,forward!args);
 	if(auto tconv=cast(TransitiveConversion)conv) return f(tconv,forward!args);
 	if(auto tconv=cast(TypeConversion)conv) return f(tconv,forward!args);
+	if(auto uconv=cast(UnionPackConversion)conv) return f(uconv,forward!args);
+	if(auto uconv=cast(UnionUnpackConversion)conv) return f(uconv,forward!args);
 	if(auto qprom=cast(QuantumPromotion)conv) return f(qprom,forward!args);
 	if(auto nconv=cast(NumericConversion)conv) return f(nconv,forward!args);
 	if(auto ncoer=cast(NumericCoercion)conv) return f(ncoer,forward!args);

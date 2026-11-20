@@ -289,6 +289,7 @@ string[2][] simpleTokens =
 	 ["~=",    "ConcatEqual"              ]];
 string[2][] unicodeTokens =
 	[["·",     "Multiply2"                 ],
+	 ["⋃",     "BigUnion"                  ],
 	 ["·=",    "MultiplyEqual2"            ],
 	 ["⊥",     "Bottom",                   ],
 	 ["⊤",     "Top",                      ],
@@ -351,7 +352,7 @@ string[2][] compoundTokens = [];
 
 string[] commonKeywords = ["dat","def","true","false","if","then","else","observe","assert","return","repeat","for","while","in","cobserve","import","Π","Pi","∏","cprod","as","coerce","pun","forget","typeof","_","wild","let"];
 string[] psiKeywords = ["pure"];
-string[] silqKeywords = ["λ","lambda","quantum","const","moved","once","spent","lifted","qfree","mfree","classical","do","with"];
+string[] silqKeywords = ["λ","lambda","quantum","const","moved","once","spent","lifted","qfree","mfree","classical","do","with","Un"];
 
 string[] keywords = commonKeywords~(language==psi?psiKeywords:[])~(language==silq?silqKeywords:[]);
 
