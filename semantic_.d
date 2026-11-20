@@ -969,6 +969,19 @@ BuiltIn isBuiltInCall(CallExp ce){
 	if(!ce) return BuiltIn.none;
 	return isBuiltIn(cast(Identifier)ce.e);
 }
+static if(language==silq)
+bool isLhsMove(CallExp ce,Scope sc){ // (`move` on the left-hand side of a definition or an update: its adjoint, `move` itself, defines what it would move, e.g., `x[0]` for `move(x[0]):=1`; not a reversed call of a declaration named `move`)
+	if(isBuiltInCall(ce)!=BuiltIn.move||ce.isSquare) return false;
+	return !sc.lookup(cast(Identifier)ce.e,false,true,Lookup.probing,null);
+}
+static if(language==silq)
+Expression unwrapLhsMoves(Expression lhs,Scope sc){ // (see `isLhsMove`; in the arguments of reversed calls, see `defineLhsSemanticImpl(CallExp)`)
+	if(auto ce=cast(CallExp)lhs) return isLhsMove(ce,sc)?unwrapLhsMoves(ce.arg,sc):lhs;
+	if(auto tpl=cast(TupleExp)lhs) foreach(ref e;tpl.e) e=unwrapLhsMoves(e,sc);
+	else if(auto vec=cast(VectorExp)lhs) foreach(ref e;vec.e) e=unwrapLhsMoves(e,sc);
+	else if(auto tae=cast(TypeAnnotationExp)lhs) tae.e=unwrapLhsMoves(tae.e,sc);
+	return lhs;
+}
 bool isLhsBuiltInCall(CallExp ce){ // built-ins that can be called on the left-hand side of a definition
 	static if(language==silq) return !!util.among(isBuiltInCall(ce),BuiltIn.qabort,BuiltIn.dummy);
 	else return false;
@@ -2550,11 +2563,18 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 		}
 		collectDefinitions(we.bdy);
 	}
+	bool condReported=false; // (the errors of the condition in an earlier iteration, which the next iterations do not report again)
 	// Setup the condition and body scope for one WhileExp iteration.
 	void setupWhileIter(BlockScope wesc,ref Expression ncond){
 		FunctionDef reason;
 		ncond=we.cond.copy(cargs);
-		ncond=conditionSemantic(we,ncond,wesc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
+		{
+			auto handler=wesc.handler,suppress=condReported;
+			if(suppress) handler.suppress++;
+			scope(exit) if(suppress) handler.suppress--;
+			ncond=conditionSemantic(we,ncond,wesc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
+		}
+		condReported|=ncond.isSemError();
 		static if(language==silq){
 			import ast.type:freeIdentifiers;
 			foreach(id;ncond.freeIdentifiers)
@@ -3503,6 +3523,7 @@ Expression defineLhsSemanticImpl(ReturnExp re,DefineLhsContext context){
 }
 static if(language==silq)
 Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
+	if(isLhsMove(ce,context.sc)) return defineLhsSemantic!isPresemantic(ce.arg,context); // (e.g., in an argument of a reversed call that the reversal defines, `X(move(q)):=r`, see `unwrapLhsMoves`)
 	Expression result=ce;
 	if(isPresemantic?!ce.e.type:!ce.isSemFinal()){
 		result=callSemantic!isPresemantic(ce,context);
@@ -5255,6 +5276,7 @@ private Expression[] arithmeticOperands(Expression e){ // (of an operator on num
 }
 Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq){
+		be.e1=unwrapLhsMoves(be.e1,sc);
 		Identifier[] constIds,checkLiftedIds;
 		CallExp[] initializers;
 		unwrapConstLocals(be.e1,&be.e2,constIds,checkLiftedIds,initializers);
@@ -7000,6 +7022,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	auto context=expSemContext(sc,ConstResult.no,InType.no);
 	CompoundExp[] prologues,epilogues;
 	if(auto le=cast(LetExp)be.e1) if(auto fwd=le.isForward(false)) be.e1=fwd; // (as for definitions)
+	static if(language==silq) be.e1=unwrapLhsMoves(be.e1,sc);
 	Expression oe1=be.e1;
 	static if(language==silq)
 	if(sc.allowsLinear){

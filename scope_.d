@@ -2911,6 +2911,7 @@ abstract class Scope{
 		static if(language==silq) assert(allowsLinear());
 		assert(r.parent is this);
 	}do{
+		static if(language==silq) if(auto ns=cast(NestedScope)this) if(auto log=ns.continuedLog) if(r !in log.scopeCreatedAt) log.scopeCreatedAt[r]=log.branches.length;
 		r.controlDependency.joinWith(controlDependency); // TODO: replace
 		r.quantumControlled|=quantumControlled;
 		r.dependencies=dependencies.dup;

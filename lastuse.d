@@ -95,6 +95,7 @@ final class ContinuedLog{ // (of the conditionals of a scope whose other branch 
 	MapX!(BlockScope,size_t) numbers; // (of the branches, in the order in which they were added)
 	SymbolTable initial; // (the table of the scope when the log was created)
 	MapX!(Declaration,size_t) createdAt; // (the number of branches when a version of a variable of the scope that is not in `initial` was added to its table: a version added after a branch is part of the code after its conditional, see `checkBranchOrder`)
+	MapX!(NestedScope,size_t) scopeCreatedAt; // (the number of branches when a nested scope of the scope was opened, as for `createdAt`)
 	size_t[] startsOf(Scope b){ // (of a branch that the code after its conditional continues, or none)
 		auto bs=cast(BlockScope)b;
 		return bs?starts.get(bs,null):null;
@@ -2621,7 +2622,11 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		auto log=logOf(b);
 		bool inContinuation(Declaration x){ // (a version that the code after the conditional of `b` defines, which continues `b`, see `ContinuedLog.createdAt`)
-			return log&&x.scope_ is b.parent&&log.createdAt.get(x,0)>log.numbers[b];
+			if(!log||!x.scope_) return false;
+			if(x.scope_ is b.parent) return log.createdAt.get(x,0)>log.numbers[b];
+			for(auto s=cast(NestedScope)x.scope_;s;s=cast(NestedScope)s.parent) // (also in a scope that the code after the conditional opens, e.g., `t` in `if d { t:=dup(o); forget(t); }`)
+				if(s.parent is b.parent) return log.scopeCreatedAt.get(s,0)>log.numbers[b];
+			return false;
 		}
 		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
