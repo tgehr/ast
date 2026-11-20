@@ -1288,36 +1288,196 @@ Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref 
 		return false;
 	}
 	if(!pattern(lhs)) return type;
+	return declareWitnesses(type,rhs.loc,witnesses,opened,names,sc);
+}
+static if(language==silq)
+Id witnessName(Id name){ // (unspeakable, see `isUnionWitness`)
+	auto k=freshNameCount();
+	freshName();
+	return Id.intern(text(name?name.str:"x","₍",k,"₎"));
+}
+static if(language==silq)
+Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc){ // (a `const` local for the witness of an opened value)
+	auto vd=new VarDecl(temporaryIdentifier(name,loc));
+	vd.loc=loc;
+	vd.setTemporary(true);
+	vd.vtype=dom;
+	vd.isConst_=true;
+	vd=varDeclSemantic(vd,sc);
+	if(vd.isSemError()) return null;
+	return witnessUse(vd,sc);
+}
+static if(language==silq)
+Identifier witnessUse(VarDecl vd,Scope sc){
+	auto use=new Identifier(vd.getId);
+	use.loc=vd.loc;
+	use.meaning=vd;
+	use.scope_=sc;
+	use.type=vd.vtype;
+	use.constLookup=true; // (as in a type, which reads the witness)
+	use.setSemCompleted();
+	return use;
+}
+static if(language==silq)
+Expression declareWitnesses(Expression type,Location loc,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Scope sc){ // (the member of the unions that `type` is, whose witnesses are declared)
 	while(true){
 		auto ut=cast(UnionTy)type;
 		if(!ut) break;
-		Id name;
-		if(witnesses.length<names.length) name=names[witnesses.length]; // (of the definition that this one is a copy of)
-		else{
-			auto k=freshNameCount();
-			freshName();
-			name=Id.intern(text(ut.name?ut.name.str:"x","₍",k,"₎")); // (unspeakable, see `isUnionWitness`)
-		}
-		auto vd=new VarDecl(temporaryIdentifier(name,rhs.loc));
-		vd.loc=rhs.loc;
-		vd.setTemporary(true);
-		vd.vtype=ut.dom;
-		vd.isConst_=true;
-		vd=varDeclSemantic(vd,sc);
-		if(vd.isSemError()) break;
-		witnesses~=vd;
+		auto use=declareWitness(witnesses.length<names.length?names[witnesses.length]:witnessName(ut.name),ut.dom,loc,sc); // (with the names of the definition that this one is a copy of)
+		if(!use) break;
+		witnesses~=cast(VarDecl)use.meaning;
 		opened~=ut;
-		auto use=new Identifier(vd.getId);
-		use.loc=vd.loc;
-		use.meaning=vd;
-		use.scope_=sc;
-		use.type=ut.dom;
-		use.constLookup=true; // (as in a type, which reads the witness)
-		use.setSemCompleted();
 		type=ut.name?ut.cod.substitute(ut.name,use).eval():ut.cod;
 	}
 	if(witnesses.length) opened~=type;
 	return type;
+}
+static if(language==silq)
+Expression openOperand(Expression e,ExpSemContext context,bool arrays=false){ // (an operand of a union type, or an array with `arrays`, is used as a value of its member, see `OpenExp`)
+	if(context.inType||!e.isSemCompleted()||!e.type||!cast(UnionTy)e.type&&!(arrays&&cast(ArrayTy)e.type)) return e;
+	auto oe=new OpenExp(e);
+	oe.loc=e.loc;
+	oe.declares=false; // (unless it is not a `const` parameter with witnesses)
+	return expressionSemantic(oe,context);
+}
+static if(language==silq)
+Expression expressionSemanticImpl(OpenExp oe,ExpSemContext context){
+	auto sc=context.sc;
+	oe.e=expressionSemantic(oe.e,context);
+	propErr(oe.e,oe);
+	if(oe.isSemError()) return oe;
+	auto ut=cast(UnionTy)oe.e.type, at=cast(ArrayTy)oe.e.type;
+	if(context.inType||!ut&&!at) return oe.e; // (e.g., a copy whose operand does not have the type anymore)
+	if(oe.declares||!openWithKnownWitnesses(oe,sc)){
+		oe.declares=true;
+		oe.witnesses=[];
+		oe.opened=[];
+		if(ut){
+			oe.type=declareWitnesses(ut,oe.loc,oe.witnesses,oe.opened,oe.witnessNames,sc);
+			if(!oe.witnesses.length) return oe.e;
+		}else{
+			auto use=declareWitness(oe.witnessNames.length?oe.witnessNames[0]:witnessName(Id.s!"n"),ℕt(true),oe.loc,sc);
+			if(!use) return oe.e;
+			oe.witnesses=[cast(VarDecl)use.meaning];
+			oe.type=vectorTy(at.next,use.eval());
+			oe.opened=[at,oe.type];
+		}
+	}
+	return oe;
+}
+static if(language==silq)
+bool readsOpenedWitnesses(Expression e,Expression arg){ // (`e` mentions the witnesses that opened values in `arg` declare, see `CallExp.argumentsFirst`)
+	VarDecl[] witnesses;
+	foreach(x;arg.subexpressions) if(auto oe=cast(OpenExp)x) if(oe.declares) witnesses~=oe.witnesses;
+	if(!witnesses.length) return false;
+	foreach(id;e.freeIdentifiers) if(id.meaning&&witnesses.any!(w=>w is id.meaning)) return true;
+	return false;
+}
+static if(language==silq)
+bool consumesRead(Expression e,Expression read){ // (`e` consumes a variable that `read` mentions)
+	foreach(x;e.subexpressions) if(auto id=cast(Identifier)x) if(id.meaning&&!id.constLookup&&!id.implicitDup)
+		foreach(r;read.freeIdentifiers) if(r.meaning&&r.meaning.canonicalSource is id.meaning.canonicalSource) return true;
+	return false;
+}
+static if(language==silq)
+private bool openWithKnownWitnesses(OpenExp oe,Scope sc){ // (the witnesses of a `const` parameter, see `openParameters`, or of another use of the same variable, see `openArguments`, by name for a copy)
+	auto ut=cast(UnionTy)oe.e.type;
+	if(!ut){
+		auto at=cast(ArrayTy)oe.e.type;
+		if(!at||oe.witnessNames.length!=1) return false;
+		auto vd=cast(VarDecl)sc.lookup(new Identifier(oe.witnessNames[0]),false,true,Lookup.probing,null);
+		oe.witnessNames=[];
+		if(!vd||!vd.vtype||!vd.scope_||vd.scope_.getFunction() !is sc.getFunction()||!isSubtype(vd.vtype,ℕt(true))) return false;
+		oe.witnesses=[vd];
+		oe.type=vectorTy(at.next,witnessUse(vd,sc).eval());
+		oe.opened=[at,oe.type];
+		return true;
+	}
+	bool open(VarDecl[] witnesses,Identifier[] uses=null){
+		Expression[] opened;
+		Expression type=ut;
+		foreach(i,vd;witnesses){
+			auto u=cast(UnionTy)type;
+			if(!u||!vd||!vd.vtype||!vd.scope_||!uses&&vd.scope_.getFunction() !is sc.getFunction()||!isSubtype(u.dom,vd.vtype)||!isSubtype(vd.vtype,u.dom)) return false;
+			opened~=u;
+			type=u.name?u.cod.substitute(u.name,uses?uses[i]:witnessUse(vd,sc)).eval():u.cod;
+		}
+		if(!witnesses.length||cast(UnionTy)type) return false;
+		oe.witnesses=witnesses;
+		oe.opened=opened~type;
+		oe.type=type;
+		return true;
+	}
+	if(oe.witnessNames.length&&open(oe.witnessNames.map!(name=>cast(VarDecl)sc.lookup(new Identifier(name),false,true,Lookup.probing,null)).array)) return true;
+	auto id=cast(Identifier)oe.e;
+	auto p=id&&id.meaning?cast(Parameter)id.meaning.canonicalSource:null;
+	oe.witnessNames=[];
+	if(!p||!p.isConst||!p.witnesses.length||!p.scope_) return false;
+	if(p.scope_.getFunction() is sc.getFunction()) return open(p.witnesses);
+	Identifier[] uses; // (of a parameter of an enclosing function, which a nested function captures)
+	foreach(w;p.witnesses){
+		auto use=new Identifier(w.getId);
+		use.loc=oe.loc;
+		auto r=cast(Identifier)expressionSemantic(use,expSemContext(sc,ConstResult.yes,InType.yes));
+		if(!r||r.isSemError()||!r.meaning||r.meaning.canonicalSource !is w.canonicalSource) return false;
+		uses~=r;
+	}
+	return open(p.witnesses,uses);
+}
+static if(language==silq)
+void openParameters(FunctionDef fd,FunctionScope fsc){ // (the parameters of union types are opened at the start of the body: a `moved` one by the definition `p:=p`, a `const` one by the witnesses that its uses read, see `OpenExp`)
+	if(!fd.body_||Id.s!"silq-loop" in fd.attributes||Id.s!"silq-join" in fd.attributes) return; // (functions that the loop lowering generates, whose parameters keep their types, as in the loops)
+	Expression[] definitions;
+	foreach(p;fd.params){
+		auto ut=cast(UnionTy)p.vtype;
+		if(!ut||!p.name||p.name.id==Id.s!"_") continue;
+		if(!p.witnessNames.length) for(Expression t=ut;cast(UnionTy)t;t=(cast(UnionTy)t).cod) p.witnessNames~=witnessName((cast(UnionTy)t).name);
+		p.witnesses=[];
+		p.opened=[];
+		if(p.isConst){
+			if(!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(fsc);
+			declareWitnesses(ut,p.loc,p.witnesses,p.opened,p.witnessNames,fd.body_.blscope_);
+		}else{
+			auto lhs=new Identifier(p.getId), rhs=new Identifier(p.getId);
+			lhs.loc=rhs.loc=p.loc;
+			auto de=new DefineExp(lhs,rhs);
+			de.loc=p.loc;
+			de.witnessNames=p.witnessNames;
+			definitions~=de;
+		}
+	}
+	if(definitions.length) fd.body_.s=definitions~fd.body_.s;
+}
+static if(language==silq)
+CompoundExp openUpdatedVariable(Expression e,Scope sc,ref StmFlags flags,bool resetConst){ // (a variable of a union type whose component a statement updates is opened first, by `x=x`, e.g., after a conditional whose branches give it different witnesses, see `openUnions`)
+	Expression lhs=null;
+	if(auto de=cast(DefineExp)e) lhs=de.e1;
+	else if(auto ae=cast(AAssignExp)e) lhs=ae.e1;
+	if(!lhs) return null;
+	while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+	if(!cast(IndexExp)lhs&&!cast(SliceExp)lhs) return null;
+	for(;;){
+		if(auto idx=cast(IndexExp)lhs) lhs=idx.e;
+		else if(auto sl=cast(SliceExp)lhs) lhs=sl.e;
+		else break;
+	}
+	auto id=cast(Identifier)lhs;
+	if(!id||id.meaning) return null;
+	auto probe=new Identifier(id.id);
+	probe.loc=id.loc;
+	auto decl=cast(VarDecl)sc.lookup(probe,false,true,Lookup.probing,null);
+	if(!decl||decl.isConst||!decl.scope_||decl.scope_.getFunction() !is sc.getFunction()||!cast(UnionTy)typeForDecl(decl)) return null;
+	auto lhsId=new Identifier(id.id), rhsId=new Identifier(id.id);
+	lhsId.loc=rhsId.loc=id.loc;
+	auto open=new AssignExp(lhsId,rhsId);
+	open.loc=id.loc;
+	auto r=new CompoundExp([statementSemantic(open,sc,flags,resetConst)]);
+	r.loc=e.loc;
+	r.s~=statementSemantic(e,sc,flags,resetConst);
+	foreach(x;r.s) propErr(x,r);
+	r.type=unit;
+	if(!r.isSemError()) r.setSemCompleted();
+	return r;
 }
 static if(language==silq)
 Expression lowerNondeterministicType(DefineExp be){ // (`w:=e; t:=uint[w];` for `t:=uint[e]` if `e` is not deterministic: the type variable stands for the type of its own evaluation of `e`, through which the analysis looks, while another evaluation of `uint[e]` can give another type, see `definitionValue`)
@@ -2132,6 +2292,7 @@ ForAggregate forAggregateSemantic(ForAggregate aggr,ExpSemContext context,ForExp
 		return ForAggregate(range);
 	}else if(auto cnt=aggr.isContainer()){
 		cnt.e=expressionSemantic(cnt.e,context.nestConsumed);
+		static if(language==silq) cnt.e=openOperand(cnt.e,context.nestConsumed);
 		propErr(cnt.e,fe);
 		return ForAggregate(cnt);
 	}else{
@@ -2663,6 +2824,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 		scope(exit) if(suppress) handler.suppress--;
 		fcond=conditionSemantic(we,fcond,sc,InType.no); // TODO: treat like `if cond { do { ... } until cond; }` instead.
 	}
+	static if(language==silq) foreach(x;fcond.subexpressions) if(auto oe=cast(OpenExp)x) if(oe.declares) foreach(w;oe.witnesses) if(w.scope_ is sc&&sc.rnsymtab.get(w.getId,null) is w) sc.symtabRemove(w); // (`fcond` is not kept: its witnesses are not defined)
 	propErr(fcond,we);
 	static if(language==silq){
 		import ast.type:freeIdentifiers;
@@ -2976,6 +3138,7 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 	assert(sc.allowsLinear());
 }do{
 	if(e.isSemCompleted()) return e;
+	static if(language==silq) if(auto r=openUpdatedVariable(e,sc,flags,resetConst)) return r;
 	static if(language==silq) auto typeConstBlockSave=sc.saveTypeConstBlocks();
 	e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
 	if(!e.type) e.type=unit;
@@ -4075,6 +4238,9 @@ Expression defineLhsSemanticImpl(TypeAnnotationExp tae,DefineLhsContext context)
 	// TODO: need to do anything else?
 }
 
+Expression defineLhsSemanticImpl(OpenExp oe,DefineLhsContext context){
+	return defineLhsSemanticImplLifted(oe,context);
+}
 Expression defineLhsSemanticImpl(UPlusExp upe,DefineLhsContext context){
 	return defineLhsSemanticImplLifted(upe,context);
 }
@@ -7217,6 +7383,7 @@ Expression opAssignExpSemantic(AAssignExp be,Scope sc,ref StmFlags flags)in{
 	assert(!!ce);
 	auto nce=expressionSemantic(ce,context.nestConsumed);
 	assert(nce is ce||cast(LetExp)nce&&(cast(LetExp)nce).isForward(true) is ce);
+	static if(language==silq) if(cast(OpenExp)ce.e2) be.e2=ce.e2; // (the operand that the operation opens, see `openOperand`)
 	if(auto id=cast(Identifier)be.e1)
 		if(auto nid=cast(Identifier)ce.e1)
 			if(nid.meaning)
@@ -7793,6 +7960,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	}
 	static if(isRhs){
 		ce.e=expressionSemantic(ce.e,context.nestCalled);
+		static if(language==silq) ce.e=openOperand(ce.e,context.nestCalled);
 		static if(language==silq) if(isBuiltInCall(ce)==BuiltIn.move) return moveSemantic(ce,context);
 		static if(language==silq) if(!context.inType&&!cast(Identifier)ce.e) holdValue(ce.e,context.sc); // (while the arguments are evaluated)
 	}else static if(!isPresemantic){
@@ -8167,6 +8335,51 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 			return nft;
 		}
+		static if(language==silq&&isRhs)
+		bool openArguments(ProductTy pft,scope bool delegate() retry,bool explainOpened=false){ // (where the call does not match otherwise, the arguments of union types are opened, and arrays where the parameter is a vector, e.g., `xs` in `len(xs)` for `len[a:type,n:!ℕ](const xs:a^n)` and `xs:!ℕ[]`; `explainOpened`: a failure is explained with the opened arguments, e.g., where their witnesses differ)
+			if(context.inType||ce.isSquare||!ce.arg.isSemCompleted()) return false;
+			auto arg=ce.arg;
+			auto tpl=cast(TupleExp)arg;
+			auto separate=pft.isTuple&&tpl&&tpl.length==pft.nargs;
+			auto originals=separate?tpl.e.dup:[];
+			auto originalType=arg.type;
+			bool opened=false;
+			OpenExp[] variables; // (the arguments that are opened variables)
+			Expression open(Expression a,Expression paramTy,bool isConst){
+				if(!a.type||cast(UnionTy)paramTy) return a;
+				auto arrays=!!cast(VectorTy)paramTy;
+				if(auto id=cast(Identifier)a) if(id.meaning&&(id.constLookup||id.implicitDup)&&!consumes(arg)) foreach(oe;variables){ // (another use of the same variable has the same witnesses, e.g., `xs` in `add(xs,xs)`)
+					auto oid=cast(Identifier)oe.e;
+					if(oid.meaning.canonicalSource !is id.meaning.canonicalSource||oe.e.type!=a.type) continue;
+					auto r=new OpenExp(a);
+					r.loc=a.loc;
+					r.declares=false;
+					r.witnesses=oe.witnesses;
+					r.opened=oe.opened;
+					r.type=oe.type;
+					r.constLookup=a.constLookup;
+					r.setSemCompleted();
+					return r;
+				}
+				auto r=openOperand(a,context.nest(isConst?ConstResult.yes:ConstResult.no),arrays);
+				if(r !is a){
+					opened=true;
+					if(auto oe=cast(OpenExp)r) if(oe.declares) if(auto id=cast(Identifier)oe.e) if(id.meaning) variables~=oe;
+				}
+				return r;
+			}
+			if(separate){
+				foreach(i,ref a;tpl.e) a=open(a,pft.argTy(i),pft.isConst[i]);
+				if(opened) tpl.type=tupleTy(tpl.e.map!(e=>e.type).array);
+			}else if(!pft.isTuple) ce.arg=open(arg,pft.dom,pft.isConst.length?pft.isConst[0]:pft.isSquare);
+			if(!opened) return false;
+			if(retry()||explainOpened) return true;
+			if(separate){
+				tpl.e=originals;
+				tpl.type=originalType;
+			}else ce.arg=arg;
+			return false;
+		}
 		bool tryCall(){
 			if(!ce.isSquare && ft.isSquare){
 				auto nft=inferenceType();
@@ -8202,16 +8415,29 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					if(ce.arg.isSemError()) return true;
 					Expression garg;
 					auto tt=nft.tryMatch(ce.arg,garg,context.sc);
+					static if(language==silq&&isRhs){
+						bool argumentsFirst=false;
+						bool evaluationOrder(){ // (the arguments are evaluated first if the inferred arguments read the witnesses of opened arguments)
+							argumentsFirst=readsOpenedWitnesses(garg,ce.arg);
+							if(!argumentsFirst||cast(Identifier)ce.e&&!consumesRead(ce.arg,garg)) return true;
+							tt=null;
+							return false;
+						}
+						if(tt) evaluationOrder();
+						else openArguments(codft,(){ tt=nft.tryMatch(ce.arg,garg,context.sc); return tt&&evaluationOrder(); },true);
+					}
 					if(!tt) return false;
 					Expression.CopyArgs cargs={ preserveMeanings: true };
 					auto nce=new CallExp(ce.e,garg.copy(cargs),true,false);
 					nce.loc=ce.e.loc;
 					auto nnce=new CallExp(nce,ce.arg,false,false);
 					nnce.loc=ce.loc;
+					static if(language==silq&&isRhs) nnce.argumentsFirst=argumentsFirst;
 					// TODO: this semantic analysis is out-of-order with the one for the arguments
 					static if(isRhs) nnce=cast(CallExp)callSemantic(nnce,context);
 					else nnce=cast(CallExp)callSemantic(nnce,context.expSem);
 					assert(!!nnce);
+					static if(language==silq&&isRhs) nnce.argumentsFirst=argumentsFirst;
 					ce=nnce;
 					return true;
 				}
@@ -8222,6 +8448,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			if(!ce.arg.isSemCompleted()) return true;
 			static if(isRhs){
 				ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc);
+				static if(language==silq) if(!ce.type) openArguments(ft,(){ ce.type=ft.tryApply(ce.arg,ce.isSquare,context.sc); return !!ce.type; });
 				return !!ce.type;
 			}else{
 				auto targs=cast(TupleExp)ce.arg;
@@ -9275,6 +9502,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	static if(language==silq) if(auto r=toplevelProjection(fe,context)) return r;
 	fe.e=expressionSemantic(fe.e,context.nestConst);
+	static if(language==silq) fe.e=openOperand(fe.e,context.nestConst);
 	propErr(fe.e,fe);
 	if(fe.isSemError())
 		return fe;
@@ -9621,6 +9849,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 	}
 	auto aggContext=context.nestAggregate(idx.e);
 	idx.e=expressionSemantic(idx.e,aggContext);
+	static if(language==silq) if(!idx.byRef) idx.e=openOperand(idx.e,aggContext);
 	propErr(idx.e,idx);
 	auto ne=asPreludeType(idx.e,sc); // TODO: overloading
 	if(!ne&&!idx.e.type&&idx.e.isSemError()){ // (error recovery: the expression may also be a function, e.g., `g` in `g[H(0:𝔹)]`: the index is borrowed, as an index, but it does not have to be lifted, as an argument)
@@ -9655,6 +9884,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 		if(holdAggregate) holdValue(idx.e,sc);
 	}
 	idx.a=expressionSemantic(idx.a,context.nestConst);
+	static if(language==silq) idx.a=openOperand(idx.a,context.nestConst);
 	static if(language==silq) if(holdAggregate) idx.e=weakenHeld(idx.e,aggContext);
 	propErr(idx.a,idx);
 	explainSliceSyntax(idx,index,sc); // e.g., `x[1:3]` instead of `x[1..3]`
@@ -9826,12 +10056,15 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 Expression expressionSemanticImpl(SliceExp sl,ExpSemContext context){
 	auto sc=context.sc;
 	sl.e=expressionSemantic(sl.e,context.nestConst);
+	static if(language==silq) if(!sl.byRef) sl.e=openOperand(sl.e,context.nestConst);
 	propErr(sl.e,sl);
 	static if(language==silq) if(!context.inType) holdValue(sl.e,sc);
 	auto lloc=sl.l.loc,rloc=sl.r.loc; // (an analyzed bound can be a shared type, e.g., the result of `typeof(x)`)
 	sl.l=expressionSemantic(sl.l,context.nestConst);
+	static if(language==silq) sl.l=openOperand(sl.l,context.nestConst);
 	propErr(sl.l,sl);
 	sl.r=expressionSemantic(sl.r,context.nestConst);
+	static if(language==silq) sl.r=openOperand(sl.r,context.nestConst);
 	propErr(sl.r,sl);
 	static if(language==silq) if(!context.inType) sl.e=weakenHeld(sl.e,context.nestConst);
 	if(sl.isSemError())
@@ -10597,6 +10830,10 @@ Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
 	static if(language==silq) t1=unfoldTypeVariables(t1),t2=unfoldTypeVariables(t2); // (the structure of the values of type variables, e.g., `!ℕ[]` for `A` after `A:=!ℕ[]`)
 	if(isEmpty(t1)&&isEmpty(t2)) return bottom;
 	if(isEmpty(t1)||isEmpty(t2)) t1=t2=joinTypes(t1,t2);
+	static if(language==silq){ // (the members of unions, which the comparison opens, see `OpenExp`)
+		if(auto ut=cast(UnionTy)t1) return cmpType!eqOnly(ut.cod,t2);
+		if(auto ut=cast(UnionTy)t2) return cmpType!eqOnly(t1,ut.cod);
+	}
 	if(isFixedIntTy(t1) || isFixedIntTy(t2)){
 		if(!(joinTypes(t1,t2)||isNumericTy(t1)||isNumericTy(t2)))
 			return null;
@@ -10658,6 +10895,7 @@ Expression cmpType(bool eqOnly=false)(Expression t1,Expression t2){
 
 private Expression handleUnary(alias determineType)(string name,Expression e,ref Expression e1,ExpSemContext context){
 	e1=expressionSemantic(e1,context.nestConst);
+	static if(language==silq) e1=openOperand(e1,context.nestConst);
 	propErr(e1,e);
 	if(e.isSemError())
 		return e;
@@ -10766,8 +11004,10 @@ private Expression handleBinary(alias determineType)(string name,Expression e,re
 			return expressionSemantic(r, context);
 		}
 	}
+	static if(language==silq) e1=openOperand(e1,context.nestConst);
 	static if(language==silq) if(!context.inType) holdValue(e1,sc);
 	e2 = expressionSemantic(e2, context.nestConst);
+	static if(language==silq) e2=openOperand(e2,context.nestConst);
 	static if(language==silq) if(!context.inType) e1=weakenHeld(e1,context.nestConst);
 	propErr(e2, e);
 	if(!e1.type || !e2.type) {
@@ -10952,8 +11192,10 @@ Expression concatType(Expression t1,Expression t2){
 Expression expressionSemanticImpl(CatExp ce,ExpSemContext context){
 	auto sc=context.sc;
 	ce.e1=expressionSemantic(ce.e1,context);
+	static if(language==silq) ce.e1=openOperand(ce.e1,context);
 	static if(language==silq) if(!context.inType) holdValue(ce.e1,sc);
 	ce.e2=expressionSemantic(ce.e2,context);
+	static if(language==silq) ce.e2=openOperand(ce.e2,context);
 	static if(language==silq) if(!context.inType) ce.e1=weakenHeld(ce.e1,context);
 	propErr(ce.e1,ce);
 	propErr(ce.e2,ce);
@@ -11859,6 +12101,7 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	StmFlags bdyFlags;
 	static if(language==silq){
 		erpBeforeBody(fd); // early-return elimination, stage 1
+		openParameters(fd,fsc);
 	}
 	auto bdy=fd.body_?compoundExpSemantic(fd.body_,fsc,bdyFlags):null;
 	fd.body_=bdy;

@@ -268,6 +268,7 @@ class Parameter: VarDecl{
 		enforce(!args.preserveSemantic||ofType||util.among(sstate,SemState.initial,SemState.error),"TODO");
 		auto r=new Parameter(isConst,copyNameImpl(args),dtype?dtype.copy(args):dtype);
 		if(args.preserveSemantic&&ofType) r.vtype=r.dtype;
+		static if(language==silq) r.witnessNames=witnessNames;
 		return r;
 	}
 	override bool isLinear(){
@@ -275,6 +276,11 @@ class Parameter: VarDecl{
 	}
 	override bool isPinned(){
 		return isConst_;
+	}
+	static if(language==silq){
+		Id[] witnessNames; // (of the witnesses of its union type, which each analysis of the body reuses, see `ast.semantic_.openParameters`)
+		VarDecl[] witnesses; // (of a `const` parameter of a union type, defined at the start of the body, which its uses read, see `OpenExp`)
+		Expression[] opened; // (as for `DefineExp`)
 	}
 	override string toString(){
 		static if(language==silq){

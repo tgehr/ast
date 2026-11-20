@@ -899,30 +899,40 @@ private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression fr
 		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
 		if(isTypeTy(from)&&isTypeTy(to)&&isSubtype(from,to)) return new TypeConversion(from,to);
-		static if(language==silq){
-			if(auto fu=cast(UnionTy)from){
-				if(auto tu=cast(UnionTy)to) if(isSubtype(fu.dom,tu.dom)){ // (the members at the same value, see `UnionTy.isSubtypeImpl`)
-					auto n=fu.freshName(tu);
-					auto lu=fu.relabel(n),ru=tu.relabel(n);
-					if(auto r=typeExplicitConversion!true(lu.cod,ru.cod,annotationType))
-						return new UnionUnpackConversion(from,to,lu,new UnionPackConversion(lu.cod,to,varTy(n,lu.dom),r),annotationType);
+	}else if(isSubtype(from,to)) return true;
+	static if(language==silq){ // (also where the check for a conversion does not compute it, e.g., for `x coerce !ℕ^k` with `x:⋃[n:!ℕ]. !ℕ^(n+1)`)
+		if(auto fu=cast(UnionTy)from){
+			if(auto tu=cast(UnionTy)to) if(isSubtype(fu.dom,tu.dom)){ // (the members at the same value, see `UnionTy.isSubtypeImpl`)
+				auto n=fu.freshName(tu);
+				auto lu=fu.relabel(n),ru=tu.relabel(n);
+				if(auto r=typeExplicitConversion!witness(lu.cod,ru.cod,annotationType)){
+					static if(witness) return new UnionUnpackConversion(from,to,lu,new UnionPackConversion(lu.cod,to,varTy(n,lu.dom),r),annotationType);
+					else return true;
 				}
-				auto u=fu.relabel(fu.freshName(to));
-				if(auto r=typeExplicitConversion!true(u.cod,to,annotationType)) return new UnionUnpackConversion(from,to,u,r,annotationType);
 			}
-			if(auto tu=cast(UnionTy)to){
-				UnionTy u;
-				if(auto w=unionWitness(from,tu,u))
-					if(auto r=typeExplicitConversion!true(from,u.cod.substitute(u.name,w),annotationType)) return new UnionPackConversion(from,to,w,r);
+			auto u=fu.relabel(fu.freshName(to));
+			if(auto r=typeExplicitConversion!witness(u.cod,to,annotationType)){
+				static if(witness) return new UnionUnpackConversion(from,to,u,r,annotationType);
+				else return true;
 			}
 		}
+		if(auto tu=cast(UnionTy)to){
+			UnionTy u;
+			if(auto w=unionWitness(from,tu,u))
+				if(auto r=typeExplicitConversion!witness(from,u.cod.substitute(u.name,w),annotationType)){
+					static if(witness) return new UnionPackConversion(from,to,w,r);
+					else return true;
+				}
+		}
+	}
+	static if(witness){
 		if(from.isClassical()&&!to.isClassical()){
 			auto cto=to.getClassical();
 			if(auto r=typeExplicitConversion!true(from,cto,annotationType))
 				return trans(r,new QuantumPromotion(cto,to));
 		}
 		if(auto r=functionToFunction!true(from,to,annotationType)) return r;
-	}else if(isSubtype(from,to)) return true;
+	}
 	if(auto r=numericToNumeric!witness(from,to,annotationType)) return r;
 	if(annotationType>=annotationType.conversion){
 		if(auto r=ℤtoFixed!witness(from,to,annotationType)) return r;

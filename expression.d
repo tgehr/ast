@@ -488,6 +488,64 @@ class TypeAnnotationExp: Expression{
 	}
 }
 
+class OpenExp: Expression{ // (a value of a union type used as the value of its member, whose witnesses are `const` locals, e.g., `lengths(3)` in `lengths(3)[0]`, or an array used as a vector, whose length is the witness, see `ast.semantic_.openOperand`)
+	Expression e;
+	this(Expression e){ this.e=e; }
+	override OpenExp copyImpl(CopyArgs args){
+		auto r=new OpenExp(e.copy(args));
+		r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
+		r.declares=declares;
+		if(args.preserveSemantic){
+			r.witnesses=witnesses;
+			r.opened=opened;
+		}
+		return r;
+	}
+	override @property string kind(){ return e.kind; }
+	override @property int lprec(){ return e.lprec; }
+	override @property int rprec(){ return e.rprec; }
+	override string toString(){ return e.toString(); }
+	override string toStringImpl(int cl,int cr){ return e.toStringImpl(cl,cr); }
+	override int freeVarsImpl(scope int delegate(Identifier) dg){
+		return e.freeVarsImpl(dg);
+	}
+	override int componentsImpl(scope int delegate(Expression) dg){
+		return dg(e);
+	}
+	override OpenExp substituteImpl(MapSX!(Id,Expression) subst,TypeTransition* tt){
+		auto ne=e.substitute(subst,tt);
+		if(ne is e) return this;
+		auto r=new OpenExp(ne);
+		r.loc=loc;
+		r.witnesses=witnesses;
+		r.opened=opened;
+		r.declares=declares;
+		r.type=type;
+		return r;
+	}
+	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
+		return false;
+	}
+	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
+		auto oe=cast(OpenExp)rhs;
+		if(!oe||!witnesses.equal!((a,b)=>a is b)(oe.witnesses)) return false;
+		return isEqual(e,oe.e,&ctx);
+	}
+	override Annotation getAnnotation(){
+		return e.getAnnotation();
+	}
+	override Expression evalImpl(){ return this; }
+	// semantic information
+	VarDecl[] witnesses; // (of the bound variables of the unions, or of the length of the array)
+	Expression[] opened; // (as for `DefineExp`)
+	Id[] witnessNames; // (as for `DefineExp`)
+	bool declares=true; // (otherwise, they are the witnesses of a `const` parameter, see `ast.semantic_.openParameters`, or of another argument that is the same variable, see `openArguments`)
+	override void setConstLookup(bool constLookup){
+		e.setConstLookup(constLookup);
+		super.setConstLookup(constLookup);
+	}
+}
+
 // workaround for the bug:
 UnaryExp!(Tok!"&") isAddressExp(Expression self){return cast(UnaryExp!(Tok!"&"))self;}
 
@@ -1877,8 +1935,14 @@ class CallExp: Expression{
 		static if(language==silq) this.isClassical_=isClassical_;
 	}
 	override CallExp copyImpl(CopyArgs args){
+		static if(language==silq) if(argumentsFirst&&!args.preserveSemantic) if(auto sq=cast(CallExp)e) if(sq.isSquare){ // (the analysis of the copy infers the arguments again, after it opens the arguments)
+			auto r=new CallExp(sq.e.copy(args),arg.copy(args),isSquare,isClassical_);
+			r.checkReverse=checkReverse;
+			return r;
+		}
 		auto r=new CallExp(e.copy(args),arg.copy(args),isSquare,isClassical_);
 		r.checkReverse=checkReverse;
+		static if(language==silq) if(args.preserveSemantic) r.argumentsFirst=argumentsFirst;
 		return r;
 	}
 	mixin PrecedenceToString;
@@ -2110,6 +2174,7 @@ class CallExp: Expression{
 	// semantic information
 	bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 	Declaration newFunctionVar=null; // `once` → `spent` replacement
+	static if(language==silq) bool argumentsFirst=false; // (the inferred square-bracket arguments of the function read the witnesses of opened arguments, see `ast.semantic_.openOperand`: the arguments are evaluated before the function)
 }
 
 abstract class ABinaryExp: Expression{
@@ -2433,6 +2498,7 @@ class FieldExp: Expression{
 				if(auto len=vt.num.asIntegerConstant())
 					return LiteralExp.makeInteger(len.get);
 		}
+		static if(language==silq) if(!f.meaning&&f.name=="length") if(auto oe=cast(OpenExp)ne) if(auto vt=cast(VectorTy)oe.type) return vt.num; // (which mentions the witnesses)
 		if(ne is e) return this;
 		return new FieldExp(ne,f);
 	}
@@ -4037,7 +4103,7 @@ else alias stmKinds=stmKindsCommon;
 alias exprStmKinds=AliasSeq!(CallExp,TypeAnnotationExp,ObserveExp,CObserveExp,AssertExp,ForgetExp);
 private alias expKindsCommon=AliasSeq!(
 	IteExp,AssertExp,LiteralExp,LetExp,LambdaExp,CallExp,ForgetExp,Identifier,
-	FieldExp,IndexExp,SliceExp,TupleExp,VectorExp,TypeAnnotationExp,
+	FieldExp,IndexExp,SliceExp,TupleExp,VectorExp,TypeAnnotationExp,OpenExp,
 	UPlusExp,UMinusExp,UNotExp,UBitNotExp,
 	AddExp,SubExp,NSubExp,MulExp,DivExp,IDivExp,ModExp,PowExp,
 	BitOrExp,BitXorExp,BitAndExp,AndThenExp,OrElseExp,OrExp,XorExp,AndExp,

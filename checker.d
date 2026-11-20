@@ -157,14 +157,26 @@ class Checker {
 		if(isEntryValue(e)) return;
 		assert(e.isSemCompleted(), format("expression not fully analyzed: << %s >> in state %s", e, e.sstate));
 		assert(e.type && ast_ty.isType(e.type), format("expression type not a type: << %s >> of type %s", e, e.type));
-		visType(e.type);
+		auto late = mentionsUndefinedWitness(e.type); // (the expression defines it, see `ast_exp.OpenExp`)
+		if(!late) visType(e.type);
 		ast_exp.dispatchExp!((auto ref e){
 			this.implExpr(e);
 		})(e);
+		if(late) visType(e.type);
 		if(e.isDeterministic()) {
 			// for assertions
 			e.eval();
 		}
+	}
+
+	bool mentionsUndefinedWitness(ast_exp.Expression type) {
+		foreach(id; ast_ty.freeIdentifiers(type)) {
+			if(!id.meaning || !ast_ty.isUnionWitness(id.meaning)) continue;
+			bool defined = false;
+			for(auto cur = this; cur && !defined; cur = cur.parent) defined = !!cur.vars.getPtr(id.meaning.getId);
+			if(!defined) return true;
+		}
+		return false;
 	}
 
 	void visType(ast_exp.Expression e) {
@@ -277,6 +289,9 @@ class Checker {
 			assert(outer.splitInto == [decl]);
 			getVar(outer, false, "splitVars", e);
 			sc.defineVar(decl, "splitVars", e);
+		}
+		if(auto fd = cast(ast_scope.FunctionScope) e.blscope_.parent ? e.blscope_.parent.getFunction() : null) {
+			if(fd.body_ is e) foreach(p; fd.params) foreach(w; p.witnesses) sc.defineVar(w, "witness of parameter", e); // (see `ast.semantic_.openParameters`)
 		}
 
 		StmtResult r = sc.visCompoundStmt(e);
@@ -595,6 +610,7 @@ class Checker {
 				assert(!!outer1);
 				defineVar(outer0, "mergedVars", bdy);
 			}
+			if(condition) visExitCondition(condition); // (the evaluation that exits the loop)
 			return r;
 		}
 
@@ -611,10 +627,16 @@ class Checker {
 		assert(merged.length == sc.mergedVars.length);
 
 		if(condition) {
-			visExpr(condition); // TODO: treat `while cond { ... }` like `if cond { do { ... } until cond; }` instead.
+			visExitCondition(condition); // TODO: treat `while cond { ... }` like `if cond { do { ... } until cond; }` instead.
 		}
 
 		return r;
+	}
+
+	void visExitCondition(ast_exp.Expression condition) {
+		visExpr(condition);
+		foreach(x; condition.subexpressions) if(auto oe = cast(ast_exp.OpenExp) x) if(oe.declares) // (the witnesses of opened values are locals of the body)
+			foreach(w; oe.witnesses) if(w.scope_ !is nscope) if(auto p = vars.getPtr(w.getId)) *p = null;
 	}
 
 	StmtResult implStmt(ast_exp.BinaryExp!(Tok!":=") e){
@@ -945,6 +967,19 @@ class Checker {
 		visExpr(e.e);
 	}
 
+	void implExpr(ast_exp.OpenExp e) {
+		visExpr(e.e);
+		if(e.declares) foreach(w; e.witnesses) {
+			auto owner = this;
+			while(owner.scopeFree && owner.parent && (w.scope_ !is owner.nscope || owner.parent.nscope is owner.nscope)) owner = owner.parent; // (e.g., a `let` that forgets variables after their last uses)
+			auto strict = owner.strictScope;
+			owner.strictScope = strict && w.scope_ is owner.nscope; // (not for the evaluation of the condition of a `while` loop when it exits the loop, which the scope of the body declares)
+			owner.defineVar(w, "witness of opened value", e);
+			owner.strictScope = strict;
+		}
+		visType(e.type);
+	}
+
 	void visSplit(ref Checker ifTrue, ast_scope.NestedScope scTrue, ref Checker ifFalse, ast_scope.NestedScope scFalse, ast_exp.Expression cause) {
 		// TypeScopes are self-contained scopes carried by types (see
 		// ast.substitute.transitionToType); they have no parent in this scope
@@ -1205,7 +1240,8 @@ class Checker {
 		}
 
 
-		visExpr(targetExpr);
+		if(!callExpr.argumentsFirst) visExpr(targetExpr);
+		scope(success) if(callExpr.argumentsFirst) visExpr(targetExpr); // (see `ast.semantic_.readsOpenedWitnesses`)
 		if(callExpr.newFunctionVar) {
 			assert(callTy.captureAnnotation == ast_ty.CaptureAnnotation.once, format("ERROR: call target not a `once` function on %s: << %s >>", targetExpr.loc, targetExpr));
 			auto newTy = ast_sem.typeForDecl(callExpr.newFunctionVar), expectedTy = callTy.setCaptureAnnotation(ast_ty.CaptureAnnotation.spent);

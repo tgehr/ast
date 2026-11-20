@@ -12,7 +12,7 @@ private alias genericLhsTypes=AliasSeq!(
 	BitOrExp,BitXorExp,BitAndExp,AndThenExp,OrElseExp,
 	OrExp,XorExp,AndExp,LtExp,LeExp,GtExp,GeExp,EqExp,NeqExp,
 	VectorForExp,ClassicalTy,ProductTy,ArrayTy,TupleTy,VectorTy,
-	VariadicTy,TypeTy,QNumericTy,BottomTy,NumericTy,StringTy,UnionTy
+	VariadicTy,TypeTy,QNumericTy,BottomTy,NumericTy,StringTy,UnionTy,OpenExp
 );
 
 Expression transitionToType(Expression e,Scope target){

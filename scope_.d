@@ -3069,7 +3069,11 @@ abstract class Scope{
 					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) return;
 					if(sc.rnsymtab.get(d.getId,null) !is d) return;
 					auto origin=d;
-					while(origin.splitFrom) origin=origin.splitFrom;
+					for(;;){
+						if(origin.splitFrom) origin=origin.splitFrom;
+						else if(origin.mergedFrom.length&&origin.mergedFrom.all!(m=>m.canonicalSource is origin.mergedFrom[0].canonicalSource)) origin=origin.mergedFrom[0]; // (a version that a loop merges, e.g., in a loop with a `return`)
+						else break;
+					}
 					if(!origin.scope_||!origin.scope_.isNestedIn(sc)) return;
 					if(!sc.canForgetAppend(d)){
 						if(!sc.lastUses.betterUnforgettableError(d,sc))

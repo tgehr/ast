@@ -631,7 +631,7 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 		arg.loc=loc;
 		auto ce=new CallExp(oce,arg,false,false);
 		ce.loc=loc;
-		return expressionSemantic(ce,context);
+		return comparisonCallSemantic(ce,context);
 	}
 	void visId(Identifier id){
 		auto cur=id.meaning;
@@ -661,7 +661,16 @@ Expression makeComparisonCall(string name,Expression original,Expression[] args,
 	arg.loc=loc;
 	auto ce=new CallExp(lambda,arg,false,false);
 	ce.loc=loc;
-	return expressionSemantic(ce,context);
+	return comparisonCallSemantic(ce,context);
+}
+private Expression comparisonCallSemantic(CallExp ce,ExpSemContext context){
+	static if(language==silq){ // (the comparison function reads the witnesses of the types of opened operands, see `CallExp.argumentsFirst`)
+		auto tpl=cast(TupleExp)ce.arg;
+		ce.argumentsFirst=tpl&&tpl.e.any!(e=>e.type&&readsOpenedWitnesses(e.type,ce.arg));
+	}
+	auto r=expressionSemantic(ce,context);
+	static if(language==silq) if(auto rce=cast(CallExp)r) rce.argumentsFirst|=ce.argumentsFirst;
+	return r;
 }
 
 Expression[] annotateEmpty(Expression[] args,Expression type,ExpSemContext context){ // (operands of type `⊥` are annotated, so that a lowering keeps all operands)
