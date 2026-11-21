@@ -1043,6 +1043,7 @@ class Checker {
 			t.dFalse = decl;
 		}
 
+		if(auto bs = cast(ast_scope.BlockScope) scTrue) foreach(w; bs.mergeWitnesses) defineVar(w[0], "merge witness", cause); // (see `ast.scope_.Scope.mergeWitnesses`)
 		foreach(decl; scTrue.mergedVars) {
 			auto name = decl.mergedInto.getId;
 			auto t = mergedVars.getPtr(name);
@@ -1076,6 +1077,7 @@ class Checker {
 
 	void visMerge(Checker nested, ast_exp.Expression cause) {
 		auto scNested = nested.nscope;
+		if(auto bs = cast(ast_scope.BlockScope) scNested) foreach(w; bs.mergeWitnesses) defineVar(w[0], "merge witness", cause); // (see `ast.scope_.Scope.mergeWitnesses`)
 
 		foreach(vNested; scNested.mergedVars) {
 			auto outer = vNested.mergedInto;

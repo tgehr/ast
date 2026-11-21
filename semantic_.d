@@ -1479,6 +1479,15 @@ CompoundExp openUpdatedVariable(Expression e,Scope sc,ref StmFlags flags,bool re
 	if(!r.isSemError()) r.setSemCompleted();
 	return r;
 }
+bool mergeBranches(IteExp ite,Scope sc,bool quantumControl){ // (with the names of the witnesses of the merge of the analysis that this one is a copy of, see `Scope.mergeWitnesses`)
+	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_) bs.mergeWitnessNames=ite.mergeWitnessNames;
+	auto r=sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_);
+	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_) if(bs.mergeWitnesses.length){
+		ite.mergeWitnessNames=bs.mergeWitnesses.map!(w=>w[0].getId).array;
+		break;
+	}
+	return r;
+}
 static if(language==silq)
 Expression lowerNondeterministicType(DefineExp be){ // (`w:=e; t:=uint[w];` for `t:=uint[e]` if `e` is not deterministic: the type variable stands for the type of its own evaluation of `e`, through which the analysis looks, while another evaluation of `uint[e]` can give another type, see `definitionValue`)
 	auto lhs=be.e1;
@@ -1572,7 +1581,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
 	auto diverges=condAborts||definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
-	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
+	if(mergeBranches(ite,sc,quantumControl)){
 		sc.note("trying to merge branches of this if expression", ite.loc);
 		ite.setSemError();
 	}
@@ -3685,7 +3694,7 @@ Expression defineLhsSemanticImpl(IteExp ite,DefineLhsContext context){ // TODO: 
 			sc.error("replacing components within conditional expression not yet supported", ite.loc);
 			ite.setSemError();
 		}
-		if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
+		if(mergeBranches(ite,sc,quantumControl)){
 			sc.note("consumed in one branch of if expression", ite.loc);
 			ite.setSemError();
 		}
@@ -8822,7 +8831,7 @@ Expression expressionSemanticImpl(IteExp ite,ExpSemContext context){
 		}
 		if(ite.type&&ite.cond.type&&isEmpty(ite.cond.type)) ite.type=bottom;
 	}
-	if(sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_)){
+	if(mergeBranches(ite,sc,quantumControl)){
 		sc.note("consumed in one branch of if expression", ite.loc);
 		ite.setSemError();
 	}

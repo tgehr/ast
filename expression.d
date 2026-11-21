@@ -2513,6 +2513,7 @@ class IteExp: Expression{
 	override IteExp copyImpl(CopyArgs args){
 		auto r=new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
 		if(args.preserveSemantic) r.condForget=condForget?condForget.copy(args):null;
+		static if(language==silq) r.mergeWitnessNames=mergeWitnessNames;
 		return r;
 	}
 	override string toString(){
@@ -2612,6 +2613,7 @@ class IteExp: Expression{
 		super.setConstLookup(constLookup);
 	}
 	Expression condForget=null; // manual re-derivation of the condition
+	static if(language==silq) Id[] mergeWitnessNames; // (of the witnesses of its merge, which the analysis of a copy reuses, see `ast.scope_.Scope.mergeWitnesses`)
 	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for variables that both branches forget, which the reversal recomputes before the reversed statement, see `ast.reverse.resolveForgets`)
 }
 

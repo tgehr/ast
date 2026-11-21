@@ -3161,7 +3161,7 @@ abstract class Scope{
 			static if(language==silq) if(type) return unfoldTypeVariables(type,(Declaration d)=>d.scope_&&scopes.any!(sc=>d.scope_.isNestedIn(sc)));
 			return type;
 		}
-		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; } // (of an earlier analysis)
+		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; static if(language==silq) bs.mergeWitnesses=null; } // (of an earlier analysis)
 		static if(language==silq) if(!isLoop&&scopes.all!(s=>LastUse.isBranch(s))){ // (see `BlockScope.keptValues`)
 			SetX!Id keptValues;
 			keys.forEach(scopes[0].rnsymtab,(Declaration d0){
@@ -3212,6 +3212,12 @@ abstract class Scope{
 			type=unfoldBranchTypeVariables(type);
 			bool gone(Declaration d){ return d in goneConstLocals||d in goneLocals; }
 			return goneConstLocals.length||goneLocals.length?eliminateVariables(type,&gone,&gone):type;
+		}
+		static if(language==silq){ // (the locals of the branches that the types of several merged variables mention become `const` locals of this scope, witnesses whose values each branch gives, so that the merge keeps the relations between the variables, e.g., the same length of `x:!ℕ^n` and `y:!ℕ^n` for a local `n` of a branch)
+			MapSX!(Id,Expression) jointTypes;
+			VarDecl[] jointWitnesses;
+			if(!isLoop&&!quantumControl&&(goneConstLocals.length||goneLocals.length)&&scopes.length<=2&&scopes.all!(sc=>LastUse.isBranch(sc)&&cast(BlockScope)sc))
+				jointTypes=mergeWitnesses(scopes,keys,&packs,&visibleType,&unfoldBranchTypeVariables,(Id id)=>!!(id in eagerIds),jointWitnesses);
 		}
 		keys.forEach(rnsymtab.dup,(Declaration psym){
 			auto sym=psym;
@@ -3305,6 +3311,7 @@ abstract class Scope{
 							auto nt=ot&&st?joinTypes(ot,st):null;
 							static if(language==silq) if((goneConstLocals.length||goneLocals.length)&&(packs(ot)||packs(st))) // (the join of the types without the locals of the branches keeps the relations between their components, which the locals are packed into unions for, see `ast.type.eliminateVariables`)
 								if(auto vot=visibleType(ot)) if(auto vst=visibleType(st)) if(auto vnt=joinTypes(vot,vst)) nt=vnt;
+							static if(language==silq) if(auto jt=jointTypes.get(sym.getId,null)) nt=jt;
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								splitSym(), sc.split(osym,null);
 								if(sym.isSemCompleted()&&osym.isSemCompleted()){
@@ -3327,7 +3334,9 @@ abstract class Scope{
 					}
 				}
 			}
-			if(symExists&&needMerge&&sym.scope_ is scopes[0]){
+			static if(language==silq) auto jointType=jointTypes.get(sym.getId,null);
+			else enum jointType=null;
+			if(symExists&&needMerge&&sym.scope_ is scopes[0]&&!jointType){
 				auto type=typeForDecl(sym);
 				if(auto gone=goneMention(type)) if(!visibleType(type)){ // (not merged, as for incompatible types on different paths)
 					splitSym();
@@ -3343,7 +3352,7 @@ abstract class Scope{
 			}
 			if(symExists&&needMerge){
 				if(auto ntype=typeForDecl(sym)){
-					if(sym.scope_ is scopes[0]) promoteSym(visibleType(ntype));
+					if(sym.scope_ is scopes[0]) promoteSym(jointType?jointType:visibleType(ntype));
 					auto sources=DefinitionSources.empty;
 					if(nestedControlDependency.isTop) sources=DefinitionSources.init;
 					else foreach(d;nestedControlDependency.dependencies) sources.reads.insert(d);
@@ -3591,7 +3600,76 @@ abstract class Scope{
 		consumedLogged=null;
 		if(keys.all||!leftLogged) declProps.retireAll=true;
 		else if(declProps.tracked) foreach(id;keys.changed~changedHere) if(auto o=oldTable.get(id,null)) if(rnsymtab.get(id,null) !is o) leftTable~=o; // (see `afterStatement`)
+		static if(language==silq) foreach(w;jointWitnesses){
+			import ast.semantic_:varDeclSemantic;
+			varDeclSemantic(w,this);
+		}
 		return errors;
+	}
+	static if(language==silq)
+	private MapSX!(Id,Expression) mergeWitnesses(NestedScope[] scopes,MergeKeys keys,scope bool delegate(Expression) packs,scope Expression delegate(Expression) visibleType,scope Expression delegate(Expression) unfold,scope bool delegate(Id) eager,out VarDecl[] witnesses){ // (the members of the joined union of the types of the merged variables that mention the locals of the branches, for its witnesses, `const` locals of this scope: the values of the witnesses in each branch are its `mergeWitnesses`; not for the variables that are merged before the others, see `eagerIds`)
+		import ast.semantic_:typeForDecl,witnessName,witnessUse,temporaryIdentifier;
+		MapSX!(Id,Expression) r;
+		Id[] names;
+		keys.forEach(scopes[0].rnsymtab.dup,(Declaration d0){
+			auto id=d0.getId;
+			if(eager(id)) return;
+			bool mentions=false;
+			foreach(sc;scopes){
+				auto d=sc.rnsymtab.get(id,null);
+				if(!d||cast(DeadDecl)d||d.isSemError()||!typeForDecl(d)) return;
+				mentions|=packs(typeForDecl(d));
+			}
+			if(mentions) names~=id;
+		});
+		if(!names.length) return r;
+		Expression combined(NestedScope sc){
+			auto types=names.map!(id=>unfold(typeForDecl(sc.rnsymtab.get(id,null)))).array;
+			return types.length==1?types[0]:tupleTy(types);
+		}
+		Expression[] branchTypes;
+		Expression joined=null;
+		foreach(i,sc;scopes){
+			auto t=combined(sc),p=visibleType(t);
+			if(!p) return r;
+			branchTypes~=t;
+			joined=i?joinTypes(joined,p):p;
+			if(!joined) return r;
+		}
+		if(!cast(UnionTy)joined) return r;
+		foreach(id;joined.freeIdentifiers) if(id.meaning&&id.meaning.scope_&&scopes.any!(sc=>id.meaning.scope_.isNestedIn(sc))) return r;
+		Expression[][] values;
+		foreach(i,sc;scopes){
+			Expression[] ws;
+			for(Expression cur=joined;cast(UnionTy)cur;){
+				UnionTy u;
+				auto w=unionWitness(branchTypes[i],cast(UnionTy)cur,u);
+				if(!w) return r;
+				ws~=w;
+				cur=u.name?u.cod.substitute(u.name,w):u.cod;
+			}
+			values~=ws;
+		}
+		auto loc=scopes[0].rnsymtab.get(names[0],null).loc;
+		VarDecl[] decls;
+		Expression type=joined;
+		auto given=(cast(BlockScope)scopes[0]).mergeWitnessNames;
+		while(auto ut=cast(UnionTy)type){
+			auto vd=new VarDecl(temporaryIdentifier(decls.length<given.length?given[decls.length]:witnessName(ut.name),loc));
+			vd.loc=loc;
+			vd.setTemporary(true);
+			vd.vtype=ut.dom;
+			vd.isConst_=true;
+			decls~=vd;
+			type=ut.name?ut.cod.substitute(ut.name,witnessUse(vd,this)).eval():ut.cod;
+		}
+		if(values.any!(ws=>ws.length!=decls.length)||cast(UnionTy)type) return r;
+		auto tt=names.length==1?null:type.isTupleTy();
+		if(names.length!=1&&(!tt||tt.length!=names.length)) return r;
+		foreach(i,id;names) r[id]=tt?tt[i]:type;
+		foreach(i,sc;scopes) (cast(BlockScope)sc).mergeWitnesses=iota(decls.length).map!(k=>q(decls[k],values[i][k])).array;
+		witnesses=decls;
+		return r;
 	}
 	private Id[] deadMergeIds(MergeKeys keys,NestedScope[] scopes,ref MapSX!(Id,DeadMerge) deadMerges){ // (the dead entries that no nested scope changed, but whose names merged dead entries have: their merges are not trivial, see `MergeKeys`)
 		SetX!Id names;
@@ -4829,6 +4907,8 @@ class BlockScope: NestedScope{
 	Expression conditional; // (of a branch, for diagnostics, see `cancelDup`)
 	Q!(LastUse,size_t)[] uncomputations; // (in the branch and its nested scopes, with the numbers of the events of the code after the conditional at them, see `checkBranchOrder` and `LastUse.noteBranchEvent`)
 	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
+	static if(language==silq) Q!(VarDecl,Expression)[] mergeWitnesses; // (the `const` locals that the merge declares in the enclosing scope for the locals of the branches that the types of the merged variables mention, with their values in this branch, see `Scope.merge`)
+	static if(language==silq) Id[] mergeWitnessNames; // (the names of those of the analysis that this one is a copy of, see `ast.semantic_.mergeBranches`)
 	SetX!Id keptValues; // (the variables whose versions the merge of this branch merges although they all keep the value from before the conditional: a `return` on another path consumed it, which gives the branches new versions, e.g., `a` for `if k { } else { if l { return a; } }`; the merged versions do not depend on each other all the same, see `unknownAfterMerge` in `Scope.merge`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
