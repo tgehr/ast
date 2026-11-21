@@ -8993,7 +8993,7 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 	le.type=le.e.type;
 	static if(language==silq) if(bsc&&le.type){ // (the type cannot mention the variables of the `let` expression, as for the merge of a block whose `const` locals a type mentions)
 		bool isLocal(Declaration d){ return !cast(DatDecl)d&&d.scope_&&d.scope_.isNestedIn(bsc)&&d.canonicalSource.scope_&&d.canonicalSource.scope_.isNestedIn(bsc); }
-		if(auto visible=eliminateVariables(le.type,&isLocal)) le.type=visible;
+		if(auto visible=eliminateVariables(le.type,&isLocal,&isLocal)) le.type=visible;
 		else foreach(id;le.type.freeIdentifiers){
 			if(!id.meaning||!isLocal(id.meaning)) continue;
 			sc.error(format("local variable `%s` appears in type `%s` of `let` expression (maybe declare `%s` in the enclosing scope?)",id.name,le.type,id.name),le.e.loc);
@@ -12315,7 +12315,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			return false;
 		}
 		static if(language==silq) if(type){
-			if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
+			if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc),(Declaration d)=>!unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
 				if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
 			foreach(id;type.freeIdentifiers){ // (e.g., `n` in `uint[n]` after `move(n)`, as the parameters that a declared return type mentions are `const`)
 				if(!id.meaning||isBodyLocal(fd,id.meaning)||!unavailableAt(id.meaning,sc)) continue;

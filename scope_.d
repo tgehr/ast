@@ -3062,18 +3062,31 @@ abstract class Scope{
 		auto keys=new MergeKeys(this,scopes);
 		auto numErrors=handler.nerrors;
 		SetX!Declaration goneConstLocals; // (the types of the merged variables do not mention them)
+		SetX!Declaration goneLocals; // (the other classical locals of the branches that the merge does not keep, which unions keep in the types of the merged variables, as the `const` ones, see `packs`)
 		static if(language==silq){
+			static Declaration originOf(Declaration d){
+				for(;;){
+					if(d.splitFrom) d=d.splitFrom;
+					else if(d.mergedFrom.length&&d.mergedFrom.all!(m=>m.canonicalSource is d.mergedFrom[0].canonicalSource)) d=d.mergedFrom[0]; // (a version that a loop merges, e.g., in a loop with a `return`)
+					else break;
+				}
+				return d;
+			}
+			foreach(sc;scopes){
+				keys.forEach(sc.rnsymtab.dup,(Declaration d){
+					if(cast(DeadDecl)d||d.isSemError()||isConstLocal(d)||cast(Parameter)d||!isPackable(d)||sc.rnsymtab.get(d.getId,null) !is d) return;
+					auto o=originOf(d);
+					if(!o.scope_||!o.scope_.isNestedIn(sc)) return;
+					if(scopes.all!((t){ auto td=t.rnsymtab.get(d.getId,null); return td&&!cast(DeadDecl)td; })) return; // (merged)
+					for(auto x=d;x;x=x.splitFrom) goneLocals.insert(x);
+				});
+			}
 			foreach(sc;scopes){
 				if(auto bsc=cast(BlockScope)sc) if(bsc.keepConstLocals) continue;
 				keys.forEach(sc.rnsymtab.dup,(Declaration d){
 					if(cast(DeadDecl)d||d.isSemError()||!isConstLocal(d)) return;
 					if(sc.rnsymtab.get(d.getId,null) !is d) return;
-					auto origin=d;
-					for(;;){
-						if(origin.splitFrom) origin=origin.splitFrom;
-						else if(origin.mergedFrom.length&&origin.mergedFrom.all!(m=>m.canonicalSource is origin.mergedFrom[0].canonicalSource)) origin=origin.mergedFrom[0]; // (a version that a loop merges, e.g., in a loop with a `return`)
-						else break;
-					}
+					auto origin=originOf(d);
 					if(!origin.scope_||!origin.scope_.isNestedIn(sc)) return;
 					if(!sc.canForgetAppend(d)){
 						if(!sc.lastUses.betterUnforgettableError(d,sc))
@@ -3191,13 +3204,14 @@ abstract class Scope{
 			});
 			if(candidates.length) eagerIds=eagerMergeOrder(this,scopes,candidates);
 		}
-		static if(language==silq) bool packsWitness(Expression type){ // (`type` mentions the witness of a union that is a `const` local of a branch, see `isUnionWitness`)
-			if(type) foreach(id;type.freeIdentifiers) if(id.meaning&&id.meaning in goneConstLocals&&isUnionWitness(id.meaning)) return true;
+		static if(language==silq) bool packs(Expression type){ // (`type` mentions a local of a branch whose values a union keeps, e.g., the witness of a union, see `isPackable`)
+			if(type) foreach(id;type.freeIdentifiers) if(id.meaning&&(id.meaning in goneConstLocals&&isPackable(id.meaning)||id.meaning in goneLocals)) return true;
 			return false;
 		}
-		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, as the join with a type in another branch, or `null`)
+		Expression visibleType(Expression type){ // (a supertype of `type` that does not mention the `const` locals of the branches, nor their other classical locals that are not merged, as the join with a type in another branch, or `null`)
 			type=unfoldBranchTypeVariables(type);
-			return goneConstLocals.length?eliminateVariables(type,(Declaration d)=>!!(d in goneConstLocals)):type;
+			bool gone(Declaration d){ return d in goneConstLocals||d in goneLocals; }
+			return goneConstLocals.length||goneLocals.length?eliminateVariables(type,&gone,&gone):type;
 		}
 		keys.forEach(rnsymtab.dup,(Declaration psym){
 			auto sym=psym;
@@ -3289,7 +3303,7 @@ abstract class Scope{
 								if(isEmpty(ot)) if(auto qt=st.getQuantum) st=qt; // (e.g., the version after an erroneous assignment)
 							}
 							auto nt=ot&&st?joinTypes(ot,st):null;
-							static if(language==silq) if(goneConstLocals.length&&(packsWitness(ot)||packsWitness(st))) // (the join of the types without the witnesses of the branches keeps the relations between their components, which the witnesses are packed into unions for, see `ast.type.eliminateVariables`)
+							static if(language==silq) if((goneConstLocals.length||goneLocals.length)&&(packs(ot)||packs(st))) // (the join of the types without the locals of the branches keeps the relations between their components, which the locals are packed into unions for, see `ast.type.eliminateVariables`)
 								if(auto vot=visibleType(ot)) if(auto vst=visibleType(st)) if(auto vnt=joinTypes(vot,vst)) nt=vnt;
 							if(!nt||quantumControl&&!trivialSplit&&nt.hasClassicalComponent()){
 								splitSym(), sc.split(osym,null);

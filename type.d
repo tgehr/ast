@@ -2113,23 +2113,39 @@ bool isUnionWitness(Declaration d){ // (the variable that a definition declares 
 	auto vd=cast(VarDecl)d;
 	return vd&&vd.isTemporary&&vd.getName.canFind("₍");
 }
-private Expression packWitness(Expression type,scope bool delegate(Declaration) eliminated){ // (`⋃[n:τ]. ρ[n/w]` for the last eliminated witness `w:τ` that `type` mentions, whose type does not mention it)
+bool isPackable(Declaration d){ // (a variable whose value a union keeps where the variable leaves its scope: a witness, or a variable of a classical type whose values are not types, see `eliminateVariables`)
+	auto vd=cast(VarDecl)d;
+	return vd&&vd.vtype&&(isUnionWitness(vd)||vd.vtype.isClassical()&&!isTypeTy(vd.vtype));
+}
+bool readByMerge(Declaration d){ // (a classical local whose value the merge reads to convert the merged variables whose types mention it into unions, see `ast.scope_.Scope.merge`)
+	return !cast(Parameter)d&&isPackable(d);
+}
+private Expression packWitness(Expression type,scope bool delegate(Declaration) eliminated,scope bool delegate(Declaration) packed){ // (`⋃[n:τ]. ρ[n/w]` for an eliminated witness or packed variable `w:τ` that `type` mentions and that the types of the others do not mention: the last witness, otherwise the last variable in `type`)
 	static size_t index(Declaration d){
 		auto s=d.getName.findSplitAfter("₍")[1];
 		return s.findSplitBefore("₎")[0].to!size_t;
 	}
+	Declaration[] candidates;
+	foreach(id;type.freeIdentifiers){
+		auto d=id.meaning;
+		if(!d||!eliminated(d)||candidates.canFind!(c=>c is d)||!isUnionWitness(d)&&!(packed&&packed(d)&&isPackable(d))) continue;
+		if(type.freeIdentifiers.any!(o=>o.id==d.getId&&o.meaning !is d)) continue; // (another version of the variable)
+		candidates~=d;
+	}
 	Declaration last=null;
-	foreach(id;type.freeIdentifiers)
-		if(id.meaning&&eliminated(id.meaning)&&isUnionWitness(id.meaning)&&(!last||index(id.meaning)>index(last)))
-			last=id.meaning;
+	foreach(d;candidates){
+		if(candidates.any!(c=>c !is d&&(cast(VarDecl)c).vtype.freeIdentifiers.any!(id=>id.meaning is d))) continue;
+		if(!last||(isUnionWitness(d)?!isUnionWitness(last)||index(d)>index(last):!isUnionWitness(last))) last=d;
+	}
 	if(!last) return type;
-	auto dom=(cast(VarDecl)last).vtype,name=Id.intern(last.getName.findSplitBefore("₍")[0]);
-	while(type.hasFreeVar(name)) name=name.apos;
-	return unionOf(name,dom,type.substitute(last.getId,varTy(name,dom)));
+	auto dom=(cast(VarDecl)last).vtype,name=isUnionWitness(last)?Id.intern(last.getName.findSplitBefore("₍")[0]):last.getId;
+	while(type.freeIdentifiers.any!(id=>id.id==name&&id.meaning !is last)) name=name.apos;
+	auto r=unionOf(name,dom,type.substitute(last.getId,varTy(name,dom)));
+	return isSubtype(type,r)?r:type; // (otherwise, the conversions into the union would not find the witness, e.g., for `!𝔹^dup(t)[dup(i)]`)
 }
 }
 /// a supertype of `type` that does not mention the variables for which `eliminated` holds, as the join with a type that does not mention them, or `null`
-Expression eliminateVariables(Expression type,scope bool delegate(Declaration) eliminated){
+Expression eliminateVariables(Expression type,scope bool delegate(Declaration) eliminated,scope bool delegate(Declaration) packed=null){ // (`packed`: the eliminated variables whose values are available where the type is weakened, which unions keep, see `packWitness`)
 	bool mentions(Expression e){
 		foreach(id;e.freeIdentifiers) if(id.meaning&&eliminated(id.meaning)) return true;
 		return false;
@@ -2137,27 +2153,27 @@ Expression eliminateVariables(Expression type,scope bool delegate(Declaration) e
 	if(!mentions(type)) return type;
 	static if(language==silq){ // (an eliminated type variable stands for its value, see `typeVariableValue`)
 		auto u=unfoldTypeVariables(type,eliminated);
-		if(u !is type) return eliminateVariables(u,eliminated);
-		auto p=packWitness(type,eliminated); // (the values of the type for the values of the witness)
-		if(p !is type) return eliminateVariables(p,eliminated);
+		if(u !is type) return eliminateVariables(u,eliminated,packed);
+		auto p=packWitness(type,eliminated,packed); // (the values of the type for the values of the witness)
+		if(p !is type) return eliminateVariables(p,eliminated,packed);
 		if(auto ut=cast(UnionTy)type){
-			auto dom=eliminateVariables(ut.dom,eliminated),cod=dom?eliminateVariables(ut.cod,eliminated):null;
+			auto dom=eliminateVariables(ut.dom,eliminated,packed),cod=dom?eliminateVariables(ut.cod,eliminated,packed):null;
 			return cod?unionOf(ut.name,dom,cod):null;
 		}
 	}
 	if(auto vt=cast(VectorTy)type){
-		auto next=eliminateVariables(vt.next,eliminated);
+		auto next=eliminateVariables(vt.next,eliminated,packed);
 		if(!next) return null;
 		return mentions(vt.num)?arrayTy(next):vectorTy(next,vt.num);
 	}
 	if(auto at=cast(ArrayTy)type){
-		auto next=eliminateVariables(at.next,eliminated);
+		auto next=eliminateVariables(at.next,eliminated,packed);
 		return next?arrayTy(next):null;
 	}
 	if(auto tt=cast(TupleTy)type){
 		Expression[] types;
 		foreach(t;tt.types){
-			auto w=eliminateVariables(t,eliminated);
+			auto w=eliminateVariables(t,eliminated,packed);
 			if(!w) return null;
 			types~=w;
 		}
