@@ -4142,8 +4142,10 @@ Expression defineLhsSemanticImpl(TupleExp tpl,DefineLhsContext context){
 					else specificityErrorOrDefer(sc,text("inconsistent number of tuple entries for definition: ",tpl.e.length," vs. ",vt.num.eval),tpl.loc,tpl);
 				}
 			}else if(!at&&!isBottom){
-				sc.error(format("cannot unpack type `%s` as a tuple",context.type),tpl.loc);
-				explainUnpacking(tpl,context.initializer,context.type,sc);
+				if(!(context.erroneousInitializer&&cast(UnionTy)ctype)){ // (error recovery: the definition opens a union only if its initializer has no error, see `openUnions`)
+					sc.error(format("cannot unpack type `%s` as a tuple",context.type),tpl.loc);
+					explainUnpacking(tpl,context.initializer,context.type,sc);
+				}
 				tpl.setSemError();
 			}
 		}else{
@@ -4192,7 +4194,7 @@ Expression defineLhsSemanticImpl(VectorExp vec,DefineLhsContext context){
 					else specificityErrorOrDefer(sc,text("inconsistent number of vector entries for definition: ",vec.e.length," vs. ",vt.num.eval),vec.loc,vec);
 				}
 			}else if(!at&&!isBottom){ // (`⊥`: as for a tuple)
-				sc.error(format("cannot unpack type `%s` as a vector",context.type),vec.loc);
+				if(!(context.erroneousInitializer&&cast(UnionTy)ctype)) sc.error(format("cannot unpack type `%s` as a vector",context.type),vec.loc); // (see above)
 				vec.setSemError();
 			}
 		}else{
