@@ -1535,8 +1535,8 @@ void checkFunction(ast_decl.FunctionDef fd) {
 		sc.visExpr(decl.vtype);
 		sc.defineVar(decl, "param", decl.name);
 	}
-	if(fd.rret) sc.visExpr(fd.rret);
-	sc.visExpr(fd.ret);
+	if(fd.rret) sc.visType(fd.rret);
+	sc.visType(fd.ret); // (it can mention a variable that a branch splits after the definition, e.g., in the type of a moved capture, see `currentSplit`)
 	if(fd.body_) {
 		StmtResult r = sc.visStmt(fd.body_);
 		assert(!(r & StmtResult.MayPass), format("ERROR: Function doesn't definitely return: << %s >>", fd));
