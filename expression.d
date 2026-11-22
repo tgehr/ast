@@ -2232,7 +2232,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 	static if(language==silq) static if(op==Tok!":="||op==Tok!"←"){
 		VarDecl[] witnesses; // (of the bound variables of the unions that the value is in, which the definition or the assignment opens, see `openUnions`)
 		Expression[] opened; // (the unions, the inner ones with the witnesses of the outer ones, and the member)
-		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍1₎+1](x)` in a lowered loop)
+		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍₁₎+1](x)` in a lowered loop)
 	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;

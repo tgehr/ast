@@ -1279,7 +1279,7 @@ Expression[] typeWitnesses(Expression e,ref Expression[] rest,ref Location[] loc
 	return r;
 }
 static if(language==silq)
-Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍1₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`; not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
+Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍₁₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`; not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
 	static bool pattern(Expression e){
 		if(auto id=cast(Identifier)e) return !id.implicitDup;
 		if(cast(WildcardExp)e) return true;
@@ -1294,7 +1294,7 @@ static if(language==silq)
 Id witnessName(Id name){ // (unspeakable, see `isUnionWitness`)
 	auto k=freshNameCount();
 	freshName();
-	return Id.intern(text(name?name.str:"x","₍",k,"₎"));
+	return Id.intern(text(name?name.str:"x","₍",lowNum(k),"₎"));
 }
 static if(language==silq)
 Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc){ // (a `const` local for the witness of an opened value)

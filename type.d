@@ -2121,9 +2121,10 @@ bool readByMerge(Declaration d){ // (a classical local whose value the merge rea
 	return !cast(Parameter)d&&isPackable(d);
 }
 private Expression packWitness(Expression type,scope bool delegate(Declaration) eliminated,scope bool delegate(Declaration) packed){ // (`⋃[n:τ]. ρ[n/w]` for an eliminated witness or packed variable `w:τ` that `type` mentions and that the types of the others do not mention: the last witness, otherwise the last variable in `type`)
-	static size_t index(Declaration d){
-		auto s=d.getName.findSplitAfter("₍")[1];
-		return s.findSplitBefore("₎")[0].to!size_t;
+	static size_t index(Declaration d){ // (the number of the witness, see `ast.semantic_.witnessName`)
+		size_t r=0;
+		foreach(dchar c;d.getName.findSplitAfter("₍")[1].findSplitBefore("₎")[0]) r=10*r+(c-'₀');
+		return r;
 	}
 	Declaration[] candidates;
 	foreach(id;type.freeIdentifiers){
