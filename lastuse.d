@@ -576,7 +576,7 @@ final class LastUse{
 		if(auto parent=decl.splitFrom){
 			assert(parent.splitInto.canFind(decl));
 			foreach(split;parent.splitInto){
-				if(split !is decl&&interleavable(split.scope_)&&dep.isTop) continue; // (the other branches keep the version from before the split, see `checkBranchOrder`)
+				if(split !is decl&&interleavable(split.scope_)&&(dep.isTop||dep.dependencies.length)) continue; // (the other branches keep the version from before the split, also where its dependency is known, as on their paths, see `checkBranchOrder`, unless it depends on no variable, which holds on every path)
 				if(auto lu=split.scope_.lastUses.get(split,true)){
 					if(auto source=lu.splitSource)
 						lu=source;
@@ -1165,8 +1165,15 @@ final class LastUse{
 		auto bs=cast(BlockScope)scope_;
 		return bs&&bs.isLoopEntry;
 	}
-	bool forgettableAtSplit(ReturnExp earlyReturn,bool enclosing){ // (a version in a branch, e.g., at an early return after the branch consumed what it depends on, rather than before the split, as it may be used after the conditional; not at an early return in a nested scope (`enclosing`), after which the branch may continue on another path, e.g., `u` for `if c { if d { return x; } forget(u); }`)
-		return kind==Kind.lazySplit&&isBranch(scope_)&&!depAtSplit.isTop&&!(earlyReturn&&enclosing);
+	bool forgettableAtSplit(ReturnExp earlyReturn,bool enclosing,LastUse[] checking=null){ // (a version in a branch, e.g., at an early return after the branch consumed what it depends on, rather than before the split, as it may be used after the conditional; not at an early return in a nested scope (`enclosing`), after which the branch may continue on another path, e.g., `u` for `if c { if d { return x; } forget(u); }`)
+		if(kind!=Kind.lazySplit||!isBranch(scope_)||depAtSplit.isTop||earlyReturn&&enclosing) return false;
+		if(earlyReturn&&!checking.any!(lu=>lu is this)){ // (not if the path that returns forgets a version that it depends on there before the split, e.g., `t` for `w` in `if c { forget(t); } else { x:=X(x); if d { return (x,y); } … }` after `t:=dup(x); u:=dup(t); w:=dup(u);`: the `else` branch forgets `t` on entry, before `x:=X(x)`, so it forgets `w` there as well)
+			foreach(d;depAtSplit.dependencies){
+				auto dlu=scope_.lastUses.here(d);
+				if(dlu&&dlu.kind==Kind.lazySplit&&!dlu.forwardTo&&dlu.dep.isTop&&!dlu.forgettableAtSplit(earlyReturn,enclosing,checking~this)) return false;
+			}
+		}
+		return true;
 	}
 	bool isLastSplitSibling(){
 		auto nsc=cast(NestedScope)scope_;
