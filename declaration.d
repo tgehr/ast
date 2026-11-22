@@ -178,6 +178,7 @@ class VarDecl: Declaration{
 	bool outOfScopeMerged; // (`outOfScopeCause` stands for the conditional whose merge made the dependency unknown, see `Scope.cancelDup`)
 	bool outOfScopeDiverged; // (the merge after branches that diverge, see `OutOfScopeDecl.diverged`)
 	bool outOfScopeKeptValue; // (the merge of versions that keep the value, see `OutOfScopeDecl.keptValue`)
+	bool mergeWitness; // (declared by the merge of a conditional, see `ast.scope_.Scope.mergeWitnesses`)
 	void setTemporary(bool isTemporary){
 		this.isTemporary=isTemporary;
 		if(isTemporary) name.meaning=this;

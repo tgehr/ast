@@ -494,6 +494,7 @@ class OpenExp: Expression{ // (a value of a union type used as the value of its 
 	override OpenExp copyImpl(CopyArgs args){
 		auto r=new OpenExp(e.copy(args));
 		r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
+		r.openedArray=witnesses.length?!!cast(ArrayTy)opened[witnesses.length-1]:openedArray;
 		r.declares=declares;
 		if(args.preserveSemantic){
 			r.witnesses=witnesses;
@@ -539,6 +540,7 @@ class OpenExp: Expression{ // (a value of a union type used as the value of its 
 	VarDecl[] witnesses; // (of the bound variables of the unions, or of the length of the array)
 	Expression[] opened; // (as for `DefineExp`)
 	Id[] witnessNames; // (as for `DefineExp`)
+	bool openedArray; // (as for `DefineExp`)
 	bool declares=true; // (otherwise, they are the witnesses of a `const` parameter, see `ast.semantic_.openParameters`, or of another argument that is the same variable, see `openArguments`)
 	override void setConstLookup(bool constLookup){
 		e.setConstLookup(constLookup);
@@ -2233,6 +2235,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		VarDecl[] witnesses; // (of the bound variables of the unions that the value is in, which the definition or the assignment opens, see `openUnions`)
 		Expression[] opened; // (the unions, the inner ones with the witnesses of the outer ones, and the member)
 		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍₁₎+1](x)` in a lowered loop)
+		bool openedArray; // (the definition that this one is a copy of opened an array, see `ast.semantic_.openedAsArray`)
 	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
@@ -2251,7 +2254,10 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		this(Expression left, Expression right){super(left,right);}
 		override BinaryExp!op copyImpl(CopyArgs args){
 			auto r=new BinaryExp!op(e1.copy(args),e2.copy(args));
-			static if(language==silq) static if(op==Tok!":="||op==Tok!"←") r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
+			static if(language==silq) static if(op==Tok!":="||op==Tok!"←"){
+				r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
+				r.openedArray=witnesses.length?!!cast(ArrayTy)opened[witnesses.length-1]:openedArray;
+			}
 			return r;
 		}
 		override string toStringImpl(int cl,int cr){
@@ -2494,9 +2500,11 @@ class FieldExp: Expression{
 		if(!f.meaning && f.name == "length" && ne.isTotal()){
 			if(auto vec=cast(VectorExp)ne) return LiteralExp.makeInteger(vec.e.length);
 			if(auto tpl=cast(TupleExp)ne) return LiteralExp.makeInteger(tpl.e.length);
-			if(auto vt=cast(VectorTy)ne.type)
+			if(auto vt=cast(VectorTy)ne.type){
 				if(auto len=vt.num.asIntegerConstant())
 					return LiteralExp.makeInteger(len.get);
+				return vt.num; // (as `ast.semantic_.expressionSemanticImpl(FieldExp)`, e.g., `dup(a).length` is `n` for `a:!ℕ^n`)
+			}
 		}
 		static if(language==silq) if(!f.meaning&&f.name=="length") if(auto oe=cast(OpenExp)ne) if(auto vt=cast(VectorTy)oe.type) return vt.num; // (which mentions the witnesses)
 		if(ne is e) return this;
@@ -2513,7 +2521,10 @@ class IteExp: Expression{
 	override IteExp copyImpl(CopyArgs args){
 		auto r=new IteExp(cond.copy(args),then.copy(args),othw?othw.copy(args):null);
 		if(args.preserveSemantic) r.condForget=condForget?condForget.copy(args):null;
-		static if(language==silq) r.mergeWitnessNames=mergeWitnessNames;
+		static if(language==silq){
+			r.mergeWitnessNames=mergeWitnessNames;
+			r.mergeWitnessVars=mergeWitnessVars;
+		}
 		return r;
 	}
 	override string toString(){
@@ -2614,6 +2625,7 @@ class IteExp: Expression{
 	}
 	Expression condForget=null; // manual re-derivation of the condition
 	static if(language==silq) Id[] mergeWitnessNames; // (of the witnesses of its merge, which the analysis of a copy reuses, see `ast.scope_.Scope.mergeWitnesses`)
+	static if(language==silq) Id[] mergeWitnessVars; // (the merged variables of those witnesses, by which a copy reuses them)
 	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for variables that both branches forget, which the reversal recomputes before the reversed statement, see `ast.reverse.resolveForgets`)
 }
 

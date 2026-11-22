@@ -1884,7 +1884,7 @@ abstract class Scope{
 		if(auto fd=getFunction()) return fd.typeBoundary;
 		return null;
 	}
-	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null)in{
+	final bool checkConsumable(Identifier id,Declaration meaning=null,IndexExp consumedComponent=null,bool forget=false)in{
 		assert(id.isSemError||id.meaning||meaning);
 	}do{
 		if(!meaning) meaning=id.meaning;
@@ -1918,7 +1918,9 @@ abstract class Scope{
 			id.setSemForceError();
 			return false;
 		}
-		if(meaning.isConst){
+		static if(language==silq) auto forgetsWitness=forget&&isUnionWitness(meaning); // (a `forget` that the analysis synthesized at its last use, which a later analysis of a copy of the analyzed code repeats, e.g., for the lowering of a loop, see `ast.lastuse.addForget`)
+		else enum forgetsWitness=false;
+		if(meaning.isConst&&!forgetsWitness){
 			if(!meaning.isSemError()){
 				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
 				note("declared `const` here", meaning.loc);
@@ -3603,6 +3605,7 @@ abstract class Scope{
 		static if(language==silq) foreach(w;jointWitnesses){
 			import ast.semantic_:varDeclSemantic;
 			varDeclSemantic(w,this);
+			if(!w.isSemError()&&!dependencyTracked(w)) addDefaultDependency(w); // (as in `ast.semantic_.declareWitness`)
 		}
 		return errors;
 	}
@@ -3636,7 +3639,18 @@ abstract class Scope{
 			joined=i?joinTypes(joined,p):p;
 			if(!joined) return r;
 		}
-		if(!cast(UnionTy)joined) return r;
+		size_t[] arrays; // (an array is a value of `⋃[n:!ℕ]. τ^n`, whose length is a witness, see `ast.semantic_.declareWitnesses`: the components of the tuple of the types of several variables that are arrays, or the array that is the type of a variable)
+		if(!cast(UnionTy)joined){
+			auto jt=names.length==1?null:joined.isTupleTy();
+			if(jt){
+				if(jt.length!=names.length) return r;
+				foreach(j;0..jt.length){
+					if(cast(UnionTy)jt[j]) return r;
+					if(cast(ArrayTy)jt[j]) arrays~=j;
+				}
+			}else if(cast(ArrayTy)joined) arrays=[0];
+			if(!arrays.length) return r;
+		}
 		foreach(id;joined.freeIdentifiers) if(id.meaning&&id.meaning.scope_&&scopes.any!(sc=>id.meaning.scope_.isNestedIn(sc))) return r;
 		Expression[][] values;
 		foreach(i,sc;scopes){
@@ -3648,26 +3662,80 @@ abstract class Scope{
 				ws~=w;
 				cur=u.name?u.cod.substitute(u.name,w):u.cod;
 			}
+			foreach(j;arrays){
+				Expression bt=branchTypes[i];
+				if(names.length!=1){
+					auto tt=bt.isTupleTy();
+					if(!tt||tt.length!=names.length) return r;
+					bt=tt[j];
+				}
+				auto vt=cast(VectorTy)bt;
+				if(!vt) return r;
+				ws~=vt.num;
+			}
 			values~=ws;
 		}
 		auto loc=scopes[0].rnsymtab.get(names[0],null).loc;
 		VarDecl[] decls;
 		Expression type=joined;
-		auto given=(cast(BlockScope)scopes[0]).mergeWitnessNames;
-		while(auto ut=cast(UnionTy)type){
-			auto vd=new VarDecl(temporaryIdentifier(decls.length<given.length?given[decls.length]:witnessName(ut.name),loc));
+		auto given=(cast(BlockScope)scopes[0]).mergeWitnessNames,givenVars=(cast(BlockScope)scopes[0]).mergeWitnessVars;
+		Id[] declVars; // (the merged variable of each witness: the one that is an array, or `Id.init` for the layers of a union)
+		auto used=new bool[](given.length);
+		Id givenName(Id var){ // (the witness of the same variable in the analysis that this one is a copy of, also where the copy merges other variables, e.g., the copies of a loop body that start from more precise types, see `ast.semantic_.openedAsArray`)
+			if(givenVars.length!=given.length) return decls.length<given.length?given[decls.length]:Id.init;
+			foreach(k,v;givenVars) if(!used[k]&&v==var){
+				used[k]=true;
+				return given[k];
+			}
+			return Id.init;
+		}
+		VarDecl declare(Id name,Expression dom,Id var){
+			auto g=givenName(var);
+			auto vd=new VarDecl(temporaryIdentifier(g!=Id.init?g:witnessName(name),loc));
 			vd.loc=loc;
 			vd.setTemporary(true);
-			vd.vtype=ut.dom;
+			vd.vtype=dom;
 			vd.isConst_=true;
+			vd.mergeWitness=true;
 			decls~=vd;
+			declVars~=var;
+			return vd;
+		}
+		Id varName(Id id){
+			if(id==Id.init) return id;
+			auto d=scopes[0].rnsymtab.get(id,null);
+			return d&&d.name?d.name.id:id;
+		}
+		Id layerVar(UnionTy ut){ // (the merged variable whose type mentions the bound variable of the layer)
+			if(names.length==1) return names[0];
+			Expression t=ut.cod;
+			while(auto u=cast(UnionTy)t) t=u.cod;
+			if(auto tt=t.isTupleTy()) if(tt.length==names.length) foreach(j;0..tt.length) if(ut.name&&tt[j].freeIdentifiers.any!(id=>id.id==ut.name)) return names[j];
+			return Id.init;
+		}
+		while(auto ut=cast(UnionTy)type){
+			auto vd=declare(ut.name,ut.dom,varName(layerVar(ut)));
 			type=ut.name?ut.cod.substitute(ut.name,witnessUse(vd,this)).eval():ut.cod;
+		}
+		if(arrays.length){
+			Expression vector(Expression t,Id var){
+				auto at=cast(ArrayTy)t;
+				return vectorTy(at.next,witnessUse(declare(Id.s!"n",ℕt(true),varName(var)),this).eval());
+			}
+			if(auto jt=names.length==1?null:type.isTupleTy()){
+				auto types=iota(jt.length).map!(j=>jt[j]).array;
+				foreach(j;arrays) types[j]=vector(types[j],names[j]);
+				type=tupleTy(types);
+			}else type=vector(type,names.length==1?names[0]:Id.init);
 		}
 		if(values.any!(ws=>ws.length!=decls.length)||cast(UnionTy)type) return r;
 		auto tt=names.length==1?null:type.isTupleTy();
 		if(names.length!=1&&(!tt||tt.length!=names.length)) return r;
 		foreach(i,id;names) r[id]=tt?tt[i]:type;
-		foreach(i,sc;scopes) (cast(BlockScope)sc).mergeWitnesses=iota(decls.length).map!(k=>q(decls[k],values[i][k])).array;
+		foreach(i,sc;scopes){
+			(cast(BlockScope)sc).mergeWitnesses=iota(decls.length).map!(k=>q(decls[k],values[i][k])).array;
+			(cast(BlockScope)sc).mergeWitnessOf=declVars;
+		}
 		witnesses=decls;
 		return r;
 	}
@@ -4909,6 +4977,8 @@ class BlockScope: NestedScope{
 	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
 	static if(language==silq) Q!(VarDecl,Expression)[] mergeWitnesses; // (the `const` locals that the merge declares in the enclosing scope for the locals of the branches that the types of the merged variables mention, with their values in this branch, see `Scope.merge`)
 	static if(language==silq) Id[] mergeWitnessNames; // (the names of those of the analysis that this one is a copy of, see `ast.semantic_.mergeBranches`)
+	static if(language==silq) Id[] mergeWitnessVars; // (the merged variables of those witnesses, see `Scope.mergeWitnesses`)
+	static if(language==silq) Id[] mergeWitnessOf; // (the merged variables of the `mergeWitnesses`)
 	SetX!Id keptValues; // (the variables whose versions the merge of this branch merges although they all keep the value from before the conditional: a `return` on another path consumed it, which gives the branches new versions, e.g., `a` for `if k { } else { if l { return a; } }`; the merged versions do not depend on each other all the same, see `unknownAfterMerge` in `Scope.merge`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)

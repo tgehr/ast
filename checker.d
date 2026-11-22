@@ -1480,7 +1480,10 @@ class Checker {
 			visConv(c.a);
 			visConv(c.b);
 		} else if(auto c = cast(ast_conv.UnionPackConversion)conv) {
+			auto prevInType = inType;
+			inType = true; // (the witness comes from a type, which can mention a variable that a branch splits later, see `currentSplit`)
 			visExpr(c.witness);
+			inType = prevInType;
 			visConv(c.payload);
 		} else if(auto c = cast(ast_conv.UnionUnpackConversion)conv) {
 			auto sc = new Checker(nscope, this);

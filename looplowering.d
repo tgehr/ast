@@ -2400,6 +2400,10 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					foreach(l;logs) if(l.stm==i&&l.dst==X&&l.ite==chain[d]) cond=mkId(l.tmp);
 					auto cite=new IteExp(cond?cond:cp(ite.cond),then,othw);
 					cite.loc=ite.loc;
+					static if(language==silq){ // (which the copied code mentions, see `ast.scope_.Scope.mergeWitnesses`)
+						cite.mergeWitnessNames=ite.mergeWitnessNames;
+						cite.mergeWitnessVars=ite.mergeWitnessVars;
+					}
 					emit(cite);
 					open~=Frame(chain[d],inElse[d],cite,inElse[d]?othw:then);
 					open[$-1].divCont=divergesOtherwise(chain[d],inElse[d]);
@@ -3828,6 +3832,16 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				auto id=cast(Identifier)le.e,did=cast(Identifier)(cast(DefineExp)le.s.s[0]).e1;
 				if(auto t=id.id in names) id.id=did.id=*t;
 			}
+			static if(language==silq){ // (the witnesses that the copies declare, see `ast.semantic_.openUnions`)
+				Id[] renamed(Id[] ids){ return ids.any!(w=>w in names)?ids.map!(w=>names.get(w,w)).array:ids; }
+				if(auto de=cast(DefineExp)x) de.witnessNames=renamed(de.witnessNames);
+				if(auto ae=cast(AssignExp)x) ae.witnessNames=renamed(ae.witnessNames);
+				if(auto oe=cast(OpenExp)x) oe.witnessNames=renamed(oe.witnessNames);
+				if(auto ite=cast(IteExp)x){ // (the witnesses that its merge declares and their merged variables, see `ast.scope_.Scope.mergeWitnesses`)
+					ite.mergeWitnessNames=renamed(ite.mergeWitnessNames);
+					ite.mergeWitnessVars=renamed(ite.mergeWitnessVars);
+				}
+			}
 		});
 		renameItrans(c,names);
 		renameSkipped(c,names);
@@ -3878,7 +3892,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				Id[Id] exitNames; // (the other definitions of the body that are available after the loop get fresh names)
 				foreach(d;loop.exitScope.mergedVars) if(d.mergedInto&&d.mergedInto.name&&definedInLoop(d)){
 					auto v=d.mergedInto.name.id;
-					if(v !in carriedNames&&!outputs.canFind(v)&&v !in exitNames) exitNames[v]=freshName();
+					if(v in carriedNames||outputs.canFind(v)||v in exitNames) continue;
+					static if(language==silq) if(isUnionWitness(d.mergedInto)){ // (the recomputation declares its own, e.g., for `w` in `do{ w:=x:𝔹[]; … }while …;`: the main loop declares the one after the loop)
+						exitNames[v]=freshWitnessName(v);
+						continue;
+					}
+					exitNames[v]=freshName();
 				}
 				auto c=freshName();
 				rst.s=inc(c)~rst.s;
@@ -3958,7 +3977,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						then.s=appendLog(cl,setLoc(LiteralExp.makeBoolean(true)))~then.s;
 						othw.s=appendLog(cl,setLoc(LiteralExp.makeBoolean(false)))~othw.s;
 					}
-					r~=setLoc(new IteExp(cp(ite.cond,copyOf),then,othw));
+					auto nite=setLoc(new IteExp(cp(ite.cond,copyOf),then,othw));
+					static if(language==silq){ // (which the copied code mentions, see `ast.scope_.Scope.mergeWitnesses`)
+						nite.mergeWitnessNames=ite.mergeWitnessNames;
+						nite.mergeWitnessVars=ite.mergeWitnessVars.map!(v=>copyOf.get(v,v)).array;
+					}
+					r~=nite;
 					break;
 				}
 				case K.loop:{
@@ -4046,6 +4070,16 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			stmts~=ml;
 		}else if(mbdy.s.length) stmts~=mkLoop(mbdy);
 	}
+	bool mentionsLocalWitness(Expression t){ // (the witnesses that the loop declares are not available to the recomputations, see `ast.semantic_.openUnions`: the logged value keeps its weakened type)
+		static if(language==silq){
+			bool local(Scope s){
+				if(!s) return false;
+				static if(isDoWhile) if(loop.reset&&loop.reset.blscope_&&s.isNestedIn(loop.reset.blscope_)) return true;
+				return loop.bdy.blscope_&&s.isNestedIn(loop.bdy.blscope_);
+			}
+			return t.freeIdentifiers.any!(id=>id.meaning&&isUnionWitness(id.meaning)&&local(id.meaning.scope_));
+		}else return false;
+	}
 	// the recomputations
 	Id[Id][] renames;
 	foreach(ref sl;slices){
@@ -4069,7 +4103,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			t=freshName();
 			Expression v=dupOf(setLoc(new IndexExp(mkId(logs[li].name),mkId(c))));
-			if(logs[li].stored!is logs[li].type) v=setLoc(new TypeAnnotationExp(v,cp(logs[li].type,names),TypeAnnotationType.coercion));
+			if(logs[li].stored!is logs[li].type&&!mentionsLocalWitness(logs[li].type)) v=setLoc(new TypeAnnotationExp(v,cp(logs[li].type,names),TypeAnnotationType.coercion));
 			return [define(mkId(t),v),inc(c)];
 		}
 		Id[Id] without(Id[Id] names,SetX!Id vars){
@@ -4139,7 +4173,12 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 						}else cond=cp(ite.cond,inner);
 						auto then=block(emitS(n.a,inner));
 						CompoundExp othw=ite.othw?block(emitS(n.b,inner)):null;
-						r~=setLoc(new IteExp(cond,then,othw));
+						auto nite=setLoc(new IteExp(cond,then,othw));
+						static if(language==silq){ // (which the copied code mentions, see `ast.scope_.Scope.mergeWitnesses`)
+							nite.mergeWitnessNames=ite.mergeWitnessNames;
+							nite.mergeWitnessVars=ite.mergeWitnessVars.map!(v=>inner.get(v,v)).array;
+						}
+						r~=nite;
 						break;
 					}
 					case K.loop:{
@@ -5441,6 +5480,7 @@ struct ERPVar{
 	Id name;
 	Expression type;
 	bool lifted,isConst;
+	bool renamed; // (a witness that the analysis of the transformed code declares under another name, see `erpJoinPoint`)
 }
 ERPVar[][size_t] erpJoins; // by location of the statement
 // statements are identified across copies by `Expression.erpId` (0: not identified, e.g. generated code)
@@ -5683,9 +5723,9 @@ struct LoopContinuation{
 		return r;
 	}
 }
-bool erpRecording(Scope sc){
+bool erpRecording(Scope sc,int stage=1){
 	for(auto fd=sc.getFunction();fd;fd=fd.scope_?fd.scope_.getFunction():null)
-		if(fd.erpStage==1) return true;
+		if(fd.erpStage==stage) return true;
 	return false;
 }
 void erpRecordJoin(Expression stm,Scope sc){
@@ -5703,6 +5743,7 @@ void erpRecordJoin(Expression stm,Scope sc){
 			auto type=typeForDecl(vd);
 			if(!type) continue;
 			vars~=ERPVar(vd.name.id,type,!type.isClassical()&&sc.canForget(vd),vd.isPinned);
+			static if(language==silq) vars[$-1].renamed=isUnionWitness(vd)&&!(fun&&fun.params.any!(p=>p.witnessNames.canFind(vd.name.id))); // (not those of the parameters, see `ast.semantic_.openParameters`)
 			decls~=vd;
 		}
 		if(cast(FunctionScope)c) break;
@@ -5744,11 +5785,14 @@ void erpBeforeBody(FunctionDef fd){
 }
 // record join-point information after statement `stms[i]` (originally `original`) has been analyzed
 void erpAfterStatement(Expression original,Expression[] stms,size_t i,Scope sc){
-	if(!erpRecording(sc)) return;
 	// (also for the last statement of a block: the loop lowering may place it before other statements, e.g., the recursive
 	// call at the end of the body of a loop function)
-	if((cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original))
-		erpRecordJoin(original,sc);
+	bool join=(cast(IteExp)original||cast(CompoundExp)original)&&hasLoopWithReturn(original);
+	if(!erpRecording(sc)){
+		if(join&&erpRecording(sc,2)) erpRecordJoin(original,sc); // (again in stage 2, for the lowering of an enclosing loop, which moves the analyzed code after the statement into the join point: that code mentions the witnesses of this analysis, see `erpJoinPoint`)
+		return;
+	}
+	if(join) erpRecordJoin(original,sc);
 	if(isLoopStatement(original)&&containsReturn(original)){
 		auto stm=stms[i];
 		if(auto cmp=cast(CompoundExp)stm) if(cmp.s.length==1&&isLoopStatement(cmp.s[0])) stm=cmp.s[0]; // (see `anchorLoopConstForgets`)
@@ -5955,7 +5999,10 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 		if(auto ret=cast(ReturnExp)x){
 			auto info=erpKey(ret) in erpReturns;
 			if(!info||!info.recorded||info.quantum) ok=false;
-			else foreach(c;info.consumed) if(!isQuantum(c[1])) ok=false;
+			else foreach(c;info.consumed){
+				if(!isQuantum(c[1])) ok=false;
+				static if(language==silq) if(erpMentionsBodyWitness(c[1],fd)) ok=false; // (the placeholder would need its type)
+			}
 		}
 	});
 	static if(language==silq) visitStm(loop,(Expression x){ // (returns within `do`-`while` loops are not made explicit, TODO)
@@ -6359,6 +6406,15 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 	ok=true;
 	return r;
 }
+// whether `t` mentions witnesses of opened values in the body of `fd`, which the analysis of the transformed body declares
+// under other names (not those of the parameters, see `ast.semantic_.openParameters`)
+static if(language==silq)
+bool erpMentionsBodyWitness(Expression t,FunctionDef fd){
+	return t.freeIdentifiers.any!((id){
+		auto vd=cast(VarDecl)id.meaning;
+		return vd&&vd.name&&isUnionWitness(vd)&&vd.scope_&&vd.scope_.getFunction() is fd&&!fd.params.any!(p=>p.witnessNames.canFind(vd.name.id));
+	});
+}
 // builds `def k(params){ rest }` and the call `return k(args)` (in `tail`)
 Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Expression[] tail){
 	import ast.substitute:statementFreeVarsImpl,defineLhsBoundVarsImpl;
@@ -6391,11 +6447,22 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 		}
 	}
 	Parameter[] params;
-	Expression[] args,prologue,coercions;
+	Expression[] args,definitions; // (of the lifted variables and of the values that are coerced back)
 	SetX!Id localNames;
 	foreach(v;vars) localNames.insert(v.name);
+	static if(language==silq){
+		// (the witnesses of opened values are not passed: the analysis of the transformed code declares them under other
+		// names, e.g., `n₍₁₎` for `x:𝔹^n₍₁₎` after `x:=e` with `e:𝔹[]`; the join point opens the values again, with the same
+		// witnesses, see `ast.semantic_.openUnions`)
+		bool renamed(Identifier id){
+			auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+			return vars.any!(w=>w.name==n&&w.renamed);
+		}
+		SetX!Id opened;
+	}
 	foreach(v;vars){
 		if(v.name !in used||v.isConst) continue;
+		static if(language==silq) if(v.renamed) continue;
 		auto pname=new Identifier(v.name);
 		pname.loc=s.loc;
 		auto type=v.type.copy(cargs);
@@ -6403,19 +6470,42 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 		// (types of parameters cannot mention other parameters, and the calls may have other versions of the variables that
 		// the join point captures, e.g., the parameters of a nested join point: such a type is weakened, and the value is
 		// coerced back)
-		if(v.type.freeIdentifiers.any!(id=>id.id in localNames||id.meaning&&id.meaning.name&&id.meaning.name.id in localNames)){
-			if(auto w=weakenedExitType(v.type,localNames)){
-				type=w.copy(cargs);
-				argKind=weakeningAnnotation(v.type,w);
-				auto use=new Identifier(v.name);
-				use.loc=s.loc;
-				use.moved=true;
-				auto coerced=new TypeAnnotationExp(use,v.type.copy(cargs),TypeAnnotationType.coercion);
-				coerced.loc=s.loc;
-				auto def=new DefineExp(new Identifier(v.name),coerced);
-				def.loc=def.e1.loc=s.loc;
-				coercions~=def;
+		bool local(Identifier id){ return id.id in localNames||id.meaning&&id.meaning.name&&id.meaning.name.id in localNames; }
+		Expression target=null; // (the type that the value is coerced back to)
+		Id[] witnesses; // (that the definition of the value declares)
+		if(v.type.freeIdentifiers.any!local){
+			target=v.type;
+			static if(language==silq){
+				foreach(id;v.type.freeIdentifiers){
+					auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+					if(renamed(id)&&n !in opened&&!witnesses.canFind(n)) witnesses~=n;
+				}
+				foreach_reverse(n;witnesses) target=unionOf(n,vars.find!(w=>w.name==n).front.type,target);
 			}
+			Expression weakened=null;
+			if(!target.freeIdentifiers.any!local) weakened=target; // (e.g., `𝔹[]` for `x:𝔹^n₍₁₎`)
+			else if(auto w=weakenedExitType(v.type,localNames)){
+				weakened=w;
+				static if(language==silq) if(cast(UnionTy)target){ target=null; witnesses=[]; } // (the value keeps the weakened type: no coercion to a union)
+			}
+			if(weakened){
+				type=weakened.copy(cargs);
+				argKind=weakeningAnnotation(v.type,weakened);
+				if(target is weakened) target=null;
+			}else{ target=null; witnesses=[]; }
+		}
+		Expression definition(Expression value){
+			if(target){
+				value=new TypeAnnotationExp(value,target.copy(cargs),TypeAnnotationType.coercion);
+				value.loc=s.loc;
+			}
+			auto def=new DefineExp(new Identifier(v.name),value);
+			def.loc=def.e1.loc=s.loc;
+			static if(language==silq){
+				def.witnessNames=witnesses;
+				foreach(n;witnesses) opened.insert(n);
+			}
+			return def;
 		}
 		if(v.lifted){
 			auto tmp=new Identifier(freshName());
@@ -6425,13 +6515,17 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 			params~=param;
 			auto dupe=new CallExp(new Identifier(Id.s!"dup"),tmp.copy(),false,false);
 			dupe.loc=s.loc;
-			auto def=new DefineExp(pname,dupe);
-			def.loc=s.loc;
-			prologue~=def;
+			definitions~=definition(dupe);
 		}else{
 			auto param=new Parameter(false,pname,type);
 			param.loc=s.loc;
 			params~=param;
+			if(target||witnesses.length){
+				auto use=new Identifier(v.name);
+				use.loc=s.loc;
+				use.moved=true;
+				definitions~=definition(use);
+			}
 		}
 		auto arg=new Identifier(v.name);
 		arg.loc=s.loc;
@@ -6441,9 +6535,14 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 			args~=conv;
 		}else args~=arg;
 	}
+	static if(language==silq){ // (the witnesses that the join point captures are not its own to forget, e.g., `n₍₁₎` after `x:=x~x` with `x:𝔹[]` in the body of a loop, where `x` has another type after the statement)
+		SetX!Id captured;
+		foreach(v;vars) if(v.renamed&&v.name in used&&v.name !in opened) captured.insert(v.name);
+		if(captured.length) rest=withoutForgets(rest,captured,true);
+	}
 	auto kname=new Identifier(freshName());
 	kname.loc=s.loc;
-	auto body_=new CompoundExp(prologue~coercions~rest);
+	auto body_=new CompoundExp(definitions~rest);
 	body_.loc=rest[0].loc;
 	auto fd=new FunctionDef(kname,params,true,null,body_);
 	fd.annotation=pure_;

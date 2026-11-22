@@ -1279,7 +1279,7 @@ Expression[] typeWitnesses(Expression e,ref Expression[] rest,ref Location[] loc
 	return r;
 }
 static if(language==silq)
-Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍₁₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`; not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
+Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍₁₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`, also for `e:𝔹[]` (see `opensArray`); not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
 	static bool pattern(Expression e){
 		if(auto id=cast(Identifier)e) return !id.implicitDup;
 		if(cast(WildcardExp)e) return true;
@@ -1288,13 +1288,51 @@ Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref 
 		return false;
 	}
 	if(!pattern(lhs)) return type;
-	return declareWitnesses(type,rhs.loc,witnesses,opened,names,sc);
+	return declareWitnesses(type,rhs.loc,witnesses,opened,names,sc,opensArray(lhs,sc));
+}
+bool mayOverlap(Expression t1,Expression t2){ // (the types have common values, where vectors whose lengths mention witnesses may have any length, as arrays, e.g., `𝔹^n₍₁₎` for `x:=e` with `e:𝔹[]` and `𝔹^3`, see `openUnions`)
+	static Expression unknownLengths(Expression t){
+		if(auto vt=cast(VectorTy)t){
+			auto next=unknownLengths(vt.next);
+			static if(language==silq) if(vt.num.freeIdentifiers.any!(id=>id.meaning&&isUnionWitness(id.meaning))) return arrayTy(next);
+			return next is vt.next?t:vectorTy(next,vt.num);
+		}
+		if(auto at=cast(ArrayTy)t){
+			auto next=unknownLengths(at.next);
+			return next is at.next?t:arrayTy(next);
+		}
+		if(auto tt=cast(TupleTy)t){
+			auto types=tt.types.map!unknownLengths.array;
+			return iota(types.length).all!(i=>types[i] is tt.types[i])?t:tupleTy(types);
+		}
+		return t;
+	}
+	auto u1=unknownLengths(t1),u2=unknownLengths(t2);
+	return joinTypes(u1,u2)&&meetTypes(u1,u2);
+}
+static if(language==silq)
+Expression openedAsArray(Expression rhs,bool openedArray,ExpSemContext context){ // (the value of a copy of a definition or an assignment that opened an array, where it has the type of a vector, e.g., in the copies of the body of a loop that start from the types before the loop, see `ast.looplowering.sliceLoop`: it is opened as the array, with the witness that the copied code mentions, e.g., `n₍₂₅₎` in `y:=y~vector(1,0:𝔹); z:=measure[𝔹^n₍₂₅₎](dup(y));`)
+	if(!openedArray||rhs.isSemError()) return rhs;
+	auto vt=cast(VectorTy)rhs.type;
+	if(!vt) return rhs;
+	auto tae=new TypeAnnotationExp(rhs,arrayTy(vt.next),TypeAnnotationType.annotation);
+	tae.loc=rhs.loc;
+	return expressionSemantic(tae,context);
+}
+static if(language==silq)
+bool opensArray(Expression lhs,Scope sc){ // (a local variable that a definition or an assignment of an array gives the type of a vector whose length is a witness, as for a value of `⋃[n:!ℕ]. τ^n`, see `declareWitnesses`)
+	auto id=cast(Identifier)lhs;
+	return id&&!id.implicitDup&&sc.getFunction();
 }
 static if(language==silq)
 Id witnessName(Id name){ // (unspeakable, see `isUnionWitness`)
 	auto k=freshNameCount();
 	freshName();
 	return Id.intern(text(name?name.str:"x","₍",lowNum(k),"₎"));
+}
+static if(language==silq)
+Id freshWitnessName(Id witness){ // (for a copy of the definition that declares `witness`, e.g., in the same scope)
+	return witnessName(Id.intern(witness.str.findSplitBefore("₍")[0]));
 }
 static if(language==silq)
 Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc){ // (a `const` local for the witness of an opened value)
@@ -1305,6 +1343,7 @@ Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc){ // (a `
 	vd.isConst_=true;
 	vd=varDeclSemantic(vd,sc);
 	if(vd.isSemError()) return null;
+	if(!sc.dependencyTracked(vd)) sc.addDefaultDependency(vd); // (as for a definition, e.g., such that the state of a loop does not change by its first lookup in the body, see `Scope.getDependency`)
 	return witnessUse(vd,sc);
 }
 static if(language==silq)
@@ -1319,15 +1358,21 @@ Identifier witnessUse(VarDecl vd,Scope sc){
 	return use;
 }
 static if(language==silq)
-Expression declareWitnesses(Expression type,Location loc,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Scope sc){ // (the member of the unions that `type` is, whose witnesses are declared)
+Expression declareWitnesses(Expression type,Location loc,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Scope sc,bool arrays=false){ // (the member of the unions that `type` is, whose witnesses are declared; with `arrays`, an array is a vector whose length is the witness, as a value of `⋃[n:!ℕ]. τ^n`)
+	Id name(Id bound){ return witnesses.length<names.length?names[witnesses.length]:witnessName(bound); } // (with the names of the definition that this one is a copy of)
 	while(true){
 		auto ut=cast(UnionTy)type;
 		if(!ut) break;
-		auto use=declareWitness(witnesses.length<names.length?names[witnesses.length]:witnessName(ut.name),ut.dom,loc,sc); // (with the names of the definition that this one is a copy of)
+		auto use=declareWitness(name(ut.name),ut.dom,loc,sc);
 		if(!use) break;
 		witnesses~=cast(VarDecl)use.meaning;
 		opened~=ut;
 		type=ut.name?ut.cod.substitute(ut.name,use).eval():ut.cod;
+	}
+	if(arrays&&!cast(UnionTy)type) if(auto at=cast(ArrayTy)type) if(auto use=declareWitness(name(Id.s!"n"),ℕt(true),loc,sc)){
+		witnesses~=cast(VarDecl)use.meaning;
+		opened~=at;
+		type=vectorTy(at.next,use.eval());
 	}
 	if(witnesses.length) opened~=type;
 	return type;
@@ -1346,6 +1391,11 @@ Expression expressionSemanticImpl(OpenExp oe,ExpSemContext context){
 	oe.e=expressionSemantic(oe.e,context);
 	propErr(oe.e,oe);
 	if(oe.isSemError()) return oe;
+	if(!context.inType){ // (a copy of the opening of an array whose operand has the type of a vector here, see `openedAsArray`)
+		oe.e=openedAsArray(oe.e,oe.openedArray,context);
+		propErr(oe.e,oe);
+		if(oe.isSemError()) return oe;
+	}
 	auto ut=cast(UnionTy)oe.e.type, at=cast(ArrayTy)oe.e.type;
 	if(context.inType||!ut&&!at) return oe.e; // (e.g., a copy whose operand does not have the type anymore)
 	if(oe.declares||!openWithKnownWitnesses(oe,sc)){
@@ -1480,10 +1530,14 @@ CompoundExp openUpdatedVariable(Expression e,Scope sc,ref StmFlags flags,bool re
 	return r;
 }
 bool mergeBranches(IteExp ite,Scope sc,bool quantumControl){ // (with the names of the witnesses of the merge of the analysis that this one is a copy of, see `Scope.mergeWitnesses`)
-	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_) bs.mergeWitnessNames=ite.mergeWitnessNames;
+	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_){
+		bs.mergeWitnessNames=ite.mergeWitnessNames;
+		bs.mergeWitnessVars=ite.mergeWitnessVars;
+	}
 	auto r=sc.merge(quantumControl,ite.then.blscope_,ite.othw.blscope_);
 	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_) if(bs.mergeWitnesses.length){
 		ite.mergeWitnessNames=bs.mergeWitnesses.map!(w=>w[0].getId).array;
+		ite.mergeWitnessVars=bs.mergeWitnessOf;
 		break;
 	}
 	return r;
@@ -3770,7 +3824,7 @@ Expression defineLhsSemanticImpl(CallExp ce,DefineLhsContext context){
 					}
 					if(!ce.type) ce.type=ft.cod;
 					if(context.type&&!isSubtype(context.type,ce.type)){
-						if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){
+						if(!mayOverlap(context.type,ce.type)){
 							sc.error(format("cannot call reversed function with return type `%s` with a result type of `%s`",ce.type,context.type),ce.loc);
 							ok=false;
 						}else if(!isForgettableCallLhs(ce)){
@@ -4509,7 +4563,7 @@ Expression defineLhsSemanticImpl(CatExp ce,DefineLhsContext context){
 				ce.setSemError();
 			}
 		}else if(context.type&&!isSubtype(context.type,ce.type)){
-			if(!joinTypes(context.type,ce.type)||!meetTypes(context.type,ce.type)){ // TODO: ok?
+			if(!mayOverlap(context.type,ce.type)){ // TODO: ok?
 				sc.error(format("incompatible types for split: `%s` vs `%s`",ce.type,context.type),ce.loc);
 				ce.setSemError();
 			}else foreach(i,e;[ce.e1,ce.e2]){ // (parts are converted to the types of the defined locations)
@@ -5583,11 +5637,12 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 	bool attemptLowering=sc.allowsLinear;
 	void updateLhs(){
 		if(be.e2.type){
+			static if(language==silq) be.e2=openedAsArray(be.e2,be.openedArray,context);
 			auto initializer=be.e2;
 			if(initializer.isSemCompleted()&&initializer.isConstant())
 				if(auto folded=initializer.eval()) initializer=folded;
 			auto lhsType=be.e2.type;
-			static if(language==silq) if(!be.e2.isSemError()&&cast(UnionTy)lhsType&&!(cast(Identifier)be.e1&&(cast(Identifier)be.e1).byRef)){ // (not a variable that stands for a component, which keeps its type, e.g., during the update of the component, see `buildIndexReplacements`)
+			static if(language==silq) if(!be.e2.isSemError()&&(cast(UnionTy)lhsType||cast(ArrayTy)lhsType)&&!(cast(Identifier)be.e1&&(cast(Identifier)be.e1).byRef)){ // (not a variable that stands for a component, which keeps its type, e.g., during the update of the component, see `buildIndexReplacements`)
 				lhsType=openUnions(be.e1,be.e2,be.witnesses,be.opened,be.witnessNames,lhsType,sc);
 				if(lhsType !is be.e2.type) initializer=null;
 			}
@@ -7066,8 +7121,9 @@ Expression assignExpSemantic(AssignExp ae,Scope sc,ref StmFlags flags){
 			checkCompat(tae.e,type); // TODO: ok?
 		}else assert(ae.isSemError());
 	}
+	static if(language==silq) if(!ae.isSemError()) ae.e2=openedAsArray(ae.e2,ae.openedArray,expSemContext(sc,ConstResult.no,InType.no));
 	auto rhsType=ae.e2.type;
-	static if(language==silq) if(!ae.isSemError()&&cast(UnionTy)rhsType) rhsType=openUnions(ae.e1,ae.e2,ae.witnesses,ae.opened,ae.witnessNames,rhsType,sc); // (a strong update, as a definition)
+	static if(language==silq) if(!ae.isSemError()&&(cast(UnionTy)rhsType||cast(ArrayTy)rhsType)) rhsType=openUnions(ae.e1,ae.e2,ae.witnesses,ae.opened,ae.witnessNames,rhsType,sc); // (a strong update, as a definition)
 	if(rhsType) checkCompat(ae.e1,rhsType);
 	enum Stage{
 		collectDeps,
@@ -8144,6 +8200,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 				}
 				foreach(id;exp.freeVars){
 					if(!id.meaning) continue;
+					static if(language==silq) if(isUnionWitness(id.meaning)&&id.meaning.scope_&&id.meaning.scope_ !is sc&&id.meaning.scope_.isNestedIn(sc)) continue; // (a witness that a function within the argument declares, which `freeVars` does not know as bound, see `openUnions`; not other variables of nested scopes, e.g., a capture that a closure in the argument moves)
 					if(id.constLookup||id.implicitDup){
 						typeConstBlockDecl(id.meaning,ce,sc);
 					}else{
@@ -9231,7 +9288,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					id.setSemError();
 					return false;
 				}
-				if(!sc.checkConsumable(id,meaning)){
+				if(!sc.checkConsumable(id,meaning,null,true)){
 					id.setSemError();
 					return false;
 				}
@@ -9559,6 +9616,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 		if(fe.f.name=="length"&&fe.e.isTotal()){
 			auto ety=unfoldTypeVariable(fe.e.type); // (the structure of the value of a type variable)
 			if(auto vt=cast(VectorTy)ety){
+				static if(language==silq) if(vt.num.freeIdentifiers.any!(id=>cast(VarDecl)id.meaning&&(cast(VarDecl)id.meaning).mergeWitness)) return r; // (the copies of the analyzed code declare the witness of a merge only where they merge the value, e.g., `y` before `s+=y.length` in a loop body that the removal of loops copies: the evaluation folds the length, see `FieldExp.evalImpl`)
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=vt.num.copy(cargs);
 				len.loc=fe.loc;
