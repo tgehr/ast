@@ -456,6 +456,13 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			if(auto fd=cast(FunctionDef)x) if(fd.name) strongDef(fd.name.id);
 			if(cast(AssertExp)x) info.effects=true;
+			static if(language==silq){ // (the witnesses that the statement declares where it opens a value, e.g., `n₍₁₎` for `a:=a~[2]` with `a:!ℕ[]`, which the analyzed code mentions instead of `a.length`)
+				VarDecl[] witnesses;
+				if(auto de=cast(DefineExp)x) witnesses=de.witnesses;
+				else if(auto ae=cast(AssignExp)x) witnesses=ae.witnesses;
+				else if(auto oe=cast(OpenExp)x) if(oe.declares) witnesses=oe.witnesses;
+				foreach(w;witnesses) if(w&&w.name) strongDef(w.name.id);
+			}
 			if(auto de=cast(DefineExp)x) addDefs(de.e1,true);
 			else if(auto we=cast(WithExp)x){
 				visitStm(we.trans,(Expression y){
@@ -6389,12 +6396,17 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok,Se
 		Expression kdef=null;
 		if(rest.length){
 			auto vars=erpKey(s) in erpJoins;
-			if(!vars) return null;
-			bool rok;
-			auto ntrest=erpTransformImpl(rest,tail,rok,loopCaptured);
-			if(!rok) return null;
-			kdef=erpJoinPoint(s,ntrest,*vars,ntail,loopCaptured);
-			if(!kdef) return null;
+			auto ite=cast(IteExp)s;
+			if(!vars&&ite&&ite.othw&&endsWithReturn(ite.then)!=endsWithReturn(ite.othw)){ // (a conditional without the variables of a join point, e.g., the exit test `if c{}else{ exit }` of a `do`-`while` loop with a continuation, which the lowering synthesizes: the rest only continues the branch that does not return)
+				(endsWithReturn(ite.then)?ite.othw:ite.then).s~=rest;
+			}else{
+				if(!vars) return null;
+				bool rok;
+				auto ntrest=erpTransformImpl(rest,tail,rok,loopCaptured);
+				if(!rok) return null;
+				kdef=erpJoinPoint(s,ntrest,*vars,ntail,loopCaptured);
+				if(!kdef) return null;
+			}
 		}
 		bool transformBlock(CompoundExp b){
 			bool bok;
