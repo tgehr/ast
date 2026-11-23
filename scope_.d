@@ -407,13 +407,15 @@ abstract class Scope{
 	}
 	final bool tryPrepareRedefine(Declaration newDecl,Declaration oldDecl){
 		static if(language==silq) if(blockedRedefinitionError(newDecl,oldDecl)) return false;
-		if(oldDecl.scope_&&lastUses.canRedefine(oldDecl)){
+		static if(language==silq) auto decayed=cast(VarDecl)oldDecl.canonicalSource&&(cast(VarDecl)oldDecl.canonicalSource).decayed&&!lastUses.canRedefine(oldDecl)&&lastUses.canForget(oldDecl,false,false); // (forgotten after its last use, as if it had been forgotten early instead of its decay, see `ast.semantic_.decayTypeMentions`)
+		else enum decayed=false;
+		if(oldDecl.scope_&&(decayed||lastUses.canRedefine(oldDecl))){
 			static if(language==silq) if(consumesOutsideType(oldDecl,letTypeBoundary())){ // (the previous version is forgotten)
 				if(!oldDecl.isSemError()&&!newDecl.isSemError()) error(format("cannot consume `%s` in a type",oldDecl.name),newDecl.name.loc);
 				newDecl.setSemError();
 				return false;
 			}
-			lastUses.forget(oldDecl,true);
+			lastUses.forget(oldDecl,!decayed);
 			return true;
 		}
 		if(!oldDecl.isSemError()&&!newDecl.isSemError()) redefinitionError(newDecl, oldDecl);
@@ -3961,6 +3963,13 @@ abstract class Scope{
 					})){
 						foreach(d;deps) if(!(*forgetBefore).canFind(d)) *forgetBefore~=d;
 						mayChange=true;
+					}else static if(language==silq) if(freed&&deps.length&&deps.all!((d){ auto dtype=typeForDecl(d); return dtype&&dtype.isClassical(); })){
+						// (blocked by classical variables that the loop mentions, whose types decay before the change, e.g., `x` in
+						// `x:=vector(n,…); do{ forget(n); … }while …;`, see `ast.semantic_.decayTypeMentions`: as for the variables that
+						// the code after the loop consumes, the types of the parameters that mention it are weakened, see `lowerLoop`)
+						r[1]~=q(id,decl,typeCopy(type),true);
+						freed.insert(decl.name.id);
+						continue;
 					}
 				}
 				if(mayChange) mayChange=splitIntoLoop;
@@ -4002,6 +4011,11 @@ abstract class Scope{
 			import ast.semantic_: typeForDecl;
 			foreach(_,decl;rnsymtab) if(!cast(DeadDecl)decl&&decl.name&&decl.name.id==name) return typeForDecl(decl);
 			return null;
+		}
+		Declaration[] declarations(){
+			Declaration[] r;
+			foreach(_,decl;rnsymtab) if(!cast(DeadDecl)decl) r~=decl;
+			return r;
 		}
 		// (a variable comes after the variables whose types mention it in this state)
 		Q!(Id,Declaration,Expression,bool)[] orderedByTypeMentions(Q!(Id,Declaration,Expression,bool)[] params){

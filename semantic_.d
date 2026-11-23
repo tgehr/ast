@@ -1529,6 +1529,73 @@ CompoundExp openUpdatedVariable(Expression e,Scope sc,ref StmFlags flags,bool re
 	if(!r.isSemError()) r.setSemCompleted();
 	return r;
 }
+static if(language==silq)
+Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool resetConst){ // (before a statement that updates a classical variable that the types of live classical variables mention, e.g., `n=3` for `x:!ℕ^n`, those types decay into the unions over the variable that they are members of, which keep its old value as their witness, by the definition `(x,…):=(x,…):⋃[n:!ℕ]. …`, which opens them, see `openUnions`: the analyzed definitions)
+	Identifier[] targets;
+	void collect(Expression lhs){
+		while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+		if(auto id=cast(Identifier)lhs) targets~=id;
+		else if(auto tpl=cast(TupleExp)lhs) foreach(x;tpl.e) collect(x);
+	}
+	if(auto de=cast(DefineExp)e) collect(de.e1);
+	else if(auto ae=cast(AAssignExp)e) collect(ae.e1);
+	else if(auto fe=cast(ForgetExp)e) collect(fe.var);
+	Expression[] r;
+	foreach(id;targets){
+		if(id.meaning) continue;
+		auto probe=new Identifier(id.id);
+		probe.loc=id.loc;
+		auto decl=cast(VarDecl)sc.lookup(probe,false,true,Lookup.probing,null);
+		if(!decl||decl.isConst||decl.typeConstBlocker||!isPackable(decl)||isUnionWitness(decl)||!decl.scope_||decl.scope_.getFunction() !is sc.getFunction()||sc.isConst(decl)||!typeConstBlocked(decl,sc)) continue;
+		auto dependents=liveTypeDependents(decl,sc);
+		if(!dependents.length) continue;
+		Expression[] types;
+		bool ok=true;
+		bool visible(Declaration d){ // (the current version, not one of an enclosing scope that this one consumed, e.g., in the body of a loop)
+			auto probe=new Identifier(d.getId);
+			probe.loc=id.loc;
+			return sc.lookup(probe,false,true,Lookup.probing,null) is d;
+		}
+		Declaration[] decaying; // (the classical ones: the quantum ones can be forgotten early instead, where they can be uncomputed, see `Scope.tryUncomputeTypeDependents`)
+		foreach(d;dependents){
+			auto vd=cast(VarDecl)d;
+			auto type=vd?typeForDecl(vd):null;
+			if(type&&!type.isClassical()) continue;
+			if(!vd||!type||vd is decl||vd.isConst||vd.isTemporary||!vd.scope_||vd.scope_.getFunction() !is sc.getFunction()||!visible(vd)||sc.isConst(vd)||typeConstBlocked(vd,sc)||unfoldTypeVariables(type) !is type){ ok=false; break; } // (not a temporary, e.g., the rest of the container of a `for` loop, whose elements keep their type)
+			types~=type;
+			decaying~=vd;
+		}
+		if(!ok||!decaying.length) continue;
+		dependents=decaying;
+		bool sameValue(Declaration d){ return d is decl||d.canonicalSource is decl.canonicalSource; } // (the versions of the variable, e.g., the one before a block of the removal of loops that consumes it on a path that returns)
+		auto packed=eliminateVariables(types.length==1?types[0]:tupleTy(types),&sameValue,&sameValue);
+		if(!packed||packed.freeIdentifiers.any!(x=>x.meaning&&sameValue(x.meaning))) continue;
+		Expression variables(){
+			Expression[] ids;
+			foreach(d;dependents){
+				auto x=new Identifier(d.getId);
+				x.loc=id.loc;
+				ids~=x;
+			}
+			if(ids.length==1) return ids[0];
+			auto tpl=new TupleExp(ids);
+			tpl.loc=id.loc;
+			return tpl;
+		}
+		auto rhs=new TypeAnnotationExp(variables(),packed,TypeAnnotationType.annotation);
+		rhs.loc=id.loc;
+		auto decay=new DefineExp(variables(),rhs);
+		decay.loc=id.loc;
+		r~=statementSemantic(decay,sc,flags,resetConst);
+		void mark(Expression e){
+			if(auto v=cast(Identifier)e){ if(auto vd=cast(VarDecl)v.meaning) vd.decayed=true; }
+			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) mark(c);
+		}
+		mark(decay.e1);
+		if(decay.witnesses.length==1) decay.witnesses[0].knownValue=knownValueOf(decl); // (the old value, e.g., `32` for `x:!int[n]` after `n:=32`)
+	}
+	return r;
+}
 bool mergeBranches(IteExp ite,Scope sc,bool quantumControl){ // (with the names of the witnesses of the merge of the analysis that this one is a copy of, see `Scope.mergeWitnesses`)
 	static if(language==silq) foreach(b;only(ite.then,ite.othw)) if(b) if(auto bs=cast(BlockScope)b.blscope_){
 		bs.mergeWitnessNames=ite.mergeWitnessNames;
@@ -3202,6 +3269,7 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 }do{
 	if(e.isSemCompleted()) return e;
 	static if(language==silq) if(auto r=openUpdatedVariable(e,sc,flags,resetConst)) return r;
+	static if(language==silq) auto decays=decayTypeMentions(e,sc,flags,resetConst);
 	static if(language==silq) auto typeConstBlockSave=sc.saveTypeConstBlocks();
 	e = e.dispatchStm!(statementSemanticImpl,statementSemanticImplDefault,true)(sc,flags,resetConst);
 	if(!e.type) e.type=unit;
@@ -3212,6 +3280,14 @@ Expression statementSemantic(Expression e,Scope sc,ref StmFlags flags,bool reset
 		warnDiscardedCall(e,sc); // e.g., `X(x);` instead of `x := X(x);`
 		sc.releaseTypeConstBlocks(typeConstBlockSave,resetConst);
 		sc.clearConsumed();
+		if(decays.length){
+			auto r=new CompoundExp(decays~e);
+			r.loc=e.loc;
+			r.type=unit;
+			foreach(x;r.s) propErr(x,r);
+			if(!r.isSemError()) r.setSemCompleted();
+			return r;
+		}
 	}
 	return e;
 }
@@ -6386,9 +6462,12 @@ Declaration liveTypeDependent(Declaration decl,SymbolTable rnsymtab){
 	return null;
 }
 Declaration liveTypeDependent(Declaration decl,Scope sc){ // (as `liveTypeDependent(decl,sc.rnsymtab)`, and then among the declarations of the scopes between `sc` and the scope of `decl`, e.g., of the body of a loop that contains a closure that captures `decl`, but only of those whose types may mention variables)
-	foreach(d;sc.typeMentioning) if(isLiveTypeDependent(d,decl)) return d;
+	return eachLiveTypeDependent(decl,sc,(Declaration d)=>true);
+}
+private Declaration eachLiveTypeDependent(Declaration decl,Scope sc,scope bool delegate(Declaration) dg){ // (until `dg` returns `true`, see `liveTypeDependent`)
+	foreach(d;sc.typeMentioning) if(isLiveTypeDependent(d,decl)&&dg(d)) return d;
 	if(decl.scope_&&decl.scope_ !is sc&&decl.scope_.rnsymtab !is sc.rnsymtab)
-		foreach(d;decl.scope_.typeMentioning) if(isLiveTypeDependent(d,decl)) return d;
+		foreach(d;decl.scope_.typeMentioning) if(isLiveTypeDependent(d,decl)&&dg(d)) return d;
 	if(!decl.scope_) return null;
 	Scope[] visited; // (the declarations of `sc` and of the scopes visited so far shadow those of the scopes around them, e.g., versions consumed in an inner scope)
 	for(auto nsc=cast(NestedScope)sc;nsc;nsc=cast(NestedScope)nsc.parent){
@@ -6397,13 +6476,18 @@ Declaration liveTypeDependent(Declaration decl,Scope sc){ // (as `liveTypeDepend
 		foreach(d;csc.typeMentioning){
 			auto id=d.getId;
 			if(id !in sc.rnsymtab&&!visited.any!(vsc=>id in vsc.rnsymtab))
-				if(isLiveTypeDependent(d,decl)) return d;
+				if(isLiveTypeDependent(d,decl)&&dg(d)) return d;
 		}
 		visited~=csc;
 	}
 	return null;
 }
 
+Declaration[] liveTypeDependents(Declaration decl,Scope sc){ // (all of them, see `liveTypeDependent`)
+	Declaration[] r;
+	eachLiveTypeDependent(decl,sc,(Declaration d){ if(!r.canFind(d)) r~=d; return false; });
+	return r;
+}
 Declaration[] liveTypeDependents(Declaration decl,SymbolTable rnsymtab){
 	Declaration[] r;
 	void scan(SymbolTable rnsymtab){

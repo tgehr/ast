@@ -179,6 +179,7 @@ class VarDecl: Declaration{
 	bool outOfScopeDiverged; // (the merge after branches that diverge, see `OutOfScopeDecl.diverged`)
 	bool outOfScopeKeptValue; // (the merge of versions that keep the value, see `OutOfScopeDecl.keptValue`)
 	bool mergeWitness; // (declared by the merge of a conditional, see `ast.scope_.Scope.mergeWitnesses`)
+	bool decayed; // (a classical version that the decay of its type defines, which a redefinition can forget, see `ast.semantic_.decayTypeMentions`)
 	void setTemporary(bool isTemporary){
 		this.isTemporary=isTemporary;
 		if(isTemporary) name.meaning=this;

@@ -5359,6 +5359,15 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		weakenings~=weakening(p);
 	}
 	foreach(p;movedParams) if(p[0] in convertedParams) weakenings~=weakening(p); // (the call does not convert its arguments)
+	static if(language==silq) foreach(decl;state.origStateSnapshot.declarations()){ // (classical variables that the loop does not mention, whose types it weakens at its start, e.g., `x` in `x:=vector(n,…); do{ n+=1; }while …;`, whose type decays where the first iteration changes `n`, see `ast.semantic_.decayTypeMentions`: the call consumes `n`)
+		auto vid=decl.getId;
+		if(!decl.name||constParams.any!(q=>q[0]==vid)||movedParams.any!(q=>q[0]==vid)||forgetBefore.canFind(decl)) continue;
+		auto type=typeForDecl(decl);
+		if(!type||!type.isClassical()||!type.freeIdentifiers.any!(id=>id.meaning&&movedParams.any!(q=>q[0]==id.meaning.getId))) continue;
+		auto htype=state.prevStateSnapshot.typeOf(vid);
+		if(!htype||htype==type||htype.freeIdentifiers.any!(id=>id.meaning&&movedParams.any!(q=>q[0]==id.meaning.getId))||!isSubtype(type,htype)) continue;
+		weakenings~=weakening(q(vid,decl,htype,false));
+	}
 	Expression[] stmts=forgetBefore.map!((d){
 		auto id=new Identifier(d.name.id);
 		id.loc=loop.loc;
