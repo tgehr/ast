@@ -131,7 +131,13 @@ final class ContinuedLog{ // (of the conditionals of a scope whose other branch 
 					if(auto bs=cast(BlockScope)sc) if(startsOf(bs).length&&LastUse.outerVersion(d,bs,true)) first=min(first,numbers[bs]);
 				}
 				if(d.scope_&&d.scope_ !is nsc&&d.scope_.isNestedIn(nsc)) special(d.scope_);
-				if(auto c=LastUse.climbInto(d,nsc)) if(c.scope_ is nsc&&c.mergedFrom.length==1&&c.mergedFrom[0].scope_) special(c.mergedFrom[0].scope_);
+				for(auto c=LastUse.climbInto(d,nsc);c&&c.scope_ is nsc&&c.mergedFrom.length==1&&c.mergedFrom[0].scope_;){ // (also the earlier conditionals whose branches the code after them continues, through the versions before the later ones, see `LastUse.outerVersion`)
+					special(c.mergedFrom[0].scope_);
+					auto m=c.mergedFrom[0];
+					while(m&&m.scope_&&m.scope_ !is nsc&&m.scope_.isNestedIn(nsc)) m=LastUse.sourceVersion(m,true);
+					if(!m||m is c||m.scope_ !is nsc) break;
+					c=m;
+				}
 			}
 			if(first<horizons.length) horizons[first]=i+1;
 		}
@@ -454,6 +460,12 @@ final class LastUse{
 	static Declaration outerVersion(Declaration d,NestedScope sc,bool continued=false){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`; `continued`: also through the code after nested conditionals whose other branch returns)
 		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=sourceVersion(d,continued);
 		d=climbInto(d,sc.parent); // (in the code after the conditional, see `NestedScope.continuedLog`)
+		while(continued&&d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ !is sc&&d.mergedFrom[0].scope_&&d.mergedFrom[0].scope_.isNestedIn(sc.parent)){ // (merged after a later conditional whose other branch returns, which the code after the conditional of `sc` continues as well: the version before it, e.g., `a` for `forget(v0)` in `if k { … assert(false); } if l { … assert(false); } forget(v0);`)
+			auto m=d.mergedFrom[0];
+			while(m&&m.scope_&&m.scope_ !is sc.parent&&m.scope_.isNestedIn(sc.parent)) m=sourceVersion(m,continued);
+			if(!m||m is d||m.scope_ !is sc.parent) break;
+			d=m;
+		}
 		if(d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ is sc){ // (the version of the branch, which the code after the conditional continues)
 			d=d.mergedFrom[0];
 			while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=sourceVersion(d,continued); // (also through a nested conditional that the branch continues, e.g., `a` for `v0` in `if k { if l { x:=(a,true); assert(false); } } else { a:=X(a); … assert(false); } forget(v0);` after `v0:=dup(a);`)
@@ -2644,10 +2656,33 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 				if(s.parent is b.parent) return log.scopeCreatedAt.get(s,0)>log.numbers[b];
 			return false;
 		}
+		MapX!(Declaration,Dependency*) atSplit; // (the versions that the branch forgets at the split, with their dependencies there: an uncomputation that depends on one of them recomputes it from those)
+		foreach(u;uncomputations(b,ends[i])){
+			auto lu=u[0];
+			if(lu.fromDiscardedAnalysis()||!(lu.atSplit&&lu.scope_ is b)||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.dep.isTop) continue;
+			if(auto outer=LastUse.outerVersion(lu.decl,b,true)){
+				auto dep=new Dependency;
+				*dep=lu.dep.dup();
+				atSplit[outer]=dep;
+			}
+		}
+		Declaration[] needed(Dependency dep){ // (the versions from outside that an uncomputation reads, also through the versions that the branch forgets at the split)
+			Declaration[] r;
+			SetX!Declaration visited;
+			void visit(Declaration d){
+				auto outer=LastUse.outerVersion(d,b,true);
+				if(!outer||outer in visited) return;
+				visited.insert(outer);
+				if(auto ds=atSplit.get(outer,null)) foreach(e;ds.dependencies) visit(e);
+				else r~=d;
+			}
+			foreach(d;dep.dependencies) visit(d);
+			return r;
+		}
 		foreach(u;uncomputations(b,ends[i])){
 			auto lu=u[0];
 			if(lu.fromDiscardedAnalysis()||lu.atSplit&&lu.scope_ is b||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
-			foreach(d;lu.dep.dependencies){
+			foreach(d;needed(lu.dep)){
 				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
 				if(p==size_t.max) continue;
