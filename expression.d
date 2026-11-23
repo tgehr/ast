@@ -4009,7 +4009,9 @@ class ForgetExp: Expression{
 		this.val=val;
 	}
 	override ForgetExp copyImpl(CopyArgs args){
-		return new ForgetExp(var.copy(args),val?val.copy(args):null);
+		auto r=new ForgetExp(var.copy(args),val?val.copy(args):null);
+		r.written=written;
+		return r;
 	}
 	override string toString(){ return _brk("forget("~var.toString()~(val?"="~val.toString():"")~")"); }
 
@@ -4017,7 +4019,9 @@ class ForgetExp: Expression{
 		if(!val) return this;
 		auto nval=val.eval();
 		if(nval is val) return this;
-		return new ForgetExp(var,nval);
+		auto r=new ForgetExp(var,nval);
+		r.written=written;
+		return r;
 	}
 	override Annotation getAnnotation(){ // (forgetting a classical value has no effect, and forgetting a quantum value uncomputes it, as in `qfree` functions)
 		if(!var.type) return Annotation.none;
@@ -4034,6 +4038,7 @@ class ForgetExp: Expression{
 		if(!r) return false;
 		return isEqual(var,r.var,&ctx)&&isEqual(val,r.val,&ctx);
 	}
+	bool written; // (stated by the program, unlike the forgets that the analysis synthesizes, which copies repeat: it is checked where it is, also where the code generator uncomputes it at the split of a branch, see `ast.lastuse.LastUse.updateDependenciesOnConsumptionLocal`)
 	// semantic information
 	bool isStatement=false; // TODO: get rid of this
 	static if(language==silq) Expression[] uncomputation; // (for a forget without value: forgets with values that uncompute its quantum variables, which the reversal recomputes, and a forget of the others, see `ast.reverse.resolveForgets`)

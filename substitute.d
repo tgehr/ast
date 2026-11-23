@@ -1075,6 +1075,7 @@ private Expression substStm(ForgetExp fe,ref BlockSubst ctx){
 	auto nval=fe.val?useSubstitute(fe.val,ctx):null;
 	if(nvar is fe.var&&nval is fe.val) return fe;
 	auto r=new ForgetExp(nvar,nval);
+	r.written=fe.written;
 	return finishStatement(r,fe,ctx);
 }
 // expression-statements are substituted as lvalues

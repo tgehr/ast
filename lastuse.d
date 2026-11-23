@@ -8,6 +8,10 @@ import util.tuple:Q=Tuple,q=tuple;
 import std.range, std.algorithm, std.conv, std.format;
 import ast.expression,ast.type,ast.declaration,ast.scope_;
 
+private bool isWritten(Expression parent){ // (a `forget` that the program states, see `ForgetExp.written`)
+	auto fe=cast(ForgetExp)parent;
+	return fe&&fe.written;
+}
 bool canAddForget(Expression e){
 	if(auto le=cast(LetExp)e)
 		return !!le.isForward(true);
@@ -913,7 +917,7 @@ final class LastUse{
 			if(lu.kind==Kind.synthesizedForget&&lu.forgottenOutside()) continue; // (checked where it is forgotten)
 			if(lu.isConsumption()&&lu.splitFrom&&lu.splitFrom.isConsumption()&&lu.splitFrom !is this&&lu.splitFrom.walkMark!=mark&&lu.kind!=Kind.synthesizedForget&&(fromBranch||lu.scope_ !is scope_)) continue; // (a forget in the branch itself is checked here; not a consumption in the scope where the walk starts, which comes after its start, e.g., `a:=X(a)` for the forget of `v1` at `u:=!v1` in `if k { u:=!v1; a:=X(a); t:=measure(v2); }` with `v2:=!v1`: the walk does not visit the version in the enclosing scope)
 			if(splitFrom&&(fromBranch||!isConsumption())&&lu.decl&&definedInScope(lu.decl)&&(isClassicalDecl(lu.decl)||readSplitAtDefinition(lu.decl,lu.dep))) continue;
-			bool hoisted=lu.atSplit&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)&&(!cdep.lostAt||!cdep.lostAt.scope_||cdep.lostAt.scope_.isNestedIn(lu.scope_))); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`; not where it is consumed in another branch, after the split)
+			bool hoisted=lu.atSplit&&!isWritten(lu.parent)&&!(cdep.isTop&&(nested?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)&&(!cdep.lostAt||!cdep.lostAt.scope_||cdep.lostAt.scope_.isNestedIn(lu.scope_))); // (uncomputed at the split, unless what it depends on is consumed in the branch before it, as for the forgets that `forget` checks directly, see `LastUses.dependencyAtSplit`; not where it is consumed in another branch, after the split; not a `forget` that the program states, which is checked where it is, although the code generator uncomputes it at the split, e.g., `forget(w)` after `x:=X(x)` for `w:=dup(x)` before the conditional)
 			if(!nested&&hoisted){ // (its dependency is the one at the split, which comes before the consumption)
 				cdep.replace(lu.decl,lu.dep,lu.use);
 				ccont.replace(lu.decl,lu.dep,lu.use);
@@ -925,7 +929,7 @@ final class LastUse{
 				lu.scope_.lastUses.noteMentions(lu,lu.depAtSplit);
 			}
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
-			if(byVersion?hasVersion(lu.dep,decl):decl in lu.dep.dependencies){
+			if((byVersion?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)&&!(isWritten(lu.parent)&&lu.time<consumption.consumedAt)){ // (not a `forget` that the program states before the consumption, which is checked where it is)
 				auto prior=lu.prevImplicitDup&&lu.use?lu.dep.dup:Dependency.init;
 				if(byVersion) replaceVersions(lu.dep,decl,hoisted?byAtSplit:cdep);
 				else lu.dep.replace(decl,cdep);
@@ -996,6 +1000,7 @@ final class LastUse{
 		}else if(use&&use.scope_&&cast(ForgetExp)parent){
 			scope_.error(format("cannot synthesize forget expression for `%s`",use),use.loc);
 			scope_.explainUnknownDependency(decl,dep);
+			if(auto fd=scope_.getFunction()) if(fd.body_) fd.body_.setSemForceError(); // (as for the forgets that the analysis of the `forget` rejects: e.g., the final pass of the function does not report it again)
 		}else if(use && use.isSemError()){
 			// already reported
 		}else if(decl.scope_){

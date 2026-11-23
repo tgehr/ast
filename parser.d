@@ -1428,7 +1428,9 @@ struct Parser{
 			var.loc=varBegin.to(tok.loc);
 		}
 		expect(Tok!")");
-		return res=New!ForgetExp(var,val);
+		res=New!ForgetExp(var,val);
+		res.written=true;
+		return res;
 	}
 	TypeofExp parseTypeof(){
 		mixin(SetLoc!TypeofExp);
