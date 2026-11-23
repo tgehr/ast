@@ -9523,6 +9523,10 @@ Declaration lookupMeaning(Identifier id,Lookup lookup,Scope sc,bool ignoreExisti
 }
 
 void undefinedIdentifierError(Identifier id,DeadDecl[] failures,Scope sc,bool showError=true,bool called=false,bool inType=false){
+	static if(language==silq) if(sc.handler.suppress&&sc.getWithTransTrial()){ // (the trial of a `with` transformation, which is analyzed again: the dead declarations report only once, e.g., `EarlyForgottenDecl`, so they report at the analysis that is kept)
+		id.setSemError();
+		return;
+	}
 	bool handled=false;
 	if(showError)
 		foreach(f;failures)
