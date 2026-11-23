@@ -255,6 +255,7 @@ Expression ttTransitionIte(IteExp ite,MapSX!(Id,Expression) subst,TypeTransition
 	}
 	auto r=new IteExp(ncond,nthen,nothw);
 	r.loc=ite.loc;
+	static if(language==silq) r.neverTaken=ite.neverTaken;
 	if(ite.isSemError()) r.sstate=SemState.error;
 	else if(ite.isSemCompleted()){
 		r.type=ite.type?ite.type.substitute(subst,tt):null;
@@ -960,6 +961,7 @@ private Expression substStm(IteExp ite,ref BlockSubst ctx){
 	if(tctx.changed||octx.changed) ctx.changed=true;
 	if(ncond is ite.cond&&nthen is ite.then&&nothw is ite.othw) return ite;
 	auto r=new IteExp(ncond,nthen,nothw);
+	static if(language==silq) r.neverTaken=ite.neverTaken;
 	return finishStatement(r,ite,ctx);
 }
 private Expression substStm(CompoundExp ce,ref BlockSubst ctx){

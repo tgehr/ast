@@ -995,6 +995,7 @@ final class LastUse{
 	}
 
 	private void reportUnforgettable(){ // (a forget whose dependency is unknown)
+		if(scope_&&scope_.inUnreachableCode()) return; // (it does not run, see `Scope.inUnreachableCode`)
 		if(dep.lostByError()){
 			// (error recovery, see `Scope.dependencyLostByError`)
 		}else if(use&&use.scope_&&cast(ForgetExp)parent){
@@ -1521,6 +1522,8 @@ final class LastUse{
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){
 						nsc.lastUses.forget(cdecl,false);
 						//imported!"util.io".writeln("AFTER FORGET: ",declBefore," ",decl," ",declBefore is decl," ",decl.splitInto);
+					}else if(nsc.inUnreachableCode()){
+						// (code that does not run does not need to forget it, see `Scope.inUnreachableCode`)
 					}else{
 						ok=false;
 						if(!nsc.lastUses.betterUnforgettableError(cdecl,nsc)&&!nsc.dependencyLostByError(cdecl)){

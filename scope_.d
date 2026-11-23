@@ -321,7 +321,6 @@ enum Lookup{
 static if(language==silq)
 final class AbortingBranchEnd{ // (the versions of the variables at the end of a branch that aborts, before it is closed, see `continueAbortingBranches`)
 	SymbolTable table;
-	SetX!Id unforgettable; // (variables whose versions have quantum values without a known dependency)
 	SetX!Id droppable; // (quantum variables of the branch that it can forget, also at their last uses, e.g., `q` for `q:=dup(b); b:=fail(b);`)
 	Id[] fresh; // (the variables that the branch defines, which are not from outside)
 	Dependency[Id] dependencies; // (of the versions of the variables)
@@ -335,7 +334,6 @@ final class AbortingBranchEnd{ // (the versions of the variables at the end of a
 			dependencies[d.getId]=dep;
 			if(!type||type.isClassical()) return;
 			if(own&&(!dep.isTop||bs.lastUses.canForget(d,true,false))) droppable.insert(d.getId);
-			else if(dep.isTop) unforgettable.insert(d.getId);
 		}
 		SetX!Id split;
 		foreach(s;bs.splitVars){
@@ -380,6 +378,14 @@ abstract class Scope{
 	import ast.looplowering:LoopContinuation;
 	LoopContinuation loopContinuation; // loop lowering: code after a loop that the lowering may absorb
 	int droppedCodeAnalysis; // loop lowering: the code after a loop that the lowering drops is being analyzed, without lowering its loops (see `unreachableSemantic`)
+	static if(language==silq) bool unreachableCode=false; // (the rest of the block follows a statement that does not complete, see `compoundExpSemantic`, e.g., `assert(false)`, also the one in a branch whose literal condition never takes it, see `statementSemanticImpl(IteExp)`)
+	final bool inUnreachableCode(){ // (code that never runs: the analysis checks its types, but not what it consumes, as it does not need to forget its variables; not the functions that it defines)
+		static if(language==silq) for(Scope s=this;s;s=s.parentScope()){
+			if(s.unreachableCode) return true;
+			if(cast(FunctionScope)s) break;
+		}
+		return false;
+	}
 	uint typeofOperand=0; // block modifications while analyzing `typeof`
 	bool allowsLinear(){
 		return true;
@@ -2114,6 +2120,7 @@ abstract class Scope{
 		static if(is(T==ReturnExp)) Id[] unknown; // (consumed by an erroneous `return` with code after it, see below)
 		static if(is(T==ReturnExp)){
 			auto erroneous=loc.isSemError(); // (it consumes the variables that it cannot forget without errors, as its expression may have, see `returnExpSemantic`)
+			erroneous|=inUnreachableCode(); // (as it does not run)
 			auto dropsClassical=!codeAfterStatement&&dropsClassicalAtReturn(); // (the unreachable code after the `return` sees the variables that it does not consume, see `hiddenAfterReturn`)
 			bool dropped(Declaration d){ return dropsClassical&&d.scope_ !is this&&isClassicalValue(d); } // (forgetting it has no effect, while consuming it would split it into the other branches; dropping it does not change what blocks the others)
 			if(dropsClassical) returnDropped=true;
@@ -2313,6 +2320,7 @@ abstract class Scope{
 					case CloseAction.remove: symtabRemove(d); break;
 					case CloseAction.keep: break;
 					case CloseAction.consume:
+						static if(language==silq) if(lastUses.canCancelImplicitDup(d)&&lastUses.canForget(d,true,false)) lastUses.forget(d,false); // (the implicit `dup` at its last use keeps no value that the code after it needs, as at a `return`, e.g., `measure(a)` in `a:=0:𝔹; measure(a); assert(false);`)
 						consume(d,null);
 						clearConsumed();
 						break;
@@ -3084,6 +3092,7 @@ abstract class Scope{
 		if(!scopes.length) return false;
 		static if(language==silq) bool unknownAfterMerge=scopes.length>1||!continued; // (the merged versions do not depend on each other: the merge of several branches, and of one branch after branches that diverge, unless the code after the conditional continues it, see below)
 		else bool unknownAfterMerge=scopes.length>1;
+		auto unreachableMerge=inUnreachableCode(); // (the branches do not need to forget their variables)
 		auto keys=new MergeKeys(this,scopes);
 		auto numErrors=handler.nerrors;
 		SetX!Declaration goneConstLocals; // (the types of the merged variables do not mention them)
@@ -3302,7 +3311,7 @@ abstract class Scope{
 				auto osym=sc.rnsymtab.get(sym.getId,null);
 				if(!osym||cast(DeadDecl)osym){
 					splitSym();
-					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)){
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)&&!unreachableMerge){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						scopes[0].explainUnforgettable(sym);
 						errors=true;
@@ -3341,7 +3350,7 @@ abstract class Scope{
 								splitSym(), sc.split(osym,null);
 								if(sym.isSemCompleted()&&osym.isSemCompleted()){
 									auto symOk=scopes[0].canForgetAppend(sym)||scopes[0].dependencyLostByError(sym),osymOk=sc.canForgetAppend(osym)||sc.dependencyLostByError(osym);
-									if(!symOk||!osymOk){
+									if((!symOk||!osymOk)&&!unreachableMerge){
 										error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 										if(!nt) note(format("declared with incompatible types `%s` and `%s` in different branches",ot,st), osym.loc);
 										else if(!symOk) scopes[0].explainUnforgettable(sym);
@@ -3365,7 +3374,7 @@ abstract class Scope{
 				auto type=typeForDecl(sym);
 				if(auto gone=goneMention(type)) if(!visibleType(type)){ // (not merged, as for incompatible types on different paths)
 					splitSym();
-					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)){
+					if(!scopes[0].canForgetAppend(sym)&&!consumedByError(sym.getId)&&!scopes[0].dependencyLostByError(sym)&&!unreachableMerge){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						scopes[0].explainUnforgettable(sym);
 						note(format("its type `%s` mentions `const` variable `%s`, which is not visible after its block",type,gone.getName),gone.loc);
@@ -3478,7 +3487,7 @@ abstract class Scope{
 					}
 					sym=sc.split(sym,null);
 					forgotten.insert(sym);
-					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)&&!sc.dependencyLostByError(sym)){
+					if(!sc.canForgetAppend(sym)&&!consumedByError(sym.getId)&&!sc.dependencyLostByError(sym)&&!unreachableMerge){
 						error(format("variable `%s` is not consumed", sym.getName), sym.loc);
 						sc.explainUnforgettable(sym);
 						errors=true;

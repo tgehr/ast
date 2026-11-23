@@ -1713,6 +1713,7 @@ Expression lowerNondeterministicType(DefineExp be){ // (`w:=e; t:=uint[w];` for 
 
 Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq) auto condConstContext=sc.saveConst();
+	static if(language==silq) if(ite.neverTaken<0) ite.neverTaken=writtenLiteral(ite.cond,true)?2:writtenLiteral(ite.cond,false)?1:0;
 	ite.cond=conditionSemantic!true(ite,ite.cond,sc,InType.no);
 	static if(language==silq){
 		auto quantumControl=ite.cond.type&&!ite.cond.type.isClassical();
@@ -1729,6 +1730,13 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		ite.othw.loc=ite.loc;
 	}
 	if(!ite.othw.blscope_) ite.othw.blscope_=new BlockScope(sc,restriction_,restrictionCause);
+	static if(language==silq) if(auto never=ite.neverTaken==1?ite.then:ite.neverTaken==2?ite.othw:null) if(never.s.length&&!isFalseAssert(never.s[0])){ // (the statements of the branch that a literal condition never takes do not run: it aborts before them, see `Scope.inUnreachableCode`; an empty one stays as it is, e.g., the `else` branch of `if true { … }`)
+		auto no=LiteralExp.makeBoolean(false);
+		no.loc=never.loc;
+		auto abort=new AssertExp(no);
+		abort.loc=never.loc;
+		never.s=abort~never.s;
+	}
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
 	ite.then.blscope_.conditional=ite.othw.blscope_.conditional=ite;
 	auto continued=insideDoWhileBody(sc)?null:continuedBranch(ite); // (also in a loop body, where `--remove-loops` puts the code after the conditional into the other branch, see `guard` in `erpLoopExplicit`, or lowers the loop to a function whose body continues it; not yet in the body of a `do`-`while` loop, where the versions that the code after the conditional continues reach the merge after the condition, which does not keep their dependencies, e.g., `t` for `do { t:=dup(x); if k==0 { return x; } c+=1; } while c<3;`, TODO)
@@ -1894,19 +1902,7 @@ void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // 
 			type=t;
 		}
 		if(first&&type.freeIdentifiers.any!(fid=>fid.meaning&&fid.meaning.scope_&&fid.meaning.scope_.getFunction() is sc.getFunction()&&sc.rnsymtab.get(fid.meaning.getId,null) !is fid.meaning)) first=null; // (it mentions a version that is not visible after the conditional, e.g., of a `const` local of a branch)
-		if(!first){ // (as for a merge, which reports a version that a branch cannot forget, see `Scope.merge`, where code follows)
-			if(sc.codeAfterStatement&&!erroneous&&!(dd&&dd.consumedByError())){
-				foreach(end;ends){
-					if(id !in end.unforgettable) continue;
-					auto d=end.table[id];
-					sc.error(format("variable `%s` is not consumed",d.getName),d.loc);
-					sc.note("trying to merge branches of this if expression",ite.loc);
-					ite.setSemError();
-					break;
-				}
-			}
-			return;
-		}
+		if(!first) return; // (the code after the conditional does not run, so it does not need to forget it, see `Scope.inUnreachableCode`)
 		auto dep=dependencyOf(id);
 		if(!dep.isTop&&dep.dependencies.length) dep=Dependency(true); // (the continued version could be forgotten only where the versions that it depends on are available, not at its definition)
 		if(!dd&&dep.isTop&&ends.all!(end=>id in end.droppable)) return; // (the branches can forget it, also at its last use, unless the code after the conditional uses it)
@@ -2748,6 +2744,7 @@ bool shouldLowerLoop(Scope sc){
 	if(!astopt.removeLoops) return false;
 	if(auto fd=sc.getFunction()) if(fd.keepLoops) return false;
 	for(auto s=sc;s;s=s.parentScope()) if(s.droppedCodeAnalysis) return false; // (code that the lowering drops, e.g., a loop with a quantum-controlled `return` at its end, which has no continuation there, see `unreachableSemantic`)
+	if(sc.inUnreachableCode()) return false; // (code that does not run, which the code generator drops)
 	return !insideLoopBody(sc);
 }
 // Run the final ("mode-(b)") loop iteration with `loopFinalPass` set, together
@@ -3403,6 +3400,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		if(!ce.blscope_) ce.blscope_=new BlockScope(sc,restriction_,restrictionCause);
 		bsc = ce.blscope_;
 		ce.blscope_.block=ce;
+		static if(language==silq) bsc.unreachableCode=false; // (of an earlier analysis)
 	}
 	foreach(i,ref e;ce.s){
 		//imported!"util.io".writeln("BEFORE: ",e," ",typeid(e)," ",e.sstate," ",bsc.getStateSnapshot());
@@ -3414,6 +3412,7 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		static if(language==silq) bsc.codeAfterStatement=codeAfter;
+		static if(language==silq) if(i+1<ce.s.length&&definitelyReturns(e)) bsc.unreachableCode=true; // (the rest of the block never runs, e.g., after `assert(false)`)
 		propErr(e,ce);
 		if(blscope&&resetConst) bsc.afterStatement();
 		static if(language==silq){
@@ -3443,6 +3442,11 @@ static if(language==silq)
 CompoundExp unreachableSemantic(Expression[] stms,Expression prev,Scope sc,ref StmFlags flags,Annotation restriction_,bool resetConst){ // (copies of the statements after `prev` in a block of `sc`, as `compoundExpSemantic` analyzes them, e.g., after a loop whose lowering drops them)
 	sc.droppedCodeAnalysis++; // (their loops are analyzed as without the lowering, see `shouldLowerLoop`)
 	scope(exit) sc.droppedCodeAnalysis--;
+	static if(language==silq){ // (they do not run, see `Scope.inUnreachableCode`)
+		auto unreachable=sc.unreachableCode;
+		sc.unreachableCode=true;
+		scope(exit) sc.unreachableCode=unreachable;
+	}
 	auto codeAfter=sc.codeAfterStatement;
 	sc.codeAfterStatement=false; // (they are the rest of the block)
 	scope(exit) sc.codeAfterStatement=codeAfter;
@@ -9281,7 +9285,7 @@ Expression generalLetExpSemantic(LetExp le,ExpSemContext context){
 					le.setSemForceError();
 					continue;
 				}
-				if(!bsc.canForgetAppend(d)){
+				if(!bsc.canForgetAppend(d)&&!bsc.inUnreachableCode()){
 					if(!d.isSemError()){
 						bool done=bsc.lastUses.betterUnforgettableError(d,bsc);
 						auto result=cast(Identifier)le.e,vd=cast(VarDecl)d;
@@ -9501,7 +9505,8 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 					nsc.forgottenAtSplit~=q(split.decl,split);
 					nsc.uncomputedAtSplitByForget~=split.decl; // (the code after the merges cannot recompute it, as the branch consumes what it depends on)
 				}
-				if(forgettable||uncomputedAtSplit){
+				bool unreachable=nmeaning&&!forgettable&&!uncomputedAtSplit&&sc.inUnreachableCode(); // (code that does not run does not need to forget it: it only consumes it, see `Scope.inUnreachableCode`)
+				if(forgettable||uncomputedAtSplit||unreachable){
 					id.scope_=sc;
 					id.byRef=true;
 					assert(!!meaning);
@@ -9514,7 +9519,7 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 						id.setSemError();
 						return false;
 					}else id.setSemCompleted();
-					sc.lastUses.synthesizedForget(meaning,id,sc,fe,uncomputedAtSplit?&atSplit:null);
+					if(!unreachable) sc.lastUses.synthesizedForget(meaning,id,sc,fe,uncomputedAtSplit?&atSplit:null);
 					if(uncomputedAtSplit) sc.consumedDepLog[meaning]=atSplit.dup; // (for the versions forgotten at the split that depend on it)
 					return true;
 				}else{
@@ -12808,6 +12813,18 @@ bool returnsOnEveryPath(Expression e){ // (rather than aborting on some path: th
 bool containsReturn(CompoundExp ce){ // (on some path)
 	foreach(x;ce.subexpressions) if(cast(ReturnExp)x) return true;
 	return false;
+}
+static if(language==silq)
+bool writtenLiteral(Expression e,bool value){ // (`true` or `false` as written, also before the analysis, e.g., in a copy)
+	if(auto id=cast(Identifier)e) return id.id==(value?Id.s!"true":Id.s!"false");
+	if(!cast(LiteralExp)e) return false;
+	auto v=e.asIntegerConstant();
+	return v&&(v.get()!=0)==value;
+}
+static if(language==silq)
+bool isFalseAssert(Expression e){ // (`assert(false)`, also before its analysis, e.g., in a copy)
+	auto ae=cast(AssertExp)e;
+	return ae&&writtenLiteral(ae.e,false);
 }
 CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibling returns on every path: the code after the conditional runs as part of it, see `ItePartialReturn`)
 	foreach(i,b;[ite.then,ite.othw]){

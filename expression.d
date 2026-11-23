@@ -2528,6 +2528,7 @@ class IteExp: Expression{
 		static if(language==silq){
 			r.mergeWitnessNames=mergeWitnessNames;
 			r.mergeWitnessVars=mergeWitnessVars;
+			r.neverTaken=neverTaken;
 		}
 		return r;
 	}
@@ -2559,6 +2560,7 @@ class IteExp: Expression{
 		if(ncond is cond&&nthen is then&&nothw is othw) return this;
 		auto r=new IteExp(ncond,nthen,nothw);
 		r.loc=loc;
+		static if(language==silq) r.neverTaken=neverTaken;
 		return r;
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
@@ -2586,6 +2588,7 @@ class IteExp: Expression{
 			nothw.type=othw.s[0].type;
 			nothw.setSemCompleted();
 			auto r=new IteExp(cond,nthen,nothw);
+			r.neverTaken=neverTaken;
 			r.type=getClassicalTy(type);
 			r.setSemCompleted();
 			return r.eval();
@@ -2619,6 +2622,7 @@ class IteExp: Expression{
 		if(ncond is cond && nthen is then && nothw is othw) return this;
 		auto r=new IteExp(ncond,nthen,nothw);
 		r.type=type;
+		static if(language==silq) r.neverTaken=neverTaken;
 		return r;
 	}
 	// semantic information
@@ -2628,6 +2632,7 @@ class IteExp: Expression{
 		super.setConstLookup(constLookup);
 	}
 	Expression condForget=null; // manual re-derivation of the condition
+	static if(language==silq) byte neverTaken=-1; // (the branch that a literal condition never takes, as written: 1 for `then`, 2 for `othw`, 0 for neither; decided by the first analysis and kept by copies, also where a substitution makes the condition constant, see `ast.semantic_.statementSemanticImpl(IteExp)`)
 	static if(language==silq) Id[] mergeWitnessNames; // (of the witnesses of its merge, which the analysis of a copy reuses, see `ast.scope_.Scope.mergeWitnesses`)
 	static if(language==silq) Id[] mergeWitnessVars; // (the merged variables of those witnesses, by which a copy reuses them)
 	static if(language==silq) Expression[] uncomputation; // (as `ForgetExp.uncomputation`, for variables that both branches forget, which the reversal recomputes before the reversed statement, see `ast.reverse.resolveForgets`)
