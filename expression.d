@@ -1384,7 +1384,7 @@ class Identifier: Expression{
 				// descend from a common canonical source): they are equal
 				// iff their meanings are paired up (alpha-equivalence)
 				if(!ctx.lookup(meaning,r.meaning)) return false;
-				return ctx.isBound(meaning)||ctx.isBound(r.meaning)||isEqual(type,r.type,&ctx); // (the types of bound variables are determined by their definitions, e.g., more precisely in a substituted copy that is analyzed again)
+				return ctx.isBound(meaning)||ctx.isBound(r.meaning)||isEqual(valueType,r.valueType,&ctx); // (the types of bound variables are determined by their definitions, e.g., more precisely in a substituted copy that is analyzed again)
 			}
 			if(id==r.id && isClassical(this)==isClassical(r) && meaning==r.meaning) {
 				if(meaning) {
@@ -1473,6 +1473,10 @@ class Identifier: Expression{
 	}
 	final Expression typeFromMeaning(){
 		return typeFromMeaning(meaning);
+	}
+	final @property Expression valueType(){ // (without the view of the length of an array, which does not change the value, see `ast.semantic_.arrayLengthView`)
+		static if(language==silq) if(meaning&&cast(VectorTy)type) if(auto t=typeFromMeaning) if(cast(ArrayTy)t) return t;
+		return type;
 	}
 
 	override Annotation getAnnotation(){ return pure_; }

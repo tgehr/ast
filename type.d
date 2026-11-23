@@ -1362,7 +1362,9 @@ class ProductTy: Type{
 		// the codomain moves from the expression context of the callee into a
 		// type used at the call site; transition it to the type context first
 		import ast.substitute: transitionToType;
-		return transitionToType(cod,target).substitute(subst);
+		auto r=transitionToType(cod,target);
+		static if(language==silq) r=lengthsOfArguments(r,subst);
+		return r.substitute(subst);
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto r=cast(ProductTy)rhs;
@@ -2144,6 +2146,34 @@ private Expression packWitness(Expression type,scope bool delegate(Declaration) 
 	auto r=unionOf(name,dom,type.substitute(last.getId,varTy(name,dom)));
 	return isSubtype(type,r)?r:type; // (otherwise, the conversions into the union would not find the witness, e.g., for `!𝔹^dup(t)[dup(i)]`)
 }
+}
+static if(language==silq)
+bool lengthOnly(Expression cod,Id name){ // (`cod` reads only the length of the parameter `name`, e.g., `!𝔹^x.length`, and contains no code, whose substitution would analyze it again, e.g., a `let` expression)
+	size_t uses=0,lengths=0;
+	foreach(id;cod.freeIdentifiers) if(id.id==name) uses++;
+	foreach(x;cod.subexpressions){
+		if(cast(LetExp)x||cast(LambdaExp)x||cast(FunctionDef)x||cast(CompoundExp)x) return false;
+		if(auto fe=cast(FieldExp)x) if(auto id=cast(Identifier)fe.e) if(id.id==name&&fe.f.name=="length") lengths++;
+	}
+	return uses==lengths;
+}
+static if(language==silq)
+Expression lengthsOfArguments(Expression cod,MapSX!(Id,Expression) subst){ // (the lengths that the types of the arguments give, also for an argument that the evaluation of a type could not repeat, e.g., `!𝔹^n` for `!𝔹^x.length` and `measure(q)` with `q:𝔹^n`: the call evaluates it, see `FieldExp.evalImpl`)
+	MapSX!(Id,Expression) markers;
+	bool any=false;
+	foreach(n,v;subst){
+		if(v.isTotal()||!cast(VectorTy)v.type||!lengthOnly(cod,n)) continue;
+		auto vd=new VarDecl(new Identifier(n));
+		vd.vtype=v.type;
+		auto marker=new Identifier(n);
+		marker.meaning=vd;
+		marker.type=v.type;
+		marker.constLookup=true;
+		marker.setSemEvaluated();
+		markers[n]=marker;
+		any=true;
+	}
+	return any?cod.substitute(markers):cod;
 }
 /// a supertype of `type` that does not mention the variables for which `eliminated` holds, as the join with a type that does not mention them, or `null`
 Expression eliminateVariables(Expression type,scope bool delegate(Declaration) eliminated,scope bool delegate(Declaration) packed=null){ // (`packed`: the eliminated variables whose values are available where the type is weakened, which unions keep, see `packWitness`)

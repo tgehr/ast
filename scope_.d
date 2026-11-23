@@ -4006,6 +4006,10 @@ abstract class Scope{
 					if(!accessedDecls||decl.canonicalSource !in *accessedDecls) continue; // not captured
 					// (classical variables are passed as well: a function without captures is analyzed only once)
 					if(type.isClassical()&&(!cast(VarDecl)decl&&!cast(Parameter)decl||decl.isToplevelDeclaration()||isTypeTy(type)||cast(FunTy)type||decl.canonicalSource in inTypes)) continue; // (const capture)
+					static if(language==silq){
+						import ast.semantic_: viewsArrayLength;
+						if(viewsArrayLength(cast(Parameter)decl.canonicalSource)) continue; // (const capture: the uses in the loop view the length of the array, see `ast.semantic_.arrayLengthView`)
+					}
 					if(type.isClassical()&&letScope&&!(decl.canonicalSource.scope_&&decl.canonicalSource.scope_.isNestedIn(letScope))) continue; // (const capture)
 					r[0]~=q(id,decl,typeCopy(type),false); // separate const parameter
 					continue;

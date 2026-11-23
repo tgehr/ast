@@ -1499,14 +1499,49 @@ bool writesVariable(Expression body_,Id name){ // (whether the statements assign
 	return false;
 }
 static if(language==silq)
-void openParameters(FunctionDef fd,FunctionScope fsc){ // (the parameters of union types are opened at the start of the body: a `moved` one by the definition `p:=p`, a `const` one by the witnesses that its uses read, see `OpenExp`; a `moved` array by the definition `p:=p` as well, see `opensArray`, if it is quantum or the body changes it: a classical one that the body does not change keeps its type, which the types of its values can mention, e.g., `vector(a.length,0:𝔹)`)
+bool viewsArrayLength(Parameter p){ // (a classical array parameter `x:τ[]` that is not opened, see `openParameters`, and therefore `const` in the body: `const`, or one that the type of the function mentions or that the body does not change; its uses have the type `τ^x.length`: its length is a witness that needs no name, see `arrayLengthView`)
+	if(!p||!p.name||p.name.id==Id.s!"_"||!p.vtype||!cast(ArrayTy)p.vtype||!p.vtype.isClassical()||p.witnessNames.length||!p.scope_) return false;
+	auto fd=p.scope_.getFunction();
+	return fd&&fd.body_&&Id.s!"silq-loop" !in fd.attributes&&Id.s!"silq-join" !in fd.attributes; // (not the functions that the loop lowering generates, whose parameters keep their types, see `openParameters`)
+}
+static if(language==silq)
+Expression arrayLength(Identifier id,Scope sc,Location loc){ // (`x.length` for a use `id` of `x`, without the view of its type, as in a type, see `arrayLengthView`)
+	auto raw=new Identifier(id.id);
+	raw.loc=loc;
+	raw.meaning=id.meaning;
+	auto len=new FieldExp(raw,new Identifier(Id.s!"length"));
+	len.loc=loc;
+	return expressionSemantic(len,expSemContext(sc,ConstResult.yes,InType.yes));
+}
+static if(language==silq)
+Expression arrayLengthView(Identifier id,Scope sc){ // (the type `τ^x.length` of a use of a parameter `x:τ[]` whose uses view its length, see `viewsArrayLength`)
+	auto at=cast(ArrayTy)id.type;
+	if(!at||!id.meaning||id.byRef||!viewsArrayLength(cast(Parameter)id.meaning.canonicalSource)) return null;
+	auto len=arrayLength(id,sc,id.loc);
+	if(len.isSemError()) return null;
+	return vectorTy(at.next,len.eval());
+}
+static if(language==silq)
+bool isArrayLengthView(Expression e){ // (a use whose type views the length of the array that it reads, see `arrayLengthView`)
+	auto id=cast(Identifier)e;
+	return id&&id.meaning&&cast(VectorTy)id.type&&cast(ArrayTy)typeForDecl(id.meaning);
+}
+static if(language==silq)
+bool dependsOnValue(Expression cod,Id name,Expression type){ // (whether `cod` depends on the value of the parameter `name` for an argument of type `type`, rather than only on that type, e.g., not `!𝔹^x.length` for an argument of type `!𝔹^n`, see `lengthsOfArguments`)
+	return !type||!cast(VectorTy)type||!lengthOnly(cod,name);
+}
+static if(language==silq)
+void openParameters(FunctionDef fd,FunctionScope fsc){ // (the parameters of union types are opened at the start of the body: a `moved` one by the definition `p:=p`, a `const` one by the witnesses that its uses read, see `OpenExp`; a `moved` array by the definition `p:=p` as well, see `opensArray`, if it is quantum or the body changes it: a classical one that the body does not change is `const` in the body, as if the type of the function mentioned it, see `viewsArrayLength`)
 	if(!fd.body_||Id.s!"silq-loop" in fd.attributes||Id.s!"silq-join" in fd.attributes) return; // (functions that the loop lowering generates, whose parameters keep their types, as in the loops)
 	Expression[] definitions;
 	foreach(p;fd.params){
 		if(!p.name||p.name.id==Id.s!"_") continue;
 		auto ut=cast(UnionTy)p.vtype;
 		bool array=!ut&&!p.isConst&&!p.typeConstBlocker&&cast(ArrayTy)p.vtype&&(!p.vtype.isClassical()||writesVariable(fd.body_,p.name.id)); // (not one that the type of the function mentions, which is `const`)
-		if(!ut&&!array) continue;
+		if(!ut&&!array){
+			if(!ut&&!p.isConst&&!p.typeConstBlocker&&cast(ArrayTy)p.vtype&&p.vtype.isClassical()) typeConstBlockDecl(p,fd,fd.scope_); // (its last use does not move it, as its uses view its length)
+			continue;
+		}
 		if(!p.witnessNames.length){
 			if(array) p.witnessNames=[witnessName(Id.s!"n")];
 			else for(Expression t=ut;cast(UnionTy)t;t=(cast(UnionTy)t).cod) p.witnessNames~=witnessName((cast(UnionTy)t).name);
@@ -8299,11 +8334,25 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 	auto fun=ce.e;
 	bool matchArg(FunTy ft){
 		bool error=false, explained=false;
-		void checkArg(size_t i,ref Expression exp)in{
+		void checkArg(size_t i,ref Expression exp,ExpSemContext acontext)in{
 			assert(exp.isSemFinal(),text(exp));
 		}do{
 			if(exp.isSemError()) return;
-			if(i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i])){
+			bool dependent=i<ft.names.length&&ft.cod.hasFreeVar(ft.names[i]);
+			static if(language==silq) if(dependent){
+				bool whole=ft.isTuple&&!cast(TupleExp)ce.arg; // (an argument for all parameters)
+				auto aty=exp.type;
+				if(whole){
+					auto tt=aty?aty.isTupleTy():null;
+					aty=tt&&i<tt.length?tt[i]:null;
+				}
+				dependent=dependsOnValue(ft.cod,ft.names[i],aty); // (e.g., not on `measure(q)` for `!𝔹^x.length` with `q:𝔹^n`)
+				if(dependent&&!whole&&cast(ArrayTy)aty&&!(aty.isClassical()&&exp.isQfree())&&lengthOnly(ft.cod,ft.names[i])){ // (only on the length of the array, which it opens, as for a generic parameter, see `openArguments`)
+					exp=openOperand(exp,acontext,true);
+					dependent=dependsOnValue(ft.cod,ft.names[i],exp.type);
+				}
+			}
+			if(dependent){
 				void reportImpure()(){
 					static if(language==silq){
 						sc.error(format("argument must be `qfree` (return type `%s` depends on parameter `%s`)",ft.cod,ft.names[i]),exp.loc);
@@ -8439,7 +8488,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 								badReverseImplicitDup(exp);
 						}
 						exp=argSemantic(exp,ncontext);
-						static if(isRhs) checkArg(i,exp);
+						static if(isRhs) checkArg(i,exp,ncontext);
 						static if(isRhs&&language==silq){
 							argContexts~=ncontext;
 							if(!inType&&i+1<tpl.e.length) heldArgBlocks~=holdValue(exp,sc,(Expression weak)=>acceptsWeakened(i,weak)); // (the blocks of its subexpressions are filtered above)
@@ -8484,7 +8533,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 						badReverseImplicitDup(ce.arg);
 				}
 				ce.arg=argSemantic(ce.arg,ncontext);
-				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg);
+				static if(isRhs) foreach(i;0..ft.names.length) checkArg(i,ce.arg,ncontext);
 				if(!ft.isConst.all!(x=>x==ft.isConst[0])){
 					auto ttpl=ce.arg.type?ce.arg.type.isTupleTy():null;
 					if(ce.arg.type&&(!ttpl||ttpl.length!=ft.nargs)){ // (not a tuple of arguments)
@@ -8510,7 +8559,7 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 			}
 			ce.arg=argSemantic(ce.arg,ncontext);
 			assert(ft.names.length==1);
-			static if(isRhs) checkArg(0,ce.arg);
+			static if(isRhs) checkArg(0,ce.arg,ncontext);
 		}
 		propErr(ce.arg,ce);
 		if(error&&!explained){
@@ -9697,6 +9746,7 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 			sc.captureTypeDependencies(init);
 		}
 	}
+	static if(language==silq) if(sc&&!context.inType&&id.type&&!id.isSemError()) if(auto view=arrayLengthView(id,sc)) id.type=view;
 	if(!isType(id)){
 		if(auto dsc=isInDataScope(id.meaning.scope_)){
 			if(auto decl=sc.getDatDecl()){
@@ -9765,6 +9815,7 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 			auto ety=unfoldTypeVariable(fe.e.type); // (the structure of the value of a type variable)
 			if(auto vt=cast(VectorTy)ety){
 				static if(language==silq) if(vt.num.freeIdentifiers.any!(id=>cast(VarDecl)id.meaning&&(cast(VarDecl)id.meaning).mergeWitness)) return r; // (the copies of the analyzed code declare the witness of a merge only where they merge the value, e.g., `y` before `s+=y.length` in a loop body that the removal of loops copies: the evaluation folds the length, see `FieldExp.evalImpl`)
+				static if(language==silq) if(isArrayLengthView(fe.e)) return arrayLength(cast(Identifier)fe.e,sc,fe.loc);
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=vt.num.copy(cargs);
 				len.loc=fe.loc;
