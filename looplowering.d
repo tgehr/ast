@@ -4630,6 +4630,14 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			movedParams=movedParams.filter!(p=>!isDead(p)).array;
 		}
 	}
+	SetX!Id loopCaptures(){ // (the variables from before the loop that the function captures: they do not change in it, see `erpJoinPoint`)
+		SetX!Id r;
+		bool param(Q!(Id,Declaration,Expression,bool) p,Id n){ return p[1].name&&p[1].name.id==n; }
+		void add(Id n){ if(state.prevStateSnapshot.typeOfName(n)&&!constParams.any!(p=>param(p,n))&&!movedParams.any!(p=>param(p,n))) r.insert(n); }
+		foreach(n;namesInLoop) add(n);
+		foreach(p;constParams~movedParams) if(auto t=p[1]?typeForDecl(p[1]):null) foreach(id;t.freeIdentifiers) add(varName(id)); // (e.g., witnesses that the types of the parameters mention)
+		return r;
+	}
 	// (the plain forgets before returns of the classical variables that the function does not take as moved parameters, e.g.,
 	// of `n` in `forget(x); forget(n);` with `x:𝔹^n` in the continuation, which it captures, are dropped: the caller forgets
 	// them)
@@ -5047,7 +5055,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 			auto thene=new ReturnExp(ce);
 			thene.loc=ce.loc;
 			nbdy.s~=thene;
-			static if(language==silq) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
+			static if(language==silq) if(auto ns=erpTransform(nbdy.s,loopCaptures())) nbdy.s=ns;
 		}else{
 			auto thene=new DefineExp(retName,ce);
 			thene.loc=ce.loc;
@@ -5196,7 +5204,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				auto ite=at(new IteExp(ncond,at(new CompoundExp([])),at(new CompoundExp(exit))));
 				nbdy.s~=[cast(Expression)ite]~nrst.s~next;
 			}
-			if(continuation) if(auto ns=erpTransform(nbdy.s)) nbdy.s=ns;
+			if(continuation) if(auto ns=erpTransform(nbdy.s,loopCaptures())) nbdy.s=ns;
 		}
 		bdy=nbdy;
 	}}else if(continuation){
@@ -6348,13 +6356,13 @@ Expression[] erpLoopExplicit(Expression loop,FunctionDef fd){
 }
 // Moves the code after statements that contain loops with early returns into join points.
 // Returns `null` if some needed information is missing.
-Expression[] erpTransform(Expression[] stms){
+Expression[] erpTransform(Expression[] stms,SetX!Id loopCaptured=SetX!Id.init){ // (`loopCaptured`: the variables that the function of an enclosing loop captures)
 	bool ok;
-	auto r=erpTransformImpl(stms,[],ok);
+	auto r=erpTransformImpl(stms,[],ok,loopCaptured);
 	return ok?(r?r:[]):null;
 }
 // `tail`: statements to execute at the end of `stms` (a call to an enclosing join point)
-Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
+Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok,SetX!Id loopCaptured){
 	Expression.CopyArgs cargs;
 	Expression[] r;
 	foreach(i,s;stms){
@@ -6383,14 +6391,14 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok){
 			auto vars=erpKey(s) in erpJoins;
 			if(!vars) return null;
 			bool rok;
-			auto ntrest=erpTransformImpl(rest,tail,rok);
+			auto ntrest=erpTransformImpl(rest,tail,rok,loopCaptured);
 			if(!rok) return null;
-			kdef=erpJoinPoint(s,ntrest,*vars,ntail);
+			kdef=erpJoinPoint(s,ntrest,*vars,ntail,loopCaptured);
 			if(!kdef) return null;
 		}
 		bool transformBlock(CompoundExp b){
 			bool bok;
-			auto nb=erpTransformImpl(b.s,ntail,bok);
+			auto nb=erpTransformImpl(b.s,ntail,bok,loopCaptured);
 			if(!bok) return false;
 			b.s=nb;
 			return true;
@@ -6425,7 +6433,7 @@ bool erpMentionsBodyWitness(Expression t,FunctionDef fd){
 	});
 }
 // builds `def k(params){ rest }` and the call `return k(args)` (in `tail`)
-Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Expression[] tail){
+Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Expression[] tail,SetX!Id loopCaptured){ // (`loopCaptured`: variables that the join point captures as well, as for `const` variables, see `erpTransform`)
 	import ast.substitute:statementFreeVarsImpl,defineLhsBoundVarsImpl;
 	Expression.CopyArgs cargs;
 	SetX!Id used; // (not those that `rest` defines before it reads them, e.g., `x` in `x:=vector(0,…); n:=x.length;`)
@@ -6446,10 +6454,10 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	for(bool changed=true;changed;){
 		changed=false;
 		foreach(v;vars){
-			if(v.name !in used||v.isConst) continue;
+			if(v.name !in used||v.isConst||v.name in loopCaptured) continue;
 			foreach(id;v.type.freeIdentifiers){
 				auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
-				if(n in used||n !in defined||!vars.any!(w=>w.name==n&&!w.isConst)) continue;
+				if(n in used||n !in defined||!vars.any!(w=>w.name==n&&!w.isConst&&w.name !in loopCaptured)) continue;
 				used.insert(n);
 				changed=true;
 			}
@@ -6458,19 +6466,19 @@ Expression erpJoinPoint(Expression s,Expression[] rest,ERPVar[] vars,out Express
 	Parameter[] params;
 	Expression[] args,definitions; // (of the lifted variables and of the values that are coerced back)
 	SetX!Id localNames;
-	foreach(v;vars) localNames.insert(v.name);
+	foreach(v;vars) if(v.name !in loopCaptured) localNames.insert(v.name); // (the calls in the function of the loop have the variables that it captures)
 	static if(language==silq){
 		// (the witnesses of opened values are not passed: the analysis of the transformed code declares them under other
 		// names, e.g., `n₍₁₎` for `x:𝔹^n₍₁₎` after `x:=e` with `e:𝔹[]`; the join point opens the values again, with the same
 		// witnesses, see `ast.semantic_.openUnions`)
 		bool renamed(Identifier id){
 			auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
-			return vars.any!(w=>w.name==n&&w.renamed);
+			return n !in loopCaptured&&vars.any!(w=>w.name==n&&w.renamed); // (not those that the function of an enclosing loop captures, which keep their names)
 		}
 		SetX!Id opened;
 	}
 	foreach(v;vars){
-		if(v.name !in used||v.isConst) continue;
+		if(v.name !in used||v.isConst||v.name in loopCaptured) continue;
 		static if(language==silq) if(v.renamed) continue;
 		auto pname=new Identifier(v.name);
 		pname.loc=s.loc;
