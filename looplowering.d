@@ -2579,6 +2579,7 @@ private final class SliceNode{
 	SetX!Id cuses,cdefs,cstrong,cfresh; // (other classical values: they are logged; `cfresh`: defined by `:=`)
 	SetX!Id writtenBack; // (classical values that the inverse of a `with` transformation writes back, e.g., `k` for `with { c:=k; } do { c:=X(c); }`, which are among `cdefs`)
 	bool nonQfree;
+	Id[] witnesses; // (that the atom declares where it opens a value, e.g., `n₍₁₎` for `t:=dup(q)` with `q:𝔹[]`)
 	// classical results of calls that are not `qfree`: the main loop evaluates them before the atom and logs them
 	CallExp[] extracted;
 	SetX!Id xconsumed; // (consumed by the extracted calls)
@@ -2838,6 +2839,13 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(auto fd=cast(FunctionDef)x) if(fd.name){
 				n.defs.insert(fd.name.id);
 				n.strong.insert(fd.name.id);
+			}
+			static if(language==silq){
+				VarDecl[] witnesses;
+				if(auto de=cast(DefineExp)x) witnesses=de.witnesses;
+				else if(auto ae=cast(AssignExp)x) witnesses=ae.witnesses;
+				else if(auto oe=cast(OpenExp)x) if(oe.declares) witnesses=oe.witnesses;
+				foreach(w;witnesses) if(w&&w.name) n.witnesses~=w.name.id;
 			}
 			auto id=cast(Identifier)x;
 			if(!id||!isVar(id)) return true;
@@ -3754,7 +3762,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			}
 			foreach(li;logsAt[n.id]) if(logs[li].key!=LogKey.value) k=true;
 			final switch(n.kind){
-				case K.atom: k|=n.nonQfree||n.extracted.length||!writes||writesLive; break;
+				case K.atom: k|=n.nonQfree||n.extracted.length||!writes||writesLive||n.witnesses.any!(w=>w in mLive); break; // (also where it declares a witness that the main loop mentions, e.g., in the forget of the witness of a definition of the body of a `do`-`while` loop after the loop)
 				case K.ite,K.loop: k|=n.nonQfree||writesLive; break;
 				case K.with_: // (a transformation without a body is undone, but the inverse writes back what the transformation borrows, which the body may change)
 					foreach(ws;only(&n.consumed,&n.pconsumed,&n.writtenBack)) foreach(u;*ws) if(u in mLive) k=true;

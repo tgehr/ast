@@ -1594,7 +1594,78 @@ CompoundExp openUpdatedVariable(Expression e,Scope sc,ref StmFlags flags,bool re
 	return r;
 }
 static if(language==silq)
-Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool resetConst){ // (before a statement that updates a classical variable that the types of live classical variables mention, e.g., `n=3` for `x:!ℕ^n`, those types decay into the unions over the variable that they are members of, which keep its old value as their witness, by the definition `(x,…):=(x,…):⋃[n:!ℕ]. …`, which opens them, see `openUnions`: the analyzed definitions)
+bool mentionedAfter(Declaration decl,Scope sc){ // (whether the code that can run after the start of the update under analysis mentions `decl`, other than as a variable that a definition defines, before a definition of its name: an over-approximation of its later uses, which the analysis has not seen yet, see `decayTypeMentions`)
+	auto ids=only(decl.name.id,decl.getId); // (the later statements are not analyzed yet, and the declaration may be renamed)
+	bool named(Identifier y){ return ids.canFind(y.id)||y.meaning&&y.meaning.name&&ids.canFind(y.meaning.name.id); }
+	void collect(Expression lhs,ref SetX!Identifier defined){
+		while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+		if(auto lid=cast(Identifier)lhs) defined.insert(lid);
+		else if(auto tpl=cast(TupleExp)lhs) foreach(y;tpl.e) collect(y,defined);
+		else if(auto cat=cast(CatExp)lhs){ collect(cat.e1,defined); collect(cat.e2,defined); }
+	}
+	int scan(Expression e,scope bool delegate(Identifier) counts){ // (1: it mentions `decl`; -1: the code after it does not, as it defines a variable of its name, which that code mentions instead, or as it does not continue; 0: neither)
+		SetX!Identifier defined;
+		foreach(x;e.subexpressions) if(auto de=cast(DefineExp)x) collect(de.e1,defined);
+		foreach(x;e.subexpressions) if(auto y=cast(Identifier)x) if(y !in defined&&named(y)&&counts(y)) return 1;
+		auto u=e;
+		while(auto ce=cast(CompoundExp)u){ // (a statement with the forgets after it, see `ast.lastuse.canAddForget`)
+			if(ce.blscope_||!ce.s.length) break;
+			u=ce.s[0];
+		}
+		if(definitelyReturns(e)||isFalseAssert(u)) return -1;
+		if(auto de=cast(DefineExp)u){
+			SetX!Identifier lhs;
+			collect(de.e1,lhs);
+			foreach(y;lhs) if(named(y)) return -1;
+		}
+		return 0;
+	}
+	bool nextIteration(Expression loop,bool fromReset){ // (whether the rest of the iteration of the loop and the next one mention `decl`, before they define its name again at the top level or do not continue, as the later iterations mention their own variables of that name, e.g., `y` for `y:=dup(x)` in the body)
+		while(auto ce=cast(CompoundExp)loop){
+			if(ce.blscope_||!ce.s.length) break;
+			loop=ce.s[0];
+		}
+		Expression[] parts;
+		if(auto we=cast(WhileExp)loop) parts=we.cond~we.bdy.s;
+		else if(auto fe=cast(ForExp)loop) parts=fe.bdy.s;
+		else if(auto re=cast(RepeatExp)loop) parts=re.bdy.s;
+		else if(auto dw=cast(DoWhileExp)loop){
+			Expression[] rs;
+			if(dw.reset) rs=dw.reset.s;
+			parts=fromReset?dw.bdy.s~dw.cond~rs:dw.cond~rs~dw.bdy.s;
+		}else return scan(loop,y=>true)>0;
+		foreach(x;parts) if(auto r=scan(x,y=>true)) return r>0;
+		return false;
+	}
+	CompoundExp inner=null; // (the block of the statements that the scan has seen, which the statement under analysis in the current scope contains)
+	Scope[] passed; // (the scopes between them, e.g., of the branch of a conditional expression)
+	for(Scope s=sc;s;s=s.parentScope()){
+		foreach_reverse(p;s.positions){
+			bool within(CompoundExp b){ return b&&(b is inner||b.blscope_&&passed.canFind(b.blscope_)); }
+			bool kind(bool delegate(BlockScope) dg){ return passed.any!((t){ auto bs=cast(BlockScope)t; return bs&&dg(bs); }); }
+			if(inner&&kind(bs=>bs.isLoopBody||bs.isLoopEntry||bs.isLoopReset||bs.isDoWhileBody)){ // (the later iterations of a loop around it)
+				if(nextIteration(p[0].s[p[1]],kind(bs=>bs.isLoopReset))) return true;
+				if(definitelyReturns(p[0].s[p[1]])) return false;
+			}else{
+				auto all=!inner; // (the update itself)
+				SetX!Identifier skipped; // (the other branch of a conditional around it)
+				if(inner) foreach(x;p[0].s[p[1]].subexpressions){
+					if(auto we=cast(WithExp)x) if(within(we.trans)||within(we.bdy)) all=true; // (the inverse of the transformation runs after the body)
+					if(auto ite=cast(IteExp)x) if(ite.othw) foreach(b;only(q(ite.then,ite.othw),q(ite.othw,ite.then))) if(within(b[0])) foreach(y;b[1].subexpressions) if(auto id=cast(Identifier)y) skipped.insert(id);
+				}
+				if(auto r=scan(p[0].s[p[1]],y=>all||!y.isSemCompleted()&&!y.isSemError()&&y !in skipped)) return r>0; // (otherwise, the parts that the analysis has seen ran before the update)
+			}
+			foreach(x;p[0].s[p[1]+1..$]) if(auto r=scan(x,y=>true)) return r>0;
+			inner=p[0];
+			passed=[];
+		}
+		if(cast(FunctionScope)s) break;
+		passed~=s;
+	}
+	return false;
+}
+static if(language==silq)
+Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool resetConst){ // (before a statement that updates a classical variable that the types of live variables mention, e.g., `n=3` for `x:!ℕ^n`, those types decay into the unions over the variable that they are members of, which keep its old value as their witness, by the definition `(x,…):=(x,…):⋃[n:!ℕ]. …`, which opens them, see `openUnions`: the analyzed definitions)
 	Identifier[] targets;
 	void collect(Expression lhs){
 		while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
@@ -1615,16 +1686,16 @@ Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool res
 		if(!dependents.length) continue;
 		Expression[] types;
 		bool ok=true;
-		bool visible(Declaration d){ // (the current version, not one of an enclosing scope that this one consumed, e.g., in the body of a loop)
-			auto probe=new Identifier(d.getId);
+		bool visible(Declaration d){ // (the current version, not one of an enclosing scope that this one consumed, e.g., in the body of a loop; by its name, which a lowered loop renames, see `Scope.rename`)
+			auto probe=new Identifier(d.name.id);
 			probe.loc=id.loc;
 			return sc.lookup(probe,false,true,Lookup.probing,null) is d;
 		}
-		Declaration[] decaying; // (the classical ones: the quantum ones can be forgotten early instead, where they can be uncomputed, see `Scope.tryUncomputeTypeDependents`)
+		Declaration[] decaying; // (a quantum one only where the code after the update mentions it or where it cannot be forgotten at its last use: otherwise, it is forgotten early there, which is the same uncomputation, see `Scope.tryUncomputeTypeDependents`)
 		foreach(d;dependents){
 			auto vd=cast(VarDecl)d;
 			auto type=vd?typeForDecl(vd):null;
-			if(type&&!type.isClassical()) continue;
+			if(type&&!type.isClassical()&&!mentionedAfter(vd,sc)&&!sc.allowMerge&&sc.lastUses.canForget(vd,true,false)) continue;
 			if(!vd||!type||vd is decl||vd.isConst||vd.isTemporary||!vd.scope_||vd.scope_.getFunction() !is sc.getFunction()||!visible(vd)||sc.isConst(vd)||typeConstBlocked(vd,sc)||unfoldTypeVariables(type) !is type){ ok=false; break; } // (not a temporary, e.g., the rest of the container of a `for` loop, whose elements keep their type)
 			types~=type;
 			decaying~=vd;
@@ -1637,7 +1708,7 @@ Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool res
 		Expression variables(){
 			Expression[] ids;
 			foreach(d;dependents){
-				auto x=new Identifier(d.getId);
+				auto x=new Identifier(d.name.id);
 				x.loc=id.loc;
 				ids~=x;
 			}
@@ -1652,7 +1723,7 @@ Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool res
 		decay.loc=id.loc;
 		r~=statementSemantic(decay,sc,flags,resetConst);
 		void mark(Expression e){
-			if(auto v=cast(Identifier)e){ if(auto vd=cast(VarDecl)v.meaning) vd.decayed=true; }
+			if(auto v=cast(Identifier)e){ if(auto vd=cast(VarDecl)v.meaning) vd.decayed=!vd.vtype||vd.vtype.isClassical(); } // (a quantum version is redefined as any other, see `Scope.tryPrepareRedefine`)
 			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) mark(c);
 		}
 		mark(decay.e1);
@@ -3417,6 +3488,10 @@ CompoundExp compoundExpSemantic(CompoundExp ce, Scope sc, ref StmFlags flags, An
 			bool offered=bsc.loopContinuation.offer(ce.s,i,restriction_,resetConst);
 			auto codeAfter=bsc.codeAfterStatement;
 			bsc.codeAfterStatement=codeAfter||i+1<ce.s.length; // (also after a block of statements in the same scope)
+		}
+		static if(language==silq){
+			bsc.positions~=q(ce,i);
+			scope(exit) bsc.positions=bsc.positions[0..$-1];
 		}
 		e=statementSemantic(e,bsc,flags,resetConst:resetConst);
 		static if(language==silq) bsc.codeAfterStatement=codeAfter;
@@ -9832,7 +9907,13 @@ Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 				Expression.CopyArgs cargs={ preserveMeanings: true };
 				auto len=vt.num.copy(cargs);
 				len.loc=fe.loc;
-				return expressionSemantic(len,context);
+				auto rlen=expressionSemantic(len,context);
+				static if(language==silq) if(!context.inType&&!fe.e.type.isClassical()&&cast(Identifier)rlen&&rlen.isSemCompleted()){ // (a quantum vector can be forgotten after its last use here: the forget follows the length, which it cannot follow if it is an identifier, e.g., `n` for `q.length` with `q:𝔹^n`, see `ast.lastuse.LastUses.constUse`)
+					auto tae=new TypeAnnotationExp(rlen,rlen.type,TypeAnnotationType.annotation);
+					tae.loc=fe.loc;
+					rlen=expressionSemantic(tae,context);
+				}
+				return rlen;
 			}else if(auto tt=cast(TupleTy)ety){
 				auto len=LiteralExp.makeInteger(tt.length);
 				len.loc=fe.loc;

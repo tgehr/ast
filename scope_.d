@@ -2255,6 +2255,7 @@ abstract class Scope{
 
 	bool diverges=false;
 	bool quantumControlled=false;
+	static if(language==silq) Q!(CompoundExp,size_t)[] positions; // (the statements under analysis in this scope: their blocks and indices, the innermost last, see `ast.semantic_.mentionedAfter`)
 	bool allowMerge=false;
 	private bool sinceMergeLogged; // (whether `removedTracked`, `consumedLogged` and the log of `dependencies` from `depsMark` hold all changes since the last merge, also of the enclosing scopes before the nestings, see `MergeKeys`)
 	private bool logSinceNesting; // (whether the logs of `rnsymtab` and `dependencies` hold all changes since the nesting, see `MergeKeys`)
