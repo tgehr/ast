@@ -348,7 +348,7 @@ void explainNoMember(FieldExp fe,Scope sc){
 	ProductTy ft;
 	auto fname=visibleFunction(name,sc,ft);
 	if(!fname.length){
-		if(auto hint=foreignNameHint(name,true)) sc.note(hint,fe.loc);
+		if(name!="length") if(auto hint=foreignNameHint(name,true)) sc.note(hint,fe.loc); // (not `.length` itself, e.g., for a value of a union type in a type)
 		return;
 	}
 	if(auto use=methodCallSuggestion(fname,ft,receiver,ty)){
