@@ -10164,6 +10164,7 @@ Expression expressionSemanticImpl(IndexExp idx,ExpSemContext context){
 			propErr(crepls[replaceIndexLoc].write,idx);
 	idx.type=checkIndex(idx.e.type,idx.a,idx,idx.isSemError?null:sc);
 	if(!idx.type) idx.setSemError();
+	static if(language==silq) if(idx.isClassical_&&idx.type&&(isType(idx)||isQNumeric(idx))) idx.type=getClassicalTy(idx.type); // (e.g., a copy of a classical type `!τ[i]`, see `IndexExp.getClassical`)
 	static if(language==silq)
 	if(replaceIndex){
 		assert(cid&&cid.meaning);
