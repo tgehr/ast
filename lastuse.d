@@ -1005,8 +1005,7 @@ final class LastUse{
 			// already reported
 		}else if(decl.scope_){
 			auto d=decl,sc=decl.scope_;
-			if(cast(Parameter)d) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",d.kind,d.getName),d.loc);
-			else sc.error(format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName),d.loc);
+			sc.error(notConsumedMessage(d),d.loc);
 			if(cast(ReturnExp)parent) sc.note("at function return",parent.loc);
 			else if(use) sc.note("cannot be forgotten after its last use here",use.loc);
 			sc.explainUnknownDependency(d,dep);

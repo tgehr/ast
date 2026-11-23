@@ -260,6 +260,24 @@ bool acrossLoop(Scope a,Scope b){
 	return !loopContext(a,b,loops)||loops.length!=0;
 }
 
+static if(language==silq)
+Parameter openedParameter(Declaration d){ // (the `moved` parameter whose opening definition `p:=p` at the start of the body declares `d`, see `ast.semantic_.openParameters`, also where a nested scope splits it, but not after an update)
+	auto vd=cast(VarDecl)d;
+	while(vd&&vd.splitFrom) vd=cast(VarDecl)vd.splitFrom;
+	if(!vd||cast(Parameter)vd||!vd.name||!vd.scope_) return null;
+	auto fd=vd.scope_.getFunction();
+	if(!fd||!fd.body_||vd.scope_ !is fd.body_.blscope_) return null;
+	foreach(p;fd.params) if(!p.isConst&&p.witnessNames.length&&p.name&&p.name.id==vd.name.id&&p.loc.rep is vd.loc.rep) return p;
+	return null;
+}
+string notConsumedMessage(Declaration d){ // (a parameter could also be `const`)
+	import std.format:format;
+	auto p=cast(Parameter)d;
+	static if(language==silq) if(!p) p=openedParameter(d);
+	if(p) return format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",p.kind,p.getName);
+	return format("%s `%s` is not consumed (perhaps return it)",d.kind,d.getName);
+}
+
 class Parameter: VarDecl{
 	this(bool isConst, Identifier name, Expression type){
 		super(name); this.dtype=type;
@@ -888,8 +906,7 @@ class EarlyReturnForgottenDecl: ConsumedDecl{
 		import std.format:format;
 		if(isSemError()) return true; // (report only once)
 		setSemForceError();
-		if(cast(Parameter)decl) sc.error(format("%s `%s` is not consumed (perhaps return it or annotate it `const`)",decl.kind,decl.getName),decl.loc);
-		else sc.error(format("%s `%s` is not consumed (perhaps return it)",decl.kind,decl.getName),decl.loc);
+		sc.error(notConsumedMessage(decl),decl.loc);
 		sc.note("at function return",ret.loc);
 		sc.note(format("`%s` cannot be forgotten before the conditional, as it is used again here",decl.getName),id.loc);
 		return true;

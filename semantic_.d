@@ -1475,20 +1475,49 @@ private bool openWithKnownWitnesses(OpenExp oe,Scope sc){ // (the witnesses of a
 	return open(p.witnesses,uses);
 }
 static if(language==silq)
-void openParameters(FunctionDef fd,FunctionScope fsc){ // (the parameters of union types are opened at the start of the body: a `moved` one by the definition `p:=p`, a `const` one by the witnesses that its uses read, see `OpenExp`)
+bool writesVariable(Expression body_,Id name){ // (whether the statements assign, define, update, forget or move a variable of the name, also in nested scopes)
+	bool named(Expression x){
+		for(;;){
+			if(auto tae=cast(TypeAnnotationExp)x) x=tae.e;
+			else if(auto idx=cast(IndexExp)x) x=idx.e;
+			else if(auto sl=cast(SliceExp)x) x=sl.e;
+			else break;
+		}
+		if(auto id=cast(Identifier)x) return id.id==name;
+		if(auto tpl=cast(TupleExp)x) return tpl.e.any!named;
+		if(auto vec=cast(VectorExp)x) return vec.e.any!named;
+		if(auto ce=cast(CallExp)x) return named(ce.arg); // (a reversed call)
+		return false;
+	}
+	foreach(x;body_.subexpressions){
+		if(auto de=cast(DefineExp)x){ if(named(de.e1)) return true; }
+		else if(auto ae=cast(AAssignExp)x){ if(named(ae.e1)) return true; }
+		else if(auto fe=cast(ForgetExp)x){ if(named(fe.var)) return true; }
+		else if(auto id=cast(Identifier)x){ if(id.moved&&id.id==name) return true; }
+		else if(auto ce=cast(CallExp)x){ if(auto f=cast(Identifier)ce.e) if(f.id==Id.s!"move"&&named(ce.arg)) return true; }
+	}
+	return false;
+}
+static if(language==silq)
+void openParameters(FunctionDef fd,FunctionScope fsc){ // (the parameters of union types are opened at the start of the body: a `moved` one by the definition `p:=p`, a `const` one by the witnesses that its uses read, see `OpenExp`; a `moved` array by the definition `p:=p` as well, see `opensArray`, if it is quantum or the body changes it: a classical one that the body does not change keeps its type, which the types of its values can mention, e.g., `vector(a.length,0:𝔹)`)
 	if(!fd.body_||Id.s!"silq-loop" in fd.attributes||Id.s!"silq-join" in fd.attributes) return; // (functions that the loop lowering generates, whose parameters keep their types, as in the loops)
 	Expression[] definitions;
 	foreach(p;fd.params){
+		if(!p.name||p.name.id==Id.s!"_") continue;
 		auto ut=cast(UnionTy)p.vtype;
-		if(!ut||!p.name||p.name.id==Id.s!"_") continue;
-		if(!p.witnessNames.length) for(Expression t=ut;cast(UnionTy)t;t=(cast(UnionTy)t).cod) p.witnessNames~=witnessName((cast(UnionTy)t).name);
+		bool array=!ut&&!p.isConst&&!p.typeConstBlocker&&cast(ArrayTy)p.vtype&&(!p.vtype.isClassical()||writesVariable(fd.body_,p.name.id)); // (not one that the type of the function mentions, which is `const`)
+		if(!ut&&!array) continue;
+		if(!p.witnessNames.length){
+			if(array) p.witnessNames=[witnessName(Id.s!"n")];
+			else for(Expression t=ut;cast(UnionTy)t;t=(cast(UnionTy)t).cod) p.witnessNames~=witnessName((cast(UnionTy)t).name);
+		}
 		p.witnesses=[];
 		p.opened=[];
 		if(p.isConst){
 			if(!fd.body_.blscope_) fd.body_.blscope_=new BlockScope(fsc);
 			declareWitnesses(ut,p.loc,p.witnesses,p.opened,p.witnessNames,fd.body_.blscope_);
-		}else{
-			auto lhs=new Identifier(p.getId), rhs=new Identifier(p.getId);
+		}else if(!fd.body_.subexpressions.any!(s=>cast(DefineExp)s&&(cast(DefineExp)s).witnessNames==p.witnessNames)){ // (not again in a copy of an analyzed function, whose body has it, also in a nested statement, e.g., a function within the body of a loop that `--remove-loops` copies: its copy would open the array again with the same witness)
+			auto lhs=new Identifier(p.name.id), rhs=new Identifier(p.name.id); // (as written, e.g., not `b'` where a nested function renames `b`)
 			lhs.loc=rhs.loc=p.loc;
 			auto de=new DefineExp(lhs,rhs);
 			de.loc=p.loc;
