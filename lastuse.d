@@ -456,7 +456,7 @@ final class LastUse{
 		d=climbInto(d,sc.parent); // (in the code after the conditional, see `NestedScope.continuedLog`)
 		if(d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ is sc){ // (the version of the branch, which the code after the conditional continues)
 			d=d.mergedFrom[0];
-			while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=d.splitFrom;
+			while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=sourceVersion(d,continued); // (also through a nested conditional that the branch continues, e.g., `a` for `v0` in `if k { if l { x:=(a,true); assert(false); } } else { a:=X(a); … assert(false); } forget(v0);` after `v0:=dup(a);`)
 		}
 		if(d&&d.scope_&&d.scope_ !is sc.parent&&sc.parent.isNestedIn(d.scope_)) d=sc.parent.getSplit(d); // (a version from further out)
 		return d&&d.scope_ is sc.parent?d:null;
@@ -2673,12 +2673,16 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return notedSets[k];
 	}
-	static bool notedContinued(LastUse lu,BlockScope b){ // (`b` continues the code after its conditional, which has the event `lu`, see `LastUse.noteContinued`)
-		auto log=logOf(b);
-		if(!log) return false;
-		auto start=log.startsOf(b)[0];
-		foreach(i;log.indices.get(lu,null)) if(i>=start) return true;
-		return false;
+	static bool notedContinued(LastUse lu,BlockScope b){ // (`b` continues the code after its conditional, which has the event `lu`, see `LastUse.noteContinued`; also the code after the conditional of the branch that contains that conditional, which the code after it continues in turn, e.g., `forget(v0)` for the `else` branch of `if l { … assert(false); }` in `if k { if l { … assert(false); } } else { … assert(false); } forget(v0);`)
+		for(;;){
+			auto log=logOf(b);
+			if(!log) return false;
+			auto start=log.startsOf(b)[0];
+			foreach(i;log.indices.get(lu,null)) if(i>=start) return true;
+			auto p=cast(BlockScope)b.parent;
+			if(!p||!LastUse.isBranch(p)) return false;
+			b=p;
+		}
 	}
 	bool siblingsNoted(size_t k,size_t l){ // (a branch that has the event `k`, and another branch of its conditional that has the event `l`; the branches that are continued only have the events of the code after their conditionals, and their siblings return)
 		foreach(x;noted(k)){
