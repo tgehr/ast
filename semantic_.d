@@ -2359,7 +2359,9 @@ Expression statementSemanticImpl(DefineExp de,Scope sc,ref StmFlags flags,bool r
 			return wrapAliasedConstReadDefs(r,de,sc);
 		}
 	}
-	return defineSemantic(de,sc,flags,resetConst:resetConst);
+	auto r=defineSemantic(de,sc,flags,resetConst:resetConst);
+	static if(language==silq) if(de.decays) if(auto id=cast(Identifier)de.e1) if(auto vd=cast(VarDecl)id.meaning) vd.decayed=!vd.vtype||vd.vtype.isClassical(); // (as for the decay itself, see `decayTypeMentions`)
+	return r;
 }
 Expression statementSemanticImpl(AAssignExp ae,Scope sc,ref StmFlags flags,bool resetConst=true){
 	static if(language==silq) // TODO: replace hoisting with more general solution

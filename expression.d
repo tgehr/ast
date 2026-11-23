@@ -2240,6 +2240,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		Expression[] opened; // (the unions, the inner ones with the witnesses of the outer ones, and the member)
 		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍₁₎+1](x)` in a lowered loop)
 		bool openedArray; // (the definition that this one is a copy of opened an array, see `ast.semantic_.openedAsArray`)
+		static if(op==Tok!":=") bool decays; // (the variable that it defines has the value of a version that a decay defines, see `VarDecl.decayed`, e.g., after a `do`-`while` loop that `--remove-loops` lowers)
 	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
@@ -2262,6 +2263,7 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
 				r.openedArray=witnesses.length?!!cast(ArrayTy)opened[witnesses.length-1]:openedArray;
 			}
+			static if(language==silq) static if(op==Tok!":=") r.decays=decays;
 			return r;
 		}
 		override string toStringImpl(int cl,int cr){

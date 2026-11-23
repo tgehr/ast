@@ -4783,6 +4783,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	SetX!Id replayedParams; // (carried variables whose values at the exit are computed again after the loop instead of being returned)
 	SetX!Id convertedCarried; // (names of carried variables that the body defines with a type that converts to the type of the parameter, see `strongerExits`)
 	static if(isDoWhile){ // (the definitions of the body that are available after the loop are returned as well)
+		SetX!Id decayedExits; // (the variables whose versions at the exit a decay defines: so do their definitions after the loop, see `DefineExp.decays`)
+		static if(language==silq) if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars) if(d.mergedInto.name) if(auto vd=cast(VarDecl)d.mergedInto.canonicalSource) if(vd.decayed) decayedExits.insert(d.mergedInto.name.id);
 		Q!(Identifier,Expression,Expression)[] exitLocals; // (name, type, type in the result of the function)
 		SetX!Id paramNames,changed; // (`changed`: names of the values that the loop defines or changes)
 		foreach(p;allParams) paramNames.insert(p[1].name.id);
@@ -5321,6 +5323,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		coerced.loc=e[0].loc;
 		auto co=new DefineExp(e[0].copy(cargsDefault),coerced);
 		co.loc=e[0].loc;
+		static if(language==silq) co.decays=e[0].id in decayedExits;
 		exitCoercions~=co;
 		exitCoercionTypes~=e[1];
 	}
@@ -5338,6 +5341,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		coerced.loc=id.loc;
 		auto co=new DefineExp(id.copy(cargsDefault),coerced);
 		co.loc=id.loc;
+		static if(language==silq) co.decays=id.id in decayedExits;
 		exitCoercions~=co;
 		exitCoercionTypes~=s.front[1];
 	}
@@ -5430,6 +5434,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				assgnTpl1.loc=loop.loc;
 				auto assgnTpl2=new TupleExp(cast(Expression[])resultConstTmpNames.map!(id=>id.copy(cargsDefault)).array);
 				assgnTpl2.loc=loop.loc;
+				static if(language==silq) foreach(e;assgnTpl2.e) if(auto id=cast(Identifier)e) id.moved=true; // (the result of the function does not outlive the assignment, as for `exitCoercions`)
 				auto assgn=new AssignExp(assgnTpl1,assgnTpl2);
 				assgn.loc=loop.loc;
 				stmts~=assgn;
@@ -5444,6 +5449,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 					coerced.loc=loop.loc;
 					auto co=new DefineExp(new Identifier(id.id),coerced);
 					co.loc=co.e1.loc=loop.loc;
+					static if(language==silq) co.decays=id.id in decayedExits;
 					constCoercions~=co;
 					constCoercionTypes~=s.front[1];
 				}
