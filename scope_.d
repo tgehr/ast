@@ -4464,6 +4464,7 @@ class NestedScope: Scope{
 		continuedLog.starts[bs]=continuedLog.starts.get(bs,null)~continuedLog.events.length;
 	}
 	Q!(Declaration,LastUse)[] forgottenAtSplit; // (versions that are uncomputed at their split, with the last uses that keep their dependencies there, see `dependenciesAtSplit`)
+	Declaration[] uncomputedAtSplitByForget; // (those of them that a `forget` after the merges of this branch uncomputes, which the code generator forgets on entry, see `ast.semantic_.expressionSemanticImpl(ForgetExp)`)
 	final Q!(Declaration,Dependency)[] dependenciesAtSplit(){ // (they are split before the variables that those mention)
 		return forgottenAtSplit.map!(f=>q(f[0],f[1].kind==LastUse.Kind.lazySplit?f[1].depAtSplit:f[1].dep)).array;
 	}

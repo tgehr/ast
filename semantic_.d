@@ -9418,7 +9418,11 @@ Expression expressionSemanticImpl(ForgetExp fe,ExpSemContext context){
 				imported!"ast.lastuse".LastUse split;
 				bool forgettable=nmeaning&&sc.dependencyTracked(meaning)&&sc.canForget(meaning,true);
 				bool uncomputedAtSplit=nmeaning&&!forgettable&&sc.dependencyTracked(meaning)&&sc.lastUses.dependencyAtSplit(meaning,sc,atSplit,split); // (not used since it was split from a version outside a conditional, before a branch consumed what it depends on)
-				if(uncomputedAtSplit&&split.scope_ !is sc) (cast(NestedScope)split.scope_).forgottenAtSplit~=q(split.decl,split);
+				if(uncomputedAtSplit&&split.scope_ !is sc){
+					auto nsc=cast(NestedScope)split.scope_;
+					nsc.forgottenAtSplit~=q(split.decl,split);
+					nsc.uncomputedAtSplitByForget~=split.decl; // (the code after the merges cannot recompute it, as the branch consumes what it depends on)
+				}
 				if(forgettable||uncomputedAtSplit){
 					id.scope_=sc;
 					id.byRef=true;
