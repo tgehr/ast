@@ -831,7 +831,8 @@ final class LastUse{
 				import ast.semantic_:undefinedIdentifierError;
 				lu.use.setSemForceError();
 				lu.decl.setSemForceError();
-				undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,at,cause,at is dup.use?null:dup.use,true,false,cause.id in (cast(BlockScope)nsc).keptValues)],lu.scope_);
+				auto kept=cause.id in (cast(BlockScope)nsc).keptValues;
+				undefinedIdentifierError(lu.use,[new OutOfScopeDecl(lu.decl,at,cause,at is dup.use?null:dup.use,true,false,kept,kept&&(cast(BlockScope)nsc).keptAfterAbort)],lu.scope_);
 				return;
 			}
 		}
@@ -1517,6 +1518,7 @@ final class LastUse{
 							cvd.outOfScopeMerged=mvd.outOfScopeMerged;
 							cvd.outOfScopeDiverged=mvd.outOfScopeDiverged;
 							cvd.outOfScopeKeptValue=mvd.outOfScopeKeptValue;
+							cvd.outOfScopeKeptAfterAbort=mvd.outOfScopeKeptAfterAbort;
 						}
 						nsc.lastUses.cancelImplicitDup(cdecl);
 					}else if(nsc.lastUses.canForget(cdecl,false,false)){

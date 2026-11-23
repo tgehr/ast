@@ -1764,12 +1764,19 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	static if(language==silq){
 		auto bothDiverge=definitelyReturns(ite.then)&&definitelyReturns(ite.othw);
 		AbortingBranchEnd[] abortEnds;
+		if(!continued&&!quantumControl&&!sc.quantumControlled&&!insideDoWhileBody(sc)&&sc.returnInBodyBlocks()) foreach(i,b;[ite.then,ite.othw]){ // (a branch that aborts on every path, as one that returns, see `continuedBranch`: the code after the conditional continues the other one where a `return` could end the function; decided after the analysis of the branches, which decides whether they abort, e.g., a call of a function whose return type is `⊥`)
+			auto o=i?ite.then:ite.othw;
+			if(!definitelyReturns(b)||containsReturn(b)||definitelyReturns(o)||containsReturn(o)) continue;
+			continued=o;
+			b.blscope_.returningBeforeContinuation=true;
+			break;
+		}
 	}
 	foreach(branch;only(ite.then,ite.othw)){
 		if(definitelyReturns(branch)){
 			branch.blscope_.returns=returnsOnEveryPath(branch);
 			static if(language==silq) if(bothDiverge) if(auto end=abortingBranchEnd(branch)) abortEnds~=end;
-			branch.blscope_.closeUnreachable(sc,null,mentionsOf(branch));
+			branch.blscope_.closeUnreachable(sc,null,mentionsOf(branch),branch.blscope_.returningBeforeContinuation&&!containsReturn(branch));
 		}
 	}
 	auto condAborts=ite.cond.type&&isEmpty(ite.cond.type);
@@ -2652,6 +2659,7 @@ bool finalizeLoopIteration(
 	propErr(bdy,loopExp);
 	auto returns=definitelyReturns(bdy)||noNextIteration;
 	auto bsc=bdy.blscope_;
+	static if(language==silq) bsc.returningBeforeContinuation=returns&&!noNextIteration&&!containsReturn(bdy)&&!sc.quantumControlled&&!insideDoWhileBody(sc)&&sc.returnInBodyBlocks(); // (a body that aborts on every path: the code after the loop continues the path that does not run it, as after a conditional whose branch aborts, see `statementSemanticImpl(IteExp)`, and as the conditional that `--remove-loops` lowers the loop to)
 	constForgets=loopConstForgetCandidates(sc,bsc);
 	if(sc.mergeLoop(returns,state.forgetScope,bsc,noNextIteration?null:mentionsOf(bdy))){
 		sc.note("possibly consumed in "~kind~" loop", loopExp.loc);

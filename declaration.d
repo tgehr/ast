@@ -178,6 +178,7 @@ class VarDecl: Declaration{
 	bool outOfScopeMerged; // (`outOfScopeCause` stands for the conditional whose merge made the dependency unknown, see `Scope.cancelDup`)
 	bool outOfScopeDiverged; // (the merge after branches that diverge, see `OutOfScopeDecl.diverged`)
 	bool outOfScopeKeptValue; // (the merge of versions that keep the value, see `OutOfScopeDecl.keptValue`)
+	bool outOfScopeKeptAfterAbort; // (see `OutOfScopeDecl.keptAfterAbort`)
 	bool mergeWitness; // (declared by the merge of a conditional, see `ast.scope_.Scope.mergeWitnesses`)
 	bool decayed; // (a classical version that the decay of its type defines, which a redefinition can forget, see `ast.semantic_.decayTypeMentions`)
 	void setTemporary(bool isTemporary){
@@ -809,11 +810,12 @@ class OutOfScopeDecl: ConsumedDecl{
 	bool merged; // (`cause` stands for the conditional whose merge made the dependency unknown)
 	bool diverged; // (the merge of one branch after branches that diverge, whose merged versions do not depend on each other, see `Scope.merge`)
 	bool keptValue; // (the merge of versions of the dependency that all keep its value from before the conditional, see `BlockScope.keptValues`)
+	bool keptAfterAbort; // (`keptValue`, where an abort consumed it, see `BlockScope.keptAfterAbort`)
 	override bool sameExplanation(DeadDecl other){
 		auto o=cast(OutOfScopeDecl)other;
-		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse&&o.merged==merged&&o.diverged==diverged&&o.keptValue==keptValue;
+		return o&&o.use is use&&o.cause is cause&&o.dupUse is dupUse&&o.merged==merged&&o.diverged==diverged&&o.keptValue==keptValue&&o.keptAfterAbort==keptAfterAbort;
 	}
-	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null,bool merged=false,bool diverged=false,bool keptValue=false)in{
+	this(Declaration decl,Identifier use,Identifier cause,Identifier dupUse=null,bool merged=false,bool diverged=false,bool keptValue=false,bool keptAfterAbort=false)in{
 		assert(!!cause);
 	}do{
 		super(decl,use);
@@ -822,6 +824,7 @@ class OutOfScopeDecl: ConsumedDecl{
 		this.merged=merged;
 		this.diverged=diverged;
 		this.keptValue=keptValue;
+		this.keptAfterAbort=keptAfterAbort;
 	}
 	override void explain(string kind,Scope sc){
 		import std.format:format;
@@ -831,7 +834,7 @@ class OutOfScopeDecl: ConsumedDecl{
 		if(dupUse&&dupUse !is use)
 			sc.note(format("`%s` was used in a consuming position here",dupUse.name),dupUse.loc);
 		if(merged&&diverged) sc.note(format("`%s` not recomputable after this conditional, which merges its dependency `%s` after a branch that diverges",use.name,cause.name),cause.loc);
-		else if(merged&&keptValue) sc.note(format("`%s` not recomputable after this conditional, which merges its dependency `%s` after a `return` on some path",use.name,cause.name),cause.loc);
+		else if(merged&&keptValue) sc.note(format("`%s` not recomputable after this conditional, which merges its dependency `%s` after %s on some path",use.name,cause.name,keptAfterAbort?"an abort":"a `return`"),cause.loc);
 		else if(merged) sc.note(format("`%s` not recomputable after this conditional, which redefines its dependency `%s` on some path",use.name,cause.name),cause.loc);
 		else sc.note(format("`%s` not recomputable after dependency `%s` was consumed here",use.name,cause.name),cause.loc);
 	}

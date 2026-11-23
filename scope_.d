@@ -1603,7 +1603,7 @@ abstract class Scope{
 				auto cvd=vd;
 				for(auto svd=cast(VarDecl)vd.splitFrom;!cvd.outOfScopeCause&&svd;svd=cast(VarDecl)svd.splitFrom) if(svd.outOfScopeCause&&svd.outOfScopeUse is use) cvd=svd; // (consumed with the version that it was split from)
 				if(cvd.outOfScopeCause){
-					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged,cvd.outOfScopeDiverged,cvd.outOfScopeKeptValue);
+					cd=new OutOfScopeDecl(decl,use,cvd.outOfScopeCause,cvd.outOfScopeDup,cvd.outOfScopeMerged,cvd.outOfScopeDiverged,cvd.outOfScopeKeptValue,cvd.outOfScopeKeptAfterAbort);
 					vd.outOfScopeUse=use;
 				}
 			}
@@ -2241,7 +2241,7 @@ abstract class Scope{
 			auto bs=cast(BlockScope)s;
 			if(!bs) return false;
 			auto p=bs.parentScope();
-			if(cast(FunctionScope)p) return true;
+			if(auto fsc=cast(FunctionScope)p) return fsc.fd&&fsc.fd.body_&&fsc.fd.body_.blscope_ is bs; // (not, e.g., the block of a `let` expression in a type that is analyzed in the scope of the function)
 			if(!bs.isBranch&&!bs.isLoopBody&&!bs.isLoopReset) return false;
 			s=p;
 		}
@@ -2259,7 +2259,7 @@ abstract class Scope{
 	private bool sinceMergeLogged; // (whether `removedTracked`, `consumedLogged` and the log of `dependencies` from `depsMark` hold all changes since the last merge, also of the enclosing scopes before the nestings, see `MergeKeys`)
 	private bool logSinceNesting; // (whether the logs of `rnsymtab` and `dependencies` hold all changes since the nesting, see `MergeKeys`)
 	bool dependenciesMerged=false; // (after a merge, the dependencies of a nested scope are those of the scope it was merged into)
-	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,Mentions mentions=null){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`)
+	final bool closeUnreachable(Scope mergeScope,Scope consumptionScope=null,Mentions mentions=null,bool continued=false){ // (`mentions`: the variables from outside that the branch mentions, the others are not split into it, e.g., for `if c { assert(false); }`; `continued`: the code after the conditional continues the other branch, as after a `return`, see `ast.semantic_.statementSemanticImpl(IteExp)`: the variables from outside that it only reads are not split into it either, e.g., `x` for `if c { y:=x&o; forget(y); assert(false); }`)
 		bool dropped(Declaration d){ return mentions&&d.scope_&&d.scope_ !is this&&!mentions(d); }
 		Id[] candidates; // (the variables that it does not drop: those that it mentions, and its own, which are among its changes)
 		auto restricted=mentions&&logSinceNesting&&rnsymtab.isLogging;
@@ -2277,6 +2277,7 @@ abstract class Scope{
 			if(dropped(d)) return CloseAction.remove; // (the conditional abort leaves it unsplit, as `assert` does, so that the backend can still uncompute values that depend on it at their last uses, e.g., `o:=dup(x)` in `if c { assert(false); } forget(o);`)
 			if(d.isLinear()&&(!consumptionScope||!d.scope_||d.scope_.isNestedIn(consumptionScope))||d.scope_ is this){ // (variables of scopes that enclose the merge are not split into the branch, e.g., through the scope of a `let` expression)
 				if(auto p=cast(Parameter)d) if(p.isConst) return CloseAction.keep;
+				if(continued&&d.scope_ !is this&&!(lastUses.canCancelImplicitDup(d)&&lastUses.canForget(d,true,false))) return CloseAction.remove;
 				return CloseAction.consume;
 			}
 			return CloseAction.remove;
@@ -2656,7 +2657,7 @@ abstract class Scope{
 		}
 		return false;
 	}
-	private Expression mergedConditional(bool mergesBranches,out bool diverged,Declaration dependency,out bool keptValue){ // (the conditional whose merge is in progress, of the branches or of this scope)
+	private Expression mergedConditional(bool mergesBranches,out bool diverged,Declaration dependency,out bool keptValue,out bool keptAfterAbort){ // (the conditional whose merge is in progress, of the branches or of this scope)
 		Scope sc=this;
 		if(mergingScopes.length) sc=mergingScopes[0];
 		auto bsc=cast(BlockScope)sc;
@@ -2664,13 +2665,14 @@ abstract class Scope{
 		diverged=bsc.parent.mergingScopes.count!(b=>!b.diverges)<2;
 		if(diverged&&!mergesBranches) return null; // (where the other branches return and the code after the conditional continues the branch, the merge does not join the paths)
 		keptValue=dependency&&dependency.getId in bsc.keptValues;
+		keptAfterAbort=keptValue&&bsc.keptAfterAbort;
 		return bsc.conditional;
 	}
 	private bool cancelDup(Declaration ndecl,LastUse lu,Identifier consumingUse,Declaration dependency=null,bool mergesBranches=false,Identifier explanation=null){ // (`explanation`: the consumption that made `dependency` not recomputable, if it is only forgotten at `consumingUse`)
 		auto unusedSplit=lu.kind==LastUse.Kind.lazySplit&&!lu.use&&lu.prevImplicitDup&&lu.prevImplicitDup.kind==LastUse.Kind.constPinned&&lu.scope_ is this; // (a version that this branch has not used, whose value an implicit `dup` before the split keeps, which a use in another branch pins, so that `pushDependencies` leaves the cancellation to the branches)
 		if(!unusedSplit&&!lu.canCancelImplicitDup()) return false;
-		bool merged=false,diverged=false,keptValue=false;
-		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged,dependency,keptValue)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
+		bool merged=false,diverged=false,keptValue=false,keptAfterAbort=false;
+		if(!consumingUse&&dependency) if(auto conditional=mergedConditional(mergesBranches,diverged,dependency,keptValue,keptAfterAbort)){ // (the merge of a conditional, which makes the dependency unknown: explained by the conditional)
 			consumingUse=new Identifier(dependency.getId);
 			consumingUse.loc=conditional.loc;
 			merged=true;
@@ -2681,6 +2683,7 @@ abstract class Scope{
 			vd.outOfScopeMerged=merged;
 			vd.outOfScopeDiverged=merged&&diverged;
 			vd.outOfScopeKeptValue=merged&&keptValue;
+			vd.outOfScopeKeptAfterAbort=merged&&keptAfterAbort;
 		}
 		if(consumingUse) if(auto vd=cast(VarDecl)ndecl) if(!vd.outOfScopeCause){
 			record(vd);
@@ -2759,7 +2762,7 @@ abstract class Scope{
 	private bool deferDupCancels(){
 		return !cancellingDeferredDups&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch);
 	}
-	private void cancelDeferredDups(){ // (those of the variables that no branch used, and of the variables that depend on them)
+	private void cancelDeferredDups(NestedScope continued=null){ // (those of the variables that no branch used, and of the variables that depend on them; `continued`: the branch that the code after the conditional continues)
 		auto todo=deferredDupCancels;
 		deferredDupCancels=[];
 		dropDeadOnPaths();
@@ -2769,6 +2772,10 @@ abstract class Scope{
 			auto ndecl=todo[i][0];
 			auto lu=lastUses.get(ndecl,true);
 			if(!lu||lu.kind!=LastUse.Kind.lazySplitSink||!lu.forwardTo||ndecl.isSemError()) continue; // (a branch uses it: the branches forget their versions before their consumptions)
+			if(continued){ // (the merge keeps the dependency of its version there, see `continueDependencies`: a consumption on the path of the other branch does not make it unavailable, e.g., `v1` for `v0:=!a; v1:=dup(v0); e:=v1; if c { a:=X(a); } else { t:=measure(v0); assert(false); } m:=measure(v1);`)
+				auto v=LastUse.versionIn(ndecl,continued);
+				if(continued.rnsymtab.get(v.getId,null) is v&&continued.dependencyTracked(v)&&!continued.getDependency(v).isTop) continue;
+			}
 			auto dependents=dependencies.mentioning(ndecl).dup;
 			while(lu.forwardTo) lu=lu.forwardTo;
 			auto forgets=lu.kind==LastUse.Kind.constUse&&!(lu.constConsume&&lu.constConsume.canCancelImplicitDup()); // (a `const` use after the implicit `dup`: forgotten there, before the conditional, see `forgetting`)
@@ -3021,6 +3028,13 @@ abstract class Scope{
 			}
 		}
 	}
+	private static NestedScope continuedBranch(NestedScope[] scopes){ // (the branch that the code after the conditional continues, see `continued` in `merge`)
+		static if(language==silq){
+			if(!scopes.any!((sc){ auto bs=cast(BlockScope)sc; return bs&&bs.diverges&&bs.returningBeforeContinuation; })) return null;
+			auto rest=scopes.filter!(sc=>!sc.diverges).array;
+			return rest.length==1?rest[0]:null;
+		}else return null;
+	}
 	final bool merge(bool quantumControl,NestedScope[] scopes...)in{
 		assert(scopes.length);
 	}do{
@@ -3029,7 +3043,10 @@ abstract class Scope{
 	final bool mergeLoop(bool returns,NestedScope forgetScope,NestedScope loopScope,Mentions mentions=null)in{
 		assert(equal(activeNestedScopes,only(forgetScope,loopScope)));
 	}do{
-		if(returns) loopScope.closeUnreachable(this,null,mentions);
+		if(returns){
+			auto bs=cast(BlockScope)loopScope;
+			loopScope.closeUnreachable(this,null,mentions,bs&&bs.returningBeforeContinuation);
+		}
 		return merge(false,!returns,forgetScope,loopScope);
 	}
 	final bool mergeLoopExit(BlockScope exitScope)in{ // (the exit scope is nested in the loop scope of the last iteration)
@@ -3053,7 +3070,7 @@ abstract class Scope{
 		}
 		auto entries=deadOnPaths;
 		static if(language==silq) foreach(e;entries) if(e[3].scope_&&scopes.any!(sc=>e[3].scope_.isNestedIn(sc))) reportUncomputableCondition(e[0],e[2]?e[2]:e[1].implicitDup?e[1]:null,e[3]);
-		if(deferredDupCancels.length) cancelDeferredDups();
+		if(deferredDupCancels.length) cancelDeferredDups(continuedBranch(scopes));
 		dropDeadOnPaths();
 		keepDeadOnPaths(entries);
 		static if(language==silq) if(!isLoop&&activeNestedScopes.all!(LastUse.isBranch)) foreach(sc;scopes) if(!sc.diverges) sc.forgetDeadSplits();
@@ -3195,7 +3212,7 @@ abstract class Scope{
 			static if(language==silq) if(type) return unfoldTypeVariables(type,(Declaration d)=>d.scope_&&scopes.any!(sc=>d.scope_.isNestedIn(sc)));
 			return type;
 		}
-		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; static if(language==silq) bs.mergeWitnesses=null; } // (of an earlier analysis)
+		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; bs.keptAfterAbort=false; static if(language==silq) bs.mergeWitnesses=null; } // (of an earlier analysis)
 		static if(language==silq) if(!isLoop&&scopes.all!(s=>LastUse.isBranch(s))){ // (see `BlockScope.keptValues`)
 			SetX!Id keptValues;
 			keys.forEach(scopes[0].rnsymtab,(Declaration d0){
@@ -3209,7 +3226,8 @@ abstract class Scope{
 				}
 				if(source&&scopes.any!(s=>s.rnsymtab.get(d0.getId,null) !is source)) keptValues.insert(d0.getId);
 			});
-			foreach(sc;scopes) if(auto bs=cast(BlockScope)sc) bs.keptValues=keptValues;
+			auto keptAfterAbort=!scopes.any!((s){ auto bs=cast(BlockScope)s; return bs&&bs.returnsOnSomePath; });
+			foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.keptValues=keptValues; bs.keptAfterAbort=keptAfterAbort; }
 		}
 		SetX!Id eagerIds; // (variables whose versions in the branches have no known dependency in some branch, but values that are merged as well depend on them: those depend on the merged versions instead, which the code generator merges first, see `genEagerMerges` in hqir.d)
 		static if(language==silq) if(!isLoop&&scopes.length>1&&scopes.all!(s=>LastUse.interleavable(s)&&!(cast(BlockScope)s).returnsOnSomePath)){
@@ -5032,12 +5050,13 @@ class BlockScope: NestedScope{
 	static if(language==silq) Id[] mergeWitnessVars; // (the merged variables of those witnesses, see `Scope.mergeWitnesses`)
 	static if(language==silq) Id[] mergeWitnessOf; // (the merged variables of the `mergeWitnesses`)
 	SetX!Id keptValues; // (the variables whose versions the merge of this branch merges although they all keep the value from before the conditional: a `return` on another path consumed it, which gives the branches new versions, e.g., `a` for `if k { } else { if l { return a; } }`; the merged versions do not depend on each other all the same, see `unknownAfterMerge` in `Scope.merge`)
+	bool keptAfterAbort=false; // (no branch returns: an abort on some path consumed them, whose conditional the code after it continues, e.g., `a` for `if k { } else { if l { x:=(a,b); assert(false); } }`, see `ast.semantic_.statementSemanticImpl(IteExp)`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
 	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path, and the code after the conditional does not continue the other branch: a `return` does not end the branch, see `dropsClassicalAtReturn`)
 	bool loweredReturns=false; // (`returningConditional`, but not in the body of a `do`-`while` loop: `--remove-loops` lowers the returns to assignments of the result, of a flag and of dummy values for what they consume, so that the branches reach the merge, see `erpLoopExplicit`)
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
-	bool returningBeforeContinuation=false; // (it returns on every path, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`)
+	bool returningBeforeContinuation=false; // (it returns on every path, or aborts on every path, see `ast.semantic_.statementSemanticImpl(IteExp)`, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`; or a loop body that aborts on every path, see `ast.semantic_.finalizeLoopIteration`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	static if(language==silq) AbortingBranchEnd loweredLoopEnd; // (the end of the branch after a loop that does not exit normally, as without its lowering, see `restoreBeforeLoop` and `abortingBranchEnd`)
 	bool keepConstLocals=false; // (not forgotten when merging, e.g., for a `with` transformation)

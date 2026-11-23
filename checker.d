@@ -991,6 +991,7 @@ class Checker {
 		struct Triple {
 			ast_decl.Declaration outer, dTrue, dFalse;
 		}
+		static bool continuesOther(ast_scope.NestedScope sc) { auto bs = cast(ast_scope.BlockScope) sc; return bs && bs.returningBeforeContinuation; } // (a branch that aborts, where the code after the conditional continues the other one, which may split variables that it only reads: it uses the outer versions, see `hqir.ScopeWriter.genSplit`)
 		IdMap!Triple splitVars;
 		foreach(decl; scTrue.splitVars) {
 			assert(decl.scope_ is scTrue);
@@ -998,28 +999,43 @@ class Checker {
 			assert(outer.scope_ is nscope);
 			splitVars[outer.getId] = Triple(outer, decl, null);
 		}
+		Id[] onlyFalse;
 		foreach(decl; scFalse.splitVars) {
 			assert(decl.scope_ is scFalse);
 			auto name = decl.splitFrom.getId;
 			Triple* t = splitVars.getPtr(name);
+			if(!t && continuesOther(scTrue)) {
+				assert(decl.splitFrom.scope_ is nscope);
+				splitVars[name] = Triple(decl.splitFrom, null, decl);
+				onlyFalse ~= name;
+				continue;
+			}
 			assert(t, format("ERROR: Split variable %s missing in if-true", name.str));
 			assert(decl.splitFrom is t.outer, format("ERROR: Split variable %s splitFrom scope mismatch", name.str));
 			t.dFalse = decl;
 		}
 
-		foreach(decl; scTrue.splitVars) {
-			auto name = decl.splitFrom.getId;
+		void split(Id name) {
 			Triple* t = splitVars.getPtr(name);
-			assert(t.dFalse, format("ERROR: Split variable %s missing in if-false", name));
+			assert(t.dFalse || continuesOther(scFalse), format("ERROR: Split variable %s missing in if-false", name));
 			auto vTrue = t.dTrue;
 			auto vFalse = t.dFalse;
 			auto vtype = ast_sem.typeForDecl(t.outer);
-			assert(typeForDecl(vTrue) == vtype, format("ERROR: Split variable %s changed type in if-true", name));
-			assert(typeForDecl(vFalse) == vtype, format("ERROR: Split variable %s changed type in if-false", name));
+			assert(!vTrue || typeForDecl(vTrue) == vtype, format("ERROR: Split variable %s changed type in if-true", name));
+			assert(!vFalse || typeForDecl(vFalse) == vtype, format("ERROR: Split variable %s changed type in if-false", name));
 			getVar(t.outer, false, "splitVars", cause);
-			ifTrue.defineVar(vTrue, "splitVars-if-true", cause);
-			ifFalse.defineVar(vFalse, "splitVars-if-false", cause);
+			void define(Checker c, ast_decl.Declaration d, string causeType) {
+				if(d) return c.defineVar(d, causeType, cause);
+				auto strict = c.strictScope;
+				c.strictScope = false;
+				c.defineVar(t.outer, causeType, cause);
+				c.strictScope = strict;
+			}
+			define(ifTrue, vTrue, "splitVars-if-true");
+			define(ifFalse, vFalse, "splitVars-if-false");
 		}
+		foreach(decl; scTrue.splitVars) split(decl.splitFrom.getId);
+		foreach(name; onlyFalse) split(name);
 	}
 
 	void visMerge(Checker ifTrue, Checker ifFalse, ast_exp.Expression cause) {
