@@ -4086,6 +4086,7 @@ abstract class Scope{
 		size_t numLastUses;
 		size_t numMovedCaptures;
 		SetX!Declaration consumedBefore; // (in the tables, although their last uses before the snapshot consume them: the splits that a `return` hides and inserts again, see `close`)
+		bool returnDropped; // (see `Scope.returnDropped`)
 	}
 	ScopeState getStateSnapshot(bool restoreable=false){
 		SymbolTable nsymtab=symtab.dup;
@@ -4111,6 +4112,7 @@ abstract class Scope{
 		r.numMergedNestedScopes=mergedNestedScopes.length;
 		r.numLastUses=lastUses.numAdded;
 		r.numMovedCaptures=numMovedCaptures;
+		r.returnDropped=returnDropped;
 		return r;
 	}
 	Declaration getSplit(Declaration decl,bool clearSplitInto=false,size_t since=0){
@@ -4203,6 +4205,7 @@ abstract class Scope{
 		rnsymtab.stopLog();
 		updateStateSnapshot(state);
 		dependencies=state.dependencies;
+		returnDropped=state.returnDropped; // (e.g., set by the code after a loop that does not exit normally, which is analyzed before the lowered loop, see `ast.looplowering.restoreBeforeLoop`)
 		resetDeclProps(state.declProps);
 		toRemove=state.toRemove;
 		symtab.clear();
