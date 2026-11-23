@@ -1803,14 +1803,20 @@ AbortingBranchEnd abortingBranchEnd(CompoundExp branch){ // (of a branch that di
 	return returns?null:bs.loweredLoopEnd;
 }
 static if(language==silq)
-void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // (both branches diverge, so the code after the conditional is not reachable: it continues the branches that abort, as the code after a statement that aborts continues it, e.g., `b` in `if c { b:=fail(b); } else { b:=(X(b),)[1]; } return measure(b);`; the variables from outside that the branches consumed get the versions that a merge of those branches would give, where all of them define one and their types join, but they are not merged from them, as the code after the conditional is not generated)
+void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // (both branches diverge, so the code after the conditional is not reachable: it continues the branches that abort, as the code after a statement that aborts continues it, e.g., `b` in `if c { b:=fail(b); } else { b:=(X(b),)[1]; } return measure(b);`; the variables from outside that the branches consumed get the versions that a merge of those branches would give, where all of them define one and their types join, but they are not merged from them, as the code after the conditional is not generated; so do the variables that all of them define, e.g., `r` in `if c { r:=1; assert(false); } else { r:=2; assert(false); } return r;`)
 	SetX!Id seen;
-	foreach(branch;only(ite.then,ite.othw)) foreach(split;branch.blscope_.splitVars){
-		auto id=split.getId;
-		if(id in seen) continue;
-		seen.insert(id);
-		auto dd=cast(DeadDecl)sc.rnsymtab.get(id,null);
-		if(!dd) continue; // (not consumed by the split)
+	Declaration[Declaration] continuedAs; // (the versions of the branches)
+	Dependency dependencyOf(Id id){ // (of the versions of the branches, with the versions that are continued, where it mentions only versions that are visible after the conditional)
+		auto dep=Dependency(false);
+		foreach(end;ends){
+			auto edep=end.dependencies.get(id,Dependency(true));
+			if(edep.isTop) return edep;
+			foreach(x;edep.dependencies) dep.dependencies.insert(continuedAs.get(x,x));
+		}
+		if(dep.dependencies.any!(x=>sc.rnsymtab.get(x.getId,null) !is x)) return Dependency(true);
+		return dep;
+	}
+	void continueVariable(Id id,DeadDecl dd){ // (`dd`: the version from outside that the branches consumed, if any)
 		Declaration first=null;
 		Expression type=null;
 		bool erroneous=false;
@@ -1825,7 +1831,7 @@ void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // 
 		}
 		if(first&&type.freeIdentifiers.any!(fid=>fid.meaning&&fid.meaning.scope_&&fid.meaning.scope_.getFunction() is sc.getFunction()&&sc.rnsymtab.get(fid.meaning.getId,null) !is fid.meaning)) first=null; // (it mentions a version that is not visible after the conditional, e.g., of a `const` local of a branch)
 		if(!first){ // (as for a merge, which reports a version that a branch cannot forget, see `Scope.merge`, where code follows)
-			if(sc.codeAfterStatement&&!erroneous&&!dd.consumedByError()){
+			if(sc.codeAfterStatement&&!erroneous&&!(dd&&dd.consumedByError())){
 				foreach(end;ends){
 					if(id !in end.unforgettable) continue;
 					auto d=end.table[id];
@@ -1835,13 +1841,32 @@ void continueAbortingBranches(IteExp ite,Scope sc,AbortingBranchEnd[] ends){ // 
 					break;
 				}
 			}
-			continue;
+			return;
 		}
+		auto dep=dependencyOf(id);
+		if(!dep.isTop&&dep.dependencies.length) dep=Dependency(true); // (the continued version could be forgotten only where the versions that it depends on are available, not at its definition)
+		if(!dd&&dep.isTop&&ends.all!(end=>id in end.droppable)) return; // (the branches can forget it, also at its last use, unless the code after the conditional uses it)
 		auto var=sc.addVariable(first,type,true);
-		if(!var) continue;
+		if(!var) return;
 		if(erroneous) var.setSemForceError();
-		sc.addDefaultDependency(var);
+		foreach(end;ends) continuedAs[end.table[id]]=var;
+		if(dep.isTop) sc.addDefaultDependency(var);
+		else sc.addDependency(var,dep);
 		sc.lastUses.definition(var,null);
+	}
+	foreach(branch;only(ite.then,ite.othw)) foreach(split;branch.blscope_.splitVars){
+		auto id=split.getId;
+		if(id in seen) continue;
+		seen.insert(id);
+		auto dd=cast(DeadDecl)sc.rnsymtab.get(id,null);
+		if(!dd) continue; // (not consumed by the split)
+		continueVariable(id,dd);
+	}
+	foreach(end;ends) foreach(id;end.fresh){
+		if(id in seen) continue;
+		seen.insert(id);
+		if(auto cur=sc.rnsymtab.get(id,null)) if(!cast(DeadDecl)cur) continue;
+		continueVariable(id,null);
 	}
 }
 
@@ -6059,9 +6084,11 @@ Identifier[] indexIdentifiers(IndexExp idx){
 bool guaranteedDifferentLocations(Expression e1,Expression e2,Location loc,Scope sc,InType inType){
 	e1=unwrap(e1), e2=unwrap(e2);
 	if(auto id1=cast(Identifier)e1)
-		if(auto id2=cast(Identifier)e2)
-			if(id1.name!=id2.name) // TODO: this may become imprecise
+		if(auto id2=cast(Identifier)e2){
+			import ast.reverse: nameOf;
+			if(nameOf(id1)!=nameOf(id2)) // (of the variables: an identifier may have the renamed name of its declaration, e.g., `b'` and `b` for the same `b` in a lowered loop, see `ArrayConsumer.consumeArray`) TODO: this may become imprecise
 				return true;
+		}
 	if(auto idx1=cast(IndexExp)e1){
 		if(auto idx2=cast(IndexExp)e2){
 			if(guaranteedDifferentLocations(idx1.e,idx2.e,loc,sc,inType))

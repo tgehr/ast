@@ -321,16 +321,38 @@ enum Lookup{
 static if(language==silq)
 final class AbortingBranchEnd{ // (the versions of the variables at the end of a branch that aborts, before it is closed, see `continueAbortingBranches`)
 	SymbolTable table;
-	SetX!Id unforgettable; // (variables from outside whose versions have quantum values without a known dependency)
+	SetX!Id unforgettable; // (variables whose versions have quantum values without a known dependency)
+	SetX!Id droppable; // (quantum variables of the branch that it can forget, also at their last uses, e.g., `q` for `q:=dup(b); b:=fail(b);`)
+	Id[] fresh; // (the variables that the branch defines, which are not from outside)
+	Dependency[Id] dependencies; // (of the versions of the variables)
 	this(BlockScope bs){
 		import ast.semantic_: typeForDecl;
 		table=bs.rnsymtab.dup;
-		foreach(split;bs.splitVars){
-			auto d=table.get(split.getId,null);
-			if(!d||cast(DeadDecl)d||d.isSemError()) continue;
+		void note(Declaration d,bool own=false){
 			auto type=typeForDecl(d);
-			if(type&&!type.isClassical()&&!(bs.dependencyTracked(d)&&!bs.getDependency(d).isTop)) unforgettable.insert(d.getId);
+			auto tracked=bs.dependencyTracked(d);
+			auto dep=tracked?bs.getDependency(d).dup:Scope.getDefaultDependency(d);
+			dependencies[d.getId]=dep;
+			if(!type||type.isClassical()) return;
+			if(own&&(!dep.isTop||bs.lastUses.canForget(d,true,false))) droppable.insert(d.getId);
+			else if(dep.isTop) unforgettable.insert(d.getId);
 		}
+		SetX!Id split;
+		foreach(s;bs.splitVars){
+			split.insert(s.getId);
+			auto d=table.get(s.getId,null);
+			if(!d||cast(DeadDecl)d||d.isSemError()) continue;
+			note(d);
+		}
+		void visit(Declaration d){
+			if(!d||cast(DeadDecl)d||d.scope_ !is bs||!cast(VarDecl)d||d.getId in split) return;
+			fresh~=d.getId;
+			if(!d.isSemError()) note(d,true);
+		}
+		if(bs.logSinceNesting&&bs.rnsymtab.isLogging){ // (its own variables are among its changes)
+			SetX!Id seen;
+			foreach(id;bs.rnsymtab.changeLog) if(id !in seen){ seen.insert(id); visit(table.get(id,null)); }
+		}else foreach(d;table.liveValues()) visit(d);
 	}
 }
 
