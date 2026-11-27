@@ -1839,6 +1839,7 @@ abstract class Scope{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
+		auto onDivergingPath=consumedOnDivergingPath; // (by a nested scope, see `NestedScope.consumeImpl`)
 		consumedOnDivergingPath=false;
 		lastUses.prepareChange(odecl);
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
@@ -1851,7 +1852,7 @@ abstract class Scope{
 				auto prevConsumingUse=consumingUse;
 				consumingUse=use;
 				scope(exit) consumingUse=prevConsumingUse;
-				pushDependencies(ndecl,true,splitting?null:use);
+				pushDependencies(ndecl,true,splitting?null:use,false,onDivergingPath);
 			}
 			recordConsumption(odecl,use);
 		}else if(odecl !is ndecl){
@@ -2629,11 +2630,13 @@ abstract class Scope{
 			return r;
 		}else return null;
 	}
-	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null,bool mergesBranches=false){ // (`mergesBranches`: the merge of several branches pushes their versions, also of one branch whose merged versions do not depend on each other, see `unknownAfterMerge` in `merge`)
+	final void pushDependencies(Declaration decl,bool keep,Identifier consumedAt=null,bool mergesBranches=false,bool onDivergingPath=false,bool notesOnly=false){ // (`mergesBranches`: the merge of several branches pushes their versions, also of one branch whose merged versions do not depend on each other, see `unknownAfterMerge` in `merge`; `onDivergingPath`: a nested scope consumed it on a path that does not reach the end of this scope, see `NestedScope.consumeImpl`: it only notes the versions that it makes unavailable on that path, without cancelling their implicit `dup`s for the paths that continue; `notesOnly`: without changing the dependencies, see `NestedScope.consumeImpl`)
 		static if(language==psi) return; // (in PSI, all data is classical: dependencies are not tracked)
-		consumedDepLog[decl]=getDependency(decl).dup;
-		if(sinceMergeLogged) consumedLogged~=decl;
-		noteDependencyConsumed(decl,getDependency(decl));
+		if(!notesOnly){
+			consumedDepLog[decl]=getDependency(decl).dup;
+			if(sinceMergeLogged) consumedLogged~=decl;
+			noteDependencyConsumed(decl,getDependency(decl));
+		}
 		bool forgotten=decl is forgetting;
 		if(getDependency(decl).isTop&&!(forgotten&&activeNestedScopes.length)){ // (not for a forget before the split into nested scopes that are being analyzed or merged, see `forgetting`)
 			auto explanation=forgotten?getDependency(decl).lostAt:null; // (see `forgetting`)
@@ -2656,12 +2659,12 @@ abstract class Scope{
 							while(last.forwardTo) last=last.forwardTo;
 							auto keptBy=last.use&&(last.use.implicitDup||last.prevImplicitDup&&(last.kind==LastUse.Kind.constUse||last.kind==LastUse.Kind.constPinned))?last:last.keepsMergeOfImplicitDup()?last.prevImplicitDup:null; // (also after a `const` use that follows the implicit `dup`, and through the merge of an earlier conditional whose branches do not use it, see `unusedSplitOfImplicitDup`)
 							if(lu.forwardTo&&(lu.kind==LastUse.Kind.lazySplitSink||lu.kind==LastUse.Kind.constPinned)&&keptBy&&deferDupCancels()){ // (the value continues into the branches (lazy splitting), which may use it before they consume `decl`, e.g., `y0` for `y1:=y0; if c { z:=H(x); } else { w:=!y0; forget(w); z:=H(x); }`: decided at the merge, see `cancelDeferredDups`; not after a `const` use, e.g., `t:=dup(y0)`, where it is forgotten, as before)
-								deferredDupCancels~=q(ndecl,consumingUse);
+								if(!onDivergingPath) deferredDupCancels~=q(ndecl,consumingUse);
 								noteDeadOnPath(ndecl,keptBy,consumingUse);
 								continue;
 							}
 							if(lu.forwardTo&&deferDupCancels()||last.kind==LastUse.Kind.lazySplit){ // (e.g., after a `const` use that follows the implicit `dup`, which a branch that uses the variable pins; or the version that a branch has not used yet when it consumes its own version of what it depends on, e.g., when the other branch consumed it before)
-								if(noteDeadOnPath(ndecl,splitBasis(last),consumingUse)&&last.kind==LastUse.Kind.lazySplit&&!last.use&&last.scope_ is this&&LastUse.isBranch(this)&&dependencies.mentioning(ndecl).length){ // (the branch forgets its version at the split, see `forgetDeadSplits`: the variables that depend on it depend on what it depends on, e.g., `v1` in the `else` branch of `v0:=dup(a); v1:=dup(v0); t:=measure(v0); if k { s:=measure(v0); } else { a:=X(a); m:=measure(v1); }`, whose dependency is unknown after `a:=X(a)`)
+								if(noteDeadOnPath(ndecl,splitBasis(last),consumingUse)&&!onDivergingPath&&last.kind==LastUse.Kind.lazySplit&&!last.use&&last.scope_ is this&&LastUse.isBranch(this)&&dependencies.mentioning(ndecl).length){ // (the branch forgets its version at the split, see `forgetDeadSplits`: the variables that depend on it depend on what it depends on, e.g., `v1` in the `else` branch of `v0:=dup(a); v1:=dup(v0); t:=measure(v0); if k { s:=measure(v0); } else { a:=X(a); m:=measure(v1); }`, whose dependency is unknown after `a:=X(a)`)
 									dependencies.pushUp(ndecl,true,consumingUse);
 									done=false; // (they depend on `decl` now)
 								}
@@ -2669,12 +2672,14 @@ abstract class Scope{
 							if(lu.forwardTo&&(lu.kind==LastUse.Kind.consumption||lu.kind==LastUse.Kind.constPinned)&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch)) continue; // (a branch consumed or uses the version, which continued into the branches, e.g., `p` for `m:=measure(p); if c { p:=X(p); } else { w:=X(w); }` with `p:=dup(w)`, or `v1` for `m1:=measure(v1); m0:=measure(v0); if k { a:=X(a); } else { u:=!v1; forget(u); }` with `v0:=!a; v1:=X(dup(v0));` when the merge cancels the implicit `dup` of `v0` at `measure(v0)`: they decide about their versions, see `cancelDeferredDups`)
 							if(mergingScopes.length&&lu.forwardTo&&lu.kind==LastUse.Kind.constPinned) continue; // (a branch of the merge in progress uses it, e.g., `d` for `d:=dup(b); m:=measure(d); if c { a:=X(a); } else { u:=!d; forget(u); t:=measure(b); }` when the merge of `a` cancels the `dup` of `b` at `measure(b)`: the branches forget their versions before they consume what it depends on, see `noteDeadOnPath`)
 							//imported!"util.io".writeln("CHECKING PUSH: ",last," ",last.use?last.use.implicitDup:false);
+							if(onDivergingPath) continue;
 							if(cancelDup(ndecl,last,consumingUse,decl,mergesBranches,explanation)) done=false;
 						}
 					}
 				}
 			}while(!done);
 		}
+		if(notesOnly) return;
 		dependencies.pushUp(decl,keep,consumedAt);
 		if(keep) toRemove~=decl;
 		this.pushUp(controlDependency,decl);
@@ -4640,7 +4645,7 @@ class NestedScope: Scope{
 					auto prevConsumingUse=consumingUse;
 					consumingUse=use;
 					scope(exit) consumingUse=prevConsumingUse;
-					pushDependencies(old,true,splitting?null:use);
+					pushDependencies(old,true,splitting?null:use,false,onDivergingPath,onDivergingPath); // (on a path that diverges in a nested scope, only the versions that it makes unavailable there: the split keeps the dependencies on its version, as for `splitForDivergingSibling`)
 				}
 				// TODO: backtrace forgets and last usages
 				if(auto added=addVariable(ndecl,type,true)){
@@ -4730,7 +4735,7 @@ class NestedScope: Scope{
 			auto old=oldVersion(this);
 			symtabRemove(odecl);
 			if(dependencyTracked(old))
-				pushDependencies(old,true,splitting?null:use);
+				pushDependencies(old,true,splitting?null:use,false,onDivergingPath);
 			if(old !is result)
 				replaceDecl(old,result);
 			return result;

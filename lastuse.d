@@ -860,6 +860,7 @@ final class LastUse{
 				auto nsc=cast(NestedScope)s.scope_;
 				if(!nsc||nsc.diverges||!branches.canFind(nsc)) continue;
 				if(auto m=s.mergedInto) if(m.isDerivedFrom(c.decl)) return m;
+				if(branches.count!(b=>!b.diverges)==1) if(auto m=nsc.rnsymtab.get(c.decl.getId,null)) if(!cast(DeadDecl)m&&m.isDerivedFrom(c.decl)) return m; // (the version of the only branch that reaches the merge, which the enclosing scope continues, see `Scope.merge`, e.g., `a` for `if l { if m { a:=X(a); assert(false); } } else { x:=(a,true); assert(false); }`)
 			}
 			return null;
 		}
