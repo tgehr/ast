@@ -1327,7 +1327,7 @@ final class LastUse{
 		if(forwardTo){
 			forwardTo.forget(forceConsumed,earlyReturn,enclosing);
 			while(forwardTo.forwardTo) forwardTo=forwardTo.forwardTo;
-			assert(isConsumption(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption()));
+			assert(isConsumption()||decl.isSemError(),text(this," ",forwardTo," ",forwardTo.splitFrom," ",isConsumption())); // (error recovery: an implicit `dup` that cannot be cancelled, as the variable is used after it, see `Scope.checkDeclarationCancel`)
 			if(scope_.lastUses.here(decl) is this)
 				scope_.lastUses.lastUses[decl]=forwardTo;
 			return;
