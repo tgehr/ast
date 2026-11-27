@@ -1216,23 +1216,42 @@ class ProductTy: Type{
 		foreach(k,v;nsubst) subst[k]=v;
 		return res;
 	}
+	private static bool unifyStated(Expression type,Expression stated,Expression aty,ref MapSX!(Id,UnificationResult) subst){ // (the type of an argument, also its stated type, see `statedFirst`)
+		bool unify(Expression rhs){
+			if(!stated){
+				if(!type.unify(rhs,subst,false)) return false;
+				return true;
+			}
+			MapSX!(Id,UnificationResult) nsubst;
+			foreach(k,v;subst) nsubst[k]=v;
+			if(!type.unify(rhs,nsubst,false)) return false;
+			subst=nsubst;
+			return true;
+		}
+		if(!stated) return unify(aty);
+		return statedFirst(stated,aty)?unify(stated)||unify(aty):unify(aty)||unify(stated);
+	}
 	Expression tryMatch(Expression arg,out Expression garg,Scope target=null)in{assert(isSquare&&cast(ProductTy)cod);}do{
 		auto cod=cast(ProductTy)this.cod;
 		assert(!!cod);
 		auto nnames=freshNames(arg);
 		if(nnames!=names) return relabelAll(nnames).tryMatch(arg,garg);
-		Expression[] atys;
+		Expression[] atys,stated;
 		auto tpl=arg.type.isTupleTy();
 		if(cod.isTuple&&tpl){
 			atys=iota(tpl.length).map!(i=>tpl[i]).array;
 			if(atys.length!=cod.nargs) return null;
-		}else atys=[arg.type];
+			if(auto targ=cast(TupleExp)arg) if(targ.length==atys.length) stated=targ.e.map!statedType.array;
+		}else{
+			atys=[arg.type];
+			stated=[statedType(arg)];
+		}
 		MapSX!(Id,UnificationResult) subst;
 		foreach(i,n;names) subst[n]=UnificationResult.init;
 		foreach(i,aty;atys){
 			if(i>=cod.nargs) continue;
-			if(!cod.argTy(i).unify(aty,subst,false))
-				return null;
+			auto st=i<stated.length?stated[i]:null;
+			if(!unifyStated(cod.argTy(i),st,aty,subst)) return null;
 		}
 		auto gargs=new Expression[](names.length);
 		foreach(i,n;names){
@@ -1283,7 +1302,7 @@ class ProductTy: Type{
 		foreach(i,a;args){
 			if(i>=cod.nargs) continue;
 			if(!cod.isConstForReverse[i]) continue;
-			if(!a.type||!cod.argTy(i).unify(a.type,subst,false))
+			if(!a.type||!unifyStated(cod.argTy(i),statedType(a),a.type,subst))
 				return null;
 		}
 		foreach(i,n;names){
@@ -1327,8 +1346,16 @@ class ProductTy: Type{
 	Expression tryApply(Expression arg,bool isSquare,Scope target=null){
 		assert(arg.isSemCompleted());
 		if(isSquare != this.isSquare) return null;
-		if(!isSubtype(arg.type,dom)) return null;
+		if(!isSubtype(arg.type,dom)&&!argumentsConvertStated(arg)) return null;
 		return applyUnchecked(arg,target);
+	}
+	private bool argumentsConvertStated(Expression arg){ // (with the witnesses of unions from the types that the program states for the arguments, which the code generator converts one at a time, see `convertsStated`)
+		static if(language==silq){
+			if(isSquare||dom.hasAnyFreeVar(names)) return false;
+			auto tpl=cast(TupleExp)arg,tdom=dom.isTupleTy();
+			if(isTuple&&tpl&&tdom&&tdom.length==tpl.length) return iota(tpl.length).all!(i=>isSubtype(tpl.e[i].type,tdom[i])||convertsStated(tpl.e[i],tdom[i]));
+			return convertsStated(arg,dom);
+		}else return false;
 	}
 	private bool mentionsParameters(){
 		return names.any!(n=>n!=Id()&&cod.hasFreeVar(n));
@@ -1810,22 +1837,61 @@ Expression typeOfUnionTy(Id name,Expression dom,Expression cod){ // (the values 
 	return cod.type;
 }
 
-/// a witness `w:τ` with `lhs ⊆ ρ[w/x]` for `rhs=⋃[x:τ]. ρ`, from the bounds that unification determines, the least one first, e.g., `n` for `𝔹^n ⊆ ⋃[m:!ℕ]. 𝔹^m`, or `null`
-Expression unionWitness(Expression lhs,UnionTy rhs,out UnionTy relabeled,EqualityContext* ctx=null){
-	auto n=rhs.freshName(lhs);
+/// a witness `w:τ` with `lhs ⊆ ρ[w/x]` for `rhs=⋃[x:τ]. ρ`, from the bounds that unification determines, the least one first, e.g., `n` for `𝔹^n ⊆ ⋃[m:!ℕ]. 𝔹^m`, or `null`; `stated`: the type of the value that the program states, which unification tries first, see `statedType`
+Expression unionWitness(Expression lhs,UnionTy rhs,out UnionTy relabeled,EqualityContext* ctx=null,Expression stated=null){
+	auto n=stated?rhs.freshName(lhs,stated):rhs.freshName(lhs);
 	auto u=rhs.relabel(n);
 	relabeled=u;
-	MapSX!(Id,Expression.UnificationResult) subst;
-	subst[n]=Expression.UnificationResult.init;
-	u.cod.unify(lhs,subst,false); // (its bounds are candidates also where it fails, e.g., `𝔹` for `!𝔹 × (𝔹 !→ 𝔹)` and `⋃[a:*]. !a × (a !→ a)`, whose lower bound `!𝔹` from `!a` does not unify with `𝔹`)
-	Expression[] candidates;
-	foreach(w;only(subst[n].bound(false),subst[n].bound(true))){
-		if(!w) continue;
-		candidates~=w;
-		if(isType(w)) foreach(v;only(w.getClassical(),w.getQuantum())) if(v) candidates~=v; // (e.g., `a` for `!a × (a !→ a)`, whose lower bound is `!a`)
+	foreach(from;statedFirst(stated,lhs)?only(stated,lhs):only(lhs,stated)){
+		if(!from) continue;
+		MapSX!(Id,Expression.UnificationResult) subst;
+		subst[n]=Expression.UnificationResult.init;
+		u.cod.unify(from,subst,false); // (its bounds are candidates also where it fails, e.g., `𝔹` for `!𝔹 × (𝔹 !→ 𝔹)` and `⋃[a:*]. !a × (a !→ a)`, whose lower bound `!𝔹` from `!a` does not unify with `𝔹`)
+		Expression[] candidates;
+		foreach(w;only(subst[n].bound(false),subst[n].bound(true))){
+			if(!w) continue;
+			candidates~=w;
+			if(isType(w)) foreach(v;only(w.getClassical(),w.getQuantum())) if(v) candidates~=v; // (e.g., `a` for `!a × (a !→ a)`, whose lower bound is `!a`)
+		}
+		foreach(w;candidates) if(w.type&&isSubtype(w.type,u.dom)&&isSubtype(lhs,u.cod.substitute(n,w),ctx)) return w;
 	}
-	foreach(w;candidates) if(w.type&&isSubtype(w.type,u.dom)&&isSubtype(lhs,u.cod.substitute(n,w),ctx)) return w;
 	return null;
+}
+/// the type of `e` as the program states it, before its evaluation, e.g., `[!ℕ,!ℚ[]][1]` for `v:[!ℕ,!ℚ[]][1]`, whose type is `!ℚ[]`: unification tries it first, as the evaluation can lose structure that it matches, see `unionWitness`; or `null`
+Expression statedType(Expression e){
+	static if(language==silq){
+		Expression stated=null;
+		if(auto tae=cast(TypeAnnotationExp)e){
+			if(tae.type&&tae.t.isSemCompleted()&&!tae.t.isSemError()) stated=tae.t;
+		}else if(auto oe=cast(OpenExp)e){ // (e.g., the definition of an array, see `ast.semantic_.openOperand`)
+			stated=statedType(oe.e);
+		}else if(auto id=cast(Identifier)e){
+			auto vd=cast(VarDecl)id.meaning;
+			while(vd&&!vd.initializer&&!vd.definition&&vd.splitFrom&&!acrossLoop(vd.scope_,vd.splitFrom.scope_)) vd=cast(VarDecl)vd.splitFrom; // (e.g., in a branch, but not in a loop, whose lowering passes the variable as a parameter of its evaluated type)
+			if(vd){
+				if(vd.dtype&&!vd.dtype.isSemEvaluated()&&vd.dtype.isSemCompleted()&&!vd.dtype.isSemError()) stated=vd.dtype; // (e.g., of a parameter)
+				else if(auto de=vd.definition){ // (also `p:=p` for a parameter that the body opens, see `openedParameter`)
+					auto lid=cast(Identifier)de.e1;
+					if(lid&&lid.meaning is vd) stated=statedType(de.e2);
+					else if(auto ltpl=cast(TupleExp)de.e1) if(auto rtpl=cast(TupleExp)de.e2) if(ltpl.length==rtpl.length) foreach(i,c;ltpl.e) if(auto cid=cast(Identifier)c) if(cid.meaning is vd) stated=statedType(rtpl.e[i]); // (e.g., `(a,b):=(x:S,y:T)`)
+				}
+				if(!stated&&vd.initializer) stated=statedType(vd.initializer);
+			}
+		}
+		if(!stated||!e.type||stated is e.type||!isSubtype(e.type,stated.eval())) return null; // (it describes the value, e.g., `!ℚ^n` for `v` after `v:=x:[!ℕ,!ℚ[]][1]`, which opens the array)
+		foreach(x;stated.freeVars) if(x.meaning&&!x.meaning.isToplevelDeclaration()&&!e.type.hasFreeVar(x.id)) return null; // (it mentions only variables that the type mentions, which the uses of the value keep)
+		return stated;
+	}else return null;
+}
+/// whether unification tries the stated type before the type: where it is the type before its evaluation; otherwise, it can be less precise, e.g., `!ℚ[]` for `v` after `v:=x:[!ℕ,!ℚ[]][1]`, whose type `!ℚ^n` opens the array, and unification tries it only if the type does not unify
+bool statedFirst(Expression stated,Expression type){
+	return stated&&isEqual(stated.eval(),type,null);
+}
+/// `e` converts implicitly to `type` with the witnesses of unions from the type that the program states for it, see `statedType`
+bool convertsStated(Expression e,Expression type){
+	import ast.conversion:typeExplicitConversion;
+	auto stated=statedType(e);
+	return stated&&typeExplicitConversion(e.type,type,TypeAnnotationType.annotation,stated);
 }
 private bool isSubtypeOfUnion(Expression lhs,UnionTy rhs,EqualityContext* ctx){
 	UnionTy u;

@@ -11028,20 +11028,21 @@ Expression expressionSemanticImpl(TypeAnnotationExp tae,ExpSemContext context){
 			if(isNumericTy(tae.type)==NumericType.ℕt&&!fitToType(v.get,tae.type))
 				specificityErrorOrDefer(sc,format("coercion of `%s` to `%s` always fails",v.get,tae.type),tae.loc,tae);
 	}
-	if(!explicitConversion(tae.e,tae.type,tae.annotationType)){
+	auto stated=statedType(tae.e);
+	if(!explicitConversion(tae.e,tae.type,tae.annotationType,stated)){
 		final switch(tae.annotationType){
 			case TypeAnnotationType.annotation:
 				sc.error(format("type is `%s`, not `%s`",tae.e.type,tae.type),tae.loc);
 				if(explainAnnotationMismatch(tae,sc)){}
-				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.conversion))
+				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.conversion,stated))
 					sc.note(format("explicit conversion possible, use `%s as %s`",tae.e,tae.type),tae.loc);
-				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
+				else if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion,stated))
 					sc.note(format("(unsafe type coercion possible)"),tae.loc);
 				break;
 			case TypeAnnotationType.conversion:
 				sc.error(format("cannot convert from type `%s` to `%s`",tae.e.type,tae.type),tae.loc);
 				explainNumericType(sc,tae.e,integralKind(tae.type));
-				if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion))
+				if(explicitConversion(tae.e,tae.type,TypeAnnotationType.coercion,stated))
 					sc.note(format("(unsafe type coercion possible)"),tae.loc);
 				break;
 			case TypeAnnotationType.coercion:
@@ -12882,7 +12883,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 	static if(language==silq) fd.fscope_.returnAnalyzed=true;
 	if(fd.ret){
 		assert(!!ret.e.type);
-		if(!widenReturnType(ret.e.type)){
+		if(!widenReturnType(ret.e.type)&&!(fd.ret&&convertsStated(ret.e,fd.ret))){ // (also with the witnesses of unions from the type that the program states for the value, see `statedType`)
 			sc.error(format("`%s` is incompatible with return type `%s`",ret.e.type,fd.ret),ret.e.loc);
 			explainNumericType(sc,ret.e,integralKind(fd.ret));
 			ret.setSemError();

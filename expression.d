@@ -231,11 +231,13 @@ abstract class Expression: Node{
 		}
 	}
 
-	final bool unify(Expression rhs,ref MapSX!(Id,UnificationResult) subst, bool meet){
-		if(unifyImpl(rhs,subst,meet) || eval().unifyImpl(rhs.eval(),subst,meet) || isSubtype(rhs,this)) return true;
+	final bool unify(Expression rhs,ref MapSX!(Id,UnificationResult) subst, bool meet){ // (`rhs` can be unevaluated, e.g., a stated type, see `ast.type.statedType`)
+		if(unifyImpl(rhs,subst,meet)) return true;
+		auto l=eval(),r=rhs.eval();
+		if(l.unifyImpl(r,subst,meet) || isSubtype(r,l)) return true;
 		static if(language==silq){
-			auto ur=unfoldTypeVariables(rhs);
-			if(ur !is rhs) return unify(ur,subst,meet);
+			auto ur=unfoldTypeVariables(r);
+			if(ur !is r) return unify(ur,subst,meet);
 		}
 		return false;
 	}
@@ -1332,6 +1334,7 @@ class Identifier: Expression{
 		return result;
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
+		rhs=rhs.eval(); // (the value of the variable, also from a stated type, see `unify`)
 		if(id !in subst) return meet?isSubtype(this,rhs):isSubtype(rhs,this);
 		if(this==rhs){
 			if(subst[id].bound(meet)&&subst[id].bound(meet)!=this) return false;
@@ -1752,11 +1755,28 @@ class IndexExp: Expression{ //e[a]
 		auto idx=cast(IndexExp)rhs;
 		if(!idx) return false;
 		// TODO: improve
+		static if(language==silq){
+			Expression[] l,r;
+			if(typeList(e,l)&&typeList(idx.e,r)&&l.length==r.length&&!cast(TupleExp)e!=!cast(TupleExp)idx.e)
+				return iota(l.length).all!(i=>l[i].unify(r[i],subst,meet))&&a.unify(idx.a,subst,meet);
+		}
 		return e.unify(idx.e,subst,meet)&&a.unify(idx.a,subst,meet);
 	}
 	override bool isEqualImpl(Expression rhs,ref EqualityContext ctx){
 		auto idx=cast(IndexExp)rhs;
-		return idx&&isEqual(e,idx.e,&ctx)&&isEqual(a,idx.a,&ctx)&&isClassical_==idx.isClassical_;
+		if(!idx||isClassical_!=idx.isClassical_||!isEqual(a,idx.a,&ctx)) return false;
+		static if(language==silq){
+			Expression[] l,r;
+			if(typeList(e,l)&&typeList(idx.e,r)&&!cast(TupleExp)e!=!cast(TupleExp)idx.e)
+				return l.length==r.length&&iota(l.length).all!(i=>isEqual(l[i],r[i],&ctx));
+		}
+		return isEqual(e,idx.e,&ctx);
+	}
+	static if(language==silq) private static bool typeList(Expression e,out Expression[] types){ // (the types of a tuple or vector of types, whose components are the same types, e.g., `(!ℕ,!ℚ[])[t]` and `[!ℕ,!ℚ[]][t]`, which can be the type of a component of an argument `(!ℕ,!ℚ[])` for a parameter `types:*[]`, whose value is `[!ℕ,!ℚ[]]`)
+		if(auto tpl=cast(TupleExp)e) types=tpl.e;
+		else if(auto vec=cast(VectorExp)e) types=vec.e;
+		else return false;
+		return types.all!isType;
 	}
 	override bool isSubtypeImpl(Expression rhs,EqualityContext* ctx){
 		if(isEqual(this,rhs,ctx)) return true;
@@ -2171,16 +2191,54 @@ class CallExp: Expression{
 		CallExp r;
 		if(ne is e && narg is arg) r=this;
 		else r=new CallExp(ne,narg,isSquare,isClassical_);
+		static if(language==silq) if(auto u=r.unfoldTypeAlias()) return u;
 		// TODO: partially evaluate arbitrary functions
 		if(type.isClassical() || constLookup) {
 			if(auto sub=r.isDup()) if(isSubtype(sub.type,type)) return sub.eval(); // TODO: ok?
 		}
 		return r;
 	}
+	static if(language==silq) private Expression unfoldTypeAlias(){ // (the type that the call stands for if it calls a simple parameterized type alias, e.g., `⋃[tag:!ℕ]. [!ℕ,!ℚ[]][tag]` for `sum[!ℕ,!ℚ[]]` after `def sum[types:*[]]⇒⋃[tag:!ℕ]. types[tag];`, see `typeAliasBody`)
+		auto id=cast(Identifier)e;
+		auto fd=id?cast(FunctionDef)id.meaning:null;
+		if(!fd||fd.isSquare!=isSquare||!arg.isTotal()) return null; // (the type can mention a parameter more than once, or not at all)
+		auto body_=typeAliasBody(fd);
+		if(!body_) return null;
+		MapSX!(Id,Expression) subst;
+		if(fd.isTuple){
+			auto targ=cast(TupleExp)arg;
+			if(!targ||targ.length!=fd.params.length) return null;
+			foreach(i,p;fd.params) subst[p.getId]=targ.e[i];
+		}else subst[fd.params[0].getId]=arg;
+		auto r=body_.substitute(subst);
+		return isClassical_?r.getClassical():r;
+	}
 	// semantic information
 	bool checkReverse=true; // (calls to reverse in the frontend implementation of reverse are more liberal)
 	Declaration newFunctionVar=null; // `once` → `spent` replacement
 	static if(language==silq) bool argumentsFirst=false; // (the inferred square-bracket arguments of the function read the witnesses of opened arguments, see `ast.semantic_.openOperand`: the arguments are evaluated before the function)
+}
+
+static if(language==silq)
+Expression typeAliasBody(FunctionDef fd){ // (the type that a call of `fd` stands for, with its parameters, if `fd` is a simple parameterized type alias: its classical parameters determine the type that its body returns, it captures nothing, and the unfolding of the aliases that the type mentions terminates; otherwise `null`)
+	static Expression candidate(FunctionDef fd){
+		if(!fd.body_||fd.body_.s.length!=1||fd.capturedDecls.length||fd.isSemError()||!fd.body_.isSemCompleted()) return null;
+		if(!fd.params.all!(p=>p.vtype&&p.vtype.isClassical())) return null;
+		auto ret=cast(ReturnExp)fd.body_.s[0];
+		if(!ret||!ret.e||!ret.e.isSemCompleted()||ret.e.isSemError()||!isType(ret.e)||!ret.e.isDeterministic()) return null; // (e.g., not `uint[1+measure(q) as !ℕ]`)
+		return ret.e;
+	}
+	static bool recursive(FunctionDef fd,FunctionDef[] path){
+		if(path.canFind!((a,b)=>a is b)(fd)) return true;
+		auto body_=candidate(fd);
+		if(!body_) return false;
+		foreach(x;body_.freeVars) if(auto g=cast(FunctionDef)x.meaning) if(recursive(g,path~fd)) return true;
+		return false;
+	}
+	auto body_=candidate(fd);
+	if(!body_) return null;
+	foreach(x;body_.freeVars) if(auto g=cast(FunctionDef)x.meaning) if(recursive(g,[fd])) return null;
+	return body_;
 }
 
 abstract class ABinaryExp: Expression{

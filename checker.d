@@ -1483,7 +1483,7 @@ class Checker {
 
 	void expectConvertible(ast_exp.Expression e, ast_exp.Expression from, ast_exp.Expression to, ast_ty.TypeAnnotationType annotationType) {
 		import ast.conversion;
-		auto conv = typeExplicitConversion!true(from, to, annotationType);
+		auto conv = typeExplicitConversion!true(from, to, annotationType, from is e.type ? ast_ty.statedType(e) : null); // (with the type that the program states for `e`, as the analysis)
 		// check witness generation
 		assert(conv, format("ERROR: Expected %s of type %s to be convertible to type %s", e, from, to));
 		visConv(conv);

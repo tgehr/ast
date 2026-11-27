@@ -886,15 +886,15 @@ class ParameterizedSubtypeConversion: Conversion{
 }
 +/
 
-Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
-	if(auto r=typeExplicitConversionImpl!witness(from,to,annotationType)) return r;
+Ret!witness typeExplicitConversion(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType,Expression stated=null){ // (`stated`: the type of the value that the program states, see `statedType`)
+	if(auto r=typeExplicitConversionImpl!witness(from,to,annotationType,stated)) return r;
 	static if(language==silq) if(from&&to){ // (through the values of type variables, see `unfoldTypeVariables`)
 		auto ufrom=unfoldTypeVariables(from),uto=unfoldTypeVariables(to);
-		if(ufrom !is from||uto !is to) return typeExplicitConversionImpl!witness(ufrom,uto,annotationType);
+		if(ufrom !is from||uto !is to) return typeExplicitConversionImpl!witness(ufrom,uto,annotationType,stated);
 	}
 	return typeof(return).init;
 }
-private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType){
+private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression from,Expression to,TypeAnnotationType annotationType,Expression stated=null){
 	static if(witness){
 		if(isEmpty(from)) return new ExplosionConversion(from,to);
 		if(isNoOpConversion(from,to)) return new NoOpConversion(from,to);
@@ -918,7 +918,7 @@ private Ret!witness typeExplicitConversionImpl(bool witness=false)(Expression fr
 		}
 		if(auto tu=cast(UnionTy)to){
 			UnionTy u;
-			if(auto w=unionWitness(from,tu,u))
+			if(auto w=unionWitness(from,tu,u,null,stated))
 				if(auto r=typeExplicitConversion!witness(from,u.cod.substitute(u.name,w),annotationType)){
 					static if(witness) return new UnionPackConversion(from,to,w,r);
 					else return true;
@@ -984,17 +984,17 @@ bool annotateLiteral(Expression expr, Expression type){
 	expr.type=ltype;
 	return true;
 }
-Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression type,TypeAnnotationType annotationType){
+Ret!witness explicitConversion(bool witness=false)(Expression expr,Expression type,TypeAnnotationType annotationType,Expression stated=null){ // (`stated`: the type of `expr` that the program states, see `statedType`)
 	assert(expr.type);
 	assert(expr.type.isSemEvaluated());
 	assert(type);
 	assert(type.isSemEvaluated());
-	if(annotationType==TypeAnnotationType.punning) return typeExplicitConversion!witness(expr.type,type,annotationType);
+	if(annotationType==TypeAnnotationType.punning) return typeExplicitConversion!witness(expr.type,type,annotationType,stated);
 	if(annotateLiteral(expr,type)){
 		static if(witness) return refl(type);
 		else return true;
 	}
-	if(auto r=typeExplicitConversion!witness(expr.type,type,annotationType)) return r;
+	if(auto r=typeExplicitConversion!witness(expr.type,type,annotationType,stated)) return r;
 	Expression[] es;
 	bool isVec=false;
 	if(auto tpl1=cast(TupleExp)expr) es=tpl1.e;
