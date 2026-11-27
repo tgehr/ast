@@ -2299,6 +2299,10 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 		Id[] witnessNames; // (of the definition that this one is a copy of, which its analysis reuses, so that the copies of the analyzed code that mention them refer to its own, e.g., `size[n₍₁₎+1](x)` in a lowered loop)
 		bool openedArray; // (the definition that this one is a copy of opened an array, see `ast.semantic_.openedAsArray`)
 		static if(op==Tok!":=") bool decays; // (the variable that it defines has the value of a version that a decay defines, see `VarDecl.decayed`, e.g., after a `do`-`while` loop that `--remove-loops` lowers)
+		static if(op==Tok!":=") bool[] carriedWitnesses; // (the witnesses of `witnessNames` that are variables of the program that a lowered loop carries, not `const` temporaries)
+		static if(op==Tok!":=") Id[] exitWitnesses; // (of the call of the function of a lowered `do`-`while` loop: the values of the loop that its result packs into unions, whose witnesses it declares under their names, see `ast.semantic_.bindExitWitnesses`)
+		static if(op==Tok!":=") bool[] exitWitnessesCarried; // (the variables of `exitWitnesses` that the loop carries)
+		static if(op==Tok!":=") Expression[] exitTypes; // (the types in the body of the loop of the components of the left-hand side that mention `exitWitnesses`)
 	}
 	static if(op==Tok!"→"){
 		CaptureAnnotation captureAnnotation;
@@ -2321,7 +2325,13 @@ class BinaryExp(TokenType op): BinaryExpParent!op{
 				r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
 				r.openedArray=witnesses.length?!!cast(ArrayTy)opened[witnesses.length-1]:openedArray;
 			}
-			static if(language==silq) static if(op==Tok!":=") r.decays=decays;
+			static if(language==silq) static if(op==Tok!":="){
+				r.decays=decays;
+				r.carriedWitnesses=carriedWitnesses;
+				r.exitWitnesses=exitWitnesses;
+				r.exitWitnessesCarried=exitWitnessesCarried;
+				r.exitTypes=exitTypes;
+			}
 			return r;
 		}
 		override string toStringImpl(int cl,int cr){

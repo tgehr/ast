@@ -4809,6 +4809,8 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	SetX!Id convertedCarried; // (names of carried variables that the body defines with a type that converts to the type of the parameter, see `strongerExits`)
 	static if(isDoWhile){ // (the definitions of the body that are available after the loop are returned as well)
 		SetX!Id decayedExits; // (the variables whose versions at the exit a decay defines: so do their definitions after the loop, see `DefineExp.decays`)
+		SetX!Id boundWitnesses,carriedWitnesses; // (the values of the loop that the result packs into unions, whose witnesses the call declares under their names: witnesses of the body and variables that the loop carries, see `DefineExp.exitWitnesses`)
+		MapX!(Id,Expression) exitTypeOf; // (the types in the body of the components of the result, see `DefineExp.exitTypes`)
 		static if(language==silq) if(auto xsc=loop.exitScope) foreach(d;xsc.mergedVars) if(d.mergedInto.name) if(auto vd=cast(VarDecl)d.mergedInto.canonicalSource) if(vd.decayed) decayedExits.insert(d.mergedInto.name.id);
 		Q!(Identifier,Expression,Expression)[] exitLocals; // (name, type, type in the result of the function)
 		SetX!Id paramNames,changed; // (`changed`: names of the values that the loop defines or changes)
@@ -4850,6 +4852,32 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				convertedCarried.insert(name.id);
 			}
 			if(rtype&&rtype!=type) strongerExits~=q(name.id,type,rtype);
+		}
+		static if(language==silq) if(!continuation&&!loopContainsReturn(loop)) if(auto xsc=loop.exitScope){ // (the values that the loop changes that the types in the result of the function mention, where a definition whose type is not coerced mentions them, see `coercibleExitType`, are witnesses of the body that are available after the loop, e.g., `n₍₂₆₎` for `g:𝟙 → !ℕ × 𝔹^n₍₂₆₎`, or classical variables that the loop carries, e.g., `n` for `g:𝟙 → 𝔹^n` after `n+=1` in the body: the result packs them into unions, whose witnesses the call declares under their names, see `defineLocals`)
+			SetX!Id mentioned;
+			void mention(Expression t){
+				if(t) foreach(id;t.freeIdentifiers){
+					auto n=id.meaning&&id.meaning.name?id.meaning.name.id:id.id;
+					if(n in changed||movedParams.any!(p=>p[1].name.id==n)) mentioned.insert(n); // (also a variable that only the reset changes, which the result packs as well, see `FunctionDef.lowersLoop`)
+				}
+			}
+			foreach(e;exitLocals) mention(e[2]);
+			foreach(s;strongerExits) mention(s[2]);
+			SetX!Id carried;
+			bool bindable=mentioned.length!=0;
+			foreach(w;mentioned){
+				if(xsc.mergedVars.any!(d=>d.mergedInto&&d.mergedInto.name&&d.mergedInto.name.id==w&&isUnionWitness(d.mergedInto))&&exitLocals.any!(e=>e[0].id==w)) continue;
+				if(movedParams.any!((p){ auto ty=typeForDecl(p[1]); return p[1].name.id==w&&ty&&ty.isClassical(); })&&w !in replayedParams&&w !in convertedCarried&&!strongerExits.any!(s=>s[0]==w)){
+					carried.insert(w);
+					continue;
+				}
+				bindable=false;
+			}
+			bool mentions(Expression t){ return t.freeIdentifiers.any!(id=>id.id in mentioned||id.meaning&&id.meaning.name&&id.meaning.name.id in mentioned); }
+			if(bindable&&exitLocals.any!(e=>e[2] is e[1]&&e[1]&&(e[1].isClassical()||!coercibleExitType(e[1],changed))&&mentions(e[1]))){
+				boundWitnesses=mentioned;
+				carriedWitnesses=carried;
+			}
 		}
 		foreach(ref r;returnTpl.e){ // (see `exitCoercions`)
 			auto id=cast(Identifier)r;
@@ -5313,6 +5341,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	static if(is(T==WhileExp)||isDoWhile) visitStm(loop.cond,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
 	static if(isDoWhile) visitStm(loop.reset,(Expression x){ if(auto ce=cast(CallExp)x) if(auto ft=cast(FunTy)ce.e.type) fd.weakenAnnotation(ft.annotation,ce); });
 	fd.inferAnnotation=true;
+	static if(language==silq) fd.lowersLoop=true;
 	fd.loc=loop.loc;
 	static if(is(T==ForExp)){
 		auto paramTpl2=new TupleExp([cast(Expression)leftName.copy(cargsDefault)]~cast(Expression[])ids(constMovedParams,false));
@@ -5337,11 +5366,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	static if(isDoWhile) foreach(e;exitLocals){
 		if(e[2] is e[1]&&(!e[1]||e[1].isClassical()||!coercibleExitType(e[1],changed))){
 			defTpl.e~=e[0].copy(cargsDefault);
+			if(e[1]) exitTypeOf[e[0].id]=e[1];
 			continue;
 		}
 		auto tmp=new Identifier(freshName());
 		tmp.loc=e[0].loc;
 		defTpl.e~=tmp;
+		if(e[2] is e[1]&&e[1]) exitTypeOf[tmp.id]=e[1];
 		auto use=tmp.copy(cargsDefault);
 		use.moved=true; // (the result of the function does not outlive the coercion)
 		auto coerced=new TypeAnnotationExp(use,e[1].copy(cargsDefault),TypeAnnotationType.coercion);
@@ -5452,6 +5483,13 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 		Expression[] constCoercions,constCoercionTypes;
 		auto def=new DefineExp(defTpl,locals);
 		def.loc=loop.loc;
+		static if(isDoWhile&&language==silq) if(boundWitnesses.length){
+			foreach(w;boundWitnesses){
+				def.exitWitnesses~=w;
+				def.exitWitnessesCarried~=w in carriedWitnesses?true:false;
+			}
+			def.exitTypes=defTpl.e.map!((d){ auto id=cast(Identifier)d; return id?exitTypeOf.get(id.id,null):null; }).array;
+		}
 		stmts~=def;
 		static if(!returnOnlyMoved){
 			if(resultConstTmpNames.length){

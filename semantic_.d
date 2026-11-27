@@ -1279,7 +1279,7 @@ Expression[] typeWitnesses(Expression e,ref Expression[] rest,ref Location[] loc
 	return r;
 }
 static if(language==silq)
-Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍₁₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`, also for `e:𝔹[]` (see `opensArray`); not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
+Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Expression type,Scope sc,bool[] carried=null){ // (a value of a union type defines the witnesses of its bound variables as `const` locals, and the left-hand side gets the type of the member, e.g., `x:𝔹^n₍₁₎` for `x:=e` with `e:⋃[n:!ℕ]. 𝔹^n`, also for `e:𝔹[]` (see `opensArray`); not for left-hand sides with a type annotation, which converts the value, components and reversed calls)
 	static bool pattern(Expression e){
 		if(auto id=cast(Identifier)e) return !id.implicitDup;
 		if(cast(WildcardExp)e) return true;
@@ -1288,7 +1288,7 @@ Expression openUnions(Expression lhs,Expression rhs,ref VarDecl[] witnesses,ref 
 		return false;
 	}
 	if(!pattern(lhs)) return type;
-	return declareWitnesses(type,rhs.loc,witnesses,opened,names,sc,opensArray(lhs,sc));
+	return declareWitnesses(type,rhs.loc,witnesses,opened,names,sc,opensArray(lhs,sc),carried);
 }
 bool mayOverlap(Expression t1,Expression t2){ // (the types have common values, where vectors whose lengths mention witnesses may have any length, as arrays, e.g., `𝔹^n₍₁₎` for `x:=e` with `e:𝔹[]` and `𝔹^3`, see `openUnions`)
 	static Expression unknownLengths(Expression t){
@@ -1335,12 +1335,65 @@ Id freshWitnessName(Id witness){ // (for a copy of the definition that declares 
 	return witnessName(Id.intern(witness.str.findSplitBefore("₍")[0]));
 }
 static if(language==silq)
-Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc){ // (a `const` local for the witness of an opened value)
-	auto vd=new VarDecl(temporaryIdentifier(name,loc));
+void bindExitWitnesses(DefineExp be,Expression type){ // (the call of the function of a lowered `do`-`while` loop: the order of the witnesses of the unions of the result is that of the values of the loop that the types of the components in the body mention at their places, see `DefineExp.exitWitnesses`; the components that are such values become temporaries, as their witnesses define them)
+	Id[] binders;
+	auto member=type;
+	for(auto ut=cast(UnionTy)member;ut;ut=cast(UnionTy)member){
+		if(!ut.name) return;
+		binders~=ut.name;
+		member=ut.cod;
+	}
+	auto tpl=cast(TupleExp)be.e1,tt=cast(TupleTy)member;
+	auto types=tt?tt.types:[member];
+	if(binders.length!=be.exitWitnesses.length||!tpl||types.length!=tpl.e.length||be.exitTypes.length!=tpl.e.length) return;
+	MapX!(Id,Id) found;
+	bool conflict=false;
+	static Expression[] children(Expression e){ // (also of the types of functions and unions, which have no components)
+		if(auto pt=cast(ProductTy)e) return [pt.dom,pt.cod];
+		if(auto ut=cast(UnionTy)e) return [ut.dom,ut.cod];
+		Expression[] r;
+		foreach(c;e.components) r~=c;
+		return r;
+	}
+	void match(Expression t,Expression s){ // (`t` in the result, with the bound variables, and `s` in the body)
+		if(conflict||!t||!s) return;
+		if(auto id=cast(Identifier)t) if(binders.canFind(id.id)){
+			if(auto sid=cast(Identifier)s){
+				auto name=sid.meaning&&sid.meaning.name?sid.meaning.name.id:sid.id;
+				if(be.exitWitnesses.canFind(name)){
+					auto p=found.get(id.id,Id.init);
+					if(p!=Id.init) conflict|=p!=name;
+					else found[id.id]=name;
+				}
+			}
+			return;
+		}
+		if(typeid(t)!is typeid(s)) return;
+		auto tc=children(t),bc=children(s);
+		if(tc.length==bc.length) foreach(i;0..tc.length) match(tc[i],bc[i]);
+	}
+	foreach(i,t;types) match(t,be.exitTypes[i]);
+	if(conflict) return;
+	auto names=binders.map!(b=>found.get(b,Id.init)).array;
+	if(binders.length==1&&names[0]==Id.init) names[0]=be.exitWitnesses[0];
+	if(names.any!(n=>n==Id.init)||be.exitWitnesses.any!(w=>names.count(w)!=1)) return;
+	be.witnessNames=names;
+	be.carriedWitnesses=names.map!(n=>be.exitWitnessesCarried[be.exitWitnesses.countUntil(n)]).array;
+	foreach(ref e;tpl.e) if(auto id=cast(Identifier)e) if(names.canFind(id.id)){ // (a classical temporary, which is forgotten)
+		auto t=new Identifier(freshName());
+		t.loc=id.loc;
+		e=t;
+	}
+}
+static if(language==silq)
+Identifier declareWitness(Id name,Expression dom,Location loc,Scope sc,bool carried=false){ // (a `const` local for the witness of an opened value; `carried`: a variable of the program, see `DefineExp.carriedWitnesses`)
+	auto id=temporaryIdentifier(name,loc);
+	id.isTemporary=!carried;
+	auto vd=new VarDecl(id);
 	vd.loc=loc;
-	vd.setTemporary(true);
+	vd.setTemporary(!carried);
 	vd.vtype=dom;
-	vd.isConst_=true;
+	vd.isConst_=!carried;
 	vd=varDeclSemantic(vd,sc);
 	if(vd.isSemError()) return null;
 	if(!sc.dependencyTracked(vd)) sc.addDefaultDependency(vd); // (as for a definition, e.g., such that the state of a loop does not change by its first lookup in the body, see `Scope.getDependency`)
@@ -1358,12 +1411,12 @@ Identifier witnessUse(VarDecl vd,Scope sc){
 	return use;
 }
 static if(language==silq)
-Expression declareWitnesses(Expression type,Location loc,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Scope sc,bool arrays=false){ // (the member of the unions that `type` is, whose witnesses are declared; with `arrays`, an array is a vector whose length is the witness, as a value of `⋃[n:!ℕ]. τ^n`)
+Expression declareWitnesses(Expression type,Location loc,ref VarDecl[] witnesses,ref Expression[] opened,Id[] names,Scope sc,bool arrays=false,bool[] carried=null){ // (the member of the unions that `type` is, whose witnesses are declared; with `arrays`, an array is a vector whose length is the witness, as a value of `⋃[n:!ℕ]. τ^n`)
 	Id name(Id bound){ return witnesses.length<names.length?names[witnesses.length]:witnessName(bound); } // (with the names of the definition that this one is a copy of)
 	while(true){
 		auto ut=cast(UnionTy)type;
 		if(!ut) break;
-		auto use=declareWitness(name(ut.name),ut.dom,loc,sc);
+		auto use=declareWitness(name(ut.name),ut.dom,loc,sc,witnesses.length<carried.length&&carried[witnesses.length]);
 		if(!use) break;
 		witnesses~=cast(VarDecl)use.meaning;
 		opened~=ut;
@@ -2472,6 +2525,26 @@ Expression statementSemanticImpl(AAssignExp ae,Scope sc,ref StmFlags flags,bool 
 	return assignSemantic(ae,sc,flags);
 }
 
+static if(language==silq)
+void recordLoopEntryConversions(ref FixedPointIterState state,CompoundExp bdy,Scope sc){ // (from the types before the loop to those of the state that the last iteration starts from, as the weakenings of the lowering, see `ast.looplowering.lowerLoop`; also of the variables of enclosing scopes that the loop splits into `sc`)
+	auto bs=bdy?cast(BlockScope)bdy.blscope_:null;
+	if(!bs) return;
+	bs.entryConversions=[];
+	MapX!(Id,Declaration) before;
+	foreach(d;state.origStateSnapshot.declarations()) before[d.getId]=d;
+	foreach(d1;state.prevStateSnapshot.declarations()){
+		if(!cast(VarDecl)d1) continue;
+		auto d0=before.get(d1.getId,null);
+		for(auto s=sc.parentScope();!d0&&s;s=s.parentScope()){
+			if(auto d=s.rnsymtab.get(d1.getId,null)) if(!cast(DeadDecl)d) d0=d;
+			if(cast(FunctionScope)s) break;
+		}
+		if(!d0||d1 is d0) continue;
+		auto from=typeForDecl(d0),to=typeForDecl(d1);
+		if(!from||!to||from==to||!isSubtype(from,to)) continue;
+		bs.entryConversions~=q(d0,from,to);
+	}
+}
 struct FixedPointIterState{
 	Scope.ScopeState origStateSnapshot;
 	StmFlags origFlags;
@@ -3105,6 +3178,7 @@ Expression statementSemanticImpl(ForExp fe,Scope sc,ref StmFlags flags,bool rese
 	if(!iterations.outer) runFinalLoopIteration(fe,sc,flags,state,bdy,"for",constForgets,anyDeferredSpecificityCheck,
 		(BlockScope fesc){ setupForIter(fesc); });
 	state.fixSplitMergeGraph(sc);
+	static if(language==silq) recordLoopEntryConversions(state,bdy,sc);
 	fe.bdy=bdy;
 	fe.type=unit;
 	fe.setSemCompleted();
@@ -3228,6 +3302,7 @@ Expression statementSemanticImpl(WhileExp we,Scope sc,ref StmFlags flags,bool re
 	}
 	if(ncond) we.cond=ncond;
 	if(bdy) we.bdy=bdy;
+	static if(language==silq) recordLoopEntryConversions(state,bdy,sc);
 	we.type=isTrue(we.cond)?bottom:unit;
 	we.setSemCompleted();
 	Expression result=we;
@@ -3275,6 +3350,7 @@ Expression statementSemanticImpl(RepeatExp re,Scope sc,ref StmFlags flags,bool r
 	// Final mode-(b) pass: one more iteration with loopFinalPass=true.
 	if(!iterations.outer) runFinalLoopIteration(re,sc,flags,state,bdy,"repeat",constForgets,anyDeferredSpecificityCheck);
 	state.fixSplitMergeGraph(sc);
+	static if(language==silq) recordLoopEntryConversions(state,bdy,sc);
 	re.bdy=bdy;
 	re.type=isPositive(re.num)&&definitelyReturns(re.bdy)?bottom:unit;
 	re.setSemCompleted();
@@ -3445,6 +3521,7 @@ Expression statementSemanticImpl(DoWhileExp dw,Scope sc,ref StmFlags flags,bool 
 		}
 	}
 	dw.implicitReset=!dw.reset;
+	recordLoopEntryConversions(state,bdy,sc);
 	dw.bdy=bdy;
 	dw.cond=ncond;
 	dw.reset=rst;
@@ -5986,7 +6063,8 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 				if(auto folded=initializer.eval()) initializer=folded;
 			auto lhsType=be.e2.type;
 			static if(language==silq) if(!be.e2.isSemError()&&(cast(UnionTy)lhsType||cast(ArrayTy)lhsType)&&!(cast(Identifier)be.e1&&(cast(Identifier)be.e1).byRef)){ // (not a variable that stands for a component, which keeps its type, e.g., during the update of the component, see `buildIndexReplacements`)
-				lhsType=openUnions(be.e1,be.e2,be.witnesses,be.opened,be.witnessNames,lhsType,sc);
+				if(be.exitWitnesses.length&&!be.witnessNames.length) bindExitWitnesses(be,lhsType);
+				lhsType=openUnions(be.e1,be.e2,be.witnesses,be.opened,be.witnessNames,lhsType,sc,be.carriedWitnesses);
 				if(lhsType !is be.e2.type) initializer=null;
 			}
 			auto dcontext=defineLhsContext(context,be.e2.isSemError(),lhsType,initializer);
@@ -6259,6 +6337,7 @@ Expression defineSemantic(DefineExp be,Scope sc,ref StmFlags flags,bool resetCon
 		ce.setSemCompleted();
 		r=ce;
 	}
+	static if(language==silq) foreach(w;be.witnesses) if(w&&!w.isConst&&w.scope_) sc.lastUses.definition(w,r); // (a variable of the program, which later code can consume, see `DefineExp.carriedWitnesses`)
 	foreach(vd;&be.varDecls){
 		if(!vd) continue;
 		propErr(be,vd);
@@ -12789,7 +12868,7 @@ ReturnExp returnExpSemantic(ReturnExp ret,Scope sc,ref StmFlags flags){
 			return false;
 		}
 		static if(language==silq) if(type){
-			if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc),(Declaration d)=>!unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention)
+			if(auto visible=eliminateVariables(type,(Declaration d)=>isBodyLocal(fd,d)||unavailableAt(d,sc)||fd.lowersLoop&&fd.params.any!(p=>p is d&&!p.isConst),(Declaration d)=>!unavailableAt(d,sc))) // (the type of the function cannot mention its local variables, as for the merge of a block whose `const` locals a type mentions, nor parameters that the body consumes, which the values of type variables can mention, nor those that the call of the function of a loop moves, e.g., `m'` for `g:𝟙 → 𝔹^(n'+m')` that `do{ g:=λ(){ … }; n=3; }while c<3 { m+=1; }` leaves live, which would then be `const`)
 				if(!quantumControlled||!visible.hasClassicalComponent()) type=visible; // (e.g., the length of an array is classical)
 			foreach(id;type.freeIdentifiers){ // (e.g., `n` in `uint[n]` after `move(n)`, as the parameters that a declared return type mentions are `const`)
 				if(!id.meaning||isBodyLocal(fd,id.meaning)||!unavailableAt(id.meaning,sc)) continue;

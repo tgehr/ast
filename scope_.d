@@ -5050,6 +5050,7 @@ class BlockScope: NestedScope{
 	Expression conditional; // (of a branch, for diagnostics, see `cancelDup`)
 	Q!(LastUse,size_t)[] uncomputations; // (in the branch and its nested scopes, with the numbers of the events of the code after the conditional at them, see `checkBranchOrder` and `LastUse.noteBranchEvent`)
 	Declaration[] eagerMerges; // (merged versions of variables whose versions in the branch have no known dependency, which values merged after them depend on instead, see `Scope.merge`)
+	static if(language==silq) Q!(Declaration,Expression,Expression)[] entryConversions; // (of a loop body: the variables from outside whose types the loop weakens at its start, with their types before the loop and in it, which the interpreter converts before the first iteration, see `ast.semantic_.recordLoopEntryConversions`)
 	static if(language==silq) Q!(VarDecl,Expression)[] mergeWitnesses; // (the `const` locals that the merge declares in the enclosing scope for the locals of the branches that the types of the merged variables mention, with their values in this branch, see `Scope.merge`)
 	static if(language==silq) Id[] mergeWitnessNames; // (the names of those of the analysis that this one is a copy of, see `ast.semantic_.mergeBranches`)
 	static if(language==silq) Id[] mergeWitnessVars; // (the merged variables of those witnesses, see `Scope.mergeWitnesses`)

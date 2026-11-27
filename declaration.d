@@ -344,6 +344,7 @@ class FunctionDef: FixedPointDeclaration{
 	bool isSquare=false;
 	auto annotation=Annotation.none;
 	bool inferAnnotation=false;
+	static if(language==silq) bool lowersLoop=false; // (the function of a loop that `ast.looplowering` defines, whose non-`const` parameters the call moves)
 	Location annotationLoc; // (explicit annotation)
 	Expression[Annotation.max+1] weakenedBy; // weakenedBy[a]: why inferred annotation is below `a`
 	void weakenAnnotation(Annotation annotation,Expression cause){
@@ -362,6 +363,7 @@ class FunctionDef: FixedPointDeclaration{
 		isSquare=fd.isSquare;
 		annotation=fd.annotation;
 		inferAnnotation=fd.inferAnnotation;
+		static if(language==silq) lowersLoop=fd.lowersLoop;
 		annotationLoc=fd.annotationLoc;
 		weakenedBy=fd.weakenedBy;
 		attributes=fd.attributes.dup;
