@@ -537,6 +537,7 @@ final class LastUse{
 						auto id=lu.decl.getId;
 						foreach(oos;outOfScope.get(id,null)){
 							if(onOtherPath(lu.scope_,oos[3])) continue; // (not in another branch of the conditional of the consumption)
+							if(Scope.divergesWithin(oos[3],nsc)) continue; // (not on a path that returns or aborts in the branch, which does not reach the code after the conditional, e.g., `x2:=(a,true)` in `if m { if l { x2:=(a,true); assert(false); } } t:=measure(v1);`)
 							auto origin=oos[5];
 							while(origin.splitFrom&&!(origin.scope_&&par.isNestedIn(origin.scope_))) origin=origin.splitFrom;
 							if(lu.decl is origin||lu.decl.isDerivedFrom(origin)){

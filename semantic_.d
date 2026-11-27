@@ -2013,6 +2013,15 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	ite.then.blscope_.loweredReturns=ite.othw.blscope_.loweredReturns=ite.then.blscope_.returningConditional&&!insideDoWhileBody(sc); // (`erpLoopExplicit` does not rewrite `do`-`while` loops whose body returns)
 	foreach(branch;only(ite.then,ite.othw)) branch.blscope_.returnsOnSomePath=containsReturn(branch);
 	if(continued) (continued is ite.then?ite.othw:ite.then).blscope_.returningBeforeContinuation=true;
+	static if(language==silq){
+		foreach(b;only(ite.then,ite.othw)) b.blscope_.abortsOnEveryPath=false; // (of an earlier analysis)
+		if(!continued&&!quantumControl&&!sc.quantumControlled&&!insideDoWhileBody(sc)&&sc.returnInBodyBlocks()) foreach(i,b;[ite.then,ite.othw]){ // (as below, before the analysis of the branches, for a branch that aborts by `assert(false)` on every path, see `BlockScope.abortsOnEveryPath`)
+			auto o=i?ite.then:ite.othw;
+			if(containsReturn(b)||!returnsOnEveryPath(b,true)||definitelyReturns(o)||containsReturn(o)&&insideLoopBody(sc)) continue;
+			b.blscope_.abortsOnEveryPath=true;
+			break;
+		}
+	}
 	auto dep=ite.cond.getDependency(sc);
 	static if(language==silq){
 		Dependency guardDeps;

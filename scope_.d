@@ -1834,10 +1834,12 @@ abstract class Scope{
 		}
 	}
 
+	protected bool consumedOnDivergingPath=false; // (by a nested scope, on a path that does not reach the end of a branch, see `NestedScope.consumeImpl`)
 	protected Declaration consumeImpl(Declaration odecl,Declaration ndecl,ref Expression type,bool remove,Identifier use,IndexExp consumedComponent=null,bool splitting=false)in{
 		assert(odecl is ndecl||!remove);
 	}do{
 		assert(odecl.scope_ is this&&ndecl.scope_ is this);
+		consumedOnDivergingPath=false;
 		lastUses.prepareChange(odecl);
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		if(remove){
@@ -4570,6 +4572,8 @@ class NestedScope: Scope{
 		assert(odecl is ndecl||!remove);
 	}do{
 		if(this is odecl.scope_) return super.consumeImpl(odecl,ndecl,type,remove,use,consumedComponent,splitting);
+		auto onDivergingPath=consumedOnDivergingPath; // (not for the consumptions that its analysis triggers)
+		consumedOnDivergingPath=false;
 		if(rnsymtab.get(odecl.getId,null) !is odecl) return null;
 		lastUses.prepareChange(odecl);
 		import ast.semantic_: typeForDecl;
@@ -4627,7 +4631,15 @@ class NestedScope: Scope{
 		}
 		if(remove){
 			assert(odecl is ndecl);
-			if(auto nndecl=parent.consumeImpl(odecl,ndecl,type,true,use,consumedComponent,splitting)){
+			auto bs=cast(BlockScope)this;
+			auto divergingPath=diverges||LastUse.isBranch(this)&&(bs&&bs.abortsOnEveryPath||onDivergingPath); // (the consumption is on a path that does not reach the end of this branch, also in a nested conditional, e.g., `x:=(a,true)` in `if l { if m { x:=(a,true); assert(false); } }`)
+			Declaration consumeInParent(){
+				auto prev=parent.consumedOnDivergingPath;
+				parent.consumedOnDivergingPath=divergingPath;
+				scope(exit) parent.consumedOnDivergingPath=prev;
+				return parent.consumeImpl(odecl,ndecl,type,true,use,consumedComponent,splitting);
+			}
+			if(auto nndecl=consumeInParent()){
 				pdep=parent.getDependency(nndecl,true);
 				ndecl=nndecl;
 				consumedOuter~=ndecl;
@@ -4650,7 +4662,7 @@ class NestedScope: Scope{
 						}
 						continue;
 					}
-					sc.splitForDivergingSibling=diverges;
+					sc.splitForDivergingSibling=divergingPath;
 					sc.splitForSibling=LastUse.interleavable(sc);
 					auto cdecl=sc.consumeImpl(odecl,ndecl,type,false,use,consumedComponent,splitting);
 					sc.splitForDivergingSibling=sc.splitForSibling=false;
@@ -5099,6 +5111,7 @@ class BlockScope: NestedScope{
 	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path, and the code after the conditional does not continue the other branch: a `return` does not end the branch, see `dropsClassicalAtReturn`)
 	bool loweredReturns=false; // (`returningConditional`, but not in the body of a `do`-`while` loop: `--remove-loops` lowers the returns to assignments of the result, of a flag and of dummy values for what they consume, so that the branches reach the merge, see `erpLoopExplicit`)
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
+	bool abortsOnEveryPath=false; // (by `assert(false)`, decided before its analysis, where the code after the conditional continues the other branch, see `ast.semantic_.statementSemanticImpl(IteExp)`: its consumptions of variables from outside do not change the dependencies in the other branch, as at its abort, see `splitForDivergingSibling`)
 	bool returningBeforeContinuation=false; // (it returns on every path, or aborts on every path, see `ast.semantic_.statementSemanticImpl(IteExp)`, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`; or a loop body that aborts on every path, see `ast.semantic_.finalizeLoopIteration`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	static if(language==silq) AbortingBranchEnd loweredLoopEnd; // (the end of the branch after a loop that does not exit normally, as without its lowering, see `restoreBeforeLoop` and `abortingBranchEnd`)
