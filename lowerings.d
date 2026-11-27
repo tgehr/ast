@@ -11,7 +11,7 @@ static if(language==silq):
 
 Identifier getOperatorSymbol(string name,Location loc,Scope isc){
 	import ast.modules: getOperatorScope;
-	auto sc=getOperatorScope(isc.handler, loc);
+	auto sc=getOperatorScope(isc.handler, loc, name);
 	if(!sc) return null;
 	auto res=new Identifier(name);
 	res.loc=loc;

@@ -5,7 +5,7 @@ import util.tuple: Q=Tuple, q=tuple;
 import astopt;
 import ast.parser;
 import ast.error: ErrorHandler;
-import ast.lexer: Source, Location;
+import ast.lexer: Source, Location, Lexer, Tok;
 import ast.scope_: Scope, TopScope;
 import ast.declaration;
 import ast.expression: Expression;
@@ -253,20 +253,66 @@ int parseFile(string path,ErrorHandler err,ref Expression[] r,Location loc=Locat
 }
 
 static if(language==silq)
-Scope getOperatorScope(ErrorHandler err, Location loc){
-	import ast.semantic_: semantic;
-	if(operatorScope) return operatorScope;
-	operatorScope = new TopScope(".operators",err);
-	operatorScope.import_(getPreludeScope(err, loc));
-	auto src = operatorSrc = new Source(".operators", readBuiltin!([operatorsPath])(0));
+private final class OperatorScope: TopScope{ // (analyzes a declaration of the operators library when it is first looked up, with the declarations that it mentions)
+	Expression[] pending; // (the declarations that are not analyzed yet)
+	size_t[string] index; // (of the declaration of each function)
+	size_t[][] mentions; // (the declarations whose names each declaration mentions)
+	this(ErrorHandler err){ super(".operators",err); }
+	void load(Source src){
+		pending=parseSource(src,handler);
+		foreach(i,e;pending) if(auto fd=cast(FunctionDef)e) if(fd.name) index[fd.name.name]=i;
+		mentions=new size_t[][](pending.length);
+		size_t i=0;
+		for(auto lexer=Lexer(src);!lexer.empty&&i<pending.length;lexer.popFront()){
+			if(lexer.front.type!=Tok!"i") continue;
+			auto p=lexer.front.loc.rep.ptr;
+			while(i<pending.length&&pending[i].loc.rep.ptr+pending[i].loc.rep.length<=p) i++;
+			if(i<pending.length&&pending[i].loc.rep.ptr<=p) if(auto j=lexer.front.name in index) mentions[i]~=*j;
+		}
+	}
+	void require(string name){
+		import ast.semantic_: semantic;
+		auto p=name in index;
+		if(!p||!pending[*p]) return;
+		auto chosen=new bool[](pending.length);
+		size_t[] todo;
+		void choose(size_t i){
+			if(!pending[i]||chosen[i]) return;
+			chosen[i]=true;
+			todo~=i;
+		}
+		choose(*p);
+		foreach(i,e;pending) if(e&&!cast(FunctionDef)e) choose(i);
+		while(todo.length){
+			auto i=todo[$-1];
+			todo=todo[0..$-1];
+			foreach(j;mentions[i]) choose(j);
+		}
+		Expression[] exprs;
+		foreach(i,c;chosen) if(c){
+			exprs~=pending[i];
+			pending[i]=null;
+		}
+		semantic(exprs,this);
+	}
+}
+
+static if(language==silq)
+Scope getOperatorScope(ErrorHandler err, Location loc, string name){ // (with the declaration of `name` analyzed)
+	auto osc = cast(OperatorScope)operatorScope;
 	int nerr = err.nerrors;
-	auto exprs = parseSource(src, err);
-	exprs = semantic(exprs,operatorScope);
+	if(!osc) {
+		operatorScope = osc = new OperatorScope(err);
+		osc.import_(getPreludeScope(err, loc));
+		nerr = err.nerrors;
+		osc.load(operatorSrc = new Source(".operators", readBuiltin!([operatorsPath])(0)));
+	}
+	osc.require(name);
 	if(nerr != err.nerrors) {
-		if(loc.line) operatorScope.error("failed to import operators", loc);
+		if(loc.line) osc.error("failed to import operators", loc);
 		else stderr.writeln("error: failed to import operators");
 	}
-	return operatorScope;
+	return osc;
 }
 
 static if(language==silq)
