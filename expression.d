@@ -1350,7 +1350,7 @@ class Identifier: Expression{
 	}
 	override bool unifyImpl(Expression rhs,ref MapSX!(Id,UnificationResult) subst,bool meet){
 		rhs=rhs.eval(); // (the value of the variable, also from a stated type, see `unify`)
-		if(id !in subst) return meet?isSubtype(this,rhs):isSubtype(rhs,this);
+		if(id !in subst) return this==rhs||(meet?isSubtype(this,rhs):isSubtype(rhs,this)); // (also another version of the same variable, e.g., a split)
 		if(this==rhs){
 			if(subst[id].bound(meet)&&subst[id].bound(meet)!=this) return false;
 			subst[id].add(this,meet);

@@ -4332,6 +4332,7 @@ abstract class Scope{
 					newOuter.splitInto[k].resetCanonicalSource();
 					lastUses.noteSplitFromChanged(newOuter.splitInto[k]);
 				}
+				if(prevOuter !is newOuter) prevOuter.supersededBy=newOuter; // (the types of the analyzed body can mention the version of the last iteration, e.g., `m` in `𝔹^(n+m)` for `q:=vector(n+m,dup(a))`, also with the splits, e.g., in the type of a closure that captures them, see `DeclProp.replaceDecl`: the same value)
 				outer=newOuter;
 			}
 		}

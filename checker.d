@@ -980,6 +980,31 @@ class Checker {
 		visType(e.type);
 	}
 
+	static ast_exp.Expression splitType(ast_decl.Declaration split) { // (the versions at the exit of a `do`-`while` loop that its type mentions stand for the versions they split from: the analysis cuts their derivations after the loop, see `ast.declaration.Declaration.cutDerivation`)
+		auto type = typeForDecl(split);
+		if(!type) return type;
+		MapSX!(Id, ast_exp.Expression) subst;
+		MapSX!(Id, ast_decl.Declaration) meanings;
+		SetX!Id ambiguous; // (different versions of the same name are not distinguished by substitution)
+		foreach(id; ast_ty.freeIdentifiers(type)) {
+			if(auto m = meanings.get(id.id, null)) { if(m !is id.meaning) ambiguous.insert(id.id); }
+			else meanings[id.id] = id.meaning;
+		}
+		foreach(id; ast_ty.freeIdentifiers(type)) {
+			auto d = id.meaning;
+			if(!d || id.id in ambiguous || !d.loopExitSplit || !d.splitFrom || d.splitFrom.getId != id.id) continue;
+			auto nid = new ast_exp.Identifier(id.id);
+			nid.meaning = d.splitFrom;
+			nid.scope_ = id.scope_;
+			nid.loc = id.loc;
+			nid.type = id.type;
+			nid.constLookup = true;
+			nid.setSemCompleted();
+			subst[id.id] = nid;
+		}
+		return subst.length ? type.substitute(subst) : type;
+	}
+
 	void visSplit(ref Checker ifTrue, ast_scope.NestedScope scTrue, ref Checker ifFalse, ast_scope.NestedScope scFalse, ast_exp.Expression cause) {
 		// TypeScopes are self-contained scopes carried by types (see
 		// ast.substitute.transitionToType); they have no parent in this scope
@@ -1021,8 +1046,8 @@ class Checker {
 			auto vTrue = t.dTrue;
 			auto vFalse = t.dFalse;
 			auto vtype = ast_sem.typeForDecl(t.outer);
-			assert(!vTrue || typeForDecl(vTrue) == vtype, format("ERROR: Split variable %s changed type in if-true", name));
-			assert(!vFalse || typeForDecl(vFalse) == vtype, format("ERROR: Split variable %s changed type in if-false", name));
+			assert(!vTrue || splitType(vTrue) == vtype, format("ERROR: Split variable %s changed type in if-true", name));
+			assert(!vFalse || splitType(vFalse) == vtype, format("ERROR: Split variable %s changed type in if-false", name));
 			getVar(t.outer, false, "splitVars", cause);
 			void define(Checker c, ast_decl.Declaration d, string causeType) {
 				if(d) return c.defineVar(d, causeType, cause);

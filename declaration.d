@@ -80,7 +80,9 @@ abstract class Declaration: Expression{
 		foreach(d;splitInto) d.resetCanonicalSource();
 	}
 	Declaration canonicalSource_=null;
+	Declaration supersededBy=null; // (the version that the splits of this version of the last iteration of the analysis of a loop were moved to, see `ast.scope_.Scope.fixLoopSplitMergeGraph`: this version stands for it)
 	Declaration canonicalSource(){ // TODO: compute eagerly instead?
+		if(supersededBy) return supersededBy.canonicalSource;
 		if(canonicalSource_) return canonicalSource_;
 		if(splitFrom&&!loopExitSplit) return canonicalSource_=splitFrom.canonicalSource;
 		if(mergedFrom.length&&mergedFrom.all!(d=>d.canonicalSource is mergedFrom[0].canonicalSource)) // (no path changes it)
