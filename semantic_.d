@@ -2007,7 +2007,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	}
 	ite.then.blscope_.isBranch=ite.othw.blscope_.isBranch=true;
 	ite.then.blscope_.conditional=ite.othw.blscope_.conditional=ite;
-	auto continued=insideDoWhileBody(sc)?null:continuedBranch(ite); // (also in a loop body, where `--remove-loops` puts the code after the conditional into the other branch, see `guard` in `erpLoopExplicit`, or lowers the loop to a function whose body continues it; not yet in the body of a `do`-`while` loop, where the versions that the code after the conditional continues reach the merge after the condition, which does not keep their dependencies, e.g., `t` for `do { t:=dup(x); if k==0 { return x; } c+=1; } while c<3;`, TODO)
+	auto continued=insideDoWhileBody(sc)?null:continuedBranch(ite,!insideLoopBody(sc)); // (also in a loop body, where `--remove-loops` puts the code after the conditional into the other branch, see `guard` in `erpLoopExplicit`, or lowers the loop to a function whose body continues it; not yet in the body of a `do`-`while` loop, where the versions that the code after the conditional continues reach the merge after the condition, which does not keep their dependencies, e.g., `t` for `do { t:=dup(x); if k==0 { return x; } c+=1; } while c<3;`, TODO)
 	auto bothReturn=only(ite.then,ite.othw).all!(b=>definitelyReturns(b)&&returnsOnEveryPath(b)); // (the code generator interleaves their statements as for branches that do not return, and merges their results; in a loop body, `--remove-loops` rewrites the returns, see `erpLoopExplicit`, and the branches do not return)
 	ite.then.blscope_.returningConditional=ite.othw.blscope_.returningConditional=insideLoopBody(sc)&&!continued&&!bothReturn&&(containsReturn(ite.then)||containsReturn(ite.othw)); // (in a loop body, `--remove-loops` rewrites the returns, and guards the code after the conditional by another conditional, see `erpLoopExplicit`, unless it continues the other branch)
 	ite.then.blscope_.loweredReturns=ite.othw.blscope_.loweredReturns=ite.then.blscope_.returningConditional&&!insideDoWhileBody(sc); // (`erpLoopExplicit` does not rewrite `do`-`while` loops whose body returns)
@@ -13176,10 +13176,10 @@ bool isFalseAssert(Expression e){ // (`assert(false)`, also before its analysis,
 	auto ae=cast(AssertExp)e;
 	return ae&&writtenLiteral(ae.e,false);
 }
-CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibling returns on every path, or returns on some paths and aborts on the others: the code after the conditional runs as part of it, see `ItePartialReturn`)
+CompoundExp continuedBranch(IteExp ite,bool partially=false){ // (a branch without returns whose sibling returns on every path, or returns on some paths and aborts on the others: the code after the conditional runs as part of it, see `ItePartialReturn`; `partially`: also a branch that returns on some paths, which the code generator continues on the others, see `continuesPartially`, not in a loop body, where `--remove-loops` guards the code after the conditional instead, see `returningConditional`)
 	foreach(i,b;[ite.then,ite.othw]){
 		auto o=i?ite.then:ite.othw;
-		if(definitelyReturns(b)&&returnsOnEveryPath(b,true)&&containsReturn(b)&&!containsReturn(o)&&!definitelyReturns(o)) return o;
+		if(definitelyReturns(b)&&returnsOnEveryPath(b,true)&&containsReturn(b)&&(partially||!containsReturn(o))&&!definitelyReturns(o)) return o;
 	}
 	return null;
 }
