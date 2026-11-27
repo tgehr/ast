@@ -5670,10 +5670,10 @@ bool containsDoWhile(Expression e){ // (not supported by `splitLoop`)
 	visitStm(e,(Expression x){ if(cast(DoWhileExp)x) r=true; });
 	return r;
 }
-bool hasLoopWithReturn(Expression e){
+bool hasLoopWithReturn(Expression e,bool exiting=false){ // (`exiting`: one that may also exit normally, whose lowering absorbs the code after it, see `LoopContinuation`, not one after which that code is not reached, e.g., `while true { if k { return x; } }`)
 	bool r=false;
 	visitStm(e,(Expression x){
-		if(isLoopStatement(x)) if(containsReturn(x)) r=true;
+		if(isLoopStatement(x)) if(containsReturn(x)&&!(exiting&&endsWithReturn(x))) r=true;
 	});
 	return r;
 }
@@ -6470,7 +6470,7 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok,Se
 		if(auto cmp=cast(CompoundExp)s)
 			if(cmp.s.length==1&&isLoopStatement(cmp.s[0]))
 				s=cmp.s[0];
-		bool nested=(cast(IteExp)s||cast(CompoundExp)s)&&hasLoopWithReturn(s);
+		bool nested=(cast(IteExp)s||cast(CompoundExp)s)&&hasLoopWithReturn(s,true);
 		if(!nested){
 			r~=s;
 			if(tail.length&&endsWithReturn(s)&&i+1<stms.length){
@@ -6490,7 +6490,11 @@ Expression[] erpTransformImpl(Expression[] stms,Expression[] tail,out bool ok,Se
 		if(rest.length){
 			auto vars=erpKey(s) in erpJoins;
 			auto ite=cast(IteExp)s;
-			if(!vars&&ite&&ite.othw&&endsWithReturn(ite.then)!=endsWithReturn(ite.othw)){ // (a conditional without the variables of a join point, e.g., the exit test `if c{}else{ exit }` of a `do`-`while` loop with a continuation, which the lowering synthesizes: the rest only continues the branch that does not return)
+			if(ite&&endsWithReturn(ite.then)!=(ite.othw&&endsWithReturn(ite.othw))){ // (the rest only continues the branch that does not return, as the code after the conditional does in normal mode, see `continuedBranch`, e.g., after `if l { while true { if k { return x; } } }`, also for a conditional without the variables of a join point, e.g., the exit test `if c{}else{ exit }` of a `do`-`while` loop with a continuation, which the lowering synthesizes; a join point would lose the dependencies of the variables that it passes, e.g., of `v` on `x` for `v:=dup(x)`)
+				if(!ite.othw){
+					ite.othw=new CompoundExp([]);
+					ite.othw.loc=ite.loc;
+				}
 				(endsWithReturn(ite.then)?ite.othw:ite.then).s~=rest;
 			}else{
 				if(!vars) return null;

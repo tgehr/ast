@@ -13152,7 +13152,7 @@ Expression typeForDecl(Declaration decl){
 	return unit; // TODO
 }
 
-bool returnsOnEveryPath(Expression e,bool orAborts=false){ // (rather than aborting on some path: the HQIR continues after a branch that returns in the other branch, without merging the versions there, see `ItePartialReturn`, but merges them after one that aborts; `orAborts`: or aborts by `assert(false)` on the other paths, not by a loop that does not exit, e.g., `while true { … }`, which `--remove-loops` lowers, rewriting its returns, see `erpLoopExplicit`)
+bool returnsOnEveryPath(Expression e,bool orAborts=false){ // (rather than aborting on some path: the HQIR continues after a branch that returns in the other branch, without merging the versions there, see `ItePartialReturn`, but merges them after one that aborts; `orAborts`: or aborts by `assert(false)` on the other paths, or does not exit a loop there, e.g., `while true { if k { return x; } }`, after which the code generator continues the other branch as well: `--remove-loops` lowers its returns to a conditional `return` followed by `assert(false)`, see `erpLoopExplicit`, or returns the call of the function that it lowers the loop to)
 	if(cast(ReturnExp)e) return true;
 	if(orAborts&&cast(AssertExp)e) return definitelyReturns(e);
 	if(auto ce=cast(CompoundExp)e){
@@ -13160,6 +13160,11 @@ bool returnsOnEveryPath(Expression e,bool orAborts=false){ // (rather than abort
 		return false;
 	}
 	if(auto ite=cast(IteExp)e) return ite.othw&&returnsOnEveryPath(ite.then,orAborts)&&returnsOnEveryPath(ite.othw,orAborts);
+	if(orAborts&&definitelyReturns(e)){ // (a loop whose first iteration returns or aborts, or that does not exit)
+		if(cast(WhileExp)e) return true;
+		if(auto re=cast(RepeatExp)e) return returnsOnEveryPath(re.bdy,orAborts);
+		static if(language==silq) if(auto dw=cast(DoWhileExp)e) return !definitelyReturns(dw.bdy)||returnsOnEveryPath(dw.bdy,orAborts);
+	}
 	return false;
 }
 bool containsReturn(CompoundExp ce){ // (on some path)
@@ -13240,6 +13245,12 @@ private bool definitelyReturnsImpl(WhileExp we){
 	return isTrue(we.cond);
 }
 private bool definitelyReturnsImpl(RepeatExp re){
+	static if(language==silq) if(!re.num.type){ // (as for `while true`)
+		auto le=cast(LiteralExp)re.num;
+		if(!le) return false;
+		auto v=le.asIntegerConstant();
+		return v&&v.get()>0&&definitelyReturns(re.bdy);
+	}
 	return isPositive(re.num) && definitelyReturns(re.bdy);
 }
 static if(language==silq)
