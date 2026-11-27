@@ -13141,13 +13141,14 @@ Expression typeForDecl(Declaration decl){
 	return unit; // TODO
 }
 
-bool returnsOnEveryPath(Expression e){ // (rather than aborting on some path: the HQIR continues after a branch that returns in the other branch, without merging the versions there, see `ItePartialReturn`, but merges them after one that aborts)
+bool returnsOnEveryPath(Expression e,bool orAborts=false){ // (rather than aborting on some path: the HQIR continues after a branch that returns in the other branch, without merging the versions there, see `ItePartialReturn`, but merges them after one that aborts; `orAborts`: or aborts by `assert(false)` on the other paths, not by a loop that does not exit, e.g., `while true { … }`, which `--remove-loops` lowers, rewriting its returns, see `erpLoopExplicit`)
 	if(cast(ReturnExp)e) return true;
+	if(orAborts&&cast(AssertExp)e) return definitelyReturns(e);
 	if(auto ce=cast(CompoundExp)e){
-		foreach(s;ce.s) if(definitelyReturns(s)) return returnsOnEveryPath(s);
+		foreach(s;ce.s) if(definitelyReturns(s)) return returnsOnEveryPath(s,orAborts);
 		return false;
 	}
-	if(auto ite=cast(IteExp)e) return ite.othw&&returnsOnEveryPath(ite.then)&&returnsOnEveryPath(ite.othw);
+	if(auto ite=cast(IteExp)e) return ite.othw&&returnsOnEveryPath(ite.then,orAborts)&&returnsOnEveryPath(ite.othw,orAborts);
 	return false;
 }
 bool containsReturn(CompoundExp ce){ // (on some path)
@@ -13166,10 +13167,10 @@ bool isFalseAssert(Expression e){ // (`assert(false)`, also before its analysis,
 	auto ae=cast(AssertExp)e;
 	return ae&&writtenLiteral(ae.e,false);
 }
-CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibling returns on every path: the code after the conditional runs as part of it, see `ItePartialReturn`)
+CompoundExp continuedBranch(IteExp ite){ // (a branch without returns whose sibling returns on every path, or returns on some paths and aborts on the others: the code after the conditional runs as part of it, see `ItePartialReturn`)
 	foreach(i,b;[ite.then,ite.othw]){
 		auto o=i?ite.then:ite.othw;
-		if(definitelyReturns(b)&&returnsOnEveryPath(b)&&!containsReturn(o)&&!definitelyReturns(o)) return o;
+		if(definitelyReturns(b)&&returnsOnEveryPath(b,true)&&containsReturn(b)&&!containsReturn(o)&&!definitelyReturns(o)) return o;
 	}
 	return null;
 }
@@ -13200,6 +13201,7 @@ private bool definitelyReturnsImpl(ReturnExp ret){
 	return true;
 }
 private bool definitelyReturnsImpl(AssertExp ae){
+	static if(language==silq) if(!ae.e.type) return writtenLiteral(ae.e,false); // (also before its analysis, as written, e.g., in a copy, whose literals have no types, and where `false` reads as `0`: a re-analysis of a copy decides as the original does, e.g., about `continuedBranch`)
 	return isFalse(ae.e);
 }
 private bool definitelyReturnsImpl(ObserveExp oe){
@@ -13223,6 +13225,7 @@ private bool definitelyReturnsImpl(ForExp fe){
 	return false;
 }
 private bool definitelyReturnsImpl(WhileExp we){
+	static if(language==silq) if(!we.cond.type) return writtenLiteral(we.cond,true); // (as for `assert(false)`, e.g., a copy of a branch that returns on some path finds the loop before an `assert(false)` after it, as the original does, see `returnsOnEveryPath`)
 	return isTrue(we.cond);
 }
 private bool definitelyReturnsImpl(RepeatExp re){
@@ -13230,7 +13233,7 @@ private bool definitelyReturnsImpl(RepeatExp re){
 }
 static if(language==silq)
 private bool definitelyReturnsImpl(DoWhileExp dw){
-	return definitelyReturns(dw.bdy)||isTrue(dw.cond);
+	return definitelyReturns(dw.bdy)||(dw.cond.type?isTrue(dw.cond):writtenLiteral(dw.cond,true)); // (as for `while true`)
 }
 static if(language==silq)
 private bool definitelyReturnsImpl(WithExp we){
