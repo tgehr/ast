@@ -3348,10 +3348,10 @@ abstract class Scope{
 			bool gone(Declaration d){ return d in goneConstLocals||d in goneLocals; }
 			return goneConstLocals.length||goneLocals.length?eliminateVariables(type,&gone,&gone):type;
 		}
-		static if(language==silq){ // (the locals of the branches that the types of several merged variables mention become `const` locals of this scope, witnesses whose values each branch gives, so that the merge keeps the relations between the variables, e.g., the same length of `x:!ℕ^n` and `y:!ℕ^n` for a local `n` of a branch)
+		static if(language==silq){ // (the locals of the branches that the types of several merged variables mention become `const` locals of this scope, witnesses whose values each branch gives, so that the merge keeps the relations between the variables, e.g., the same length of `x:!ℕ^n` and `y:!ℕ^n` for a local `n` of a branch; also the lengths of vectors that differ between the branches, e.g., of `x:!ℕ^2` and `y:!ℕ^2` in one branch and `x:!ℕ^3` and `y:!ℕ^3` in the other)
 			MapSX!(Id,Expression) jointTypes;
 			VarDecl[] jointWitnesses;
-			if(!isLoop&&!quantumControl&&(goneConstLocals.length||goneLocals.length)&&scopes.length<=2&&scopes.all!(sc=>LastUse.isBranch(sc)&&cast(BlockScope)sc))
+			if(!isLoop&&!quantumControl&&scopes.length<=2&&scopes.all!(sc=>LastUse.isBranch(sc)&&cast(BlockScope)sc))
 				jointTypes=mergeWitnesses(scopes,keys,&packs,&visibleType,&unfoldBranchTypeVariables,(Id id)=>!!(id in eagerIds),jointWitnesses);
 		}
 		keys.forEach(rnsymtab.dup,(Declaration psym){
@@ -3744,74 +3744,90 @@ abstract class Scope{
 		return errors;
 	}
 	static if(language==silq)
-	private MapSX!(Id,Expression) mergeWitnesses(NestedScope[] scopes,MergeKeys keys,scope bool delegate(Expression) packs,scope Expression delegate(Expression) visibleType,scope Expression delegate(Expression) unfold,scope bool delegate(Id) eager,out VarDecl[] witnesses){ // (the members of the joined union of the types of the merged variables that mention the locals of the branches, for its witnesses, `const` locals of this scope: the values of the witnesses in each branch are its `mergeWitnesses`; not for the variables that are merged before the others, see `eagerIds`)
+	private MapSX!(Id,Expression) mergeWitnesses(NestedScope[] scopes,MergeKeys keys,scope bool delegate(Expression) packs,scope Expression delegate(Expression) visibleType,scope Expression delegate(Expression) unfold,scope bool delegate(Id) eager,out VarDecl[] witnesses){ // (the members of the joined union of the types of the merged variables that mention the locals of the branches, for its witnesses, `const` locals of this scope: the values of the witnesses in each branch are its `mergeWitnesses`; not for the variables that are merged before the others, see `eagerIds`; also the lengths of vectors that differ between the branches, see `vectors`)
 		import ast.semantic_:typeForDecl,witnessName,witnessUse,temporaryIdentifier;
 		MapSX!(Id,Expression) r;
-		Id[] names;
+		bool local(Expression t){ // (mentions a local of a branch)
+			foreach(id;t.freeIdentifiers) if(id.meaning&&id.meaning.scope_&&scopes.any!(sc=>id.meaning.scope_.isNestedIn(sc))) return true;
+			return false;
+		}
+		static bool lengthsDiffer(Expression a,Expression b){ // (vectors at the same position whose lengths differ, which the join makes an array, e.g., `!𝔹^2` and `!𝔹^3`, also inside vectors and tuples)
+			auto va=cast(VectorTy)a,vb=cast(VectorTy)b;
+			if(va&&vb) return va.num!=vb.num||lengthsDiffer(va.next,vb.next);
+			auto ta=a.isTupleTy(),tb=b.isTupleTy();
+			return ta&&tb&&ta.length==tb.length&&iota(ta.length).any!(i=>lengthsDiffer(ta[i],tb[i]));
+		}
+		bool inLet=false; // (as before in `let` expressions, as their copies, e.g., in the types that mention their values, do not keep the witnesses of their merges consistent)
+		for(Scope s=this;s&&!cast(FunctionScope)s;s=cast(NestedScope)s?(cast(NestedScope)s).parent:null)
+			if(auto bs=cast(BlockScope)s) if(bs.isLetBody){ inLet=true; break; }
+		Id[] names,others; // (the variables whose types mention the locals of the branches, and the others whose types have vectors whose lengths differ between the branches)
 		keys.forEach(scopes[0].rnsymtab.dup,(Declaration d0){
 			auto id=d0.getId;
 			if(eager(id)) return;
 			bool mentions=false;
+			Expression[] ts;
 			foreach(sc;scopes){
 				auto d=sc.rnsymtab.get(id,null);
 				if(!d||cast(DeadDecl)d||d.isSemError()||!typeForDecl(d)) return;
 				mentions|=packs(typeForDecl(d));
+				ts~=unfold(typeForDecl(d));
 			}
 			if(mentions) names~=id;
+			else if(!inLet&&ts.length==2&&ts.all!(t=>t&&!local(t))&&lengthsDiffer(ts[0],ts[1])) others~=id;
 		});
-		if(!names.length) return r;
-		Expression combined(NestedScope sc){
-			auto types=names.map!(id=>unfold(typeForDecl(sc.rnsymtab.get(id,null)))).array;
-			return types.length==1?types[0]:tupleTy(types);
-		}
-		Expression[] branchTypes;
+		names.sort!((a,b)=>a.str<b.str); // (the same order in every analysis of the conditional, e.g., in the copies of a loop body, where the order of the symbol table can differ: they reuse the witnesses of the first of their merged variables, see `givenName`)
+		others.sort!((a,b)=>a.str<b.str);
+		Expression[] branchTypes; // (of the tuple of the types of `names`)
 		Expression joined=null;
-		foreach(i,sc;scopes){
-			auto t=combined(sc),p=visibleType(t);
-			if(!p) return r;
-			branchTypes~=t;
-			joined=i?joinTypes(joined,p):p;
-			if(!joined) return r;
-		}
-		size_t[] arrays; // (an array is a value of `⋃[n:!ℕ]. τ^n`, whose length is a witness, see `ast.semantic_.declareWitnesses`: the components of the tuple of the types of several variables that are arrays, or the array that is the type of a variable)
-		if(!cast(UnionTy)joined){
-			auto jt=names.length==1?null:joined.isTupleTy();
-			if(jt){
-				if(jt.length!=names.length) return r;
-				foreach(j;0..jt.length){
-					if(cast(UnionTy)jt[j]) return r;
-					if(cast(ArrayTy)jt[j]) arrays~=j;
-				}
-			}else if(cast(ArrayTy)joined) arrays=[0];
-			if(!arrays.length) return r;
-		}
-		foreach(id;joined.freeIdentifiers) if(id.meaning&&id.meaning.scope_&&scopes.any!(sc=>id.meaning.scope_.isNestedIn(sc))) return r;
-		Expression[][] values;
-		foreach(i,sc;scopes){
-			Expression[] ws;
-			for(Expression cur=joined;cast(UnionTy)cur;){
-				UnionTy u;
-				auto w=unionWitness(branchTypes[i],cast(UnionTy)cur,u);
-				if(!w) return r;
-				ws~=w;
-				cur=u.name?u.cod.substitute(u.name,w):u.cod;
+		Expression[][] layerValues; // (of the witnesses of the layers of the union in each branch)
+		bool joinNames(){
+			Expression combined(NestedScope sc){
+				auto types=names.map!(id=>unfold(typeForDecl(sc.rnsymtab.get(id,null)))).array;
+				return types.length==1?types[0]:tupleTy(types);
 			}
-			foreach(j;arrays){
-				Expression bt=branchTypes[i];
-				if(names.length!=1){
-					auto tt=bt.isTupleTy();
-					if(!tt||tt.length!=names.length) return r;
-					bt=tt[j];
-				}
-				auto vt=cast(VectorTy)bt;
-				if(!vt) return r;
-				ws~=vt.num;
+			foreach(i,sc;scopes){
+				auto t=combined(sc),p=visibleType(t);
+				if(!p) return false;
+				branchTypes~=t;
+				joined=i?joinTypes(joined,p):p;
+				if(!joined) return false;
 			}
-			values~=ws;
+			if(!cast(UnionTy)joined) if(auto jt=names.length==1?null:joined.isTupleTy()){
+				if(jt.length!=names.length) return false;
+				foreach(j;0..jt.length) if(cast(UnionTy)jt[j]) return false;
+			}
+			if(local(joined)) return false;
+			foreach(i,sc;scopes){
+				Expression[] ws;
+				for(Expression cur=joined;cast(UnionTy)cur;){
+					UnionTy u;
+					auto w=unionWitness(branchTypes[i],cast(UnionTy)cur,u);
+					if(!w) return false;
+					ws~=w;
+					cur=u.name?u.cod.substitute(u.name,w):u.cod;
+				}
+				layerValues~=ws;
+			}
+			return true;
 		}
-		auto loc=scopes[0].rnsymtab.get(names[0],null).loc;
+		if(names.length&&!joinNames()) names=null; // (merged as the others)
+		Expression[] otherTypes; // (the joins of the types of `others`)
+		Expression[][] otherBranchTypes;
+		foreach(id;others){
+			Expression jt=null;
+			Expression[] ts;
+			foreach(i,sc;scopes){
+				ts~=unfold(typeForDecl(sc.rnsymtab.get(id,null)));
+				jt=i?joinTypes(jt,ts[i]):ts[i];
+				if(!jt) break;
+			}
+			otherTypes~=jt;
+			otherBranchTypes~=ts;
+		}
+		if(!names.length&&!otherTypes.any!(t=>!!t)) return r;
+		auto loc=scopes[0].rnsymtab.get(names.length?names[0]:others[0],null).loc;
 		VarDecl[] decls;
-		Expression type=joined;
+		auto values=new Expression[][](scopes.length); // (of the witnesses in each branch)
 		auto given=(cast(BlockScope)scopes[0]).mergeWitnessNames,givenVars=(cast(BlockScope)scopes[0]).mergeWitnessVars;
 		Id[] declVars; // (the merged variable of each witness: the one that is an array, or `Id.init` for the layers of a union)
 		auto used=new bool[](given.length);
@@ -3823,7 +3839,7 @@ abstract class Scope{
 			}
 			return Id.init;
 		}
-		VarDecl declare(Id name,Expression dom,Id var){
+		VarDecl declare(Id name,Expression dom,Id var,Expression[] ws){ // (with the values `ws` in the branches)
 			auto g=givenName(var);
 			auto vd=new VarDecl(temporaryIdentifier(g!=Id.init?g:witnessName(name),loc));
 			vd.loc=loc;
@@ -3833,7 +3849,12 @@ abstract class Scope{
 			vd.mergeWitness=true;
 			decls~=vd;
 			declVars~=var;
+			foreach(i,w;ws) values[i]~=w;
 			return vd;
+		}
+		VarDecl sameWitness(Expression dom,Expression[] ws){ // (an earlier witness whose values the type system considers equal to `ws` in every branch, e.g., for the lengths `n` and `m` after `n:=2; m:=2;` in one branch and `3` and `3` in the other)
+			foreach(k,d;decls) if(isEqual(d.vtype,dom,null)&&iota(ws.length).all!(i=>isEqual(values[i][k],ws[i],null))) return d;
+			return null;
 		}
 		Id varName(Id id){
 			if(id==Id.init) return id;
@@ -3847,25 +3868,94 @@ abstract class Scope{
 			if(auto tt=t.isTupleTy()) if(tt.length==names.length) foreach(j;0..tt.length) if(ut.name&&tt[j].freeIdentifiers.any!(id=>id.id==ut.name)) return names[j];
 			return Id.init;
 		}
-		while(auto ut=cast(UnionTy)type){
-			auto vd=declare(ut.name,ut.dom,varName(layerVar(ut)));
+		Expression type=joined; // (with the witnesses of its layers)
+		for(size_t l=0;cast(UnionTy)type;l++){
+			auto ut=cast(UnionTy)type;
+			if(layerValues.any!(ws=>ws.length<=l)) return r;
+			auto ws=layerValues.map!(ws=>ws[l]).array;
+			auto vd=inLet?null:sameWitness(ut.dom,ws);
+			if(!vd) vd=declare(ut.name,ut.dom,varName(layerVar(ut)),ws);
 			type=ut.name?ut.cod.substitute(ut.name,witnessUse(vd,this)).eval():ut.cod;
 		}
-		if(arrays.length){
-			Expression vector(Expression t,Id var){
-				auto at=cast(ArrayTy)t;
-				return vectorTy(at.next,witnessUse(declare(Id.s!"n",ℕt(true),varName(var)),this).eval());
-			}
-			if(auto jt=names.length==1?null:type.isTupleTy()){
-				auto types=iota(jt.length).map!(j=>jt[j]).array;
-				foreach(j;arrays) types[j]=vector(types[j],names[j]);
-				type=tupleTy(types);
-			}else type=vector(type,names.length==1?names[0]:Id.init);
+		if(names.length>1){
+			auto tt=type.isTupleTy();
+			if(!tt||tt.length!=names.length) return r;
 		}
-		if(values.any!(ws=>ws.length!=decls.length)||cast(UnionTy)type) return r;
-		auto tt=names.length==1?null:type.isTupleTy();
-		if(names.length!=1&&(!tt||tt.length!=names.length)) return r;
-		foreach(i,id;names) r[id]=tt?tt[i]:type;
+		Expression[][] positions; // (the values in each branch of the lengths of the arrays of the joined types where each branch has a vector)
+		size_t[] weights; // (2 for an array inside a vector or an array, whose witness is the length of each element)
+		bool[] firm; // (the arrays that are the types of variables that mention locals of the branches, or the components of the tuple of their types, which have witnesses also where they are the only ones)
+		Id[] posVars;
+		VarDecl[] chosen; // (the witness of each array, or `null`)
+		bool rebuild=false;
+		size_t cur=0;
+		Expression vectors(Expression t,Expression[] bts,Id var,bool top,bool many){ // (the arrays of `t` where each branch has a vector, whose lengths can be witnesses, as an array is a value of `⋃[n:!ℕ]. τ^n`, see `ast.semantic_.declareWitnesses`: those that relate several lengths, e.g., `(!𝔹^n₍k₎)^2` for `!𝔹[]^2` after `(!𝔹^2)^2` in one branch and `(!𝔹^3)^2` in the other; also inside vectors and tuples)
+			if(auto at=cast(ArrayTy)t){
+				auto vts=bts.map!(bt=>cast(VectorTy)bt).array;
+				if(vts.any!(vt=>!vt)) return t;
+				auto k=cur++;
+				if(!rebuild){
+					positions~=vts.map!(vt=>vt.num).array;
+					weights~=many?2:1;
+					firm~=top;
+					posVars~=var;
+				}
+				auto next=vectors(at.next,vts.map!(vt=>vt.next).array,var,false,true);
+				if(rebuild&&chosen[k]) return vectorTy(next,witnessUse(chosen[k],this).eval());
+				return next is at.next?t:arrayTy(next);
+			}
+			if(auto vt=cast(VectorTy)t){
+				auto vts=bts.map!(bt=>cast(VectorTy)bt).array;
+				if(vts.all!(x=>!!x)){
+					auto len=vt.num.asIntegerConstant();
+					auto next=vectors(vt.next,vts.map!(x=>x.next).array,var,false,many||!len||len.get()>1);
+					return next is vt.next?t:vectorTy(next,vt.num);
+				}
+			}
+			if(auto tt=t.isTupleTy()){
+				auto tts=bts.map!(bt=>bt.isTupleTy()).array;
+				if(tts.any!(x=>!x||x.length!=tt.length)) return t;
+				auto types=iota(tt.length).map!(j=>vectors(tt[j],tts.map!(x=>x[j]).array,var,false,many)).array;
+				return iota(tt.length).all!(j=>types[j] is tt[j])?t:tupleTy(types);
+			}
+			return t;
+		}
+		Expression namesType(){
+			auto top=!cast(UnionTy)joined;
+			if(names.length==1) return vectors(type,branchTypes,names[0],top,false);
+			auto tt=type.isTupleTy();
+			auto types=iota(tt.length).map!(j=>vectors(tt[j],branchTypes.map!(bt=>bt.isTupleTy()[j]).array,names[j],top,false)).array;
+			return iota(tt.length).all!(j=>types[j] is tt[j])?type:tupleTy(types);
+		}
+		if(names.length>1&&branchTypes.any!(bt=>!bt.isTupleTy()||bt.isTupleTy().length!=names.length)) return r;
+		void witnessArrays(){
+			cur=0;
+			if(names.length) type=namesType();
+			foreach(k,id;others) if(otherTypes[k]){
+				auto t=vectors(otherTypes[k],otherBranchTypes[k],id,false,false);
+				if(t !is otherTypes[k]) r[id]=t;
+			}
+		}
+		auto original=type;
+		witnessArrays();
+		auto leaders=iota(positions.length).array;
+		chosen=new VarDecl[](positions.length);
+		foreach(p;0..positions.length){
+			chosen[p]=inLet?null:sameWitness(ℕt(true),positions[p]);
+			if(!chosen[p]&&!inLet) foreach(q;0..p) if(!chosen[q]&&leaders[q]==q&&iota(scopes.length).all!(i=>isEqual(positions[q][i],positions[p][i],null))){ leaders[p]=q; break; }
+		}
+		auto weight=new size_t[](positions.length);
+		auto isFirm=new bool[](positions.length);
+		foreach(p;0..positions.length) if(!chosen[p]){ weight[leaders[p]]+=weights[p]; isFirm[leaders[p]]|=firm[p]; }
+		foreach(p;0..positions.length) if(!chosen[p]&&(!inLet&&weight[leaders[p]]>1||isFirm[leaders[p]])) // (a witness of only one length is not more precise than the array)
+			chosen[p]=leaders[p]==p?declare(Id.s!"n",ℕt(true),varName(posVars[p]),positions[p]):chosen[leaders[p]];
+		if(!decls.length) return r;
+		rebuild=true;
+		type=original;
+		witnessArrays();
+		if(names.length&&(layerValues.any!(ws=>ws.length)||type !is original)){
+			auto tt=names.length==1?null:type.isTupleTy();
+			foreach(i,id;names) r[id]=tt?tt[i]:type;
+		}
 		foreach(i,sc;scopes){
 			(cast(BlockScope)sc).mergeWitnesses=iota(decls.length).map!(k=>q(decls[k],values[i][k])).array;
 			(cast(BlockScope)sc).mergeWitnessOf=declVars;
