@@ -1607,6 +1607,20 @@ bool mentionedAfter(Declaration decl,Scope sc){ // (whether the code that can ru
 		SetX!Identifier defined;
 		foreach(x;e.subexpressions) if(auto de=cast(DefineExp)x) collect(de.e1,defined);
 		foreach(x;e.subexpressions) if(auto y=cast(Identifier)x) if(y !in defined&&named(y)&&counts(y)) return 1;
+		bool inClosure(Expression b){ // (the bodies of closures, which capture `decl`, e.g., `x` for `f:=λ(){ return x; };`)
+			foreach(x;b.subexpressions){
+				if(auto y=cast(Identifier)x) if(named(y)&&counts(y)) return true;
+				auto fd=cast(FunctionDef)x;
+				if(auto le=cast(LambdaExp)x) fd=le.fd;
+				if(fd&&fd.body_&&x !is b&&inClosure(fd.body_)) return true;
+			}
+			return false;
+		}
+		foreach(x;e.subexpressions){
+			auto fd=cast(FunctionDef)x;
+			if(auto le=cast(LambdaExp)x) fd=le.fd;
+			if(fd&&fd.body_&&inClosure(fd.body_)) return 1;
+		}
 		auto u=e;
 		while(auto ce=cast(CompoundExp)u){ // (a statement with the forgets after it, see `ast.lastuse.canAddForget`)
 			if(ce.blscope_||!ce.s.length) break;
@@ -1669,66 +1683,141 @@ Expression[] decayTypeMentions(Expression e,Scope sc,ref StmFlags flags,bool res
 	Identifier[] targets;
 	void collect(Expression lhs){
 		while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+		for(;;){ // (an update of a component updates the variable, e.g., `t` for `t[0]=5`)
+			if(auto ie=cast(IndexExp)lhs) lhs=ie.e;
+			else if(auto se=cast(SliceExp)lhs) lhs=se.e;
+			else break;
+		}
 		if(auto id=cast(Identifier)lhs) targets~=id;
 		else if(auto tpl=cast(TupleExp)lhs) foreach(x;tpl.e) collect(x);
 	}
 	if(auto de=cast(DefineExp)e) collect(de.e1);
 	else if(auto ae=cast(AAssignExp)e) collect(ae.e1);
 	else if(auto fe=cast(ForgetExp)e) collect(fe.var);
+	else if(auto we=cast(WithExp)e) if(we.isIndices) foreach(s;we.trans.s) if(auto de=cast(DefineExp)s) collect(de.e2); // (a copy of an analyzed replacement of components, e.g., of `t[1]=5`, whose aggregates it updates, e.g., in a loop body that `--remove-loops` lowers, see `lowerIndexReplacement`)
+	auto assigned=!!cast(AAssignExp)e||!!cast(WithExp)e; // (an assignment consumes the variable also where it is a capture, see `Scope.addCapture`)
 	Expression[] r;
 	foreach(id;targets){
 		if(id.meaning) continue;
 		auto probe=new Identifier(id.id);
 		probe.loc=id.loc;
-		auto decl=cast(VarDecl)sc.lookup(probe,false,true,Lookup.probing,null);
-		if(!decl||decl.isConst||decl.typeConstBlocker||!isPackable(decl)||isUnionWitness(decl)||!decl.scope_||decl.scope_.getFunction() !is sc.getFunction()||sc.isConst(decl)||!typeConstBlocked(decl,sc)) continue;
-		auto dependents=liveTypeDependents(decl,sc);
-		if(!dependents.length) continue;
-		Expression[] types;
-		bool ok=true;
-		bool visible(Declaration d){ // (the current version, not one of an enclosing scope that this one consumed, e.g., in the body of a loop; by its name, which a lowered loop renames, see `Scope.rename`)
-			auto probe=new Identifier(d.name.id);
-			probe.loc=id.loc;
-			return sc.lookup(probe,false,true,Lookup.probing,null) is d;
-		}
-		Declaration[] decaying; // (a quantum one only where the code after the update mentions it or where it cannot be forgotten at its last use: otherwise, it is forgotten early there, which is the same uncomputation, see `Scope.tryUncomputeTypeDependents`)
-		foreach(d;dependents){
-			auto vd=cast(VarDecl)d;
-			auto type=vd?typeForDecl(vd):null;
-			if(type&&!type.isClassical()&&!mentionedAfter(vd,sc)&&!sc.allowMerge&&sc.lastUses.canForget(vd,true,false)) continue;
-			if(!vd||!type||vd is decl||vd.isConst||vd.isTemporary||!vd.scope_||vd.scope_.getFunction() !is sc.getFunction()||!visible(vd)||sc.isConst(vd)||typeConstBlocked(vd,sc)||unfoldTypeVariables(type) !is type){ ok=false; break; } // (not a temporary, e.g., the rest of the container of a `for` loop, whose elements keep their type)
-			types~=type;
-			decaying~=vd;
-		}
-		if(!ok||!decaying.length) continue;
-		dependents=decaying;
-		bool sameValue(Declaration d){ return d is decl||d.canonicalSource is decl.canonicalSource; } // (the versions of the variable, e.g., the one before a block of the removal of loops that consumes it on a path that returns)
-		auto packed=eliminateVariables(types.length==1?types[0]:tupleTy(types),&sameValue,&sameValue);
-		if(!packed||packed.freeIdentifiers.any!(x=>x.meaning&&sameValue(x.meaning))) continue;
-		Expression variables(){
-			Expression[] ids;
-			foreach(d;dependents){
-				auto x=new Identifier(d.name.id);
-				x.loc=id.loc;
-				ids~=x;
-			}
-			if(ids.length==1) return ids[0];
-			auto tpl=new TupleExp(ids);
-			tpl.loc=id.loc;
-			return tpl;
-		}
-		auto rhs=new TypeAnnotationExp(variables(),packed,TypeAnnotationType.annotation);
-		rhs.loc=id.loc;
-		auto decay=new DefineExp(variables(),rhs);
-		decay.loc=id.loc;
-		r~=statementSemantic(decay,sc,flags,resetConst);
-		void mark(Expression e){
-			if(auto v=cast(Identifier)e){ if(auto vd=cast(VarDecl)v.meaning) vd.decayed=!vd.vtype||vd.vtype.isClassical(); } // (a quantum version is redefined as any other, see `Scope.tryPrepareRedefine`)
-			else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) mark(c);
-		}
-		mark(decay.e1);
-		if(decay.witnesses.length==1) decay.witnesses[0].knownValue=knownValueOf(decl); // (the old value, e.g., `32` for `x:!int[n]` after `n:=32`)
+		if(auto decl=cast(VarDecl)sc.lookup(probe,false,true,Lookup.probing,null))
+			r~=decayDependents(decl,id.loc,sc,flags,resetConst,assigned);
 	}
+	foreach(id;closureUpdates(e)){ // (the closures of the statement consume the variables from outside that they update by capturing them, see `Scope.addCapture`)
+		auto probe=new Identifier(id.id);
+		probe.loc=id.loc;
+		if(auto decl=cast(VarDecl)sc.lookup(probe,false,true,Lookup.probing,null))
+			r~=decayDependents(decl,id.loc,sc,flags,resetConst,true);
+	}
+	return r;
+}
+static if(language==silq)
+Expression[] decayDependents(VarDecl decl,Location loc,Scope sc,ref StmFlags flags,bool resetConst,bool assigned=false){ // (the decays for an update of `decl` at `loc`, see `decayTypeMentions`; `assigned`: by an assignment)
+	if(decl.isConst||decl.typeConstBlocker||!isPackable(decl)||isUnionWitness(decl)||!decl.scope_||sc.isConst(decl)||!typeConstBlocked(decl,sc)) return [];
+	auto captured=decl.scope_.getFunction() !is sc.getFunction(); // (a variable of an enclosing function that the closure updates, which captures it by that: the closure's own variables decay here, those of the enclosing function before the statement that contains the closure, see `closureUpdates`)
+	if(captured&&!assigned){ // (not a definition of a variable of its name that does not consume it, see `Scope.checkCaptureRedefinition`)
+		auto fd=sc.getFunction();
+		if(!fd||!decl.name||decl.name.id !in fd.consumingCaptures) return [];
+	}
+	auto dependents=liveTypeDependents(decl,sc);
+	if(!dependents.length) return [];
+	Expression[] types;
+	bool visible(Declaration d){ // (the current version, not one of an enclosing scope that this one consumed, e.g., in the body of a loop; by its name, which a lowered loop renames, see `Scope.rename`)
+		auto probe=new Identifier(d.name.id);
+		probe.loc=loc;
+		return sc.lookup(probe,false,true,Lookup.probing,null) is d;
+	}
+	Declaration[] decaying; // (a quantum one only where the code after the update mentions it or where it cannot be forgotten at its last use: otherwise, it is forgotten early there, which is the same uncomputation, see `Scope.tryUncomputeTypeDependents`)
+	foreach(d;dependents){
+		auto vd=cast(VarDecl)d;
+		auto type=vd?typeForDecl(vd):null;
+		if(captured&&vd&&vd.scope_&&vd.scope_.getFunction() !is sc.getFunction()) continue;
+		if(type&&!type.isClassical()&&!mentionedAfter(vd,sc)&&!sc.allowMerge&&sc.lastUses.canForget(vd,true,false)) continue;
+		if(!vd||!type||vd is decl||vd.isConst||vd.isTemporary||!vd.scope_||vd.scope_.getFunction() !is sc.getFunction()||!visible(vd)||sc.isConst(vd)||typeConstBlocked(vd,sc)||unfoldTypeVariables(type) !is type) return []; // (not a temporary, e.g., the rest of the container of a `for` loop, whose elements keep their type)
+		types~=type;
+		decaying~=vd;
+	}
+	if(!decaying.length) return [];
+	bool sameValue(Declaration d){ return d is decl||d.canonicalSource is decl.canonicalSource; } // (the versions of the variable, e.g., the one before a block of the removal of loops that consumes it on a path that returns)
+	auto packed=eliminateVariables(types.length==1?types[0]:tupleTy(types),&sameValue,&sameValue);
+	if(!packed||packed.freeIdentifiers.any!(x=>x.meaning&&sameValue(x.meaning))) return [];
+	Expression variables(){
+		Expression[] ids;
+		foreach(d;decaying){
+			auto x=new Identifier(d.name.id);
+			x.loc=loc;
+			ids~=x;
+		}
+		if(ids.length==1) return ids[0];
+		auto tpl=new TupleExp(ids);
+		tpl.loc=loc;
+		return tpl;
+	}
+	auto rhs=new TypeAnnotationExp(variables(),packed,TypeAnnotationType.annotation);
+	rhs.loc=loc;
+	auto decay=new DefineExp(variables(),rhs);
+	decay.loc=loc;
+	auto r=statementSemantic(decay,sc,flags,resetConst);
+	void mark(Expression e){
+		if(auto v=cast(Identifier)e){ if(auto vd=cast(VarDecl)v.meaning) vd.decayed=!vd.vtype||vd.vtype.isClassical(); } // (a quantum version is redefined as any other, see `Scope.tryPrepareRedefine`)
+		else if(auto tpl=cast(TupleExp)e) foreach(c;tpl.e) mark(c);
+	}
+	mark(decay.e1);
+	if(decay.witnesses.length==1) decay.witnesses[0].knownValue=knownValueOf(decl); // (the old value, e.g., `32` for `x:!int[n]` after `n:=32`)
+	return [r];
+}
+static if(language==silq)
+Identifier[] closureUpdates(Expression e){ // (the variables from outside that the closures in the statement `e` update, as far as their code shows, which the closures consume by capturing them, see `Scope.addCapture` and `Scope.checkCaptureRedefinition`: assignments, definitions after uses, `move`; not those of the statements nested in `e`, which are analyzed on their own)
+	Identifier[] updates(FunctionDef fd){
+		Identifier[] u;
+		if(!fd||!fd.body_) return u;
+		SetX!Id bound,mentioned;
+		foreach(p;fd.params) if(p.name) bound.insert(p.name.id);
+		void target(Expression lhs,bool definition){
+			while(auto tae=cast(TypeAnnotationExp)lhs) lhs=tae.e;
+			bool component=false;
+			for(;;){
+				Expression next=null;
+				if(auto ie=cast(IndexExp)lhs) next=ie.e;
+				else if(auto se=cast(SliceExp)lhs) next=se.e;
+				if(!next) break;
+				foreach(y;lhs.subexpressions) if(auto yid=cast(Identifier)y) if(yid !is next&&yid.id !in bound) mentioned.insert(yid.id);
+				lhs=next;
+				component=true;
+			}
+			if(auto id=cast(Identifier)lhs){
+				if(id.id !in bound&&(!definition||component||id.id in mentioned)) u~=id;
+				if(definition&&!component) bound.insert(id.id);
+			}else if(auto tpl=cast(TupleExp)lhs) foreach(x;tpl.e) target(x,definition);
+		}
+		void visit(Expression x){
+			if(!x) return;
+			auto nfd=cast(FunctionDef)x;
+			if(auto le=cast(LambdaExp)x) nfd=le.fd;
+			if(nfd){
+				foreach(id;updates(nfd)) if(id.id !in bound) u~=id;
+				if(!cast(LambdaExp)x&&nfd.name) bound.insert(nfd.name.id);
+				return;
+			}
+			if(auto de=cast(DefineExp)x){ visit(de.e2); target(de.e1,true); return; }
+			if(auto ae=cast(AAssignExp)x){ visit(ae.e2); target(ae.e1,false); return; }
+			if(auto id=cast(Identifier)x){ if(id.id !in bound) mentioned.insert(id.id); return; }
+			if(auto ce=cast(CallExp)x) if(auto f=cast(Identifier)ce.e) if(f.id==Id.s!"move") if(auto a=cast(Identifier)ce.arg) if(a.id !in bound) u~=a;
+			foreach(c;x.components) visit(c);
+		}
+		visit(fd.body_);
+		return u;
+	}
+	Identifier[] r;
+	void scan(Expression x){
+		auto fd=cast(FunctionDef)x;
+		if(auto le=cast(LambdaExp)x) fd=le.fd;
+		if(fd){ r~=updates(fd); return; }
+		if(cast(CompoundExp)x||cast(IteExp)x||cast(WhileExp)x||cast(ForExp)x||cast(RepeatExp)x||cast(DoWhileExp)x||cast(WithExp)x) return; // (their statements are analyzed on their own)
+		foreach(c;x.components) scan(c);
+	}
+	scan(e);
 	return r;
 }
 bool mergeBranches(IteExp ite,Scope sc,bool quantumControl){ // (with the names of the witnesses of the merge of the analysis that this one is a copy of, see `Scope.mergeWitnesses`)
@@ -9854,9 +9943,28 @@ Expression expressionSemanticImpl(Identifier id,ExpSemContext context){
 	return id;
 }
 
+static if(language==silq)
+Expression lengthWithoutUse(FieldExp fe,ExpSemContext context){ // (`x.length` for a variable `x` of a vector type is the length in its type, which the analysis analyzes as if the program had written it there: it is not a use of `x`, e.g., `n` for `q.length` with `q:𝔹^n`, which then does not keep `q` alive)
+	if(fe.f.name!="length"||context.inType) return null;
+	auto id=cast(Identifier)fe.e;
+	if(!id||id.meaning||id.isSemStarted()) return null;
+	auto probe=new Identifier(id.id);
+	probe.loc=id.loc;
+	auto vd=cast(VarDecl)context.sc.lookup(probe,false,true,Lookup.probing,null);
+	auto ty=vd?typeForDecl(vd):null;
+	auto vt=ty?cast(VectorTy)unfoldTypeVariable(ty):null;
+	if(!vt||vt.num.freeIdentifiers.any!(x=>cast(VarDecl)x.meaning&&(cast(VarDecl)x.meaning).mergeWitness)) return null; // (see below)
+	Expression.CopyArgs cargs={ preserveMeanings: true }; // (as below)
+	auto len=vt.num.copy(cargs);
+	len.loc=fe.loc;
+	auto r=expressionSemantic(len,context);
+	if(!r.isSemError()) context.sc.captureTypeDependencies(r); // (the closures around the use capture the variables that the length mentions, as for the value of a type variable, see `expressionSemanticImpl(Identifier)`)
+	return r;
+}
 Expression expressionSemanticImpl(FieldExp fe,ExpSemContext context){
 	auto sc=context.sc, inType=context.inType;
 	static if(language==silq) if(auto r=toplevelProjection(fe,context)) return r;
+	static if(language==silq) if(auto r=lengthWithoutUse(fe,context)) return r;
 	fe.e=expressionSemantic(fe.e,context.nestConst);
 	static if(language==silq) fe.e=openOperand(fe.e,context.nestConst);
 	propErr(fe.e,fe);

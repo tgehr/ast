@@ -1937,8 +1937,10 @@ abstract class Scope{
 		import ast.semantic_:typeConstBlocked,typeConstBlockNote;
 		if(!meaning.isConst&&typeConstBlocked(meaning,this)){ // (`const` declarations cannot be consumed even if their type dependents can be uncomputed, see below)
 			static if(language==silq){
-				if(!meaning.typeConstBlocker&&tryUncomputeTypeDependents(meaning,id))
+				if(!meaning.typeConstBlocker&&tryUncomputeTypeDependents(meaning,id)){
+					if(forget) meaning.earlyForgotten=null; // (the program forgets it: a later use is a use after the `forget`, not a sign that the early forget of its dependents was wrong, see `IllegalConsumedDecl`)
 					return true;
+				}
 			}
 			if(!meaning.isSemError()){
 				error(format("cannot consume `const` %s `%s`",meaning.kind,id), id.loc);
@@ -4845,6 +4847,8 @@ class CapturingScope(T): NestedScope{
 		}
 		parent.recordCapturers(type);
 		import ast.semantic_:typeConstBlocked;
+		static if(language==silq&&is(T==FunctionDef)) if(kind!=Lookup.constant&&!id.isSemError()&&!meaning.isLinear()&&!meaning.typeConstBlocker&&(id.byRef||id.moved||meaning.name&&meaning.name.id in decl.consumingCaptures)&&meaning.scope_&&meaning.scope_.getFunction() is parent.getFunction()&&typeConstBlocked(meaning,parent))
+			parent.tryUncomputeTypeDependents(meaning,id); // (an update of the variable: its dependents that do not decay before the statement are forgotten early, as for an update there, see `ast.semantic_.closureUpdates` and `checkConsumable`)
 		bool isConstDecl=meaning.isConst||typeConstBlocked(meaning,origin)||origin.isConst(meaning);
 		bool isConstLookup=kind==Lookup.constant||isConstDecl;
 		static if(language==silq&&is(T==FunctionDef)){

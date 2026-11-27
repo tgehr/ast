@@ -238,6 +238,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	if(loop.noSplit||whileStopsEarly(loop)) return null; // (the copies of a `while` loop evaluate its condition: they would run its iterations after the return, e.g., forever for `while true { …; return x; }` under quantum control from outside of the loop, or after a failing `assert`, e.g., for `while j<3 { if j>=1 { assert(false); } else { j+=1; } b:=X(b); }`)
 	static if(language==silq) if(containsDoWhile(loop.bdy)) return null;
+	static if(language==silq) auto wholeLogs=containsUnionConversion(loop.bdy);
+	else enum wholeLogs=false;
 	enum NONE=-3,LSH=-2,SHARED=-1;
 	auto carried=state.prevStateSnapshot.loopParams(loop.bdy.blscope_,null,false,null);
 	if(!carried[0].length) return null;
@@ -407,6 +409,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 	}
 	struct StmInfo{
 		SetX!Id defs,uses,nonConst,consumed,strong,fresh; // (`fresh`: defined by `:=`)
+		SetX!Id capturedAway; // (classical variables that a closure of the statement consumes by capturing them, see `Scope.addCapture`)
 		MapX!(Id,Expression) types;
 		bool nonQfree=false,isForget=false,effects=false;
 	}
@@ -455,6 +458,11 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 				hasQuantumReturn=true;
 			}
 			if(auto fd=cast(FunctionDef)x) if(fd.name) strongDef(fd.name.id);
+			static if(language==silq){
+				auto cfd=cast(FunctionDef)x;
+				if(auto le=cast(LambdaExp)x) cfd=le.fd;
+				if(cfd) foreach(cap;cfd.capturedDecls) if(cfd.isConsumedCapture(cap)&&cap.name) if(auto ty=typeForDecl(cap)) if(ty.isClassical()) info.capturedAway.insert(cap.name.id);
+			}
 			if(cast(AssertExp)x) info.effects=true;
 			static if(language==silq){ // (the witnesses that the statement declares where it opens a value, e.g., `n₍₁₎` for `a:=a~[2]` with `a:!ℕ[]`, which the analyzed code mentions instead of `a.length`)
 				VarDecl[] witnesses;
@@ -1766,7 +1774,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 							r=je.e;
 						}
 						rnodes~=pos[cast(const(void)*)r];
-						if(consume){
+						if(consume||wholeLogs){
 							whole=true;
 							continue;
 						}
@@ -2069,6 +2077,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}
 		Expression[] bdy;
 		SetX!Id bodyLocals; // (defined by earlier statements)
+		SetX!Id capturedAway; // (consumed by the closures of earlier atoms, since their last definitions, see `StmInfo.capturedAway`)
 		foreach(i,s;stms){
 			Expression[] nodes;
 			walkCond(s,false,(Expression x,bool c){ nodes~=x; });
@@ -2479,6 +2488,7 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					extended.remove(u);
 				}
 				foreach(d;ainfos[a].fresh){ // (classical variables that the loop body forgets explicitly)
+					if(d in capturedAway) continue; // (consumed by a closure, e.g., `n` for `g:=λ(){ n+=1; return n; }; n:=g();`)
 					auto ty=prevTypes[a].get(d,ainfos[a].types.get(d,null)); // (e.g., not `x:𝔹[]` in `y:=measure(x); x:=vector(0,…);`, whose type 𝔹^0 is classical)
 					if(!ty||!ty.isClassical()||d !in isCarried&&d !in bodyLocals&&d !in topLocals&&!open.any!(f=>d in f.locals)) continue;
 					auto fe=new ForgetExp(mkId(d),null);
@@ -2500,6 +2510,8 @@ Expression splitLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 					else topLocals.insert(dname);
 				}
 				foreach(u;ainfos[a].consumed) consumedInStm.insert(u);
+				foreach(d;ainfos[a].defs) capturedAway.remove(d);
+				foreach(u;ainfos[a].capturedAway) capturedAway.insert(u);
 				emit(cp(atoms[a].e));
 			}
 			auto next=atoms.length-atoms.find!(t=>t.stm>i).length; // (the first atom of the next statement)
@@ -4261,11 +4273,23 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 			if(namesAfter) *namesAfter=names;
 			return r;
 		}
+		Expression[] stateTypes(){ // (the lifted variables end the iteration with the types of the loop state where these are unions: the updates that decay them can be in the main loop only, e.g., `t[0]+=1` in a nested loop after `z:=vector(t[0],0:𝔹)`, after which `z` would have the type of the vector of the logged `t` instead of `⋃[t:!ℕ^2]. 𝔹^t[0]`, see `ast.semantic_.decayTypeMentions`)
+			Expression[] r;
+			static if(language==silq) foreach(v;classVars[sl.cls]){
+				auto p=liftedParams[v];
+				if(!p[2]||!p[2].subexpressions.any!(x=>!!cast(UnionTy)x)||mentions(p[2],true)) continue;
+				auto use=mkId(v);
+				use.moved=true;
+				r~=define(mkId(v),annot(use,p[2].copy()));
+			}
+			return r;
+		}
 		static if(isDoWhile){
 			Id[Id] after;
 			auto sbdy=emitS(body_,renames[si],&after);
 			auto srst=emitS(reset_,after);
 			if(sbdy.length||srst.length){
+				srst~=stateTypes();
 				foreach(c;counters) stmts~=define(mkId(c),zero());
 				auto b=block(sbdy),rs=block(srst);
 				b.loc=loop.bdy.loc;
@@ -4274,6 +4298,7 @@ Expression sliceLoop(T)(T loop,ref FixedPointIterState state,Scope sc,ref StmFla
 		}else{
 			auto sbdy=emitS(body_,renames[si]);
 			if(sbdy.length){
+				sbdy~=stateTypes();
 				foreach(c;counters) stmts~=define(mkId(c),zero());
 				auto b=block(sbdy);
 				b.loc=loop.bdy.loc;
@@ -5310,7 +5335,7 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 	}
 	Expression[] exitCoercions,exitCoercionTypes; // (of the weakened definitions of the body, and of the quantum ones, which the function may compute classically)
 	static if(isDoWhile) foreach(e;exitLocals){
-		if(e[2] is e[1]&&(!e[1]||e[1].isClassical())){
+		if(e[2] is e[1]&&(!e[1]||e[1].isClassical()||!coercibleExitType(e[1],changed))){
 			defTpl.e~=e[0].copy(cargsDefault);
 			continue;
 		}
@@ -5594,6 +5619,12 @@ bool containsReturn(Expression e){
 	return r;
 }
 static if(language==silq)
+bool containsUnionConversion(Expression e){ // (e.g., a decay, see `ast.semantic_.decayTypeMentions`: its witness can be a variable whose components the code reads, e.g., `t` for `z:=vector(t[0],0:𝔹); z:=z:⋃[t:!ℕ^2]. 𝔹^t[0];`, which the copies of a split loop then read as a whole, see `splitLoop`: the stand-in of a logged component, e.g., `[t[0]]`, does not have the type of the variable)
+	bool r=false;
+	visitStm(e,(Expression x){ if(auto tae=cast(TypeAnnotationExp)x) if(cast(UnionTy)tae.type) r=true; });
+	return r;
+}
+static if(language==silq)
 bool containsDoWhile(Expression e){ // (not supported by `splitLoop`)
 	bool r=false;
 	visitStm(e,(Expression x){ if(cast(DoWhileExp)x) r=true; });
@@ -5710,6 +5741,14 @@ Expression weakenedExitType(Expression t,ref SetX!Id changed){
 		return null;
 	}
 	return rec(t);
+}
+// whether a value of the type `t` of a definition of the body of a lowered `do`-`while` loop in the result of the function, where the values that the loop changes are the witnesses of its union, can be coerced to `t` (not a function type that mentions them, e.g., `𝟙 → 𝔹^n₍₃₇₎` for `𝟙 → 𝔹^n₍₂₆₎`: the definition has the type of the result)
+static if(language==silq)
+bool coercibleExitType(Expression t,ref SetX!Id changed){
+	foreach(x;t.subexpressions) if(auto pt=cast(ProductTy)x)
+		foreach(id;pt.freeIdentifiers)
+			if(id.id in changed||id.meaning&&id.meaning.name&&id.meaning.name.id in changed) return false;
+	return true;
 }
 // the annotation of a value of type `t` with its weakened type `w` (see `weakenedExitType`)
 static if(language==silq)
