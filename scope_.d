@@ -3112,6 +3112,13 @@ abstract class Scope{
 		if(!scopes.length) return false;
 		static if(language==silq) bool unknownAfterMerge=scopes.length>1||!continued; // (the merged versions do not depend on each other: the merge of several branches, and of one branch after branches that diverge, unless the code after the conditional continues it, see below)
 		else bool unknownAfterMerge=scopes.length>1;
+		SetX!Id keptLost; // (kept values whose own dependency a branch lost, as a value that it depends on was consumed there)
+		bool keptContinuation(NestedScope sc,Declaration sym,ref Dependencies deps){ // (the merged version has the value of the version from before the conditional, as all branches keep it, see `BlockScope.keptValues`, e.g., `a` for `if k { if l { x:=(a,true); assert(false); } }`: the values that depend on the versions of the branches depend on it, unless the uncomputations of the values that depend on it report a consumption, see `keptLost`)
+			auto bs=cast(BlockScope)sc;
+			if(!bs||scopes.length<2||sym.getId !in bs.keptValues||sym.getId in keptLost) return false;
+			if(deps.mentioning(sym).length) foreach(m;mergingScopes) if(auto mb=cast(BlockScope)m) mb.keptContinued=true;
+			return true;
+		}
 		auto unreachableMerge=inUnreachableCode(); // (the branches do not need to forget their variables)
 		auto keys=new MergeKeys(this,scopes);
 		auto numErrors=handler.nerrors;
@@ -3216,6 +3223,7 @@ abstract class Scope{
 			return type;
 		}
 		foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.eagerMerges=null; bs.keptValues=SetX!Id.init; bs.keptAfterAbort=false; static if(language==silq) bs.mergeWitnesses=null; } // (of an earlier analysis)
+		foreach(sc;mergingScopes) if(auto bs=cast(BlockScope)sc) bs.keptContinued=false;
 		static if(language==silq) if(!isLoop&&scopes.all!(s=>LastUse.isBranch(s))){ // (see `BlockScope.keptValues`)
 			SetX!Id keptValues;
 			keys.forEach(scopes[0].rnsymtab,(Declaration d0){
@@ -3229,6 +3237,13 @@ abstract class Scope{
 				}
 				if(source&&scopes.any!(s=>s.rnsymtab.get(d0.getId,null) !is source)) keptValues.insert(d0.getId);
 			});
+			foreach(id;keptValues) foreach(s;scopes){
+				auto d=s.rnsymtab.get(id,null);
+				if(d&&s.dependencyTracked(d)){
+					auto dep=s.getDependency(d);
+					if(dep.isTop&&dep.lostVar) keptLost.insert(id);
+				}
+			}
 			auto keptAfterAbort=!scopes.any!((s){ auto bs=cast(BlockScope)s; return bs&&bs.returnsOnSomePath; });
 			foreach(sc;scopes) if(auto bs=cast(BlockScope)sc){ bs.keptValues=keptValues; bs.keptAfterAbort=keptAfterAbort; }
 		}
@@ -3313,6 +3328,7 @@ abstract class Scope{
 				dep.joinWith(nestedControlDependency);
 				addDependency(var,dep);
 				if(scopes.length==1&&!loweredReturns||sym.getId in eagerIds) continueDependencies(sym,var); // (the only branch that reaches the merge, e.g., `o` in `o:=dup(x); if n>0 { assert(false); } forget(o);`, or values computed from it depend on the merged version, see `eagerIds`)
+				else if(keptContinuation(scopes[0],sym,dependencies)) continueDependencies(sym,var);
 				else pushDependencies(sym,false,returnConsumption(loweredConditional,sym));
 				if(sym.isSemError())
 					var.setSemForceError();
@@ -3433,7 +3449,7 @@ abstract class Scope{
 						if(sym.getId in eagerIds){
 							if(auto bs=cast(BlockScope)sc) bs.eagerMerges~=sym;
 							sc.continueDependencies(osym,sym);
-						}else if(!unknownAfterMerge) sc.continueDependencies(osym,sym); // (the code after the conditional continues the branch: the merged version has the value of the version of the branch, e.g., `a` for `v:=dup(a); if k { return a; } else { t:=measure(v); } forget(v);`)
+						}else if(!unknownAfterMerge||keptContinuation(sc,osym,sc.dependencies)) sc.continueDependencies(osym,sym); // (the code after the conditional continues the branch: the merged version has the value of the version of the branch, e.g., `a` for `v:=dup(a); if k { return a; } else { t:=measure(v); } forget(v);`)
 						else sc.pushDependencies(osym,false,returnConsumption(loweredConditional,osym),unknownAfterMerge);
 					}
 					if(!cast(DeadDecl)sym){
@@ -5060,6 +5076,7 @@ class BlockScope: NestedScope{
 	bool keptAfterAbort=false; // (no branch returns: an abort on some path consumed them, whose conditional the code after it continues, e.g., `a` for `if k { } else { if l { x:=(a,b); assert(false); } }`, see `ast.semantic_.statementSemanticImpl(IteExp)`)
 	Q!(Declaration,LastUse,size_t)[] outerConsumptions; // (of versions of variables of the enclosing scope, with the same numbers)
 	bool interleave=false; // (the code generator interleaves the statements of the branches, see `checkBranchOrder`)
+	bool keptContinued=false; // (the merge continued dependencies on versions of variables that all branches keep, see `keptValues`: the code generator interleaves the code after the conditional with the branches, where the uncomputations recompute values from their versions from before the split, see `interleaveBranches` in hqir.d)
 	bool returningConditional=false; // (in a loop body, a branch of the conditional returns on some path, and the code after the conditional does not continue the other branch: a `return` does not end the branch, see `dropsClassicalAtReturn`)
 	bool loweredReturns=false; // (`returningConditional`, but not in the body of a `do`-`while` loop: `--remove-loops` lowers the returns to assignments of the result, of a flag and of dummy values for what they consume, so that the branches reach the merge, see `erpLoopExplicit`)
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)

@@ -131,7 +131,7 @@ final class ContinuedLog{ // (of the conditionals of a scope whose other branch 
 					if(auto bs=cast(BlockScope)sc) if(startsOf(bs).length&&LastUse.outerVersion(d,bs,true)) first=min(first,numbers[bs]);
 				}
 				if(d.scope_&&d.scope_ !is nsc&&d.scope_.isNestedIn(nsc)) special(d.scope_);
-				for(auto c=LastUse.climbInto(d,nsc);c&&c.scope_ is nsc&&c.mergedFrom.length==1&&c.mergedFrom[0].scope_;){ // (also the earlier conditionals whose branches the code after them continues, through the versions before the later ones, see `LastUse.outerVersion`)
+				for(auto c=LastUse.climbInto(d,nsc);c&&c.scope_ is nsc&&LastUse.continuedMerge(c)&&c.mergedFrom[0].scope_;){ // (also the earlier conditionals whose branches the code after them continues, through the versions before the later ones, see `LastUse.outerVersion`)
 					special(c.mergedFrom[0].scope_);
 					auto m=c.mergedFrom[0];
 					while(m&&m.scope_&&m.scope_ !is nsc&&m.scope_.isNestedIn(nsc)) m=LastUse.sourceVersion(m,true);
@@ -445,8 +445,14 @@ final class LastUse{
 		if(e.uncomputation) log.uncomputations~=i;
 		log.events~=e;
 	}
-	private static Declaration sourceVersion(Declaration x,bool continued){ // (`continued`: also the version of the branch that the code after a nested conditional whose other branch returns continues)
-		return x.splitFrom?x.splitFrom:continued&&x.mergedFrom.length==1?x.mergedFrom[0]:null;
+	static bool continuedMerge(Declaration x){ // (of the code after a conditional whose other branches return, or whose branches all keep the version from before it, see `BlockScope.keptValues`)
+		if(x.mergedFrom.length==1) return true;
+		if(x.mergedFrom.length<2) return false;
+		auto c=x.canonicalSource;
+		return c !is x&&x.mergedFrom.all!(m=>m.canonicalSource is c);
+	}
+	private static Declaration sourceVersion(Declaration x,bool continued){ // (`continued`: also the version of the branch that the code after a nested conditional whose other branch returns continues, and a version of a branch of a nested conditional whose branches all keep it, see `continuedMerge`)
+		return x.splitFrom?x.splitFrom:continued&&continuedMerge(x)?x.mergedFrom[0]:null;
 	}
 	private static Declaration climbInto(Declaration d,Scope parent){ // (the version of the variable in `parent` that `d` is split from, if `d` is in a nested scope)
 		while(d&&d.scope_&&d.scope_ !is parent&&d.scope_.isNestedIn(parent)) d=d.splitFrom;
@@ -460,7 +466,7 @@ final class LastUse{
 	static Declaration outerVersion(Declaration d,NestedScope sc,bool continued=false){ // (the version of a variable of the enclosing scope of `sc` that `d` is split from, or that is split from `d`; `continued`: also through the code after nested conditionals whose other branch returns)
 		while(d&&d.scope_&&d.scope_.isNestedIn(sc)) d=sourceVersion(d,continued);
 		d=climbInto(d,sc.parent); // (in the code after the conditional, see `NestedScope.continuedLog`)
-		while(continued&&d&&d.scope_ is sc.parent&&d.mergedFrom.length==1&&d.mergedFrom[0].scope_ !is sc&&d.mergedFrom[0].scope_&&d.mergedFrom[0].scope_.isNestedIn(sc.parent)){ // (merged after a later conditional whose other branch returns, which the code after the conditional of `sc` continues as well: the version before it, e.g., `a` for `forget(v0)` in `if k { … assert(false); } if l { … assert(false); } forget(v0);`)
+		while(continued&&d&&d.scope_ is sc.parent&&continuedMerge(d)&&d.mergedFrom[0].scope_ !is sc&&d.mergedFrom[0].scope_&&d.mergedFrom[0].scope_.isNestedIn(sc.parent)){ // (merged after a later conditional whose other branch returns, which the code after the conditional of `sc` continues as well: the version before it, e.g., `a` for `forget(v0)` in `if k { … assert(false); } if l { … assert(false); } forget(v0);`)
 			auto m=d.mergedFrom[0];
 			while(m&&m.scope_&&m.scope_ !is sc.parent&&m.scope_.isNestedIn(sc.parent)) m=sourceVersion(m,continued);
 			if(!m||m is d||m.scope_ !is sc.parent) break;
@@ -2529,6 +2535,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		bool need,active; // (the uncomputation needs the version from before the split if it is active, e.g., once its definition reads the version of the branch before the split)
 		size_t def=size_t.max; // (the event of that definition)
 		BlockScope[] around; // (for the event of a definition: the branches around it, as `LastUse.noted` for the others)
+		Scope at; // (for the event of a definition: the scope of its first version)
 	}
 	static ContinuedLog logOf(BlockScope b){ // (of the scope where the code after the conditional of `b` continues it, if it does)
 		auto p=cast(NestedScope)b.parent;
@@ -2639,6 +2646,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		visit(d);
 		auto e=Event(i,r==size_t.max?0:r,p);
+		e.at=at;
 		for(auto nsc=cast(NestedScope)at;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null) if(auto bs=cast(BlockScope)nsc) if(LastUse.isBranch(bs)) e.around~=bs; // (see `LastUse.noteBranchEvent`)
 		return e;
 	}
@@ -2729,8 +2737,18 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return false;
 	}
-	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `NestedScope.continuedLog`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`)
-		return !siblingsNoted(k,l)&&!siblingsNoted(l,k);
+	bool divergesBefore(size_t k,size_t l){ // (`k` is in a branch of a nested conditional that returns or aborts on all of its paths, which does not contain `l`, e.g., a consumption before an `assert(false)` and the code after the conditional, which never runs after it; the code generator does not order them, see `interleaveBranches` in hqir.d)
+		static Scope at(ref Event e){ return e.lu?e.lu.scope_:e.at; }
+		auto sk=at(events[k]),sl=at(events[l]);
+		if(!sk||!sl) return false;
+		for(auto nsc=cast(NestedScope)sk;nsc;nsc=cast(NestedScope)nsc.parent){
+			auto bs=cast(BlockScope)nsc;
+			if(bs&&bs.isBranch&&bs.diverges&&!bs.quantumControlled&&!sl.isNestedIn(bs)) return true;
+		}
+		return false;
+	}
+	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `NestedScope.continuedLog`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`; or `k` is in a branch that diverges before `l`)
+		return !siblingsNoted(k,l)&&!siblingsNoted(l,k)&&!divergesBefore(k,l);
 	}
 	foreach(i;0..branches.length){
 		auto inBranch=iota(numVars,events.length).filter!(k=>events[k].branch==i).array;
