@@ -2742,7 +2742,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return false;
 	}
-	static VarDecl[] definedBy(Identifier use,Scope sc){ // (the variables of the definition whose right-hand side consumes `use`, if it has no side effects and reads no other quantum values)
+	static VarDecl[] definedBy(Identifier use,Scope sc){ // (the variables of the definition whose right-hand side consumes `use`, if it has no side effects and the operations that consume `use` or their results read no other quantum values)
 		VarDecl[] r;
 		DefineExp de=null;
 		void consider(Declaration d){
@@ -2761,11 +2761,18 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		foreach(d,_;lus.lastUses) consider(d);
 		foreach(d,_;lus.retired) consider(d);
 		if(!de||de.e2.getAnnotation()<Annotation.mfree) return null;
-		foreach(x;de.e2.subexpressions){
-			auto id=cast(Identifier)x;
-			if(!id||id is use||!cast(VarDecl)id.meaning||!id.type||id.type.isClassical()) continue;
-			if(id.constLookup||id.implicitDup) return null; // (a read)
+		bool reads=false;
+		bool contains(Expression e){ // (`reads`: an operation that consumes `use` or the result of one that does reads another quantum value, e.g., a `const` argument of a call; the code generator computes the other operands by statements of their own, whose results it consumes, e.g., `dup(v1)` in `(a,dup(v1))`)
+			if(e is use) return true;
+			bool r=false;
+			foreach(x;e.components) r|=contains(x);
+			if(r) foreach(x;e.components){
+				if(!x.constLookup||!x.type||x.type.isClassical()) continue;
+				foreach(y;x.subexpressions) if(auto id=cast(Identifier)y) if(id !is use&&cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical()) reads=true;
+			}
+			return r;
 		}
+		if(!contains(de.e2)||reads) return null;
 		return r;
 	}
 	static VarDecl[] definedAt(LastUse lu){ // (`definedBy` in the scopes from the one of the use to the one of the last use, e.g., for a definition in a nested conditional that consumes the version of the branch)
@@ -2776,7 +2783,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return null;
 	}
-	static bool unusedBefore(Declaration x,size_t t,Scope at,int depth=0){ // (except by forgets, returns and at the end of its scope, and on the paths of branches that diverge without `at`; through the versions of nested conditionals and the variables of definitions without side effects that read no other quantum values)
+	static bool unusedBefore(Declaration x,size_t t,Scope at,int depth=0){ // (except by forgets, returns and at the end of its scope, and on the paths of branches that diverge without `at`; through the versions of nested conditionals and the variables of definitions without side effects, see `definedBy`)
 		static bool elsewhere(Scope s,Scope at){ // (in a branch that diverges, which does not contain `at`: nothing that runs after it on its paths, see `divergesBefore`)
 			for(auto nsc=cast(NestedScope)s;nsc;nsc=cast(NestedScope)nsc.parent){
 				auto bs=cast(BlockScope)nsc;
@@ -2801,7 +2808,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		if(!ok(lus.here(x))) return false;
 		return x.splitInto.all!(y=>unusedBefore(y,t,at,depth+1))&&(!x.mergedInto||unusedBefore(x.mergedInto,t,at,depth+1));
 	}
-	bool delayed(size_t k,size_t l){ // (the consumption of `k` is by a definition without side effects that reads no other quantum values, whose variables are not used before the uncomputation or definition of `l`, except as well without side effects: the code generator delays it after that, after the split of the variable, as it orders only the statements of a branch that have effects, see `interleaveBranches` in hqir.d)
+	bool delayed(size_t k,size_t l){ // (the consumption of `k` is by a definition without side effects, see `definedBy`, whose variables are not used before the uncomputation or definition of `l`, except as well without side effects: the code generator delays it after that, after the split of the variable, as it orders only the statements of a branch that have effects, see `interleaveBranches` in hqir.d)
 		auto c=events[k].lu;
 		if(!c||events[k].need||c.kind!=LastUse.Kind.consumption||!c.use||!c.scope_) return false;
 		auto u=events[l].lu;
