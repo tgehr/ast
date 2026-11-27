@@ -2014,7 +2014,8 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	foreach(branch;only(ite.then,ite.othw)) branch.blscope_.returnsOnSomePath=containsReturn(branch);
 	if(continued) (continued is ite.then?ite.othw:ite.then).blscope_.returningBeforeContinuation=true;
 	static if(language==silq){
-		foreach(b;only(ite.then,ite.othw)) b.blscope_.abortsOnEveryPath=false; // (of an earlier analysis)
+		foreach(b;only(ite.then,ite.othw)) b.blscope_.abortsOnEveryPath=b.blscope_.returnsBeforeContinuation=false; // (of an earlier analysis)
+		if(continued&&!quantumControl&&!sc.quantumControlled) (continued is ite.then?ite.othw:ite.then).blscope_.returnsBeforeContinuation=true; // (not under quantum control, where the code generator merges the paths that return with the others)
 		if(!continued&&!quantumControl&&!sc.quantumControlled&&!insideDoWhileBody(sc)&&sc.returnInBodyBlocks()) foreach(i,b;[ite.then,ite.othw]){ // (as below, before the analysis of the branches, for a branch that aborts by `assert(false)` on every path, see `BlockScope.abortsOnEveryPath`)
 			auto o=i?ite.then:ite.othw;
 			if(containsReturn(b)||!returnsOnEveryPath(b,true)||definitelyReturns(o)||containsReturn(o)&&insideLoopBody(sc)) continue;
@@ -2032,8 +2033,9 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 	ite.then=controlledCompoundExpSemantic(ite.then,sc,thenFlags,ite.cond,dep,restriction_,restrictionCause);
 	ite.othw=controlledCompoundExpSemantic(ite.othw,sc,othwFlags,ite.cond,dep,restriction_,restrictionCause);
 	auto nestedFlags=thenFlags|othwFlags;
-	if(nestedFlags&StmFlags.classicalReturn) flags|=quantumControl?StmFlags.quantumReturn:StmFlags.classicalReturn;
-	if(nestedFlags&StmFlags.quantumReturn) flags|=StmFlags.quantumReturn;
+	auto continuingFlags=(definitelyReturns(ite.then)?StmFlags.none:thenFlags)|(definitelyReturns(ite.othw)?StmFlags.none:othwFlags); // (of the branches whose paths may reach the code after the conditional: the returns of a branch that returns or aborts on every path do not leave that code under quantum control, e.g., for `if k { if q { return a; } else { return b; } }`, nor those of a quantum-controlled conditional whose branches both do)
+	if(nestedFlags!=StmFlags.none) flags|=quantumControl&&!(definitelyReturns(ite.then)&&definitelyReturns(ite.othw))?StmFlags.quantumReturn:StmFlags.classicalReturn;
+	if(continuingFlags&StmFlags.quantumReturn) flags|=StmFlags.quantumReturn;
 	static assert(StmFlags.max==StmFlags.quantumReturn);
 	propErr(ite.cond,ite);
 	propErr(ite.then,ite);

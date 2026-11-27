@@ -4671,7 +4671,7 @@ class NestedScope: Scope{
 		if(remove){
 			assert(odecl is ndecl);
 			auto bs=cast(BlockScope)this;
-			auto divergingPath=diverges||LastUse.isBranch(this)&&(bs&&bs.abortsOnEveryPath||onDivergingPath); // (the consumption is on a path that does not reach the end of this branch, also in a nested conditional, e.g., `x:=(a,true)` in `if l { if m { x:=(a,true); assert(false); } }`)
+			auto divergingPath=diverges||LastUse.isBranch(this)&&(bs&&(bs.abortsOnEveryPath||bs.returnsBeforeContinuation)||onDivergingPath); // (the consumption is on a path that does not reach the end of this branch, also in a nested conditional, e.g., `x:=(a,true)` in `if l { if m { x:=(a,true); assert(false); } }`)
 			Declaration consumeInParent(){
 				auto prev=parent.consumedOnDivergingPath;
 				parent.consumedOnDivergingPath=divergingPath;
@@ -5151,6 +5151,7 @@ class BlockScope: NestedScope{
 	bool loweredReturns=false; // (`returningConditional`, but not in the body of a `do`-`while` loop: `--remove-loops` lowers the returns to assignments of the result, of a flag and of dummy values for what they consume, so that the branches reach the merge, see `erpLoopExplicit`)
 	bool returnsOnSomePath=false; // (no eager merges, see `eagerIds` in `Scope.merge`)
 	bool abortsOnEveryPath=false; // (by `assert(false)`, decided before its analysis, where the code after the conditional continues the other branch, see `ast.semantic_.statementSemanticImpl(IteExp)`: its consumptions of variables from outside do not change the dependencies in the other branch, as at its abort, see `splitForDivergingSibling`)
+	bool returnsBeforeContinuation=false; // (on every path, under classical control, decided before its analysis, where the code after the conditional continues the other branch, see `ast.semantic_.statementSemanticImpl(IteExp)`: as for `abortsOnEveryPath`, its consumptions of variables from outside do not change the dependencies in the other branch)
 	bool returningBeforeContinuation=false; // (it returns on every path, or aborts on every path, see `ast.semantic_.statementSemanticImpl(IteExp)`, and the code after the conditional continues the other branch, see `NestedScope.continuedLog`; or a loop body that aborts on every path, see `ast.semantic_.finalizeLoopIteration`)
 	bool returns=false; // (on every path, see `returnsOnEveryPath`)
 	static if(language==silq) AbortingBranchEnd loweredLoopEnd; // (the end of the branch after a loop that does not exit normally, as without its lowering, see `restoreBeforeLoop` and `abortingBranchEnd`)
