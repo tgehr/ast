@@ -2094,7 +2094,7 @@ abstract class Scope{
 				foreach(e;sc.deadOnPaths){
 					if(e[0] !is r) continue;
 					auto csc=e[3].scope_;
-					if(!origin.isNestedIn(csc)&&!csc.isNestedIn(origin)||origin is sc&&csc !is sc&&!e[4]) continue; // (after the consumption on its path; the merge decides about the variables of this scope)
+					if(!origin.isNestedIn(csc)&&!csc.isNestedIn(origin)||origin is sc&&csc !is sc&&!e[4]||csc !is origin&&csc.isNestedIn(origin)&&divergesWithin(csc,origin)) continue; // (after the consumption on its path, not after a nested conditional whose branch returns or aborts after it; the merge decides about the variables of this scope)
 					if(failures){
 						auto dd=new OutOfScopeDecl(r,e[1],e[3],e[2]);
 						dd.scope_=r.scope_;
@@ -2761,11 +2761,18 @@ abstract class Scope{
 		return true;
 	}
 	private bool cancellingDeferredDups;
+	private bool reachesMerge(Identifier use){ // (the consumption is not in a nested scope that returns or aborts on all of its paths)
+		return !use||!divergesWithin(use.scope_,this);
+	}
+	static bool divergesWithin(Scope sc,Scope outer){ // (a scope nested in `outer` that contains `sc` returns or aborts on all of its paths, which do not reach the code after it)
+		for(;sc&&sc !is outer;sc=sc.parentScope()) if(auto nsc=cast(NestedScope)sc) if(nsc.diverges) return true;
+		return false;
+	}
 	Declaration forgetting; // (a variable that is forgotten at a last use, see `LastUse.consume`: before the split into nested scopes that are being analyzed or merged, its dependency there does not include their consumptions, which the table already does, so they do not cancel the implicit `dup`s of the variables that depend on it; the nested scopes and the code after them check those, e.g., `e:=v1` for `v0:=X(dup(a)); t:=measure(v0); v1:=!v0; e:=v1; if k { a:=X(a); } else { u:=!v1; forget(u); }`; otherwise, if it is not recomputable, the variables that depend on it are not recomputable after the consumption that made it so, not after the forget, e.g., `v2` for `v1:=X(dup(v0)); v2:=dup(v1); x:=X(x); m1:=measure(v2); m2:=measure(v2);` with `v0:=X(dup(x))`)
 	private bool deferDupCancels(){
 		return !cancellingDeferredDups&&activeNestedScopes.length&&activeNestedScopes.all!(LastUse.isBranch);
 	}
-	private void cancelDeferredDups(NestedScope continued=null){ // (those of the variables that no branch used, and of the variables that depend on them; `continued`: the branch that the code after the conditional continues)
+	private void cancelDeferredDups(NestedScope continued=null,NestedScope[] branches=null){ // (those of the variables that no branch used, and of the variables that depend on them; `continued`: the branch that the code after the conditional continues; `branches`: those of the merge in progress)
 		auto todo=deferredDupCancels;
 		deferredDupCancels=[];
 		dropDeadOnPaths();
@@ -2778,6 +2785,18 @@ abstract class Scope{
 			if(continued){ // (the merge keeps the dependency of its version there, see `continueDependencies`: a consumption on the path of the other branch does not make it unavailable, e.g., `v1` for `v0:=!a; v1:=dup(v0); e:=v1; if c { a:=X(a); } else { t:=measure(v0); assert(false); } m:=measure(v1);`)
 				auto v=LastUse.versionIn(ndecl,continued);
 				if(continued.rnsymtab.get(v.getId,null) is v&&continued.dependencyTracked(v)&&!continued.getDependency(v).isTop) continue;
+			}else if(branches.length&&!reachesMerge(todo[i][1])){ // (a consumption on a path that returns or aborts in a nested conditional of a branch: if the merge keeps the dependencies of the versions of the branches that reach it, it does not make the version unavailable, e.g., `v0` for `v0:=dup(a); t0:=measure(v0); if k { if l { x:=(a,true); assert(false); } } t1:=measure(v0);`; otherwise, a consumption on a path that reaches the merge explains it)
+				Identifier cause=null;
+				bool known=true;
+				foreach(b;branches){
+					if(b.diverges) continue;
+					auto v=LastUse.versionIn(ndecl,b);
+					if(b.rnsymtab.get(v.getId,null) is v&&b.dependencyTracked(v)&&!b.getDependency(v).isTop) continue;
+					known=false;
+					if(!cause&&b.dependencyTracked(v)) cause=b.getDependency(v).lostAt;
+				}
+				if(known) continue;
+				if(cause) todo[i][1]=cause;
 			}
 			auto dependents=dependencies.mentioning(ndecl).dup;
 			while(lu.forwardTo) lu=lu.forwardTo;
@@ -3073,7 +3092,7 @@ abstract class Scope{
 		}
 		auto entries=deadOnPaths;
 		static if(language==silq) foreach(e;entries) if(e[3].scope_&&scopes.any!(sc=>e[3].scope_.isNestedIn(sc))) reportUncomputableCondition(e[0],e[2]?e[2]:e[1].implicitDup?e[1]:null,e[3]);
-		if(deferredDupCancels.length) cancelDeferredDups(continuedBranch(scopes));
+		if(deferredDupCancels.length) cancelDeferredDups(continuedBranch(scopes),scopes);
 		dropDeadOnPaths();
 		keepDeadOnPaths(entries);
 		static if(language==silq) if(!isLoop&&activeNestedScopes.all!(LastUse.isBranch)) foreach(sc;scopes) if(!sc.diverges) sc.forgetDeadSplits();

@@ -900,6 +900,7 @@ final class LastUse{
 				if(descend) foreach(nsc;lu.nestedAfter){
 					if(nsc.lastUses.discarded) continue;
 					if(fromConditional&&nsc.getSiblingScopes().any!(s=>fromConditional.isNestedIn(s))) continue;
+					if(fromBranch&&nsc.diverges&&lu.time<consumption.consumedAt&&!consumption.scope_.isNestedIn(nsc)) continue; // (a branch before the consumption that returns or aborts on all of its paths, which do not reach it, e.g., the `then` branch of `if k { x:=(a,true); t:=g(v1); assert(false); }` for the consumption of `v0` after it, with `v1:=!v0` and `v0:=dup(a)`)
 					auto head=nsc.lastUses.lastLastUse;
 					if(!head) continue;
 					while(head.prev) head=head.prev;
@@ -950,8 +951,8 @@ final class LastUse{
 			//imported!"util.io".writeln("VISITING: ",lu," ",decl," ",cdep," ",use?text(use.loc):"<?>");
 			if((byVersion?hasVersion(lu.dep,decl):decl in lu.dep.dependencies)&&!(isWritten(lu.parent)&&lu.time<consumption.consumedAt)){ // (not a `forget` that the program states before the consumption, which is checked where it is)
 				auto prior=lu.prevImplicitDup&&lu.use?lu.dep.dup:Dependency.init;
-				if(byVersion) replaceVersions(lu.dep,decl,hoisted?byAtSplit:cdep);
-				else lu.dep.replace(decl,cdep);
+				if(byVersion) replaceVersions(lu.dep,decl,hoisted?byAtSplit:ccont); // (after the merges of conditionals whose branches consume what it depends on only on paths that diverge, through the merged versions, see `continuedByMerge`, e.g., the forget of `v1` for `v1:=dup(v0); t1:=measure(v0); if l { if m { a:=X(a); assert(false); } } forget(v1);` with `v0:=dup(a)`, when the consumption of `a` after it cancels the implicit `dup` of `v0`)
+				else lu.dep.replace(decl,ccont);
 				lu.scope_.lastUses.noteMentions(lu,lu.dep);
 				if(lu.dep.isTop&&lu.prevImplicitDup&&lu.use) cancelAtMerge(lu,prior);
 			}
