@@ -498,6 +498,7 @@ class OpenExp: Expression{ // (a value of a union type used as the value of its 
 		r.witnessNames=witnesses.length?witnesses.map!(w=>w.getId).array:witnessNames;
 		r.openedArray=witnesses.length?!!cast(ArrayTy)opened[witnesses.length-1]:openedArray;
 		r.declares=declares;
+		r.scalar=scalar;
 		if(args.preserveSemantic){
 			r.witnesses=witnesses;
 			r.opened=opened;
@@ -523,6 +524,7 @@ class OpenExp: Expression{ // (a value of a union type used as the value of its 
 		r.witnesses=witnesses;
 		r.opened=opened;
 		r.declares=declares;
+		r.scalar=scalar;
 		r.type=type;
 		return r;
 	}
@@ -537,9 +539,22 @@ class OpenExp: Expression{ // (a value of a union type used as the value of its 
 	override Annotation getAnnotation(){
 		return e.getAnnotation();
 	}
-	override Expression evalImpl(){ return this; }
+	override Expression evalImpl(){
+		if(scalar&&witnesses.length){ // (the witness stands for the value)
+			auto use=new Identifier(witnesses[0].getId);
+			use.loc=loc;
+			use.meaning=witnesses[0];
+			use.scope_=witnesses[0].scope_;
+			use.type=witnesses[0].vtype;
+			use.constLookup=true;
+			use.setSemCompleted();
+			return use;
+		}
+		return this;
+	}
 	// semantic information
-	VarDecl[] witnesses; // (of the bound variables of the unions, or of the length of the array)
+	VarDecl[] witnesses; // (of the bound variables of the unions, or of the length of the array, or the value itself, see `scalar`)
+	bool scalar; // (a classical value whose witness is the value, which the type of a call mentions, see `ast.semantic_.witnessParts`)
 	Expression[] opened; // (as for `DefineExp`)
 	Id[] witnessNames; // (as for `DefineExp`)
 	bool openedArray; // (as for `DefineExp`)

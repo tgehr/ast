@@ -1444,6 +1444,26 @@ Expression expressionSemanticImpl(OpenExp oe,ExpSemContext context){
 	oe.e=expressionSemantic(oe.e,context);
 	propErr(oe.e,oe);
 	if(oe.isSemError()) return oe;
+	if(oe.scalar){
+		if(context.inType||!oe.e.type||!oe.e.type.isClassical()||!oe.witnessNames.length) return oe.e;
+		if(!oe.declares){ // (a copy whose witness is known by name, as for the other values that are opened, see `openWithKnownWitnesses`)
+			auto vd=cast(VarDecl)sc.lookup(new Identifier(oe.witnessNames[0]),false,true,Lookup.probing,null);
+			if(vd&&vd.vtype&&vd.scope_&&vd.scope_.getFunction() is sc.getFunction()&&isSubtype(oe.e.type,vd.vtype)&&isSubtype(vd.vtype,oe.e.type)){
+				oe.witnesses=[vd];
+				oe.opened=[oe.e.type];
+				oe.type=oe.e.type;
+				return oe;
+			}
+			oe.declares=true;
+		}
+		auto use=declareWitness(oe.witnessNames[0],oe.e.type,oe.loc,sc);
+		if(!use) return oe.e;
+		oe.declares=true;
+		oe.witnesses=[cast(VarDecl)use.meaning];
+		oe.opened=[oe.e.type];
+		oe.type=oe.e.type;
+		return oe;
+	}
 	if(!context.inType){ // (a copy of the opening of an array whose operand has the type of a vector here, see `openedAsArray`)
 		oe.e=openedAsArray(oe.e,oe.openedArray,context);
 		propErr(oe.e,oe);
@@ -1467,6 +1487,41 @@ Expression expressionSemanticImpl(OpenExp oe,ExpSemContext context){
 		}
 	}
 	return oe;
+}
+static if(language==silq)
+Expression witnessParts(Expression e,ExpSemContext context,Id name){ // (the parts of a classical argument for a dependent parameter that are not `qfree` or consume variables: each is opened into a witness, a `const` local with its value, which the type of the call mentions instead, so that the value has an identity, e.g., `!ℕ^(1+n₍₁₎)` for `vector(1+measure(H(0)),2)`; the operations around them are `qfree`, so they are kept; not the parts that only some paths evaluate, e.g., the second operand of `&&`)
+	if(!e.isSemCompleted()||!e.type||!e.type.isClassical()) return e;
+	if(auto oe=cast(OpenExp)e) if(oe.scalar&&oe.witnesses.length) return e; // (a copy of an analyzed argument, whose witness the copy reuses, see `OpenExp.witnessNames`)
+	auto sc=context.sc;
+	bool consumes=false; // (as for the check of the argument, see `checkArg`)
+	foreach(id;e.freeVars) if(id.meaning&&!id.constLookup&&!id.implicitDup&&!(isUnionWitness(id.meaning)&&id.meaning.scope_&&id.meaning.scope_ !is sc&&id.meaning.scope_.isNestedIn(sc))) consumes=true;
+	if(e.isQfree()&&!consumes) return e;
+	if(!cast(ALogicExp)e){
+		if(e.isSemEvaluated()) e.setSemForceCompleted(); // (its evaluation mentions the witnesses of its parts, see `OpenExp.evalImpl`)
+		if(auto be=cast(ABinaryExp)e){
+			be.e1=witnessParts(be.e1,context,name);
+			be.e2=witnessParts(be.e2,context,name);
+			return be;
+		}
+		if(auto ue=cast(AUnaryExp)e){
+			ue.e=witnessParts(ue.e,context,name);
+			return ue;
+		}
+		if(auto tpl=cast(TupleExp)e){
+			foreach(ref x;tpl.e) x=witnessParts(x,context,name);
+			return tpl;
+		}
+		if(auto tae=cast(TypeAnnotationExp)e){
+			tae.e=witnessParts(tae.e,context,name);
+			return tae;
+		}
+	}
+	auto oe=new OpenExp(e);
+	oe.loc=e.loc;
+	oe.scalar=true;
+	auto id=cast(Identifier)e;
+	oe.witnessNames=[witnessName(id?id.id:name)];
+	return expressionSemantic(oe,context);
 }
 static if(language==silq)
 bool readsOpenedWitnesses(Expression e,Expression arg){ // (`e` mentions the witnesses that opened values in `arg` declare, see `CallExp.argumentsFirst`)
@@ -8620,7 +8675,12 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					}else static assert(0);
 				}
 				static if(language==silq){
-					bool classical=exp.type.isClassical(), qfree=exp.isQfree();
+					auto value=exp;
+					if(exp.type.isClassical()&&!acontext.inType){
+						exp=witnessParts(exp,acontext,ft.names[i]);
+						value=exp.eval();
+					}
+					bool classical=exp.type.isClassical(), qfree=value.isQfree();
 					if((!classical||!qfree)){
 						if(classical){ // TODO: could just automatically deduce existential type
 							reportImpure();
@@ -8644,7 +8704,8 @@ Expression callSemantic(bool isPresemantic=false,T)(CallExp ce,T context)if(is(T
 					ce.setSemError();
 					error=true;
 				}
-				foreach(id;exp.freeVars){
+				static if(language==psi) auto value=exp;
+				foreach(id;value.freeVars){
 					if(!id.meaning) continue;
 					static if(language==silq) if(isUnionWitness(id.meaning)&&id.meaning.scope_&&id.meaning.scope_ !is sc&&id.meaning.scope_.isNestedIn(sc)) continue; // (a witness that a function within the argument declares, which `freeVars` does not know as bound, see `openUnions`; not other variables of nested scopes, e.g., a capture that a closure in the argument moves)
 					if(id.constLookup||id.implicitDup){

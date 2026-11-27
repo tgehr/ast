@@ -5527,7 +5527,9 @@ private Expression lowerLoopImpl(T)(T loop,FixedPointIterState state,Scope sc,re
 				foreach(i,r;replays) if(!isEarly[i]&&iota(replays.length).any!(j=>isEarly[j]&&mentions(replays[j][1],r[0]))) isEarly[i]=grown=true;
 			}
 			foreach(i,r;replays){
-				auto rdef=new DefineExp(new Identifier(r[0]),r[1].copy(cargsDefault));
+				auto value=r[1].copy(cargsDefault);
+				static if(language==silq) foreach(x;value.subexpressions) if(auto oe=cast(OpenExp)x) if(oe.declares&&oe.witnessNames.length&&oe.witnessNames.all!(w=>exitLocals.any!(e=>e[0].id==w))) oe.declares=false; // (the call declares the witnesses of the values that the definition opens in the last iteration, with which the replay opens them, see `ast.semantic_.openWithKnownWitnesses`)
+				auto rdef=new DefineExp(new Identifier(r[0]),value);
 				rdef.loc=rdef.e1.loc=loop.loc;
 				if(isEarly[i]){
 					early~=rdef;
