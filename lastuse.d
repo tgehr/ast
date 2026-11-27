@@ -1651,6 +1651,13 @@ struct LastUses{
 	LastUse peek(Declaration decl){ // (as `here`, but without creating the last uses of the nestings, whose variables are not used in their scopes: their sinks forward to the last uses that this returns, and their splits are lazy splits that remain such)
 		return lastUses.get(decl,null);
 	}
+	Dependency dependencyAtNesting(Declaration decl){ // (of a variable from outside that this scope has not used yet, at its nesting)
+		auto lu=peek(decl);
+		while(lu&&lu.kind==LastUse.Kind.lazySplitSink&&lu.forwardTo) lu=lu.forwardTo; // (also when only nested scopes use it)
+		if(lu) return lu.kind==LastUse.Kind.lazySplit?lu.depAtSplit.dup:Dependency(true);
+		if(splits&&splits.isDeferred(decl)&&splits.deps.tracked(decl)) return splits.deps.getCopy(decl);
+		return Dependency(true);
+	}
 	void createDeferred(scope bool delegate(Declaration) observable=null,Id[] candidates=null,bool restricted=false){ // (all last uses of the nestings, while the scope is as at the nestings, e.g., before a scope that diverges drops its variables; `observable`: only those of these variables; `restricted`: the identifiers of all of them are among `candidates`)
 		foreach(b;only(splits,sinks)) if(b&&b.deferred){
 			if(!restricted){

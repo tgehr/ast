@@ -2010,9 +2010,48 @@ abstract class Scope{
 		if(blocksConst&&kind==Lookup.constant&&meaning&&!meaning.isPinned&&!meaning.isToplevelDeclaration()&&!typeofSuppressedCapture)
 			blockConst(meaning,id);
 		if(kind!=Lookup.probing&&meaning&&!typeofSuppressedCapture){
+			static if(language==silq) keepForAbort(meaning);
 			recordAccess(id,meaning);
 		}
 		return meaning;
+	}
+	static if(language==silq) private void keepForAbort(Declaration meaning){ // (a value that a branch that aborts on every path uses after its implicit `dup` stays recomputable from the variables from before the conditional that it depends on, as on the straight-line path, where they are never forgotten: if the branch consumed what they depend on, it pins its versions, which it drops at its abort, and the other branch forgets its own, rather than the code before the conditional at their last uses there, e.g., `v0` for `v1:=!v0; t1:=measure(v1); if m { x2:=(a,true); t5:=measure(v1); assert(false); }`)
+		if(!meaning.scope_||meaning.scope_ is this||!this.isNestedIn(meaning.scope_)||!dependencyTracked(meaning)) return;
+		LastUse last=null;
+		for(Scope sc=this;sc&&!last;sc=sc.parentScope()){
+			last=sc.lastUses.peek(meaning);
+			if(sc is meaning.scope_) break;
+		}
+		while(last&&last.forwardTo) last=last.forwardTo;
+		if(!last||!(last.use&&last.use.implicitDup||last.prevImplicitDup)) return;
+		auto dep=getDependency(meaning);
+		if(dep.isTop) return;
+		static bool outer(BlockScope bs,Declaration x){ return x.scope_&&x.scope_ !is bs&&bs.isNestedIn(x.scope_)&&bs.rnsymtab.get(x.getId,null) is x&&bs.dependencyTracked(x); }
+		static bool consumedBefore(BlockScope bs,Declaration x){ // (by an implicit `dup`, which keeps it only for later uses, e.g., `v0` for `t1:=h(v0);` with `def h(x:𝔹){ return measure(x); }`, which consumes it on the straight-line path through the branch if no other use there follows)
+			for(Scope sc=bs;sc;sc=sc.parentScope()){
+				if(auto prop=sc.declProps.tryGetAny(x)) foreach(id;prop.accesses) if(!id.constLookup) return true;
+				if(sc is x.scope_) break;
+			}
+			return false;
+		}
+		static bool lost(BlockScope bs,Declaration x,ref SetX!Declaration seen){ // (not recomputable there through the variables from outside, e.g., `v1` for `v1:=dup(v0)` with `v0:=dup(a)` after the branch consumed `a`)
+			if(x in seen) return false;
+			seen.insert(x);
+			auto d=bs.getDependency(x);
+			if(d.isTop) return true;
+			foreach(y;d.dependencies) if(outer(bs,y)&&lost(bs,y,seen)) return true;
+			return false;
+		}
+		foreach(x;dep.dependencies){
+			if(!x.scope_||x.scope_ is this||!this.isNestedIn(x.scope_)) continue;
+			for(Scope sc=this;sc&&sc !is x.scope_;sc=sc.parentScope()){
+				auto bs=cast(BlockScope)sc;
+				if(!bs||!bs.abortsOnEveryPath||!outer(bs,x)||consumedBefore(bs,x)) continue;
+				SetX!Declaration seen;
+				if(!lost(bs,x,seen)||bs.lastUses.dependencyAtNesting(x).isTop) continue; // (it is recomputable there, or it was not before the conditional)
+				bs.lastUses.pin(x,true);
+			}
+		}
 	}
 
 	final Declaration lookup(Identifier ident,bool rnsym,bool lookupImports,Lookup kind,DeadDecl[]* failures){
