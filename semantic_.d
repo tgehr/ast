@@ -2034,7 +2034,7 @@ Expression statementSemanticImpl(IteExp ite,Scope sc,ref StmFlags flags,bool res
 		AbortingBranchEnd[] abortEnds;
 		if(!continued&&!quantumControl&&!sc.quantumControlled&&!insideDoWhileBody(sc)&&sc.returnInBodyBlocks()) foreach(i,b;[ite.then,ite.othw]){ // (a branch that aborts on every path, as one that returns, see `continuedBranch`: the code after the conditional continues the other one where a `return` could end the function; decided after the analysis of the branches, which decides whether they abort, e.g., a call of a function whose return type is `⊥`)
 			auto o=i?ite.then:ite.othw;
-			if(!definitelyReturns(b)||containsReturn(b)||definitelyReturns(o)||containsReturn(o)) continue;
+			if(!definitelyReturns(b)||containsReturn(b)||definitelyReturns(o)||containsReturn(o)&&insideLoopBody(sc)) continue; // (also if the other one returns on some paths, which the code generator continues as well, see `continuesPartially`; not in a loop body, where `--remove-loops` guards the code after the conditional instead, see `returningConditional`)
 			continued=o;
 			b.blscope_.returningBeforeContinuation=true;
 			break;
