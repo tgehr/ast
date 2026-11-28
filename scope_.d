@@ -2366,7 +2366,7 @@ abstract class Scope{
 					case CloseAction.remove: symtabRemove(d); break;
 					case CloseAction.keep: break;
 					case CloseAction.consume:
-						static if(language==silq) if(lastUses.canCancelImplicitDup(d)&&lastUses.canForget(d,true,false)) lastUses.forget(d,false); // (the implicit `dup` at its last use keeps no value that the code after it needs, as at a `return`, e.g., `measure(a)` in `a:=0:𝔹; measure(a); assert(false);`)
+						static if(language==silq) if(lastUses.consumedByImplicitDup(d)&&lastUses.canCancelImplicitDup(d)&&lastUses.canForget(d,true,false)) lastUses.forget(d,false); // (the implicit `dup` at its last use keeps no value that the code after it needs, as at a `return`, e.g., `measure(a)` in `a:=0:𝔹; measure(a); assert(false);`; not a forget after a last use that is not a consumption, which the abort deallocates)
 						consume(d,null);
 						clearConsumed();
 						break;

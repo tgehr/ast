@@ -1439,6 +1439,16 @@ final class LastUse{
 		if(kind!=Kind.lazyMerge&&kind!=Kind.constPinned) return false;
 		return canCancelImplicitDupMerge(decl,nestedScopes);
 	}
+	bool consumedByImplicitDup(){ // (a consumption with an implicit `dup`, also in the branches of a merge, which forget their versions at their splits if they do not use them, see `Scope.closeUnreachable`)
+		if(forwardTo) return forwardTo.consumedByImplicitDup();
+		if(kind==Kind.implicitDup) return true;
+		if(kind!=Kind.lazyMerge) return false;
+		foreach(nsc;nestedScopes){
+			auto lu=nsc.lastUses.get(versionIn(decl,nsc),true);
+			if(!lu||!lu.consumedByImplicitDup()&&!(lu.kind==Kind.lazySplit&&!lu.use&&!lu.forwardTo)) return false;
+		}
+		return true;
+	}
 	bool canCancelImplicitDup(){
 		if(forwardTo) return forwardTo.canCancelImplicitDup();
 		if(splitFrom) return false;
@@ -2362,6 +2372,11 @@ struct LastUses{
 	bool canCancelImplicitDup(Declaration decl){
 		if(auto lastUse=here(decl))
 			return lastUse.canCancelImplicitDup();
+		return false;
+	}
+	bool consumedByImplicitDup(Declaration decl){
+		if(auto lastUse=here(decl))
+			return lastUse.consumedByImplicitDup();
 		return false;
 	}
 	bool cancelImplicitDup(Declaration decl){
