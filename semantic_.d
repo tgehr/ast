@@ -12771,7 +12771,9 @@ FunctionDef functionDefSemantic(FunctionDef fd,Scope sc){
 	static if(language==silq){ // (once the forgets in the branches are known)
 		auto pendingBranchOrders=fsc.pendingBranchOrders;
 		fsc.pendingBranchOrders=[];
+		auto nerrors=sc.handler.nerrors;
 		foreach(p;pendingBranchOrders) imported!"ast.lastuse".checkBranchOrder(p.expand);
+		if(sc.handler.nerrors!=nerrors) fd.setSemError(); // (as for the errors of the analysis of the body: e.g., the final pass of the function does not report them again)
 	}
 	if(!fd.sealed) fd.seal();
 	if(fd.unsealed||fd.numUpdatesPending!=0){

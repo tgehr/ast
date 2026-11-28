@@ -416,7 +416,7 @@ final class LastUse{
 			auto p=cast(NestedScope)bs.parent;
 			auto at=p&&p.continuedLog?p.continuedLog.events.length:0; // (the order with the events of the code after the conditional, if `bs` is continued there)
 			if(kind==Kind.synthesizedForget) bs.uncomputations~=q(this,at);
-			else if(auto outer=outerVersion(decl,bs)) bs.outerConsumptions~=q(outer,this,at);
+			else if(auto outer=outerVersion(decl,bs,true)) bs.outerConsumptions~=q(outer,this,at); // (also of the version that the code after a nested conditional whose other branch returns continues)
 		}
 		for(auto nsc=cast(NestedScope)scope_;nsc;nsc=nsc.lastUses.parent?cast(NestedScope)nsc.parent:null){ // (not the scopes around a nested function, e.g., a lambda, whose analysis has its own order: its captures are their events)
 			note(cast(BlockScope)nsc);
@@ -2533,6 +2533,8 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		size_t def=size_t.max; // (the event of that definition)
 		BlockScope[] around; // (for the event of a definition: the branches around it, as `LastUse.noted` for the others)
 		Scope at; // (for the event of a definition: the scope of its first version)
+		size_t group=size_t.max; // (the alternatives for an uncomputation that needs a version from before the split of a variable of `knownIndex`)
+		bool keep; // (the alternative that keeps that version until the uncomputation, rather than recomputing it from its dependency)
 	}
 	static ContinuedLog logOf(BlockScope b){ // (of the scope where the code after the conditional of `b` continues it, if it does)
 		auto p=cast(NestedScope)b.parent;
@@ -2582,10 +2584,22 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 	}
 	MapX!(Declaration,size_t) varIndex;
 	SetX!Declaration consumedKnown; // (with a known dependency: an uncomputation that needs its version from before the split recomputes it from that dependency, or keeps it until then where its dependency is consumed as well, see `interleaveBranches` in hqir.d)
+	MapX!(Declaration,Declaration[]) knownDeps; // (the versions from before the split of the variables that the known dependencies of the variables that the branches consume or uncompute mention)
+	Declaration[] known; // (those variables, in order)
+	void addKnown(Declaration d,Dependency dep,BlockScope b){
+		if(d !in knownDeps) known~=d;
+		auto ds=knownDeps.get(d,null);
+		foreach(x;dep.dependencies) if(auto od=LastUse.outerVersion(x,b,true)) if(!ds.canFind(od)) ds~=od;
+		knownDeps[d]=ds;
+	}
 	Event[] events; // (first the splits of the variables)
 	foreach(b;branches) foreach(c;outerConsumptions(b)){
 		if(c[1].fromDiscardedAnalysis()||c[1].kind!=LastUse.Kind.consumption||c[0].scope_ !is sc) continue;
-		if(!c[1].dep.isTop){ consumedKnown.insert(c[0]); continue; }
+		if(!c[1].dep.isTop){
+			consumedKnown.insert(c[0]);
+			addKnown(c[0],c[1].dep,b);
+			continue;
+		}
 		if(c[0] in varIndex) continue;
 		varIndex[c[0]]=events.length;
 		events~=Event(size_t.max,0,events.length);
@@ -2612,6 +2626,16 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		return false;
 	}
 	auto reorder=!fixed&&consumedKnown.length&&iota(branches.length).any!needsKnown; // (the code generator orders those uncomputations, see `interleaveBranches` in hqir.d)
+	if(varIndex.length) foreach(i,b;branches) foreach(u;uncomputations(b,ends[i])){
+		auto lu=u[0];
+		if(lu.fromDiscardedAnalysis()||lu.kind!=LastUse.Kind.synthesizedForget||!lu.decl||lu.decl.isSemError()||lu.dep.isTop) continue;
+		if(auto outer=LastUse.outerVersion(lu.decl,b,true)) if(outer.scope_ is sc&&outer !in varIndex) addKnown(outer,lu.dep,b);
+	}
+	MapX!(Declaration,size_t) knownIndex; // (the splits of the variables that the branches consume or uncompute with known dependencies on variables of `varIndex`: an uncomputation that needs the version from before such a split recomputes it from those, unless the split of one of them comes before it, and otherwise keeps it until then, see `interleaveBranches` in hqir.d)
+	foreach(d;known) if(d !in varIndex&&knownDeps[d].any!(x=>x in varIndex)){
+		knownIndex[d]=events.length;
+		events~=Event(size_t.max,0,events.length);
+	}
 	if(!events.length){
 		if(reorder) foreach(b;branches) b.interleave=true;
 		return;
@@ -2648,7 +2672,7 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 	foreach(i,b;branches){
 		foreach(c;outerConsumptions(b)){
 			if(c[1].fromDiscardedAnalysis()||c[1].kind!=LastUse.Kind.consumption) continue;
-			auto p=varIndex.get(c[0],size_t.max);
+			auto p=varIndex.get(c[0],knownIndex.get(c[0],size_t.max));
 			if(p!=size_t.max) events~=Event(i,c[1].consumedAt,p,c[1]);
 		}
 		auto log=logOf(b);
@@ -2688,7 +2712,17 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 			foreach(d;needed(lu.dep)){
 				auto outer=LastUse.outerVersion(d,b,true);
 				auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
-				if(p==size_t.max) continue;
+				if(p==size_t.max){
+					auto q=outer?knownIndex.get(outer,size_t.max):size_t.max;
+					if(q==size_t.max||lu.decl.derivedSequence.all!(x=>x.scope_&&(x.scope_.isNestedIn(b)||inContinuation(x)))) continue; // TODO: also an uncomputation of a value that the branch defines
+					auto g=events.length;
+					events~=Event(i,lu.time,q,lu,true,false,size_t.max,null,null,g,true);
+					foreach(x;knownDeps[outer]){
+						auto r=varIndex.get(x,size_t.max);
+						if(r!=size_t.max) events~=Event(i,lu.time,r,lu,true,false,size_t.max,null,null,g,false);
+					}
+					continue;
+				}
 				if(lu.decl.derivedSequence.all!(x=>x.scope_&&(x.scope_.isNestedIn(b)||inContinuation(x)))&&LastUse.readsSplitAtDefinition(b,outer,lu.decl,lu.dep,true,&inContinuation)){ // (it reads the version of the branch)
 					events~=Event(i,lu.time,p,lu,true,false,events.length+1);
 					events~=definitionEvent(i,lu.decl,b,p,&inContinuation);
@@ -2818,23 +2852,53 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		auto xs=definedAt(c);
 		return xs.length&&xs.all!(x=>unusedBefore(x,u?u.time:events[l].time,at));
 	}
+	static bool hoisted(LastUse lu,BlockScope b){ // (an uncomputation after a last use by a definition without side effects that only reads versions from before the split: the code generator computes the definition and places the uncomputation as soon as those are available, before the statements with effects of the branch, see `interleaveBranches` in hqir.d)
+		if(!lu||!lu.use||lu.kind!=LastUse.Kind.synthesizedForget) return false;
+		DefineExp de=null;
+		void consider(Declaration d){
+			auto vd=cast(VarDecl)d;
+			if(de||!vd||!vd.definition) return;
+			foreach(x;vd.definition.e2.subexpressions) if(x is lu.use){ de=vd.definition; return; }
+		}
+		for(Scope s=lu.use.scope_?lu.use.scope_:lu.scope_;s&&!de;s=cast(NestedScope)s?(cast(NestedScope)s).parent:null){
+			foreach(d,_;s.lastUses.lastUses) consider(d);
+			foreach(d,_;s.lastUses.retired) consider(d);
+			if(s is lu.scope_) break;
+		}
+		if(!de||de.e2.getAnnotation()<Annotation.mfree) return false;
+		bool ok=true;
+		void visit(Expression e){
+			if(!ok||cast(ForgetExp)e) return; // (the uncomputations after the last uses in the definition, e.g., this one)
+			if(auto id=cast(Identifier)e) if(cast(VarDecl)id.meaning&&id.type&&!id.type.isClassical())
+				if(!id.constLookup&&!id.implicitDup||!LastUse.outerVersion(id.meaning,b)) ok=false; // (a consumption, or a version that the branch defines)
+			foreach(x;e.components) visit(x);
+		}
+		visit(de.e2);
+		return ok;
+	}
 	bool ordered(size_t k,size_t l){ // (in program order, unless they are in different branches of a nested conditional, which never both run, also where the code after the nested conditional continues one of them, see `NestedScope.continuedLog`: the code generator orders them where it interleaves the nested conditional, see `interleaveBranches` in hqir.d and `ItePartialReturn`; or `k` is in a branch that diverges before `l`)
 		return !siblingsNoted(k,l)&&!siblingsNoted(l,k)&&!divergesBefore(k,l);
 	}
+	auto hoist=new bool[](events.length);
+	foreach(k;numVars..events.length) hoist[k]=events[k].need&&hoisted(events[k].lu,branches[events[k].branch]);
 	foreach(i;0..branches.length){
 		auto inBranch=iota(numVars,events.length).filter!(k=>events[k].branch==i).array;
 		inBranch.sort!((k,l)=>events[k].time<events[l].time||events[k].time==events[l].time&&k<l);
-		foreach(j;0..inBranch.length) foreach(l;j+1..inBranch.length) if(ordered(inBranch[j],inBranch[l])&&!delayed(inBranch[j],inBranch[l])) edges[inBranch[j]]~=inBranch[l];
+		foreach(j;0..inBranch.length) foreach(l;j+1..inBranch.length) if(!hoist[inBranch[l]]&&ordered(inBranch[j],inBranch[l])&&!delayed(inBranch[j],inBranch[l])) edges[inBranch[j]]~=inBranch[l];
 	}
 	foreach(k;numVars..events.length){
 		auto e=events[k];
 		if(e.lu&&!e.need) edges[e.var]~=k;
 		if(e.need&&e.active) edges[k]~=e.var;
+		if(e.need&&knownIndex.length&&e.lu.decl) if(auto outer=LastUse.outerVersion(e.lu.decl,branches[e.branch],true)){ // (an uncomputation of a version of a variable of `knownIndex` comes after its split)
+			auto q=knownIndex.get(outer,size_t.max);
+			if(q!=size_t.max) edges[q]~=k;
+		}
 	}
 	if(fixed) foreach(p;0..numVars) foreach(k;numVars..events.length) edges[p]~=k;
 	foreach(b;branches) foreach(f;b.dependenciesAtSplit()){ // (a version without uses in a branch is uncomputed at its split, before the splits of the variables it depends on)
 		auto outer=LastUse.outerVersion(f[0],b);
-		auto p=outer?varIndex.get(outer,size_t.max):size_t.max;
+		auto p=outer?varIndex.get(outer,knownIndex.get(outer,size_t.max)):size_t.max;
 		if(p==size_t.max||f[1].isTop) continue;
 		foreach(d;f[1].dependencies){
 			auto od=LastUse.outerVersion(d,b);
@@ -2853,10 +2917,22 @@ void checkBranchOrder(Scope sc,BlockScope[] branches){ // (the code generator sp
 		}
 		return visit(from);
 	}
+	for(size_t k=numVars;k<events.length;){ // (the alternatives for an uncomputation that needs a version from before the split of a variable of `knownIndex`, in program order, as in the code generator: recomputed from its dependency unless the split of one of those variables comes before it, and otherwise kept until then)
+		auto g=events[k].group;
+		if(g==size_t.max){ k++; continue; }
+		auto l=k+1;
+		while(l<events.length&&events[l].group==g) l++;
+		auto recompute=iota(k,l).all!(j=>events[j].keep||!reaches(events[j].var,j));
+		foreach(j;k..l) if(events[j].keep!=recompute){
+			events[j].active=true;
+			edges[j]~=events[j].var;
+		}
+		k=l;
+	}
 	for(bool changed=true;changed;){ // (a definition before the split reads the version from before it)
 		changed=false;
 		foreach(k;numVars..events.length){
-			if(!events[k].need||events[k].active||!reaches(events[k].def,events[k].var)) continue;
+			if(!events[k].need||events[k].active||events[k].group!=size_t.max||!reaches(events[k].def,events[k].var)) continue;
 			events[k].active=true;
 			edges[k]~=events[k].var;
 			changed=true;
